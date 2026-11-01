@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dungeons and Degenerates</title>
+  <meta name="description" content="An isometric, turn-based tactical roguelike about a fake D&amp;D party of degenerates.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700;800;900&family=Cinzel+Decorative:wght@700;900&family=Signika:wght@300..700&display=swap">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <canvas id="game"></canvas>
+  <div id="ui"></div>
+  <div id="boot-loading" style="position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:radial-gradient(ellipse at 50% 40%,#2b1a12 0%,#140d12 70%);color:#f3d38a;font:24px Cinzel,Georgia,serif;letter-spacing:.08em;z-index:9999">
+    <div style="font-size:54px;line-height:1;animation:dd-boot-spin 1.6s linear infinite">🎲</div>
+    <div>Rolling for initiative&hellip;</div>
+    <div style="font:14px Signika,'Segoe UI',sans-serif;color:#b9a88a;letter-spacing:0">The DM is still looking for his dice.</div>
+  </div>
+  <style>@keyframes dd-boot-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }</style>
+  <script src="js/manifest.js"></script>
+  <script src="js/loader.js"></script>
+</body>
+</html>
