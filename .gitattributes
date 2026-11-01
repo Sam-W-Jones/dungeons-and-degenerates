@@ -1,0 +1,3 @@
+# Keep LF everywhere (the bash tools break with CRLF on Windows checkouts)
+* text=auto eol=lf
+*.png binary

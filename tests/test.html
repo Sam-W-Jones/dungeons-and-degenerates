@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>DD tests</title>
+  <style>
+    body { font: 12px/1.4 Consolas, monospace; background: #111; color: #ddd; margin: 12px; }
+    #summary { font-size: 14px; color: #fff; }
+    .pass { color: #7f7; } .fail { color: #f77; }
+  </style>
+</head>
+<body>
+  <h3>Dungeons and Degenerates — test harness</h3>
+  <pre id="summary">loading…</pre>
+  <pre id="results"></pre>
+  <script>window.DD_BASE = '../'; window.DD_TEST = true;</script>
+  <script src="../js/manifest.js"></script>
+  <script src="manifest.js"></script>
+  <script src="harness.js"></script>
+  <script src="../js/loader.js"></script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+# Scratch output: screenshots, headless Chrome profiles, test/sim logs, workflow reports
+.tmp/
+# Local Claude Code settings (machine-specific paths)
+.claude/
+# OS junk
+Thumbs.db
+desktop.ini
+.DS_Store

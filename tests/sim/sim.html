@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Dungeons and Degenerates — campaign sim</title></head>
+<body>
+  <!-- Whole-campaign balance simulation (tests/sim/sim.js). Run it with tools/sim.sh, one headless page at a time. -->
+  <pre id="out">running…</pre>
+  <pre id="json"></pre>
+  <script>
+    window.DD_BASE = '../../';
+    window.DD_TEST = true; // keep js/main.js quiet
+    window.DD_EXTRA_SCRIPTS = ['tests/sim/sim.js'];
+  </script>
+  <script src="../../js/manifest.js"></script>
+  <script src="../../js/loader.js"></script>
+</body>
+</html>
