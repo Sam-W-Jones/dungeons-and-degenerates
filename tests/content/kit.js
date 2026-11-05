@@ -1,10 +1,11 @@
 /* Dungeons and Degenerates — tests/content/kit.js
  * Suites "kit: …" for js/data/skills_generic.js (12 generic skills gen_*, owner 'generic') and js/data/consumables.js
- * (14 consumables con_* + the con_d4s surface): registry and text rules, every skill at every level and every
- * consumable in DD.Combat.sandbox fights (effect == desc), edge cases (no target, dying users, map edges, hazards,
- * impaired users), HUD previews vs reality (also with every real hero as the user, full runs only), AutoPlay using
- * consumables sensibly, AutoPlay battles with the whole kit socketed, and the run layer (skill tomes, rewards, shop,
- * learning + upgrading, a real run fight).
+ * (14 consumables con_* + the con_d4s surface) under the v2 rules: initiative turns, durations per own turn, no Guard,
+ * no telegraphs, no free Block, attacks of opportunity. Registry and text rules (short exact descs, no v1 wording, no
+ * intent tools), every skill at every level and every consumable in DD.Combat.sandbox fights (effect == desc, v2
+ * durations), the v2 combos (Dazzle → Sucker Punch and a walk away, Taunt, pushes and skill moves that provoke
+ * nothing), edge cases, HUD previews vs reality (also with every real hero as the user, full runs only), AutoPlay with
+ * consumables and the whole kit, and the run layer (skill tomes, rewards, shop, learning + upgrading, a real run fight).
  * Uses only fixture heroes/enemies (test_*) so it runs in isolation:
  *   bash tools/test.sh "suite=kit&isolate=skills_generic,consumables,content/kit"
  */
@@ -19,21 +20,28 @@
   const CON = ['con_red_drink', 'con_big_red_drink', 'con_bad_decisions', 'con_smoke_bomb', 'con_energy_drink', 'con_antidote',
     'con_liquid_courage', 'con_scroll_of_yeet', 'con_bag_of_d4s', 'con_holy_water', 'con_frost_flask', 'con_thunder_jar',
     'con_pocket_sand', 'con_mystery_potion'];
-  const USER = 'test_knight';   // neutral passive (start-of-fight Block, cleared by fight()), no items
+  const USER = 'test_knight';   // neutral passive (3 Block at his round-1 turn start, cleared by fight()), no items
   const KINDS = ['attack', 'buff', 'heal', 'summon', 'move', 'utility'];
   const TARGET_TYPES = ['unit', 'tile', 'self', 'dir'];
+  // v1 words that must not survive in v2 text: telegraphs, Guard, planning, "the next player phase"
+  const V1_WORDS = /telegraph|\bguard|intent|planning|player phase|next round/i;
 
   // ---- helpers ---------------------------------------------------------------------------------------------
   function A() { return DD.Act; }
   function S() { return DD.Combat.state; }
   function badText(s) { return typeof s !== 'string' || !s.trim() || /undefined|NaN|\[object|null/.test(s); }
 
-  /** Sandbox that never ends on its own: 9×9 stone, no first planning, fixture heroes at level 3, Block cleared. */
+  /**
+   * Sandbox that never ends on its own: 9×9 stone, fixture heroes at level 3 (heroes first, the first one's turn,
+   * round 1), Block cleared. Enemies never act unless cfg.ai (then they act on their turns from round 1).
+   */
   function fight(cfg) {
-    cfg = cfg || {};
+    cfg = Object.assign({}, cfg || {});
+    const ai = !!cfg.ai;
+    delete cfg.ai;
     const heroes = (cfg.heroes || [{ id: USER, x: 2, y: 4 }]).map(function (h) { return Object.assign({ level: 3, skills: [] }, h); });
     DD.Combat.sandbox(Object.assign({
-      w: 9, h: 9, seed: 7, noPlan: true, enemies: [],
+      w: 9, h: 9, seed: 7, enemies: [], noPlan: false, enemyAi: ai,
       objective: { type: 'custom', text: 'Kit test' }, encounter: { id: 'kit_arena', checkObjective: function () { return null; } },
     }, cfg, { heroes: heroes }));
     const s = S();
@@ -72,8 +80,8 @@
   }
   function fingerprint(s) {
     if (T.contentHelpers && T.contentHelpers.fingerprint) return T.contentHelpers.fingerprint(s);
-    return JSON.stringify([s.units.map(function (u) { return [u.id, u.x, u.y, u.hp, u.block, u.ap, !!u.dead, !!u.downed, u.statuses]; }),
-      s.grid.tiles.map(function (tl) { return [tl.t, tl.surface, tl.obj && [tl.obj.id, tl.obj.hp]]; }), s.hype, s.rng.getState(), s.consumables]);
+    return JSON.stringify([s.units.map(function (u) { return [u.id, u.x, u.y, u.hp, u.block, u.ap, u.apBank, !!u.dead, !!u.downed, u.statuses]; }),
+      s.grid.tiles.map(function (tl) { return [tl.t, tl.surface, tl.obj && [tl.obj.id, tl.obj.hp]]; }), s.hype, s.rng.getState(), s.consumables, s.order, s.turn]);
   }
   /** What the preview said vs what really happened (HP, KO, movement, Block, Hype). */
   function compare(t, prev, s, before, hype0, label) {
@@ -130,6 +138,7 @@
   }
   /** Sorted "x,y" list of tiles (compare areas). */
   function keys(list) { return list.map(function (p) { return p.x + ',' + p.y; }).sort().join(' '); }
+  function row(x0, x1, y) { const out = []; for (let x = x0; x <= x1; x++) out.push({ x: x, y: y === undefined ? 4 : y }); return out; }
   /** Count DD.FX events pushed while fn runs (a pure query must push none). */
   function fxDuring(fn) {
     const real = DD.FX.push;
@@ -137,6 +146,21 @@
     DD.FX.push = function (evt) { n++; return real.call(DD.FX, evt); };
     try { fn(); } finally { DD.FX.push = real; }
     return n;
+  }
+  /** Run fn and return the attacks of opportunity it caused ('opportunity:attack' events). */
+  function aooDuring(fn) {
+    const seen = [];
+    const off = DD.Events.on('opportunity:attack', function (e) { seen.push(e); });
+    try { fn(); } finally { off(); }
+    return seen;
+  }
+  /** Record every hit `src` lands on `victim` from now on (a rule; returns the list). */
+  function hitsOn(src, victim, id) {
+    const hits = [];
+    A().addRule({ id: id || 'kit_hit_probe', name: 'Hit probe', hooks: { onTakeDamage: function (d) {
+      if (d.source === src && d.target === victim && d.cause === 'skill') hits.push(d.amount);
+    } } });
+    return hits;
   }
   /** Make the next ctx.rng.int(1, 6) of the fight roll `face` (for the Mystery Potion). */
   function forceD6(face) {
@@ -147,15 +171,30 @@
     }
     return false;
   }
+  /** Every function on a def (execute, canUse, desc, canTarget, area fn, preview...), as source text. */
+  function sources(def) {
+    const out = [];
+    const walk = function (o, depth) {
+      if (!o || depth > 2) return;
+      Object.keys(o).forEach(function (k) {
+        const v = o[k];
+        if (typeof v === 'function') out.push(String(v));
+        else if (v && typeof v === 'object' && !Array.isArray(v)) walk(v, depth + 1);
+      });
+    };
+    walk(def, 0);
+    return out.join('\n');
+  }
 
   // ---- 1. registry and text ------------------------------------------------------------------------------
-  T.suite('kit: registry — 12 generic skills and 14 consumables, exact text, no name clashes', function (t) {
+  T.suite('kit: registry — 12 generic skills and 14 consumables, short exact v2 text, no name clashes', function (t) {
     t.eq(GEN.length, 12, '12 generic skills planned');
     t.eq(CON.length, 14, '14 consumables planned');
     t.ok(!!DD.Kit, 'DD.Kit helpers exist');
     if (!DD.Kit) return;
     t.eq(JSON.stringify(DD.Kit.GENERIC_IDS), JSON.stringify(GEN), 'DD.Kit.GENERIC_IDS lists the generic skills');
     t.eq(JSON.stringify(DD.Kit.CONSUMABLE_IDS), JSON.stringify(CON), 'DD.Kit.CONSUMABLE_IDS lists the consumables');
+    t.ok(!DD.Kit.telegraphed && !DD.Kit.retreatSpot, 'v2: no intent tools left on DD.Kit (telegraphed / retreatSpot are gone)');
     const owned = Object.keys(DD.defs.skills).filter(function (k) { return DD.defs.skills[k].owner === 'generic'; }).sort();
     t.eq(owned.join(','), GEN.slice().sort().join(','), 'every owner:generic skill is one of the 12 (gen_ prefix)');
     const conIds = Object.keys(DD.defs.consumables).filter(function (k) { return /^con_/.test(k); }).sort();
@@ -170,21 +209,30 @@
       t.ok(KINDS.indexOf(s.kind) >= 0, id + ': kind "' + s.kind + '" (never a spell: Silence can\'t stop the basics)');
       t.ok(Array.isArray(s.tags) && s.tags.length > 0, id + ': tags');
       t.ok(typeof s.icon === 'string' && s.icon.length >= 1 && s.icon.length <= 4, id + ': one emoji icon');
-      t.ok(typeof s.flavor === 'string' && s.flavor.length > 10 && s.flavor.length <= 120, id + ': flavor ≤ 120');
+      t.ok(typeof s.flavor === 'string' && s.flavor.length > 10 && s.flavor.length <= 120 && !V1_WORDS.test(s.flavor), id + ': flavor ≤ 120, no v1 words');
       t.ok(typeof s.name === 'string' && s.name.length <= 20, id + ': short name for the action bar (' + s.name + ')');
       t.ok(s.hype === 0, id + ': no Hype cost');
+      t.ok(!/intents|telegraph/.test(sources(s)), id + ': no code reads enemy intents or telegraphs (v2: there are none)');
       aps[s.ap] = 1;
-      const descs = [1, 2, 3].map(function (lv) {
+      const faces = [1, 2, 3].map(function (lv) {
         const dn = DD.skillDesc(s, lv, null), du = DD.skillDesc(s, lv, probe);
-        t.ok(!badText(dn) && dn.length <= 300, id + ' L' + lv + ' desc reads fine without a user: ' + JSON.stringify(dn));
+        t.ok(!badText(dn), id + ' L' + lv + ' desc reads fine without a user: ' + JSON.stringify(dn));
+        // DESIGN §6 Simplicity: the desc reads in one breath
+        t.ok(dn.length <= 140, id + ' L' + lv + ': one-breath desc (' + dn.length + ' chars ≤ 140)');
+        t.ok(!V1_WORDS.test(dn), id + ' L' + lv + ': no v1 words (telegraph, Guard, intents...) in ' + JSON.stringify(dn));
         t.eq(du, dn, id + ' L' + lv + ': desc does not depend on who reads it');
         const L = Lv(id, lv);
-        ['dmg', 'heal', 'block', 'push'].forEach(function (k) {
-          if (typeof L[k] === 'number' && L[k] > 0) t.ok(new RegExp('(^|[^0-9])' + L[k] + '([^0-9]|$)').test(dn), id + ' L' + lv + ': desc shows its ' + k + ' ' + L[k]);
+        t.ok(Object.keys(L).length <= 3, id + ' L' + lv + ': at most 3 numbers per level (one verb + one rider)');
+        ['dmg', 'heal', 'block', 'push', 'range', 'r'].forEach(function (k) {
+          if (typeof L[k] === 'number' && L[k] > 0 && k !== 'r') t.ok(new RegExp('(^|[^0-9])' + L[k] + '([^0-9]|$)').test(dn), id + ' L' + lv + ': desc shows its ' + k + ' ' + L[k]);
         });
-        return dn;
+        return JSON.stringify([dn, s.ap, DD.Combat.cooldownOf(null, s, lv), DD.Targeting.range(null, s, lv)]);
       });
-      t.ok(descs[0] !== descs[1] && descs[1] !== descs[2], id + ': every level reads differently');
+      t.ok(faces[0] !== faces[1] && faces[1] !== faces[2], id + ': every level is better in some visible way (desc, cost, cooldown or range)');
+      // the level-up "upgrade" card shows the new desc next to "Was: <old desc>": they must never read the same
+      [2, 3].forEach(function (lv) {
+        t.ok(DD.skillDesc(s, lv, null) !== DD.skillDesc(s, lv - 1, null), id + ' L' + (lv - 1) + ' → L' + lv + ': the upgrade reads differently');
+      });
       const quips = DD.Kit.QUIPS && DD.Kit.QUIPS[id];
       t.ok(Array.isArray(quips) && quips.length >= 3 && quips.every(function (q) { return typeof q === 'string' && q.length > 0 && q.length <= 70; }), id + ': 3+ quips, each ≤ 70 characters');
     });
@@ -199,7 +247,9 @@
       t.ok(typeof c.price === 'number' && c.price >= 20 && c.price <= 35 && c.price === Math.round(c.price), id + ': price 20-35 (' + c.price + ')');
       t.ok(c.rarity === 'rare' ? c.price >= 30 : c.price <= 25, id + ': rares cost more than commons');
       t.eq(c.ap, 1, id + ': 1 AP');
-      t.ok(typeof c.desc === 'string' && !badText(c.desc) && c.desc.length >= 20 && c.desc.length <= 300, id + ': exact desc (a string for the tooltip)');
+      t.ok(typeof c.desc === 'string' && !badText(c.desc) && c.desc.length >= 20 && c.desc.length <= 210, id + ': exact desc, short (' + c.desc.length + ' chars ≤ 210)');
+      t.ok(!V1_WORDS.test(c.desc) && !V1_WORDS.test(c.flavor) && !/Block/.test(c.desc), id + ': no v1 words, no Block (nobody gets a free shield)');
+      t.ok(!/intents|telegraph/.test(sources(c)), id + ': no code reads enemy intents or telegraphs');
       t.ok(typeof c.flavor === 'string' && c.flavor.length > 10 && c.flavor.length <= 120, id + ': flavor ≤ 120');
       t.ok(typeof c.icon === 'string' && c.icon.length >= 1 && c.icon.length <= 4, id + ': icon');
       t.ok(c.target && TARGET_TYPES.indexOf(c.target.type) >= 0 && typeof c.execute === 'function', id + ': target + execute');
@@ -219,7 +269,6 @@
     t.eq(clashes.length, 0, 'no display-name clash with other content: ' + JSON.stringify(clashes));
     mine.forEach(function (n) { t.ok(!/marble/i.test(n), n + ': the marbles stay Professor Marbles\''); });
     // a generic skill shares the action bar with the hero's basic, signature and pool skills: its icon must be its own
-    // (Rude Shove was ✋ like Slate's Personal Space, Sucker Punch 👊 like Marbles' and Slate's basic attacks)
     const genIcons = GEN.map(function (id) { return sk(id).icon; });
     t.eq(new Set(genIcons).size, GEN.length, 'the 12 generic skills have 12 different icons');
     const iconClash = Object.keys(DD.defs.skills).filter(function (k) {
@@ -236,19 +285,30 @@
     [1, 2, 3].forEach(function (lv) {
       const L = Lv('gen_throw_chair', lv);
       fight({ heroes: [{ id: USER, x: 1, y: 4 }, { id: 'test_mage', x: 4, y: 5 }],
-        enemies: [{ id: 'test_grunt', x: 4, y: 4 }, { id: 'test_grunt', x: 5, y: 4 }, { id: 'test_grunt', x: 4, y: 3 }] });
+        enemies: [{ id: 'test_grunt', x: 4, y: 4 }, { id: 'test_grunt', x: 4, y: 3 }] });
       const u = me(), sl = give(u, 'gen_throw_chair', lv), mage = hero('test_mage');
-      const g1 = at(4, 4), g2 = at(5, 4), g3 = at(4, 3);
-      const hp = [g1.hp, g2.hp, g3.hp, mage.hp];
+      const g = at(4, 4), other = at(4, 3);
+      const hp = [g.hp, other.hp, mage.hp];
       t.eq(DD.Combat.costOf(u, sk('gen_throw_chair'), lv).ap, 2, 'Throw Chair L' + lv + ': 2 AP');
+      t.eq(keys(DD.Targeting.area(u, sl, lv, { x: 4, y: 4 })), L.push ? '4,4 5,4' : '4,4', 'Throw Chair L' + lv + ': the area shows ' + (L.push ? 'where the foe is knocked to' : 'the foe'));
       if (!use(t, u, sl, 4, 4, 'Throw Chair L' + lv)) return;
-      t.eq(hp[0] - g1.hp, L.dmg, 'Throw Chair L' + lv + ': the target takes ' + L.dmg);
-      t.eq(hp[1] - g2.hp, L.splinter || 0, 'Throw Chair L' + lv + ': splinters on the foe next to it: ' + (L.splinter || 0));
-      t.eq(hp[2] - g3.hp, L.splinter || 0, 'Throw Chair L' + lv + ': splinters on the other neighbour: ' + (L.splinter || 0));
-      t.eq(mage.hp, hp[3], 'Throw Chair L' + lv + ': splinters never hit allies');
+      t.eq(hp[0] - g.hp, L.dmg, 'Throw Chair L' + lv + ': the target takes ' + L.dmg);
+      t.ok(other.hp === hp[1] && mage.hp === hp[2], 'Throw Chair L' + lv + ': nobody else is hit');
+      t.ok(L.push ? g.x === 5 && g.y === 4 : g.x === 4 && g.y === 4, 'Throw Chair L' + lv + ': ' + (L.push ? 'knocked back 1 tile' : 'no knockback before III'));
       t.eq(u.ap, 1, 'Throw Chair L' + lv + ': 2 AP spent');
       t.ok(DD.Combat.canUse(u, sl) !== true, 'Throw Chair L' + lv + ': on cooldown right after');
     });
+    // III's knockback: into a crate (crash 3 to both) and into a pit (YEET, an environmental kill)
+    fight({ heroes: [{ id: USER, x: 1, y: 4 }], enemies: [{ id: 'test_grunt', x: 4, y: 4, hpMult: 2 }], objects: [{ x: 5, y: 4, id: 'crate' }] });
+    let g = at(4, 4);
+    const ghp = g.hp;
+    use(t, me(), give(me(), 'gen_throw_chair', 3), 4, 4, 'Throw Chair III into a crate');
+    t.ok(g.x === 4 && ghp - g.hp === 10 + 3 && tile(5, 4).obj && tile(5, 4).obj.hp === 3, 'Throw Chair III: knocked into the crate, 3 crash damage to both');
+    fight({ heroes: [{ id: USER, x: 1, y: 4 }], enemies: [{ id: 'test_grunt', x: 4, y: 4, hpMult: 2 }], terrain: function (tl) { if (tl.x === 5 && tl.y === 4) tl.t = 'pit'; } });
+    g = at(4, 4);
+    const hype0 = S().hype;
+    use(t, me(), give(me(), 'gen_throw_chair', 3), 4, 4, 'Throw Chair III next to a pit');
+    t.ok(g.dead && S().hype - hype0 === 20, 'Throw Chair III: knocked into the pit (+20 Hype environmental kill)');
     // range, line of sight
     fight({ heroes: [{ id: USER, x: 1, y: 1 }], enemies: [{ id: 'test_grunt', x: 5, y: 1 }, { id: 'test_grunt', x: 6, y: 2 }, { id: 'test_grunt', x: 1, y: 4 }, { id: 'test_grunt', x: 2, y: 1 }],
       objects: [{ x: 1, y: 2, id: 'pillar' }] });
@@ -256,7 +316,7 @@
     t.ok(valid(u, sl, 5, 1) && valid(u, sl, 2, 1), 'Throw Chair: range 1-4 (adjacent and 4 away)');
     t.ok(!valid(u, sl, 6, 2), 'Throw Chair: not 6 away');
     t.ok(!valid(u, sl, 1, 4), 'Throw Chair: needs line of sight (a pillar is in the way)');
-    // cooldown cycle: 2 at every level (use in round r → ready again in round r + 3)
+    // cooldown 2 = unusable during its owner's next 2 turns (one hero: one turn a round)
     [1, 3].forEach(function (lv) {
       const cd = DD.Combat.cooldownOf(me(), sk('gen_throw_chair'), lv);
       t.eq(cd, 2, 'Throw Chair L' + lv + ': cooldown 2');
@@ -265,92 +325,91 @@
       use(t, me(), sl2, 5, 1, 'Throw Chair L' + lv + ' (cooldown cycle)');
       for (let r = 1; r <= cd; r++) {
         DD.Combat.endTurn();
-        t.ok(/cooldown/i.test(String(DD.Combat.canUse(me(), sl2))), 'Throw Chair L' + lv + ': still cooling down ' + r + ' round(s) later');
+        t.ok(/cooldown/i.test(String(DD.Combat.canUse(me(), sl2))), 'Throw Chair L' + lv + ': still cooling down on his turn ' + r + ' round(s) later');
       }
       DD.Combat.endTurn();
-      t.ok(sl2.cd === 0 && !/cooldown/i.test(String(DD.Combat.canUse(me(), sl2))), 'Throw Chair L' + lv + ': ready again ' + (cd + 1) + ' rounds later (cooldown ' + cd + ')');
+      t.ok(sl2.cd === 0 && !/cooldown/i.test(String(DD.Combat.canUse(me(), sl2))), 'Throw Chair L' + lv + ': ready again ' + (cd + 1) + ' rounds later');
     });
 
-    // Sucker Punch: plain, every helpless status, Frozen's own +50%, waking the sleeper, Weak at III
+    // Sucker Punch: plain, every helpless status (Frozen's own +50%, waking the sleeper); a taunted foe is not helpless
     [1, 2, 3].forEach(function (lv) {
       const L = Lv('gen_sucker_punch', lv);
-      ['none'].concat(DD.Kit.HELPLESS).forEach(function (cond) {
+      ['none', 'taunt'].concat(DD.Kit.HELPLESS).forEach(function (cond) {
         fight({ heroes: [{ id: USER, x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 4, hpMult: 3 }] });
-        const u2 = me(), sl2 = give(u2, 'gen_sucker_punch', lv), g = at(3, 4);
-        if (cond !== 'none') A().addStatus(g, cond, { turns: 1 }, u2);
-        const hp0 = g.hp;
+        const u2 = me(), sl2 = give(u2, 'gen_sucker_punch', lv), g2 = at(3, 4);
+        if (cond !== 'none') A().addStatus(g2, cond, { turns: 1 }, u2);
+        const hp0 = g2.hp;
         if (!use(t, u2, sl2, 3, 4, 'Sucker Punch L' + lv + ' vs ' + cond)) return;
-        const base = L.dmg + (cond === 'none' ? 0 : L.bonus);
-        t.eq(hp0 - g.hp, cond === 'frozen' ? Math.round(base * 1.5) : base, 'Sucker Punch L' + lv + ' vs ' + cond + ': ' + base + (cond === 'frozen' ? ' (+50% on Frozen)' : ''));
-        if (cond === 'sleep') t.ok(!has(g, 'sleep'), 'Sucker Punch: the sleeper wakes up');
-        t.eq(has(g, 'weak'), !!L.weak, 'Sucker Punch L' + lv + ': Weakened only at III');
-        if (L.weak) t.eq(st(g, 'weak').turns, 1, 'Sucker Punch III: Weak for 1 turn');
+        const cheap = ['dazzled', 'stun', 'sleep', 'frozen'].indexOf(cond) >= 0;
+        const base = L.dmg + (cheap ? L.bonus : 0);
+        t.eq(hp0 - g2.hp, cond === 'frozen' ? Math.round(base * 1.5) : base, 'Sucker Punch L' + lv + ' vs ' + cond + ': ' + base + (cond === 'frozen' ? ' (+50% on Frozen)' : ''));
+        if (cond === 'sleep') t.ok(!has(g2, 'sleep'), 'Sucker Punch: the sleeper wakes up');
+        t.ok(!has(g2, 'weak'), 'Sucker Punch L' + lv + ': just damage (no rider)');
       });
     });
+    t.eq(JSON.stringify(DD.Kit.HELPLESS), JSON.stringify(['dazzled', 'stun', 'sleep', 'frozen']), 'Sucker Punch: Dazzled, Stunned, Asleep or Frozen, as the desc says');
     fight({ heroes: [{ id: USER, x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 4, y: 4 }] });
     t.ok(!valid(me(), give(me(), 'gen_sucker_punch', 1), 4, 4), 'Sucker Punch: melee only');
 
-    // Sand in Your Eye
+    // Sand in Your Eye: damage + Dazzled through its next turn; III also hits the foes next to it
     [1, 2, 3].forEach(function (lv) {
       const L = Lv('gen_pocket_sand', lv);
       fight({ heroes: [{ id: USER, x: 1, y: 4 }, { id: 'test_mage', x: 4, y: 4 }],
         enemies: [{ id: 'test_grunt', x: 3, y: 4 }, { id: 'test_grunt', x: 3, y: 5 }, { id: 'test_grunt', x: 4, y: 6 }] });
       const u3 = me(), sl3 = give(u3, 'gen_pocket_sand', lv), mage = hero('test_mage');
       const a = at(3, 4), b = at(3, 5), far = at(4, 6);
-      t.eq(valid(u3, sl3, 4, 6), L.range >= 4, 'Sand in Your Eye L' + lv + ': a foe 5 away is out of range');
+      t.eq(valid(u3, sl3, 3, 5), L.range >= 3, 'Sand L' + lv + ': a foe 3 away in range from II');
+      t.ok(!valid(u3, sl3, 4, 6), 'Sand L' + lv + ': a foe 5 away is out of range');
       const hp = [a.hp, b.hp];
       if (!use(t, u3, sl3, 3, 4, 'Sand in Your Eye L' + lv)) return;
       t.eq(hp[0] - a.hp, L.dmg, 'Sand L' + lv + ': ' + L.dmg + ' damage');
-      t.ok(has(a, 'dazzled') && st(a, 'dazzled').turns === 1, 'Sand L' + lv + ': Dazzled for 1 turn');
-      t.eq(has(a, 'weak'), !!L.weak, 'Sand L' + lv + ': Weakened from II');
+      t.ok(has(a, 'dazzled') && st(a, 'dazzled').turns === 1 && !st(a, 'dazzled').fresh, 'Sand L' + lv + ': Dazzled through its next turn');
+      t.ok(!has(a, 'weak'), 'Sand L' + lv + ': no second rider');
       t.eq(hp[1] - b.hp, L.r ? L.dmg : 0, 'Sand L' + lv + ': the foe next to it is hit only at III');
       t.eq(has(b, 'dazzled'), !!L.r, 'Sand L' + lv + ': the neighbour is Dazzled only at III');
       t.ok(!has(far, 'dazzled') && mage.statuses.length === 0, 'Sand L' + lv + ': nobody else (and never allies)');
     });
-    fight({ heroes: [{ id: USER, x: 1, y: 4 }], enemies: [{ id: 'test_grunt', x: 4, y: 4 }] });
-    t.ok(!valid(me(), give(me(), 'gen_pocket_sand', 1), 4, 4) && valid(me(), give(me(), 'gen_pocket_sand', 3), 4, 4), 'Sand: range 2, 3 at III');
-    // a Dazzled foe's telegraphed stab lands 1 tile off (so it misses the knight), then the Dazzle is gone
-    fight({ heroes: [{ id: USER, x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
-    const g = at(3, 4);
-    DD.AI.makeIntent(g, 'test_grunt_stab', me());
-    t.eq(g.intents.length, 1, 'the grunt telegraphs a stab at the knight');
-    use(t, me(), give(me(), 'gen_pocket_sand', 1), 3, 4, 'Sand vs a stabbing grunt');
-    const hp0 = me().hp;
-    let stabbed = 0;
-    A().addRule({ id: 'kit_stab_probe', name: 'probe', hooks: { onTakeDamage: function (d) { if (d.source === g && d.target.defId === USER && d.cause === 'skill') stabbed++; } } });
+    // a Dazzled grunt's stab on its turn lands 1 tile off (it misses the knight); the Dazzle ends with that turn
+    fight({ ai: true, heroes: [{ id: USER, x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
+    g = at(3, 4);
+    use(t, me(), give(me(), 'gen_pocket_sand', 1), 3, 4, 'Sand vs a stabby grunt');
+    const stabs = hitsOn(g, me());
     DD.Combat.endTurn();
-    t.ok(stabbed === 0 && me().hp === hp0, 'the Dazzled stab lands 1 tile off and misses the knight');
-    t.ok(!has(g, 'dazzled'), 'Dazzle wears off after the enemy turn');
+    t.eq(stabs.length, 0, 'the Dazzled stab lands 1 tile off and misses the knight');
+    t.ok(!has(g, 'dazzled'), 'the Dazzle wears off at the end of the grunt\'s turn');
+    // ...and the next turn it stabs him again
+    DD.Combat.endTurn();
+    t.ok(stabs.length >= 1, 'no longer Dazzled: the grunt stabs the knight on its next turn');
   });
 
   // ---- 3. pushes and bombs -------------------------------------------------------------------------------
   T.suite('kit: Rude Shove and Barrel Toss — pushes, crashes, pits, chain reactions', function (t) {
     [1, 2, 3].forEach(function (lv) {
       const L = Lv('gen_shove', lv);
-      fight({ heroes: [{ id: USER, x: 2, y: 4 }, { id: 'test_mage', x: 2, y: 3 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
+      fight({ heroes: [{ id: USER, x: 1, y: 4 }], enemies: [{ id: 'test_grunt', x: 2, y: 4 }] });
       let u = me(), sl = give(u, 'gen_shove', lv);
-      const g = at(3, 4);
-      if (!use(t, u, sl, 3, 4, 'Shove L' + lv)) return;
-      t.eq(g.x, 3 + L.push, 'Shove L' + lv + ': pushed ' + L.push + ' tiles');
-      t.eq(g.hp, 14 - L.dmg, 'Shove L' + lv + ': ' + L.dmg + ' damage');
+      const g = at(2, 4);
+      t.eq(DD.Combat.costOf(u, sk('gen_shove'), lv).ap, 1, 'Shove L' + lv + ': 1 AP');
+      if (!use(t, u, sl, 2, 4, 'Shove L' + lv)) return;
+      t.ok(g.x === 2 + L.push && g.hp === 14, 'Shove L' + lv + ': pushed ' + L.push + ' tiles, no damage without a crash');
       // an ally: moved, not hurt
-      fight({ heroes: [{ id: USER, x: 2, y: 4 }, { id: 'test_mage', x: 2, y: 3 }] });
+      fight({ heroes: [{ id: USER, x: 2, y: 5 }, { id: 'test_mage', x: 2, y: 4 }] });
       u = me(); sl = give(u, 'gen_shove', lv);
       const mage = hero('test_mage'), mhp = mage.hp;
-      use(t, u, sl, 2, 3, 'Shove L' + lv + ' (ally)');
-      t.ok(mage.x === 2 && mage.y === 3 - L.push && mage.hp === mhp, 'Shove L' + lv + ': an ally slides ' + L.push + ' and takes nothing');
+      use(t, u, sl, 2, 4, 'Shove L' + lv + ' (ally)');
+      t.ok(mage.x === 2 && mage.y === 4 - L.push && mage.hp === mhp, 'Shove L' + lv + ': an ally slides ' + L.push + ' and takes nothing');
       // a crate in the way: crash for 3, the crate takes 3
       fight({ heroes: [{ id: USER, x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }], objects: [{ x: 4, y: 4, id: 'crate' }] });
       u = me(); sl = give(u, 'gen_shove', lv);
       const g2 = at(3, 4);
       use(t, u, sl, 3, 4, 'Shove L' + lv + ' into a crate');
-      t.ok(g2.x === 3 && g2.hp === 14 - L.dmg - 3 && tile(4, 4).obj && tile(4, 4).obj.hp === 3, 'Shove L' + lv + ': crash = 3 to both the foe and the crate');
+      t.ok(g2.x === 3 && g2.hp === 11 && tile(4, 4).obj && tile(4, 4).obj.hp === 3, 'Shove L' + lv + ': crash = 3 to both the foe and the crate');
       // into another foe: both take the crash
       fight({ heroes: [{ id: USER, x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }, { id: 'test_grunt', x: 4, y: 4 }] });
       u = me(); sl = give(u, 'gen_shove', lv);
       const a = at(3, 4), b = at(4, 4);
       use(t, u, sl, 3, 4, 'Shove L' + lv + ' into a foe');
-      t.ok(a.hp === 14 - L.dmg - 3 && b.hp === 11, 'Shove L' + lv + ': both foes take the 3 crash damage');
+      t.ok(a.hp === 11 && b.hp === 11, 'Shove L' + lv + ': both foes take the 3 crash damage');
       // into a pit: YEET, environmental kill
       fight({ heroes: [{ id: USER, x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }], terrain: function (tl) { if (tl.x === 5 && tl.y === 4) tl.t = 'pit'; } });
       u = me(); sl = give(u, 'gen_shove', lv);
@@ -363,11 +422,10 @@
     t.ok(!valid(me(), sh, 3, 4), 'Shove: an immovable brute is not a valid target');
     t.ok(!valid(me(), sh, 1, 4), 'Shove: nobody there, no target');
     // ice: a push whose LAST step lands on ice slides one tile further (DD.Act.push), and the HUD area shows that tile
-    const row = function (x0, x1) { const out = []; for (let x = x0; x <= x1; x++) out.push({ x: x, y: 4 }); return out; };
     [
       { lv: 1, ice: 5, end: 6, why: 'push 2 ends on the ice at 5,4 and slides to 6,4' },
-      { lv: 3, ice: 4, end: 6, why: 'push 3 only passes over the ice at 4,4: no slide' },
-      { lv: 3, ice: 6, end: 7, why: 'push 3 ends on the ice at 6,4 and slides to 7,4' },
+      { lv: 2, ice: 5, end: 6, why: 'push 3 only passes over the ice at 5,4: no slide' },
+      { lv: 2, ice: 6, end: 7, why: 'push 3 ends on the ice at 6,4 and slides to 7,4' },
     ].forEach(function (c) {
       fight({ heroes: [{ id: USER, x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }],
         terrain: function (tl) { if (tl.y === 4 && tl.x === c.ice) tl.t = 'ice'; } });
@@ -411,21 +469,16 @@
     // Barrel Toss
     [1, 2, 3].forEach(function (lv) {
       const L = Lv('gen_barrel_toss', lv);
-      fight({ heroes: [{ id: USER, x: 1, y: 4 }, { id: 'test_mage', x: 4, y: 5 }],
+      fight({ heroes: [{ id: USER, x: 1, y: 4 }, { id: 'test_cleric', x: 4, y: 5 }],
         enemies: [{ id: 'test_grunt', x: 4, y: 4 }, { id: 'test_grunt', x: 5, y: 4 }, { id: 'test_grunt', x: 4, y: 3 }] });
-      const u = me(), sl = give(u, 'gen_barrel_toss', lv), mage = hero('test_mage');
+      const u = me(), sl = give(u, 'gen_barrel_toss', lv), cleric = hero('test_cleric');
       const c = at(4, 4), e = at(5, 4), n = at(4, 3);
-      const hp = [c.hp, e.hp, n.hp, mage.hp];
+      const hp = [c.hp, e.hp, n.hp, cleric.hp];
       if (!use(t, u, sl, 4, 4, 'Barrel Toss L' + lv)) return;
       t.ok(hp[0] - c.hp === L.dmg && hp[1] - e.hp === L.dmg && hp[2] - n.hp === L.dmg, 'Barrel Toss L' + lv + ': ' + L.dmg + ' fire damage to each foe in the blast');
-      t.eq(hp[3] - mage.hp, L.dmg, 'Barrel Toss L' + lv + ': allies in the blast are hit too');
+      t.eq(hp[3] - cleric.hp, L.dmg, 'Barrel Toss L' + lv + ': allies in the blast are hit too');
       t.eq(u.ap, 1, 'Barrel Toss L' + lv + ': 2 AP');
-      if (L.knock) {
-        t.ok(c.x === 4 && c.y === 4, 'Barrel Toss III: the unit at the center stays put');
-        t.ok(e.x === 6 && n.y === 2 && mage.y === 6, 'Barrel Toss III: everyone around is thrown 1 tile outward');
-      } else {
-        t.ok(e.x === 5 && n.y === 3 && mage.y === 5, 'Barrel Toss L' + lv + ': no knockback before III');
-      }
+      t.ok(e.x === 5 && n.y === 3 && cleric.y === 5, 'Barrel Toss L' + lv + ': nobody is thrown around (one verb: the blast)');
     });
     // range (2-4, 5 at III), no line of sight needed
     fight({ heroes: [{ id: USER, x: 1, y: 4 }], objects: [{ x: 2, y: 4, id: 'pillar' }] });
@@ -443,15 +496,15 @@
     t.ok(tile(4, 3).surface && tile(4, 3).surface.id === 'fire' && tile(4, 2).surface && tile(4, 2).surface.id === 'fire', 'the oil ignites and the fire runs along the slick');
     t.ok(tile(5, 4).surface && tile(5, 4).surface.id === 'steam', 'the puddle boils into steam');
 
-    // the 'throw' damage tag (what e.g. Slate's Mitts read: "+2 to everything he throws"): chair and barrel, not splinters
+    // the 'throw' damage tag (what e.g. Slate's Mitts read: "+2 to everything he throws"): chair and barrel
     const throwBonus = function () {
       A().addRule({ id: 'kit_mitts_probe', name: 'Mitts probe', hooks: { modifyOutgoingDamage: function (d) { if (d.tags && d.tags.indexOf('throw') >= 0) d.flat += 2; } } });
     };
     fight({ heroes: [{ id: USER, x: 1, y: 4 }], enemies: [{ id: 'test_grunt', x: 4, y: 4 }, { id: 'test_grunt', x: 5, y: 4 }] });
     throwBonus();
     let ta = at(4, 4), tb = at(5, 4);
-    use(t, me(), give(me(), 'gen_throw_chair', 3), 4, 4, 'Throw Chair III, +2 on throws');
-    t.ok(14 - ta.hp === 12 && 14 - tb.hp === 3, 'the chair is a throw (10 + 2), its splinters are not (3): ' + (14 - ta.hp) + ', ' + (14 - tb.hp));
+    use(t, me(), give(me(), 'gen_throw_chair', 1), 4, 4, 'Throw Chair, +2 on throws');
+    t.ok(14 - ta.hp === 9 && tb.hp === 14, 'the chair is a throw (7 + 2): ' + (14 - ta.hp));
     fight({ heroes: [{ id: USER, x: 1, y: 4 }], enemies: [{ id: 'test_grunt', x: 4, y: 4 }, { id: 'test_grunt', x: 5, y: 4 }] });
     throwBonus();
     ta = at(4, 4); tb = at(5, 4);
@@ -473,14 +526,16 @@
       t.eq(DD.Combat.costOf(u, sk('gen_second_wind'), lv).ap, 0, 'Second Wind L' + lv + ': 0 AP');
       if (!use(t, u, sl, u.x, u.y, 'Second Wind L' + lv)) return;
       t.eq(u.hp - hp0, L.heal, 'Second Wind L' + lv + ': heals ' + L.heal);
-      t.eq(u.ap, ap0 + (L.gainAp || 0), 'Second Wind L' + lv + ': AP ' + (L.gainAp ? '+1' : 'untouched'));
+      t.eq(u.ap, ap0, 'Second Wind L' + lv + ': free (AP untouched)');
       const left = ['weak', 'vulnerable', 'poison'].filter(function (id) { return has(u, id); });
-      t.eq(left.join(','), lv === 1 ? 'weak,vulnerable,poison' : lv === 2 ? 'weak,vulnerable' : '', 'Second Wind L' + lv + ': debuffs left ' + left.join(','));
+      t.eq(left.join(','), L.cleanse ? '' : 'weak,vulnerable,poison', 'Second Wind L' + lv + ': debuffs left ' + left.join(','));
       t.ok(/charges/i.test(String(DD.Combat.canUse(u, sl))), 'Second Wind L' + lv + ': once per fight');
     });
     fight();
     t.ok(typeof DD.Combat.canUse(me(), give(me(), 'gen_second_wind', 1)) === 'string', 'Second Wind I at full HP: refused (would waste it)');
-    t.eq(DD.Combat.canUse(me(), give(me(), 'gen_second_wind', 3)), true, 'Second Wind III at full HP: still worth the AP');
+    t.ok(typeof DD.Combat.canUse(me(), give(me(), 'gen_second_wind', 3)) === 'string', 'Second Wind III at full HP and no debuff: refused too');
+    A().addStatus(me(), 'weak', { turns: 1 }, null);
+    t.eq(DD.Combat.canUse(me(), give(me(), 'gen_second_wind', 3)), true, 'Second Wind III at full HP but Weakened: worth it (it shakes the debuff off)');
 
     [1, 2, 3].forEach(function (lv) {
       const L = Lv('gen_first_aid', lv);
@@ -492,21 +547,16 @@
       mage.hp = mage.maxHp - 12;
       A().addStatus(mage, 'bleed', { stacks: 2 }, null);
       A().addStatus(mage, 'poison', { stacks: 2 }, null);
+      A().addStatus(mage, 'weak', { turns: 2 }, null);
       t.ok(valid(u, sl, 4, 4) && valid(u, sl, 4, 5), 'First Aid L' + lv + ': self or an adjacent ally');
       t.ok(!valid(u, sl, 5, 4) && !valid(u, sl, 4, 7), 'First Aid L' + lv + ': not a foe, not an ally 3 away');
-      t.eq(valid(u, sl, 3, 4), !!L.revive, 'First Aid L' + lv + ': a downed ally only at III');
+      // v2 request: a heal aimed at a downed ally gets them up (the suite "kit: v2 requests" checks the revive itself)
+      t.ok(valid(u, sl, 3, 4), 'First Aid L' + lv + ': a downed adjacent ally too (the heal gets them up)');
       const hp0 = mage.hp;
       if (!use(t, u, sl, 4, 5, 'First Aid L' + lv)) return;
       t.eq(mage.hp - hp0, L.heal, 'First Aid L' + lv + ': heals ' + L.heal);
-      t.ok(!has(mage, 'bleed'), 'First Aid L' + lv + ': stops the Bleeding');
-      t.eq(has(mage, 'poison'), lv === 1, 'First Aid L' + lv + ': cures Poison from II');
-      if (L.revive) {
-        fight({ heroes: [{ id: USER, x: 4, y: 4 }, { id: 'test_cleric', x: 3, y: 4 }] });
-        const c2 = hero('test_cleric');
-        A().kill(c2, null);
-        use(t, me(), give(me(), 'gen_first_aid', lv), 3, 4, 'First Aid III revive');
-        t.ok(!c2.downed && c2.hp === L.revive, 'First Aid III: back on their feet with ' + L.revive + ' HP');
-      }
+      t.ok(!has(mage, 'bleed') && !has(mage, 'poison'), 'First Aid L' + lv + ': cures Bleeding and Poison');
+      t.ok(has(mage, 'weak'), 'First Aid L' + lv + ': other debuffs stay (that is the Antidote)');
     });
 
     [1, 2, 3].forEach(function (lv) {
@@ -523,90 +573,110 @@
     });
     fight();
     t.ok(typeof DD.Combat.canUse(me(), give(me(), 'gen_power_nap', 1)) === 'string', 'Power Nap at full HP: refused');
-    // made free by a passive (modifyCost): it heals for the AP actually spent, at least 1
-    [3, 0].forEach(function (ap) {
-      fight();
-      const u = me(), sl = give(u, 'gen_power_nap', 2);
-      A().addRule({ id: 'kit_free_nap', name: 'Free naps', hooks: { modifyCost: function (c) { if (c.skill && c.skill.id === 'gen_power_nap') c.ap = 0; } } });
-      u.hp = 2;
-      u.ap = ap;
-      if (!use(t, u, sl, u.x, u.y, 'free Power Nap with ' + ap + ' AP')) return;
-      t.eq(u.hp - 2, 4 * Math.max(1, ap), 'a free Power Nap with ' + ap + ' AP heals ' + Math.max(1, ap) + ' × 4');
-    });
+    // made free by a passive (modifyCost): it heals for the AP actually spent; with no AP at all it refuses
+    fight();
+    let u = me(), sl = give(u, 'gen_power_nap', 2);
+    A().addRule({ id: 'kit_free_nap', name: 'Free naps', hooks: { modifyCost: function (c) { if (c.skill && c.skill.id === 'gen_power_nap') c.ap = 0; } } });
+    u.hp = 2;
+    use(t, u, sl, u.x, u.y, 'free Power Nap with 3 AP');
+    t.eq(u.hp - 2, 3 * 4, 'a free Power Nap with 3 AP heals 3 × 4');
+    fight();
+    u = me(); sl = give(u, 'gen_power_nap', 2);
+    A().addRule({ id: 'kit_free_nap', name: 'Free naps', hooks: { modifyCost: function (c) { if (c.skill && c.skill.id === 'gen_power_nap') c.ap = 0; } } });
+    u.hp = 2;
+    u.ap = 0;
+    t.ok(/AP/.test(String(DD.Combat.canUse(u, sl))), 'a free Power Nap with 0 AP: refused (nothing to spend, nothing to heal)');
+    // resolved by something else for free (no cost paid): heals for the AP left
+    fight();
+    u = me(); sl = give(u, 'gen_power_nap', 1);
+    u.hp = 2;
+    DD.Combat._action(function () { DD.Combat.resolveSkill(u, sl, { x: u.x, y: u.y }, { pay: false }); });
+    t.ok(u.hp === 2 + 3 * 3 && u.ap === 0, 'a Power Nap resolved without paying: 3 AP left × 3 = 9');
   });
 
   // ---- 5. buffs and taunts ----------------------------------------------------------------------------
-  T.suite('kit: Rally the Troops and Come At Me, Bro — Block, Inspired timing, taunt redirects', function (t) {
+  T.suite('kit: Rally the Troops and Come At Me, Bro — Inspired and Taunt over v2 turns', function (t) {
     [1, 2, 3].forEach(function (lv) {
       const L = Lv('gen_rally', lv);
-      fight({ heroes: [{ id: USER, x: 4, y: 4 }, { id: 'test_mage', x: 4, y: 5 }, { id: 'test_cleric', x: 4, y: 7 }, { id: 'test_rogue', x: 7, y: 4 }],
+      fight({ heroes: [{ id: USER, x: 4, y: 4 }, { id: 'test_mage', x: 4, y: 5 }, { id: 'test_cleric', x: 4, y: 8 }, { id: 'test_rogue', x: 7, y: 4 }],
         enemies: [{ id: 'test_grunt', x: 7, y: 5 }, { id: 'test_grunt', x: 8, y: 8 }] });
-      const u = me(), sl = give(u, 'gen_rally', lv);
-      const near = [u, hero('test_mage')], far = [hero('test_cleric'), hero('test_rogue')];
+      const u = me(), sl = give(u, 'gen_rally', lv), mage = hero('test_mage');
+      t.eq(DD.Combat.cooldownOf(u, sk('gen_rally'), lv), L.cd, 'Rally L' + lv + ': cooldown ' + L.cd);
       if (!use(t, u, sl, u.x, u.y, 'Rally L' + lv)) return;
-      near.forEach(function (h) {
-        t.ok(h.block === L.block && has(h, 'inspired') && st(h, 'inspired').turns === L.turns, 'Rally L' + lv + ': ' + h.name + ' gets ' + L.block + ' Block + Inspired');
+      [u, mage].forEach(function (h) {
+        t.ok(has(h, 'inspired') && st(h, 'inspired').turns === 1 && h.block === 0, 'Rally L' + lv + ': ' + h.name + ' is Inspired (no Block)');
       });
-      far.forEach(function (h) {
-        t.eq(has(h, 'inspired'), L.r >= 3, 'Rally L' + lv + ': ' + h.name + ' 3 tiles away inspired only at radius 3');
-      });
+      t.eq(has(hero('test_rogue'), 'inspired'), L.r >= 3, 'Rally L' + lv + ': the rogue 3 tiles away is inspired only at radius 3+');
+      t.eq(has(hero('test_cleric'), 'inspired'), L.r >= 4, 'Rally L' + lv + ': the cleric 4 tiles away is inspired only at radius 4 (III)');
       // Inspired: +25% damage right away (chair 7 → 9)
       const g = at(7, 5), hp0 = g.hp;
       const chair = A().makeSlot('gen_throw_chair', 1);
       u.skills = [sl, chair];
       use(t, u, chair, 7, 5, 'Inspired Throw Chair');
       t.eq(hp0 - g.hp, 9, 'Rally L' + lv + ': an Inspired chair hits for 9 (7 × 1.25)');
+      // v2 durations: an ally's lasts through her next turn, the user's through his next turn (his own was fresh)
       DD.Combat.endTurn();
-      t.eq(has(me(), 'inspired'), L.turns >= 2, 'Rally L' + lv + ': Inspired ' + (L.turns >= 2 ? 'lasts into the next turn' : 'ends with this turn'));
+      t.ok(DD.Combat.current() === mage && has(mage, 'inspired'), 'Rally L' + lv + ': the mage is Inspired on her turn');
       DD.Combat.endTurn();
-      t.ok(!has(me(), 'inspired'), 'Rally L' + lv + ': gone after that');
+      t.ok(!has(mage, 'inspired') && has(me(), 'inspired'), 'Rally L' + lv + ': gone after her turn; the knight still has it');
+      DD.Combat.endRound();
+      t.ok(DD.Combat.current() === me() && has(me(), 'inspired'), 'Rally L' + lv + ': the knight is still Inspired on his next turn');
+      DD.Combat.endTurn();
+      t.ok(!has(me(), 'inspired'), 'Rally L' + lv + ': ...and it ends with that turn');
     });
 
     [1, 2, 3].forEach(function (lv) {
       const L = Lv('gen_taunt', lv);
-      fight({ heroes: [{ id: USER, x: 2, y: 4 }, { id: 'test_mage', x: 2, y: 7 }],
+      fight({ ai: true, heroes: [{ id: USER, x: 2, y: 4 }, { id: 'test_mage', x: 2, y: 7 }],
         enemies: [{ id: 'test_archer', x: 5, y: 4 }, { id: 'test_archer', x: 5, y: 5 }, { id: 'test_archer', x: 6, y: 4 }] });
       const u = me(), sl = give(u, 'gen_taunt', lv), mage = hero('test_mage');
       const a = at(5, 4), b = at(5, 5), c = at(6, 4);
-      DD.AI.makeIntent(a, 'test_arrow', mage);
-      t.eq(a.intents[0].unitId, mage.id, 'the archer is aiming at the mage');
       t.eq(valid(u, sl, 6, 4), L.range >= 4, 'Come At Me L' + lv + ': a foe 4 away in range from II');
       if (!use(t, u, sl, 5, 4, 'Come At Me L' + lv)) return;
       t.eq(u.block, L.block, 'Come At Me L' + lv + ': ' + L.block + ' Block');
-      t.ok(has(a, 'taunt') && st(a, 'taunt').source === u.id && st(a, 'taunt').turns === 1, 'Come At Me L' + lv + ': the archer is Taunted by the knight for 1 turn');
-      t.eq(a.intents.length && a.intents[0].unitId, u.id, 'Come At Me L' + lv + ': its shot now tracks the knight');
+      t.ok(has(a, 'taunt') && st(a, 'taunt').source === u.id && st(a, 'taunt').turns === 1, 'Come At Me L' + lv + ': the archer is Taunted by the knight through its next turn');
       t.eq(has(b, 'taunt'), L.r >= 1, 'Come At Me L' + lv + ': the foe next to it is Taunted only at III');
       t.eq(has(c, 'taunt'), L.r >= 1, 'Come At Me L' + lv + ': (both neighbours)');
-      const mhp = mage.hp;
-      DD.Combat.endTurn();
-      t.eq(mage.hp, mhp, 'Come At Me L' + lv + ': the mage is spared');
-      const ai = at(a.x, a.y) === a ? a : null;
-      t.ok(ai && ai.intents.some(function (it) { return it.unitId === u.id; }), 'Come At Me L' + lv + ': next round it must come for the knight');
+      // the round plays out (the mage's turn, then the archers'): the taunted archer must shoot the knight
+      const onKnight = hitsOn(a, u, 'kit_probe_knight'), onMage = hitsOn(a, mage, 'kit_probe_mage');
+      const taunted = [a, b, c].filter(function (x) { return has(x, 'taunt'); });
+      const anyOnMage = [];
+      A().addRule({ id: 'kit_probe_any', name: 'probe', hooks: { onTakeDamage: function (d) { if (d.target === mage && taunted.indexOf(d.source) >= 0) anyOnMage.push(d.source.id); } } });
+      DD.Combat.endRound();
+      t.ok(onKnight.length >= 1 && onMage.length === 0, 'Come At Me L' + lv + ': on its turn the taunted archer shoots the knight, not the mage');
+      t.eq(anyOnMage.length, 0, 'Come At Me L' + lv + ': no taunted archer touches the mage');
+      t.ok(!has(a, 'taunt'), 'Come At Me L' + lv + ': the Taunt ends with the archer\'s turn');
     });
   });
 
   // ---- 6. movement ----------------------------------------------------------------------------------------
-  T.suite('kit: Dodge Roll and Tactical Retreat — straight rolls, roots, cliffs, landing spots', function (t) {
+  T.suite('kit: Dodge Roll and Tactical Retreat — straight rolls, safe walks, nothing provoked', function (t) {
     [1, 2, 3].forEach(function (lv) {
       const L = Lv('gen_dodge_roll', lv);
       fight({ enemies: [{ id: 'test_grunt', x: 3, y: 4 }], objects: [{ x: 2, y: 3, id: 'pillar' }],
         terrain: function (tl) { if (tl.x === 2 && tl.y === 5) tl.t = 'pit'; if (tl.x === 1 && tl.y === 4) tl.h = 2; } });
-      const u = me(), sl = give(u, 'gen_dodge_roll', lv);
-      A().addStatus(u, 'root', { turns: 1 }, null);
-      t.eq(DD.Combat.reachable(u).size, 0, 'Dodge Roll L' + lv + ': rooted, no walking');
+      const u = me(), sl = give(u, 'gen_dodge_roll', lv), g = at(3, 4);
       t.ok(valid(u, sl, 4, 4), 'Dodge Roll L' + lv + ': rolls right past the grunt');
       t.eq(valid(u, sl, 5, 4), L.range >= 3, 'Dodge Roll L' + lv + ': 3 tiles from II');
       t.ok(!valid(u, sl, 3, 5) && !valid(u, sl, 3, 3), 'Dodge Roll: straight lines only');
       t.ok(!valid(u, sl, 2, 2), 'Dodge Roll: a pillar stops it');
       t.ok(!valid(u, sl, 2, 6), 'Dodge Roll: no rolling over a pit');
       t.ok(!valid(u, sl, 0, 4), 'Dodge Roll: no rolling up a 2-level cliff');
-      if (!use(t, u, sl, 4, 4, 'Dodge Roll L' + lv)) return;
+      const aoo = aooDuring(function () { use(t, u, sl, 4, 4, 'Dodge Roll L' + lv); });
       t.ok(u.x === 4 && u.y === 4, 'Dodge Roll L' + lv + ': landed');
       t.eq(u.block, L.block, 'Dodge Roll L' + lv + ': ' + L.block + ' Block');
-      t.eq(has(u, 'root'), !L.unroot, 'Dodge Roll L' + lv + ': ' + (L.unroot ? 'shakes off the Root' : 'still Rooted'));
       t.eq(u.ap, 2, 'Dodge Roll: 1 AP');
+      t.ok(aoo.length === 0 && g.oppRound !== S().round, 'Dodge Roll L' + lv + ': leaving the grunt\'s side provokes nothing');
     });
-    // "unless you fly": a flyer (Syllamin) rolls over pits, deep water and up cliffs; walls and objects still stop it
+    // the control: walking away from the grunt does provoke
+    fight({ enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
+    t.ok(DD.Combat.provokes(me(), 0, 4).length === 1, 'control: a plain move away from the grunt provokes its attack of opportunity');
+    const rollAoo = aooDuring(function () { use(t, me(), give(me(), 'gen_dodge_roll', 1), 0, 4, 'Dodge Roll away from the grunt'); });
+    t.ok(rollAoo.length === 0 && me().hp === me().maxHp, 'Dodge Roll away from the grunt: no attack of opportunity');
+    fight({ enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
+    A().addStatus(me(), 'root', { turns: 1 }, null);
+    t.ok(/Rooted/.test(String(DD.Combat.canUse(me(), give(me(), 'gen_dodge_roll', 3)))), 'Dodge Roll: not while Rooted');
+    // "unless you fly": a flyer rolls over pits, deep water and up cliffs; walls and objects still stop it
     fight({ objects: [{ x: 2, y: 3, id: 'pillar' }],
       terrain: function (tl) { if (tl.x === 2 && tl.y === 5) tl.t = 'pit'; if (tl.x === 3 && tl.y === 4) tl.t = 'deep_water'; if (tl.x === 1 && tl.y === 4) tl.h = 2; } });
     const fly = me();
@@ -616,60 +686,117 @@
     t.ok(!valid(fly, fr, 2, 2), 'Dodge Roll: a flyer still can\'t roll through a pillar');
     t.ok(!valid(fly, fr, 3, 4) && !valid(fly, fr, 2, 5), 'Dodge Roll: ...nor stop over the deep water or the pit');
 
+    // Tactical Retreat: a walk of up to 3 / 4 / 5 tiles that provokes nothing
     [1, 2, 3].forEach(function (lv) {
       const L = Lv('gen_tactical_retreat', lv);
-      fight({ heroes: [{ id: USER, x: 1, y: 4 }, { id: 'test_mage', x: 5, y: 4 }, { id: 'test_cleric', x: 7, y: 4 }, { id: 'test_rogue', x: 6, y: 1 }] });
-      let u = me(), sl = give(u, 'gen_tactical_retreat', lv);
-      const mage = hero('test_mage');
-      t.ok(valid(u, sl, 5, 4), 'Tactical Retreat L' + lv + ': an ally 4 away');
-      t.eq(valid(u, sl, 7, 4), L.range >= 6, 'Tactical Retreat L' + lv + ': an ally 6 away only at III');
-      if (!use(t, u, sl, 5, 4, 'Tactical Retreat L' + lv)) return;
-      t.ok(u.x === 4 && u.y === 4, 'Tactical Retreat L' + lv + ': lands on the free tile next to the ally nearest to you');
-      t.ok(u.block === L.block && mage.block === L.block, 'Tactical Retreat L' + lv + ': both gain ' + L.block + ' Block');
-      // the nearest tile is lava: land on a safe one instead
-      fight({ heroes: [{ id: USER, x: 1, y: 4 }, { id: 'test_mage', x: 5, y: 4 }], terrain: function (tl) { if (tl.x === 4 && tl.y === 4) tl.t = 'lava'; } });
-      u = me(); sl = give(u, 'gen_tactical_retreat', lv);
-      use(t, u, sl, 5, 4, 'Tactical Retreat L' + lv + ' (lava)');
-      t.ok(u.x === 5 && u.y === 3 && u.hp === u.maxHp, 'Tactical Retreat L' + lv + ': skips the lava, lands north of the ally');
-      // already adjacent: hold your ground, both still guard
-      fight({ heroes: [{ id: USER, x: 4, y: 4 }, { id: 'test_mage', x: 5, y: 4 }] });
-      u = me(); sl = give(u, 'gen_tactical_retreat', lv);
-      use(t, u, sl, 5, 4, 'Tactical Retreat L' + lv + ' (adjacent)');
-      t.ok(u.x === 4 && u.y === 4 && u.block === L.block && hero('test_mage').block === L.block, 'Tactical Retreat L' + lv + ': adjacent = no leap, Block for both');
+      fight({ heroes: [{ id: USER, x: 4, y: 4 }, { id: 'test_mage', x: 4, y: 3 }],
+        enemies: [{ id: 'test_grunt', x: 5, y: 4 }, { id: 'test_grunt', x: 4, y: 5 }], objects: [{ x: 3, y: 4, id: 'pillar' }] });
+      const u = me(), sl = give(u, 'gen_tactical_retreat', lv);
+      const g1 = at(5, 4), g2 = at(4, 5);
+      t.ok(valid(u, sl, 4, 1), 'Tactical Retreat L' + lv + ': 3 tiles, walking through the mage');
+      t.eq(valid(u, sl, 4, 0), L.range >= 4, 'Tactical Retreat L' + lv + ': 4 tiles from II');
+      t.eq(valid(u, sl, 2, 2), L.range >= 4, 'Tactical Retreat L' + lv + ': around the pillar (4 steps) from II');
+      t.eq(valid(u, sl, 1, 2), L.range >= 5, 'Tactical Retreat L' + lv + ': 5 steps only at III');
+      t.eq(valid(u, sl, 6, 4), L.range >= 4, 'Tactical Retreat L' + lv + ': never through a grunt (round it: 4 steps)');
+      t.ok(!valid(u, sl, 4, 3), 'Tactical Retreat: never onto a unit');
+      t.eq(keys(DD.Targeting.area(u, sl, lv, { x: 4, y: 1 })), '4,1 4,2 4,3', 'Tactical Retreat L' + lv + ': the area is the route');
+      t.ok(DD.Combat.provokes(u, 4, 2).length === 2, 'control: a plain move off this tile provokes both grunts');
+      const aoo = aooDuring(function () { use(t, u, sl, 4, 1, 'Tactical Retreat L' + lv); });
+      t.ok(u.x === 4 && u.y === 1 && u.hp === u.maxHp, 'Tactical Retreat L' + lv + ': walked 3 tiles away');
+      t.ok(aoo.length === 0 && g1.oppRound !== S().round && g2.oppRound !== S().round, 'Tactical Retreat L' + lv + ': no attacks of opportunity');
+      t.eq(u.ap, 2, 'Tactical Retreat L' + lv + ': 1 AP');
+      t.ok(/cooldown/i.test(String(DD.Combat.canUse(u, sl))), 'Tactical Retreat L' + lv + ': on cooldown (2)');
     });
-    fight({ heroes: [{ id: USER, x: 4, y: 4 }, { id: 'test_mage', x: 8, y: 4 }], enemies: [{ id: 'test_grunt', x: 8, y: 3 }, { id: 'test_grunt', x: 8, y: 5 }, { id: 'test_grunt', x: 7, y: 4 }] });
-    let tr = give(me(), 'gen_tactical_retreat', 1);
-    t.ok(!valid(me(), tr, 8, 4), 'Tactical Retreat: a boxed-in ally is not a target');
-    fight({ heroes: [{ id: USER, x: 1, y: 4 }, { id: 'test_mage', x: 4, y: 4 }] });
-    tr = give(me(), 'gen_tactical_retreat', 1);
+    // the route avoids hazards when it can (fewest hazard tiles, then fewest steps); when it can't, the preview says so
+    [[1, true], [2, false]].forEach(function (c) {
+      fight({ heroes: [{ id: USER, x: 4, y: 4 }], terrain: function (tl) { if (tl.x === 4 && tl.y === 3) tl.t = 'lava'; } });
+      const u = me(), sl = give(u, 'gen_tactical_retreat', c[0]);
+      const path = keys(DD.Targeting.area(u, sl, c[0], { x: 4, y: 2 }));
+      const prev = DD.Combat.preview(u, sl, 4, 2);
+      use(t, u, sl, 4, 2, 'Tactical Retreat L' + c[0] + ' past lava');
+      t.eq(path.indexOf('4,3') >= 0, c[1], 'Tactical Retreat L' + c[0] + ': ' + (c[1] ? 'the only route within 3 crosses the lava' : 'the 4-step detour avoids the lava') + ' (' + path + ')');
+      t.eq(u.hp < u.maxHp, c[1], 'Tactical Retreat L' + c[0] + ': ' + (c[1] ? 'it burns, as the preview warned' : 'no burns'));
+      t.eq(prev.perUnit[u.id] ? prev.perUnit[u.id].dmg || 0 : 0, u.maxHp - u.hp, 'Tactical Retreat L' + c[0] + ': the preview knew');
+    });
+    // not while Rooted; boxed in: nowhere to go
+    fight({ heroes: [{ id: USER, x: 4, y: 4 }], enemies: [{ id: 'test_grunt', x: 5, y: 4 }] });
     A().addStatus(me(), 'root', { turns: 1 }, null);
-    t.ok(/Rooted/.test(String(DD.Combat.canUse(me(), tr))), 'Tactical Retreat: not while Rooted (that is Dodge Roll\'s job)');
-    // never into a hazard: when the only free tile next to the ally is lava, the ally is no target at all
-    fight({ heroes: [{ id: USER, x: 1, y: 4 }, { id: 'test_mage', x: 5, y: 4 }],
-      enemies: [{ id: 'test_grunt', x: 5, y: 3 }, { id: 'test_grunt', x: 6, y: 4 }, { id: 'test_grunt', x: 5, y: 5 }],
-      terrain: function (tl) { if (tl.x === 4 && tl.y === 4) tl.t = 'lava'; } });
-    tr = give(me(), 'gen_tactical_retreat', 3);
-    t.ok(!valid(me(), tr, 5, 4), 'Tactical Retreat: never leaps into lava, even when it is the only free tile next to the ally');
-    // out of telegraphed attacks when it can (the HUD area shows the ally and the landing tile)
-    const lobbed = function (tiles) {
-      fight({ heroes: [{ id: USER, x: 1, y: 4 }, { id: 'test_mage', x: 5, y: 4 }], enemies: [{ id: 'test_grunt', x: 8, y: 8 }] });
-      DD.AI.makeIntent(at(8, 8), 'test_lob', tiles[0], { anchor: 'ground', tiles: tiles, noCooldown: true });
-      return give(me(), 'gen_tactical_retreat', 1);
-    };
-    tr = lobbed([{ x: 4, y: 4 }]);
-    t.eq(keys(DD.Targeting.area(me(), tr, 1, { x: 5, y: 4 })), '5,3 5,4', 'Tactical Retreat: the area shows the ally and the landing tile');
-    use(t, me(), tr, 5, 4, 'Tactical Retreat past a telegraph');
-    t.ok(me().x === 5 && me().y === 3, 'Tactical Retreat: the nearest tile is telegraphed, so it lands on the nearest clear one (at ' + me().x + ',' + me().y + ')');
-    tr = lobbed([{ x: 4, y: 4 }, { x: 5, y: 3 }, { x: 6, y: 4 }, { x: 5, y: 5 }]);
-    use(t, me(), tr, 5, 4, 'Tactical Retreat, every spot telegraphed');
-    t.ok(me().x === 4 && me().y === 4, 'Tactical Retreat: every spot telegraphed: the nearest one, as before (at ' + me().x + ',' + me().y + ')');
-    tr = lobbed([{ x: 4, y: 4 }]);
-    A().addStatus(at(8, 8), 'stun', { turns: 1 }, me());
-    use(t, me(), tr, 5, 4, 'Tactical Retreat past a cancelled telegraph');
-    t.ok(me().x === 4 && me().y === 4, 'Tactical Retreat: a stunned enemy\'s (cancelled) telegraph does not count');
+    t.ok(/Rooted/.test(String(DD.Combat.canUse(me(), give(me(), 'gen_tactical_retreat', 3)))), 'Tactical Retreat: not while Rooted');
+    fight({ heroes: [{ id: USER, x: 0, y: 0 }], enemies: [{ id: 'test_grunt', x: 1, y: 0 }, { id: 'test_grunt', x: 0, y: 1 }] });
+    t.ok(/No valid targets/.test(String(DD.Combat.canUse(me(), give(me(), 'gen_tactical_retreat', 3)))), 'Tactical Retreat: boxed into a corner by two grunts: nowhere to walk');
+    // a flyer walks over a pit (and never stops on it)
+    fight({ heroes: [{ id: USER, x: 4, y: 4 }], terrain: function (tl) { if (tl.x === 4 && (tl.y === 3 || tl.y === 2)) tl.t = 'pit'; } });
+    let w = give(me(), 'gen_tactical_retreat', 1);
+    t.ok(!valid(me(), w, 4, 1) || keys(DD.Targeting.area(me(), w, 1, { x: 4, y: 1 })).indexOf('4,3') < 0, 'Tactical Retreat: a walker goes round the pits');
+    me().flags.flying = true;
+    w = give(me(), 'gen_tactical_retreat', 1);
+    t.ok(valid(me(), w, 4, 1) && !valid(me(), w, 4, 2), 'Tactical Retreat: a flyer crosses the pits, but never lands in one');
   });
 
-  // ---- 7. drinks ----------------------------------------------------------------------------------------------
+  // ---- 7. v2 combos -----------------------------------------------------------------------------------------
+  T.suite('kit: v2 combos — Dazzle sets up a punch and a getaway, shoves free allies, Rally pays off', function (t) {
+    // Sand in Your Eye → Sucker Punch: 2 + 8 on a grunt that can't see it coming
+    fight({ heroes: [{ id: USER, x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 4, hpMult: 2 }] });
+    let u = me();
+    const g = at(3, 4), hp0 = g.hp;
+    u.skills = [A().makeSlot('gen_pocket_sand', 1), A().makeSlot('gen_sucker_punch', 1)];
+    use(t, u, u.skills[0], 3, 4, 'sand first');
+    use(t, u, u.skills[1], 3, 4, 'then the cheap shot');
+    t.eq(hp0 - g.hp, 2 + 8, 'Sand + Sucker Punch: 2 + 8 (the punch doubles on a Dazzled foe)');
+    // Sand → a walk away: a Dazzled foe makes no attack of opportunity
+    fight({ heroes: [{ id: USER, x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
+    u = me();
+    t.eq(DD.Combat.provokes(u, 0, 4).length, 1, 'control: walking away from the grunt provokes it');
+    use(t, u, give(u, 'gen_pocket_sand', 1), 3, 4, 'sand the grunt');
+    t.eq(DD.Combat.provokes(u, 0, 4).length, 0, 'Dazzled: the move preview shows no attack of opportunity');
+    const aoo = aooDuring(function () { t.ok(DD.Combat.move(u, 0, 4), 'walk away'); });
+    t.ok(aoo.length === 0 && u.x === 0 && u.hp === u.maxHp, 'Sand → walk away: no attack of opportunity');
+    // Rude Shove frees an ally from melee: forced movement provokes nothing (her own walk would have)
+    fight({ heroes: [{ id: USER, x: 3, y: 3 }, { id: 'test_mage', x: 3, y: 4 }], enemies: [{ id: 'test_grunt', x: 4, y: 4 }] });
+    const mage = hero('test_mage');
+    t.eq(DD.Act.provokers(mage, [{ x: 3, y: 5 }, { x: 3, y: 6 }]).length, 1, 'control: her own walk away would provoke the grunt');
+    const aoo2 = aooDuring(function () { use(t, me(), give(me(), 'gen_shove', 1), 3, 4, 'shove the mage out'); });
+    t.ok(aoo2.length === 0 && mage.y === 6 && mage.hp === mage.maxHp, 'Rude Shove: the mage slides out of melee, nothing provoked');
+    // Come At Me, Bro pulls a foe off the mage: the taunted grunt walks to the knight (and the knight's slash is waiting)
+    fight({ ai: true, heroes: [{ id: USER, x: 4, y: 3 }, { id: 'test_mage', x: 5, y: 4 }], enemies: [{ id: 'test_grunt', x: 5, y: 5 }] });
+    const gr = at(5, 5), m2 = hero('test_mage');
+    use(t, me(), give(me(), 'gen_taunt', 1), 5, 5, 'taunt the grunt next to the mage');
+    const onMage = hitsOn(gr, m2, 'kit_probe_mage'), onKnight = hitsOn(gr, me(), 'kit_probe_knight');
+    DD.Combat.endRound();
+    t.ok(onMage.length === 0 && m2.hp === m2.maxHp, 'Come At Me, Bro: the taunted grunt leaves the mage alone');
+    t.ok(DD.Grid.dist(gr, me()) === 1 && onKnight.length === 1, 'Come At Me, Bro: ...and walks up to stab the knight (' + gr.x + ',' + gr.y + ')');
+    // Come At Me, Bro shields an ally's getaway: a foe taunted by someone else makes no attack of opportunity on her
+    [false, true].forEach(function (taunt) {
+      fight({ heroes: [{ id: USER, x: 5, y: 2 }, { id: 'test_rogue', x: 4, y: 4 }], enemies: [{ id: 'test_grunt', x: 5, y: 4 }] });
+      if (taunt) use(t, me(), give(me(), 'gen_taunt', 1), 5, 4, 'taunt the grunt next to the rogue');
+      DD.Combat.endTurn();
+      const rogue = hero('test_rogue');
+      t.ok(DD.Combat.current() === rogue, 'the rogue\'s turn');
+      const seen = aooDuring(function () { t.ok(DD.Combat.move(rogue, 1, 4), 'the rogue walks away'); });
+      t.eq(seen.length, taunt ? 0 : 1, taunt ? 'Come At Me, Bro: the grunt taunted by the knight lets the rogue walk away' : 'control: untaunted, the grunt stabs the leaving rogue');
+    });
+    // Smoke Bomb: Stealthed heroes slip out of melee (stealthed movers never provoke)
+    fight({ heroes: [{ id: USER, x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
+    u = me();
+    drink(t, u, 'con_smoke_bomb', 2, 4);
+    const aoo3 = aooDuring(function () { t.ok(DD.Combat.move(u, 0, 4), 'walk out of the smoke'); });
+    t.ok(aoo3.length === 0 && u.x === 0 && u.hp === u.maxHp, 'Smoke Bomb → walk away: no attack of opportunity');
+    // Rally → the mage's turn: her Inspired fire hits 25% harder
+    fight({ heroes: [{ id: USER, x: 2, y: 4 }, { id: 'test_mage', x: 2, y: 5 }], enemies: [{ id: 'test_grunt', x: 5, y: 5, hpMult: 3 }] });
+    use(t, me(), give(me(), 'gen_rally', 1), 2, 4, 'rally');
+    DD.Combat.endTurn();
+    const m3 = hero('test_mage'), g3 = at(5, 5), hp3 = g3.hp;
+    t.ok(DD.Combat.current() === m3, 'the mage\'s turn');
+    use(t, m3, m3.basic, 5, 5, 'an Inspired magic missile');
+    t.eq(hp3 - g3.hp, 5, 'Rally → the mage\'s 4-damage bolt hits for 5 (×1.25)');
+    // Barrel Toss on somebody else's oil: the whole slick goes up
+    fight({ heroes: [{ id: USER, x: 1, y: 4 }], enemies: [{ id: 'test_grunt', x: 5, y: 4 }, { id: 'test_grunt', x: 6, y: 6 }],
+      surfaces: [{ x: 5, y: 4, id: 'oil', turns: 5 }, { x: 5, y: 5, id: 'oil', turns: 5 }, { x: 5, y: 6, id: 'oil', turns: 5 }, { x: 6, y: 6, id: 'oil', turns: 5 }] });
+    use(t, me(), give(me(), 'gen_barrel_toss', 1), 4, 4, 'barrel next to the oil');
+    t.ok([[5, 4], [5, 5], [5, 6], [6, 6]].every(function (p) { const sf = tile(p[0], p[1]).surface; return sf && sf.id === 'fire'; }), 'Barrel Toss: the oil slick burns all the way to the second grunt');
+  });
+
+  // ---- 8. drinks ----------------------------------------------------------------------------------------------
   T.suite('kit: consumables — Red Drinks, Energy Drink, Antidote, Liquid Courage, Mystery Potion', function (t) {
     [['con_red_drink', 10], ['con_big_red_drink', 20]].forEach(function (p) {
       fight({ heroes: [{ id: USER, x: 4, y: 4 }, { id: 'test_mage', x: 4, y: 5 }, { id: 'test_cleric', x: 4, y: 7 }], enemies: [{ id: 'test_grunt', x: 5, y: 4 }] });
@@ -689,33 +816,35 @@
       t.eq(mage.hp, mage.maxHp, p[0] + ': an ally, capped at max HP');
     });
 
+    // Energy Drink: +2 AP now for the drinker; an ally (not her turn) gets them at the start of her next turn
     fight({ heroes: [{ id: USER, x: 4, y: 4 }, { id: 'test_mage', x: 4, y: 5 }, { id: 'test_cleric', x: 4, y: 7 }] });
     drink(t, me(), 'con_energy_drink', 4, 4);
-    t.eq(me().ap, 4, 'Energy Drink: 3 − 1 + 2 = 4 AP');
-    t.ok(has(me(), 'haste') && st(me(), 'haste').turns === 2, 'Energy Drink: Hasted through the next turn');
+    t.eq(me().ap, 4, 'Energy Drink: 3 − 1 + 2 = 4 AP now');
     drink(t, me(), 'con_energy_drink', 4, 5);
-    t.eq(hero('test_mage').ap, 5, 'Energy Drink: an adjacent ally gets 2 AP');
-    t.ok(has(hero('test_mage'), 'haste'), 'Energy Drink: ...and the Haste');
-    t.ok(!has(hero('test_cleric'), 'haste'), 'Energy Drink: nobody else');
+    const mage = hero('test_mage');
+    t.ok(mage.apBank === 2 && !(mage.ap > 0), 'Energy Drink on the mage: 2 AP banked for her next turn');
+    t.ok(!valid(me(), DD.getConsumable('con_energy_drink'), 4, 7), 'Energy Drink: not 3 away');
+    t.ok(!me().statuses.length && !mage.statuses.length, 'Energy Drink: no other effect (no Haste)');
     DD.Combat.endTurn();
-    t.ok(me().ap === 4 && hero('test_mage').ap === 4 && hero('test_cleric').ap === 3, 'Energy Drink: +1 AP at the start of the next turn (4 vs 3)');
-    DD.Combat.endTurn();
-    t.ok(me().ap === 3 && !has(me(), 'haste'), 'Energy Drink: back to 3 AP the turn after');
+    t.ok(DD.Combat.current() === mage && mage.ap === 5 && !mage.apBank, 'Energy Drink: the mage starts her turn with 3 + 2 = 5 AP');
+    DD.Combat.endRound();
+    t.eq(me().ap, 3, 'Energy Drink: back to 3 AP the round after');
 
     fight({ heroes: [{ id: USER, x: 4, y: 4 }, { id: 'test_mage', x: 4, y: 5 }] });
-    let mage = hero('test_mage');
-    mage.hp = mage.maxHp - 10;
-    ['poison', 'bleed', 'weak', 'vulnerable', 'slow'].forEach(function (id) { A().addStatus(mage, id, { stacks: 2, turns: 2 }, null); });
-    A().addStatus(mage, 'inspired', { turns: 2 }, null);
-    const mhp = mage.hp;
+    let m = hero('test_mage');
+    m.hp = m.maxHp - 10;
+    ['poison', 'bleed', 'weak', 'vulnerable', 'slow'].forEach(function (id) { A().addStatus(m, id, { stacks: 2, turns: 2 }, null); });
+    A().addStatus(m, 'inspired', { turns: 2 }, null);
+    const mhp = m.hp;
     drink(t, me(), 'con_antidote', 4, 5);
-    t.eq(mage.statuses.map(function (s) { return s.id; }).join(','), 'inspired', 'Antidote: every debuff gone, buffs kept');
-    t.eq(mage.hp - mhp, 5, 'Antidote: heals 5');
+    t.eq(m.statuses.map(function (s) { return s.id; }).join(','), 'inspired', 'Antidote: every debuff gone, buffs kept');
+    t.eq(m.hp - mhp, 5, 'Antidote: heals 5');
 
+    // Liquid Courage: Empowered, and Dazzled (−1 max range) until the end of the drinker's next turn; no Block
     fight({ heroes: [{ id: USER, x: 1, y: 4 }], enemies: [{ id: 'test_grunt', x: 4, y: 4 }, { id: 'test_grunt', x: 5, y: 4 }] });
     let u = me();
     drink(t, u, 'con_liquid_courage', 1, 4);
-    t.ok(has(u, 'empowered') && u.block === 5 && has(u, 'dazzled') && st(u, 'dazzled').turns === 1, 'Liquid Courage: Empowered, 5 Block, Dazzled this turn');
+    t.ok(has(u, 'empowered') && u.block === 0 && has(u, 'dazzled') && st(u, 'dazzled').turns === 1, 'Liquid Courage: Empowered and Dazzled, no Block');
     const chair = give(u, 'gen_throw_chair', 1);
     t.ok(!valid(u, chair, 5, 4) && valid(u, chair, 4, 4), 'Liquid Courage: Dazzled = −1 max range (the chair reaches 3)');
     const g = at(4, 4), ghp = g.hp;
@@ -723,7 +852,18 @@
     t.eq(ghp - g.hp, 11, 'Liquid Courage: the next skill deals +50% (7 → 11)');
     t.ok(!has(u, 'empowered'), 'Liquid Courage: Empowered used up');
     DD.Combat.endTurn();
-    t.ok(!has(me(), 'dazzled'), 'Liquid Courage: the Dazzle wears off with the turn');
+    t.ok(has(me(), 'dazzled'), 'Liquid Courage: still Dazzled on his next turn');
+    DD.Combat.endTurn();
+    t.ok(!has(me(), 'dazzled'), 'Liquid Courage: the Dazzle wears off at the end of that turn');
+    // on an ally: until the end of HER next turn
+    fight({ heroes: [{ id: USER, x: 4, y: 4 }, { id: 'test_mage', x: 4, y: 5 }] });
+    drink(t, me(), 'con_liquid_courage', 4, 5);
+    m = hero('test_mage');
+    t.ok(has(m, 'empowered') && has(m, 'dazzled'), 'Liquid Courage on the mage: Empowered and Dazzled');
+    DD.Combat.endTurn();
+    t.ok(DD.Combat.current() === m && has(m, 'dazzled'), 'Liquid Courage: she is Dazzled on her turn');
+    DD.Combat.endTurn();
+    t.ok(!has(m, 'dazzled') && has(m, 'empowered'), 'Liquid Courage: the Dazzle ends with her turn; Empowered waits for her next damaging skill');
 
     // Mystery Potion: every face of the d6
     const surges = [];
@@ -738,10 +878,10 @@
         const n0 = surges.length;
         if (!drink(t, u, 'con_mystery_potion', u.x, u.y, 'Mystery Potion (' + face + ')')) return;
         if (face === 1) {
-          t.ok(has(u, 'sheep') && st(u, 'sheep').turns === 1, 'Mystery 1: a sheep for the rest of this turn');
+          t.ok(has(u, 'sheep') && st(u, 'sheep').turns === 1 && !st(u, 'sheep').fresh, 'Mystery 1: a sheep for the rest of this turn');
           t.ok(DD.Combat.canUse(u, u.basic) !== true, 'Mystery 1: sheep can\'t use skills');
           DD.Combat.endTurn();
-          t.ok(!has(me(), 'sheep'), 'Mystery 1: human again next turn');
+          t.ok(!has(me(), 'sheep') && me().ap === 3, 'Mystery 1: himself again on his next turn, with all his AP');
         } else if (face === 2) {
           t.ok(has(u, 'poison') && st(u, 'poison').stacks === 3, 'Mystery 2: Poisoned 3');
         } else if (face === 3) {
@@ -749,9 +889,13 @@
         } else if (face === 4) {
           t.eq(u.ap, 4, 'Mystery 4: +2 AP (3 − 1 + 2)');
         } else if (face === 5) {
-          t.ok(has(u, 'invulnerable') && st(u, 'invulnerable').turns === 2, 'Mystery 5: Invulnerable until the end of the next turn');
+          t.ok(has(u, 'invulnerable') && st(u, 'invulnerable').turns === 1, 'Mystery 5: Invulnerable');
           DD.Combat._action(function () { A().damage(at(3, 4), u, 10); });
           t.eq(u.hp, hp0, 'Mystery 5: takes no damage');
+          DD.Combat.endTurn();
+          t.ok(has(me(), 'invulnerable'), 'Mystery 5: still Invulnerable on his next turn');
+          DD.Combat.endTurn();
+          t.ok(!has(me(), 'invulnerable'), 'Mystery 5: gone at the end of it');
         } else {
           const got = surges.slice(n0);
           t.ok(DD.WildMagic ? got.length === 1 && got[0].source === 'con_mystery_potion' && got[0].good === true : u.hp - hp0 === 12, 'Mystery 6: one good wild magic surge');
@@ -774,7 +918,7 @@
     } finally { off(); }
   });
 
-  // ---- 8. throwables ------------------------------------------------------------------------------------------
+  // ---- 9. throwables ------------------------------------------------------------------------------------------
   T.suite('kit: consumables — Flask of Bad Decisions, Frost Flask, Thunder Jar, Holy Water', function (t) {
     fight({ heroes: [{ id: USER, x: 1, y: 4 }, { id: 'test_mage', x: 4, y: 5 }], enemies: [{ id: 'test_grunt', x: 4, y: 4 }, { id: 'test_grunt', x: 5, y: 4 }],
       surfaces: [{ x: 4, y: 3, id: 'oil', turns: 5 }, { x: 4, y: 2, id: 'oil', turns: 5 }], terrain: function (tl) { if (tl.x === 3 && tl.y === 4) tl.t = 'water'; } });
@@ -794,10 +938,12 @@
     A().addStatus(wet, 'wet', { turns: 2 }, null);
     drink(t, u, 'con_frost_flask', 4, 4);
     t.ok(wet.hp === 9 && has(wet, 'frozen') && !has(wet, 'wet'), 'Frost Flask: 5 frost damage, the Wet grunt freezes solid');
-    t.ok(dry.hp === 9 && has(dry, 'slow') && st(dry, 'slow').turns === 1, 'Frost Flask: 5 frost damage and Slowed for 1 turn');
+    t.ok(dry.hp === 9 && has(dry, 'slow') && st(dry, 'slow').turns === 1, 'Frost Flask: 5 frost damage and Slowed through its next turn');
     t.ok(m2.hp === m2.maxHp && m2.statuses.length === 0, 'Frost Flask: allies are left alone');
     t.eq(tile(4, 4).t, 'ice', 'Frost Flask: the water freezes');
     t.ok(!tile(4, 3).surface, 'Frost Flask: the fire goes out');
+    DD.Combat.endRound();
+    t.ok(!has(dry, 'slow') && !has(wet, 'frozen'), 'Frost Flask: Slow and Frozen are gone after the grunts\' turns');
 
     // Thunder Jar: 8 + two jumps of 4, nearest first, max 2 jumps
     fight({ heroes: [{ id: USER, x: 1, y: 4 }], enemies: [{ id: 'test_grunt', x: 4, y: 4 }, { id: 'test_grunt', x: 6, y: 4 }, { id: 'test_grunt', x: 6, y: 6 }, { id: 'test_grunt', x: 7, y: 7 }] });
@@ -826,36 +972,44 @@
     t.ok(!has(g[0], 'stun'), 'Thunder Jar: dry targets are not stunned');
 
     // Holy Water: undead / devils / demons take 10, holy ground for 3 rounds
-    fight({ heroes: [{ id: USER, x: 1, y: 4 }, { id: 'test_mage', x: 4, y: 5 }], enemies: [{ id: 'test_minion', x: 4, y: 4 }, { id: 'test_grunt', x: 5, y: 4 }, { id: 'test_grunt', x: 3, y: 4 }] });
-    const minion = at(4, 4), gob = at(5, 4), devil = at(3, 4), m4 = hero('test_mage');
+    fight({ heroes: [{ id: USER, x: 1, y: 4 }, { id: 'test_mage', x: 4, y: 5 }], enemies: [{ id: 'test_minion', x: 4, y: 4 }, { id: 'test_grunt', x: 5, y: 4 }, { id: 'test_grunt', x: 3, y: 4 }, { id: 'test_grunt', x: 4, y: 3 }] });
+    const minion = at(4, 4), gob = at(5, 4), devil = at(3, 4), demon = at(4, 3), m4 = hero('test_mage');
     devil.tags = ['devil'];
+    demon.tags = ['demon'];
     drink(t, me(), 'con_holy_water', 4, 4);
-    t.ok(minion.dead && devil.hp === 4 && gob.hp === 14, 'Holy Water: 10 holy damage to undead and devils only');
+    t.ok(minion.dead && devil.hp === 4 && demon.hp === 4 && gob.hp === 14, 'Holy Water: 10 holy damage to undead, devils and demons only');
     t.ok([[4, 4], [5, 4], [4, 5], [3, 4], [4, 3]].every(function (p) { const sf = tile(p[0], p[1]).surface; return sf && sf.id === 'holy' && sf.turns === 3; }), 'Holy Water: Holy Ground on the whole splash for 3 rounds');
     wipeEnemies();
     m4.hp = m4.maxHp - 6;
     const m4hp = m4.hp;
-    DD.Combat.endTurn();
-    t.eq(m4.hp - m4hp, 3, 'Holy Water: an ally ending the turn on Holy Ground heals 3');
+    DD.Combat.endRound();
+    t.eq(m4.hp - m4hp, 3, 'Holy Water: the mage ending her turn on Holy Ground heals 3');
   });
 
   T.suite('kit: consumables — Smoke Bomb, Bag of d4s, Scroll of Yeet, Pocket Sand (Family Size)', function (t) {
-    fight({ heroes: [{ id: USER, x: 4, y: 4 }, { id: 'test_mage', x: 4, y: 5 }, { id: 'test_cleric', x: 6, y: 6 }], enemies: [{ id: 'test_archer', x: 4, y: 8 }],
-      surfaces: [{ x: 5, y: 4, id: 'fire', turns: 3 }] });
-    const u = me(), arch = at(4, 8);
-    DD.AI.makeIntent(arch, 'test_arrow', u);
+    fight({ ai: true, heroes: [{ id: USER, x: 4, y: 4 }, { id: 'test_mage', x: 4, y: 5 }, { id: 'test_cleric', x: 7, y: 7 }],
+      enemies: [{ id: 'test_archer', x: 4, y: 8 }], surfaces: [{ x: 5, y: 4, id: 'fire', turns: 3 }] });
+    const u = me(), arch = at(4, 8), mage = hero('test_mage');
     drink(t, u, 'con_smoke_bomb', 4, 4);
     t.ok([[4, 4], [4, 3], [4, 5], [3, 4]].every(function (p) { const sf = tile(p[0], p[1]).surface; return sf && sf.id === 'smoke' && sf.turns === 2; }), 'Smoke Bomb: smoke on the tiles around you for 2 rounds');
     t.eq(tile(5, 4).surface.id, 'fire', 'Smoke Bomb: never smothers a hazard (the fire stays)');
-    t.ok(has(u, 'stealth') && st(u, 'stealth').turns === 2 && has(hero('test_mage'), 'stealth'), 'Smoke Bomb: you and the ally in it are Stealthed');
+    t.ok(has(u, 'stealth') && st(u, 'stealth').turns === 1 && has(mage, 'stealth'), 'Smoke Bomb: you and the ally in it are Stealthed');
     t.ok(!has(hero('test_cleric'), 'stealth'), 'Smoke Bomb: allies outside are not');
-    t.ok(!DD.Grid.los({ x: 4, y: 8 }, { x: 4, y: 4 }), 'Smoke Bomb: the smoke blocks line of sight');
-    const hp0 = u.hp, b0 = u.block;
+    t.ok(!DD.Grid.los({ x: 4, y: 8 }, { x: 4, y: 3 }), 'Smoke Bomb: the smoke blocks line of sight');
+    const shots = hitsOn(arch, u);
     DD.Combat.endTurn();
-    t.ok(me().hp === hp0 && me().block >= b0, 'Smoke Bomb: the tracking arrow loses you');
-    t.ok(tile(4, 4).surface && tile(4, 4).surface.id === 'smoke', 'Smoke Bomb: still smoky in round 2');
+    t.ok(DD.Combat.current() === mage && has(mage, 'stealth'), 'Smoke Bomb: the mage is Stealthed on her turn');
     DD.Combat.endTurn();
-    t.ok(!tile(4, 4).surface || tile(4, 4).surface.id !== 'smoke', 'Smoke Bomb: cleared after 2 rounds');
+    t.ok(!has(mage, 'stealth') && has(me(), 'stealth'), 'Smoke Bomb: hers ends with her turn; the knight\'s lasts through his next one');
+    DD.Combat.endTurn();
+    t.ok(DD.Combat.current() === me() && shots.length === 0 && me().hp === me().maxHp, 'Smoke Bomb: the archer can\'t pick the hidden knight on its turn');
+    t.ok(has(me(), 'stealth') && tile(4, 4).surface && tile(4, 4).surface.id === 'smoke', 'Smoke Bomb: round 2, still hidden and still smoky');
+    DD.Combat.endRound();
+    t.ok(!has(me(), 'stealth') && (!tile(4, 4).surface || tile(4, 4).surface.id !== 'smoke'), 'Smoke Bomb: stealth and smoke both gone after round 2');
+    // "every ally within 1", as the desc says: also the one standing in the fire the smoke won't cover
+    fight({ heroes: [{ id: USER, x: 4, y: 4 }, { id: 'test_mage', x: 5, y: 4 }], surfaces: [{ x: 5, y: 4, id: 'fire', turns: 3 }] });
+    drink(t, me(), 'con_smoke_bomb', 4, 4);
+    t.ok(tile(5, 4).surface.id === 'fire' && has(hero('test_mage'), 'stealth'), 'Smoke Bomb: the ally within 1 on the fire tile is Stealthed too (no smoke over the fire)');
 
     // Bag of d4s
     fight({ heroes: [{ id: USER, x: 1, y: 4 }, { id: 'test_mage', x: 4, y: 5 }], enemies: [{ id: 'test_grunt', x: 4, y: 4 }, { id: 'test_grunt', x: 2, y: 3 }],
@@ -875,7 +1029,7 @@
     t.ok(walker.x === 3 && walker.hp === 10 && !d4(3, 4), 'd4s: pushed onto the dice: 4 damage, dice gone');
     DD.Combat._action(function () { A().applyElement(4, 5, 'fire', null, { noUnits: true }); });
     t.ok(!d4(4, 5), 'd4s: fire melts them');
-    // flyers float over, walkers in a planning move step on them
+    // flyers float over, walkers step on them
     fight({ heroes: [{ id: USER, x: 1, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 1 }, { id: 'test_grunt', x: 5, y: 2 }] });
     k = me();
     drink(t, k, 'con_bag_of_d4s', 3, 4);
@@ -894,7 +1048,7 @@
     const hype0 = S().hype;
     DD.Combat._action(function () { A().push(k, victim, { x: 0, y: 1 }, 1); });
     t.ok(victim.dead && S().hype - hype0 === 20 && S().stats.units[k.id].kills === 1, 'd4s: a dice kill counts as the thrower\'s environmental kill (+20 Hype)');
-    // they wear off after 3 rounds
+    // they wear off after 3 rounds (one hero: one turn a round)
     DD.Combat.endTurn(); DD.Combat.endTurn();
     t.ok(d4(4, 4) || d4(2, 4), 'd4s: still there after 2 rounds');
     DD.Combat.endTurn();
@@ -903,7 +1057,7 @@
     // Scroll of Yeet
     fight({ heroes: [{ id: USER, x: 1, y: 4 }, { id: 'test_mage', x: 1, y: 6 }], enemies: [{ id: 'test_grunt', x: 4, y: 4 }, { id: 'test_grunt', x: 3, y: 6 }, { id: 'test_brute', x: 1, y: 2 }] });
     const yeet = DD.getConsumable('con_scroll_of_yeet');
-    let y = me();
+    const y = me();
     S().consumables = ['con_scroll_of_yeet'];
     t.ok(valid(y, yeet, 4, 4) && valid(y, yeet, 1, 6), 'Yeet: a foe or an ally in a straight line');
     t.ok(!valid(y, yeet, 3, 6), 'Yeet: straight lines only');
@@ -923,19 +1077,146 @@
     drink(t, me(), 'con_scroll_of_yeet', 4, 4);
     t.ok(gd.dead, 'Yeet: into the pit');
 
-    // Pocket Sand (Family Size): a cone 3 deep
+    // Pocket Sand (Family Size): a cone 3 deep, Dazzled + Weakened through their next turn
     fight({ heroes: [{ id: USER, x: 1, y: 4 }, { id: 'test_mage', x: 3, y: 5 }],
       enemies: [{ id: 'test_grunt', x: 2, y: 4 }, { id: 'test_grunt', x: 3, y: 3 }, { id: 'test_grunt', x: 4, y: 6 }, { id: 'test_grunt', x: 0, y: 4 }, { id: 'test_grunt', x: 5, y: 4 }] });
     drink(t, me(), 'con_pocket_sand', 2, 4);
     [[2, 4], [3, 3], [4, 6]].forEach(function (p) {
       const f = at(p[0], p[1]);
-      t.ok(has(f, 'dazzled') && has(f, 'weak') && st(f, 'weak').turns === 1, 'Pocket Sand (FS): the foe at ' + p + ' is Dazzled and Weakened');
+      t.ok(has(f, 'dazzled') && has(f, 'weak') && st(f, 'weak').turns === 1 && st(f, 'dazzled').turns === 1, 'Pocket Sand (FS): the foe at ' + p + ' is Dazzled and Weakened');
     });
     t.ok(!has(at(0, 4), 'dazzled') && !has(at(5, 4), 'dazzled'), 'Pocket Sand (FS): nothing behind you or beyond 3');
     t.eq(hero('test_mage').statuses.length, 0, 'Pocket Sand (FS): allies in the cone are spared');
+    DD.Combat.endRound();
+    t.ok(!has(at(2, 4), 'dazzled') && !has(at(2, 4), 'weak'), 'Pocket Sand (FS): gone after the grunts\' turns');
   });
 
-  // ---- 9. edge cases ---------------------------------------------------------------------------------------
+  // ---- v2 requests (Nov 3): heals on the downed, barrels, flyers ------------------------------------------------
+  T.suite('kit: v2 requests — aimed heals get downed allies up, attacks set barrels off, flyers skip the floor', function (t) {
+    /** The knight at (4,4) next to a downed cleric (3,4); a downed mage 3 tiles away; a grunt in the corner. */
+    function downed() {
+      fight({ heroes: [{ id: USER, x: 4, y: 4 }, { id: 'test_cleric', x: 3, y: 4 }, { id: 'test_mage', x: 4, y: 7 }],
+        enemies: [{ id: 'test_grunt', x: 8, y: 8 }] });
+      A().kill(hero('test_cleric'), null);
+      A().kill(hero('test_mage'), null);
+      return hero('test_cleric');
+    }
+    function entryAt(list, x, y) { return list.filter(function (p) { return p.x === x && p.y === y; })[0] || null; }
+    function isUp(label, c, prev, hp) {
+      const e = prev && prev.perUnit[c.id];
+      t.ok(!!e && e.revived === true && /UP!/.test(e.text || ''), label + ': the preview says UP! (' + JSON.stringify(e) + ')');
+      t.ok(!c.downed && !c.dead && c.hp === hp, label + ': back up with ' + hp + ' HP (has ' + c.hp + ')');
+    }
+
+    // First Aid at every level: the aimed heal is the revive (its HP = the heal), then it acts on its own slot
+    [1, 2, 3].forEach(function (lv) {
+      const L = Lv('gen_first_aid', lv), c = downed(), u = me(), sl = give(u, 'gen_first_aid', lv);
+      const list = DD.Targeting.validTargets(u, sl), e = entryAt(list, 3, 4);
+      t.ok(!!e && e.revive === true, 'First Aid L' + lv + ': the downed adjacent ally is a target, marked revive');
+      t.ok(!entryAt(list, 4, 7), 'First Aid L' + lv + ': a downed ally 3 tiles away is out of reach');
+      const ap0 = u.ap;
+      const prev = checkSkillPreview(t, u, sl, 3, 4, 'First Aid L' + lv + ' on a downed ally');
+      isUp('First Aid L' + lv, c, prev, L.heal);
+      t.eq(ap0 - u.ap, 1, 'First Aid L' + lv + ': 1 AP, as always');
+      t.ok(S().order.some(function (o) { return o.unitId === c.id; }), 'First Aid L' + lv + ': the cleric keeps its initiative slot');
+    });
+    // the healer's bonus counts: +50% healing gets the ally up with 9 instead of 6
+    let c = downed(), u = me(), sl = give(u, 'gen_first_aid', 1);
+    u.healBonus = 0.5;
+    use(t, u, sl, 3, 4, 'First Aid I with +50% healing');
+    t.eq(c.hp, 9, 'First Aid I with +50% healing: up with 9 HP');
+
+    // healing drinks revive; other drinks don't see the downed at all
+    [['con_red_drink', 10], ['con_big_red_drink', 20], ['con_antidote', 5]].forEach(function (d) {
+      const cl = downed(), k = me(), def = DD.getConsumable(d[0]);
+      S().consumables = [d[0]];
+      const e = entryAt(DD.Targeting.validTargets(k, def), 3, 4);
+      t.ok(!!e && e.revive === true, def.name + ': the downed adjacent ally is a target, marked revive');
+      const prev = checkConsPreview(t, k, d[0], 3, 4, def.name + ' on a downed ally');
+      isUp(def.name, cl, prev, d[1]);
+      t.eq(cl.statuses.length, 0, def.name + ': nothing else rides along (no stray debuffs, no errors)');
+    });
+    ['con_energy_drink', 'con_liquid_courage'].forEach(function (id) {
+      downed();
+      S().consumables = [id];
+      t.ok(!valid(me(), DD.getConsumable(id), 3, 4), DD.getConsumable(id).name + ': not a heal, so a downed ally is no target');
+    });
+    // a heal on a standing ally is unchanged (the Antidote still cleanses first)
+    fight({ heroes: [{ id: USER, x: 4, y: 4 }, { id: 'test_cleric', x: 3, y: 4 }], enemies: [{ id: 'test_grunt', x: 8, y: 8 }] });
+    c = hero('test_cleric');
+    c.hp = 10;
+    A().addStatus(c, 'weak', { turns: 2 }, null);
+    drink(t, me(), 'con_antidote', 3, 4, 'Antidote on a standing ally');
+    t.ok(c.hp === 15 && !has(c, 'weak'), 'Antidote on a standing ally: cleansed and +5 HP');
+
+    // barrels: Throw Chair at every level sets one off (8 fire next to it), no knockback, AP and cooldown paid
+    [1, 2, 3].forEach(function (lv) {
+      fight({ heroes: [{ id: USER, x: 1, y: 4 }], enemies: [{ id: 'test_grunt', x: 4, y: 5 }, { id: 'test_grunt', x: 8, y: 8 }],
+        objects: [{ x: 4, y: 4, id: 'barrel_explosive' }] });
+      const k = me(), s2 = give(k, 'gen_throw_chair', lv), g = at(4, 5), lab = 'Throw Chair L' + lv + ' at a barrel';
+      const e = entryAt(DD.Targeting.validTargets(k, s2), 4, 4);
+      t.ok(!!e && e.obj === 'barrel_explosive', lab + ': the barrel is a target');
+      const ap0 = k.ap;
+      const prev = checkSkillPreview(t, k, s2, 4, 4, lab);
+      t.ok(!!prev && !!prev.detonates, lab + ': the preview says it detonates');
+      t.ok(!tile(4, 4).obj, lab + ': the barrel is gone');
+      t.ok(g.maxHp - g.hp === 8 && g.x === 4 && g.y === 5, lab + ': the grunt next to it takes the blast (8) and is not knocked back');
+      t.eq(ap0 - k.ap, 2, lab + ': 2 AP');
+      t.ok(typeof DD.Combat.canUse(k, s2) === 'string', lab + ': on cooldown');
+    });
+    // Sucker Punch on an adjacent barrel: the puncher is in the blast too, exactly as previewed
+    fight({ heroes: [{ id: USER, x: 3, y: 4 }], enemies: [{ id: 'test_grunt', x: 5, y: 4 }, { id: 'test_grunt', x: 8, y: 8 }],
+      objects: [{ x: 4, y: 4, id: 'barrel_explosive' }] });
+    u = me();
+    const hp0 = u.hp, g1 = at(5, 4);
+    checkSkillPreview(t, u, give(u, 'gen_sucker_punch', 1), 4, 4, 'Sucker Punch at a barrel');
+    t.ok(!tile(4, 4).obj && g1.maxHp - g1.hp === 8 && u.hp < hp0, 'Sucker Punch at a barrel: boom, for the grunt and the puncher');
+    // the Thunder Jar sets one off too; its chain never happens
+    fight({ heroes: [{ id: USER, x: 1, y: 4 }], enemies: [{ id: 'test_grunt', x: 4, y: 5 }, { id: 'test_grunt', x: 5, y: 6 }],
+      objects: [{ x: 4, y: 4, id: 'barrel_explosive' }] });
+    S().consumables = ['con_thunder_jar'];
+    t.ok(!!entryAt(DD.Targeting.validTargets(me(), DD.getConsumable('con_thunder_jar')), 4, 4), 'Thunder Jar: the barrel is a target');
+    const gj = at(4, 5), gk = at(5, 6);
+    checkConsPreview(t, me(), 'con_thunder_jar', 4, 4, 'Thunder Jar at a barrel');
+    t.ok(!tile(4, 4).obj && gj.maxHp - gj.hp === 8 && gk.hp === gk.maxHp, 'Thunder Jar at a barrel: the blast hits the grunt next to it; no lightning jumps on');
+    // skills that are not attacks, and plain barrels, are no barrel targets
+    fight({ heroes: [{ id: USER, x: 1, y: 4 }], enemies: [{ id: 'test_grunt', x: 8, y: 8 }],
+      objects: [{ x: 3, y: 4, id: 'barrel_explosive' }, { x: 2, y: 5, id: 'barrel' }] });
+    u = me();
+    ['gen_pocket_sand', 'gen_taunt'].forEach(function (id) {
+      t.ok(!valid(u, give(u, id, 1), 3, 4), sk(id).name + ': not an attack, so no barrel target');
+    });
+    S().consumables = ['con_scroll_of_yeet'];
+    t.ok(!valid(u, DD.getConsumable('con_scroll_of_yeet'), 3, 4), 'Scroll of Yeet: reads at units only');
+    t.ok(!valid(u, give(u, 'gen_throw_chair', 1), 2, 5), 'Throw Chair: a plain barrel does not explode, so it is no target');
+
+    // flyers: Holy Water's ground does nothing for a flyer; a walking ally heals 3
+    fight({ heroes: [{ id: USER, x: 2, y: 4 }, { id: 'test_mage', x: 3, y: 4 }], enemies: [{ id: 'test_grunt', x: 8, y: 8 }] });
+    const kn = me(), mg = hero('test_mage');
+    drink(t, kn, 'con_holy_water', 3, 4);
+    t.ok(tile(2, 4).surface && tile(2, 4).surface.id === 'holy' && tile(3, 4).surface.id === 'holy', 'Holy Water: Holy Ground under both');
+    kn.flags.flying = true;
+    kn.hp = 20;
+    mg.hp = 10;
+    DD.Combat.endTurn();
+    t.eq(kn.hp, 20, 'Holy Water: a flying hero ending a turn above Holy Ground heals nothing');
+    if (t.ok(DD.Combat.current() === mg, 'Holy Water: (the mage\'s turn)')) {
+      DD.Combat.endTurn();
+      t.eq(mg.hp, 13, 'Holy Water: a grounded hero ending a turn on it heals 3');
+    }
+    // the Flask of Bad Decisions still hits a flyer in its blast, but its burning floor never Burns one
+    fight({ heroes: [{ id: USER, x: 1, y: 4 }], enemies: [{ id: 'test_grunt', x: 4, y: 4 }, { id: 'test_grunt', x: 6, y: 4 }] });
+    const fl = at(4, 4), wk = at(6, 4);
+    fl.flags.flying = true;
+    drink(t, me(), 'con_bad_decisions', 4, 4);
+    t.eq(fl.maxHp - fl.hp, 8, 'Flask: a flyer in the blast still takes 8 fire (it was aimed at its area)');
+    DD.Combat._action(function () { A().push(me(), fl, { x: 0, y: 1 }, 1); A().push(me(), wk, { x: -1, y: 0 }, 1); });
+    t.ok(fl.y === 5 && tile(4, 5).surface && tile(4, 5).surface.id === 'fire' && !has(fl, 'burn'), 'Flask: a flyer pushed over its fire is not Burned');
+    t.ok(wk.x === 5 && has(wk, 'burn'), 'Flask: a walker pushed into its fire is');
+    sane(t, 'kit v2 requests');
+  });
+
+  // ---- 10. edge cases ---------------------------------------------------------------------------------------
   T.suite('kit: edge cases — no target, dying users, map edges, hazards, impaired users', function (t) {
     // 1. execute with a null target / an empty far tile for every level and consumable
     GEN.forEach(function (id) {
@@ -957,49 +1238,59 @@
     });
 
     // 2. the target died before the effect / the user dies mid-skill (thorns)
-    fight({ heroes: [{ id: USER, x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }, { id: 'test_grunt', x: 3, y: 5 }] });
+    fight({ heroes: [{ id: USER, x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }, { id: 'test_grunt', x: 4, y: 4 }] });
     let u = me();
     const dead = at(3, 4);
     A().kill(dead, null);
     t.tryRun('chair at a corpse', function () { DD.Combat._action(function () { DD.Combat.resolveSkill(u, give(u, 'gen_throw_chair', 3), { x: 3, y: 4 }, { pay: false }); }); });
-    t.eq(at(3, 5).hp, 14, 'a dead target: no splinters flying off a corpse');
+    t.eq(at(4, 4).hp, 14, 'a dead target: no knockback crash off a corpse');
     fight({ heroes: [{ id: USER, x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }, { id: 'test_grunt', x: 4, y: 4 }] });
     u = me();
     u.hp = 5;
     const thorny = at(3, 4);
     A().addStatus(thorny, 'thorns', { stacks: 20, turns: 2 }, null);
     t.tryRun('punch a thorn bush', function () { use(t, u, give(u, 'gen_sucker_punch', 3), 3, 4, 'Sucker Punch into thorns'); });
-    t.ok(u.downed && has(thorny, 'weak'), 'the puncher is downed by thorns, the punch still Weakens');
+    t.ok(u.downed && thorny.hp === 14 - 6, 'the puncher lands the punch and is downed by the thorns');
     sane(t, 'thorns');
-    fight({ heroes: [{ id: USER, x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }, { id: 'test_grunt', x: 4, y: 4 }] });
+    fight({ heroes: [{ id: USER, x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
     u = me();
     u.hp = 5;
     A().addStatus(at(3, 4), 'thorns', { stacks: 20, turns: 2 }, null);
     t.tryRun('shove a thorn bush', function () { use(t, u, give(u, 'gen_shove', 1), 3, 4, 'Shove into thorns'); });
-    t.ok(u.downed && at(3, 4) && at(3, 4).hp === 12, 'a downed shover pushes nobody');
+    t.ok(!u.downed && at(5, 4) && at(5, 4).hp === 14, 'a shove deals no damage, so the thorns never prick: pushed 2, nobody hurt');
     sane(t, 'thorns shove');
 
     // 3. map edges
     fight({ heroes: [{ id: USER, x: 7, y: 4 }], enemies: [{ id: 'test_grunt', x: 8, y: 4 }] });
     use(t, me(), give(me(), 'gen_shove', 1), 8, 4, 'Shove at the edge');
-    t.ok(at(8, 4) && at(8, 4).hp === 14 - 2 - 3, 'Shove at the map edge: crash for 3, stays on the board');
+    t.ok(at(8, 4) && at(8, 4).hp === 14 - 3, 'Shove at the map edge: crash for 3, stays on the board');
     fight({ heroes: [{ id: USER, x: 5, y: 8 }], enemies: [{ id: 'test_grunt', x: 8, y: 8 }, { id: 'test_grunt', x: 8, y: 7 }, { id: 'test_grunt', x: 7, y: 8 }] });
     t.tryRun('barrel in the corner', function () { use(t, me(), give(me(), 'gen_barrel_toss', 3), 8, 8, 'Barrel Toss III into the corner'); });
-    t.ok(at(8, 8) && at(8, 8).hp === 14 - 7 && at(8, 6) && at(6, 8), 'corner blast: the center stays, its neighbours are thrown outward along the edges');
+    t.ok([[8, 8], [8, 7], [7, 8]].every(function (p) { const o = at(p[0], p[1]); return o && o.hp === 14 - 7; }), 'corner blast: all three take 7, nobody leaves the board');
     sane(t, 'corner');
     fight({ heroes: [{ id: USER, x: 0, y: 4 }] });
     const roll = give(me(), 'gen_dodge_roll', 2);
     t.ok(DD.Targeting.validTargets(me(), roll).every(function (p) { return p.x >= 0 && DD.Grid.inBounds(p.x, p.y); }), 'Dodge Roll at the edge: only in-bounds tiles');
+    fight({ heroes: [{ id: USER, x: 8, y: 8 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
+    t.ok(DD.Targeting.validTargets(me(), give(me(), 'gen_tactical_retreat', 3)).every(function (p) { return DD.Grid.inBounds(p.x, p.y); }), 'Tactical Retreat in the corner: only in-bounds tiles');
+    fight({ heroes: [{ id: USER, x: 4, y: 4 }], enemies: [{ id: 'test_grunt', x: 4, y: 2 }] });
+    use(t, me(), give(me(), 'gen_throw_chair', 3), 4, 2, 'chair knocks a foe off toward the edge');
+    t.ok(at(4, 1) && at(4, 1).hp === 14 - 10, 'chair III: knocked back 1 tile (4,2 → 4,1)');
 
     // 4. hazards
     fight({ heroes: [{ id: USER, x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }], terrain: function (tl) { if (tl.x === 4 && tl.y === 4) tl.t = 'lava'; } });
     use(t, me(), give(me(), 'gen_shove', 1), 3, 4, 'Shove into lava');
-    t.ok(at(5, 4) && has(at(5, 4), 'burn') && at(5, 4).hp === 14 - 2 - 8, 'shoved through lava: 8 fire + Burn on the way');
+    t.ok(at(5, 4) && has(at(5, 4), 'burn') && at(5, 4).hp === 14 - 8, 'shoved through lava: 8 fire + Burn on the way');
     fight({ heroes: [{ id: USER, x: 2, y: 4 }], terrain: function (tl) { if (tl.x === 4 && tl.y === 4) tl.t = 'lava'; } });
     u = me();
-    const hpL = u.hp;
+    let hpL = u.hp;
     use(t, u, give(u, 'gen_dodge_roll', 1), 4, 4, 'Dodge Roll into lava (your call)');
     t.ok(u.hp < hpL && has(u, 'burn'), 'rolling into lava hurts, as the preview warns');
+    fight({ heroes: [{ id: USER, x: 2, y: 4 }], terrain: function (tl) { if (tl.x === 4 && tl.y === 4) tl.t = 'lava'; } });
+    u = me();
+    hpL = u.hp;
+    use(t, u, give(u, 'gen_tactical_retreat', 1), 4, 4, 'Tactical Retreat onto lava (your call)');
+    t.ok(u.x === 4 && u.hp < hpL && has(u, 'burn'), 'retreating onto lava hurts too');
 
     // 5. impaired users: stun-likes and sheep stop everything; Silence stops nothing (no spells here); charm
     ['stun', 'sleep', 'frozen', 'sheep'].forEach(function (cond) {
@@ -1021,6 +1312,12 @@
     A().addStatus(u, 'charmed', { turns: 2 }, charmer);
     use(t, u, give(u, 'gen_throw_chair', 1), 4, 4, 'charmed chair');
     t.eq(charmer.hp, 14, 'Charmed: a chair can\'t hurt the charmer');
+    // not your turn: nothing (the mage's skills and drinks wait for her turn)
+    fight({ heroes: [{ id: USER, x: 2, y: 4 }, { id: 'test_mage', x: 2, y: 5 }], enemies: [{ id: 'test_grunt', x: 3, y: 5 }] });
+    const mage = hero('test_mage');
+    t.ok(/turn/i.test(String(DD.Combat.canUse(mage, give(mage, 'gen_throw_chair', 1)))), 'not her turn: no chair for the mage yet');
+    S().consumables = ['con_red_drink'];
+    t.ok(DD.Combat.canUseConsumable(mage, 0) !== true, 'not her turn: no drinking either');
     // summons can't drink
     fight({ heroes: [{ id: 'test_summoner', x: 2, y: 4 }] });
     const hound = DD.Combat.party().filter(function (x) { return x.kind === 'summon'; })[0];
@@ -1028,7 +1325,7 @@
     t.ok(!hound || DD.Combat.canUseConsumable(hound, 0) !== true, 'summons can\'t use consumables');
   });
 
-  // ---- 10. previews ------------------------------------------------------------------------------------------
+  // ---- 11. previews ------------------------------------------------------------------------------------------
   /** Crowded arena (hurt user with 6 AP, a downed cleric, oil, a pit, water, a barrel); heroId: the user (default knight). */
   function busyArena(heroId) {
     const id = heroId || USER;
@@ -1037,7 +1334,7 @@
       enemies: [{ id: 'test_grunt', x: 5, y: 4 }, { id: 'test_grunt', x: 6, y: 5 }, { id: 'test_archer', x: 4, y: 7 }, { id: 'test_minion', x: 5, y: 5 },
         { id: 'test_brute', x: 7, y: 2 }],
       objects: [{ x: 6, y: 1, id: 'barrel_explosive' }, { x: 2, y: 2, id: 'crate' }],
-      surfaces: [{ x: 6, y: 4, id: 'oil', turns: 5 }],
+      surfaces: [{ x: 6, y: 4, id: 'oil', turns: 5 }, { x: 4, y: 1, id: 'fire', turns: 3 }],
       terrain: function (tl) { if (tl.x === 8 && tl.y === 4) tl.t = 'pit'; if (tl.y === 6 && tl.x <= 2) tl.t = 'water'; },
     });
     A().kill(hero('test_cleric'), null);
@@ -1051,7 +1348,7 @@
     if (list.length <= n) return list;
     const scored = list.map(function (p, i) {
       const ctx = DD.Targeting.pure(function () { return DD.Targeting.buildCtx(u, ref, p); });
-      return { p: p, v: (ctx ? ctx.units.length : 0) * 10 - i * 0.001 };
+      return { p: p, v: (ctx ? ctx.units.length : 0) * 10 + (ctx ? ctx.tiles.length : 0) * 0.01 - i * 0.0001 };
     }).sort(function (a, b) { return b.v - a.v; });
     return scored.slice(0, n).map(function (e) { return e.p; });
   }
@@ -1141,7 +1438,7 @@
     });
   });
 
-  // ---- 11. AutoPlay and consumables ------------------------------------------------------------------------
+  // ---- 12. AutoPlay and consumables ------------------------------------------------------------------------
   function takeTurn() { DD.AutoPlay.takeTurn(); }
   T.suite('kit: AutoPlay uses consumables sensibly', function (t) {
     // a badly hurt hero, a Red Drink, nothing to hit: it drinks (on the hurt one)
@@ -1162,7 +1459,6 @@
     t.ok(DD.Combat.enemies().every(function (e) { return e.hp <= 6; }), 'AutoPlay: every grunt in the blast is singed');
     // two foes flanking an ally: the only blast that gets both also burns the ally, so the flask stays in the bag...
     fight({ heroes: [{ id: USER, x: 1, y: 4 }, { id: 'test_mage', x: 4, y: 4 }], enemies: [{ id: 'test_grunt', x: 4, y: 3 }, { id: 'test_grunt', x: 4, y: 5 }], consumables: ['con_bad_decisions'] });
-    hero('test_mage').ap = 0;
     takeTurn();
     t.ok(DD.Combat.consumables().indexOf('con_bad_decisions') >= 0, 'AutoPlay: no firebomb when the blast would burn an ally');
     // ...while the same pair without the ally in between gets bombed
@@ -1175,10 +1471,10 @@
     const g = at(4, 4);
     takeTurn();
     t.ok(g.dead, 'AutoPlay yeets the grunt into the pit');
-    // utility bottles stay in the bag for the player (smoke, energy, courage)
-    fight({ heroes: [{ id: USER, x: 1, y: 4 }], enemies: [{ id: 'test_grunt', x: 6, y: 4 }], consumables: ['con_smoke_bomb', 'con_energy_drink', 'con_liquid_courage'] });
+    // with nothing to spend the AP on and nothing to fear, the utility bottles stay in the bag
+    fight({ heroes: [{ id: USER, x: 1, y: 4 }], enemies: [{ id: 'test_grunt', x: 8, y: 8 }], consumables: ['con_smoke_bomb', 'con_energy_drink', 'con_liquid_courage'] });
     takeTurn();
-    t.eq(DD.Combat.consumables().length, 3, 'AutoPlay leaves utility consumables alone');
+    t.eq(DD.Combat.consumables().length, 3, 'AutoPlay leaves utility consumables alone when nothing calls for them');
     sane(t, 'autoplay consumables');
   });
 
@@ -1202,7 +1498,7 @@
       const setup = DD.Encounter.build(DD.getEncounter(encId), party, { rng: rng, act: DD.getEncounter(encId).act });
       DD.Combat.start(setup, { seed: t.seed + ':kit-' + i, headless: true, consumables: CON.slice((i * 3) % 12, (i * 3) % 12 + 3) });
       A().addRule({ id: 'kit_use_counter', name: 'Kit counter', hooks: { onSkillUsed: function (ctx) {
-        if (!A().simulating && ctx && ctx.skill && /^(gen|con)_/.test(ctx.skill.id)) used[ctx.skill.id] = (used[ctx.skill.id] || 0) + 1;
+        if (!A().simulating && ctx && ctx.skill && !ctx.opportunity && /^(gen|con)_/.test(ctx.skill.id)) used[ctx.skill.id] = (used[ctx.skill.id] || 0) + 1;
       } } });
       const res = t.tryRun('runBattle ' + encId, function () { return DD.AutoPlay.runBattle(25); });
       battles++;
@@ -1215,7 +1511,7 @@
     t.ok(kinds.filter(function (k) { return /^gen_/.test(k); }).length >= 4, 'AutoPlay found a use for several generic skills (' + kinds.join(', ') + ')');
   });
 
-  // ---- 12. run layer -------------------------------------------------------------------------------------------
+  // ---- 13. run layer -------------------------------------------------------------------------------------------
   T.suite('kit: run layer — skill tomes, level-ups, rewards and shop offer the kit', function (t) {
     if (!DD.Run || !DD.Rewards || typeof DD.Run.newRun !== 'function') { t.skip('run layer missing'); return; }
     const savedUi = DD.Run.useUi;
@@ -1229,7 +1525,7 @@
       const gen = DD.Run.learnableFor(rh, { generic: true }), own = DD.Run.learnableFor(rh, { generic: false });
       t.ok(GEN.every(function (id) { return gen.indexOf(id) >= 0; }), 'every generic skill is learnable by any hero');
       t.ok(GEN.every(function (id) { return own.indexOf(id) < 0; }), '...but only from the generic pool');
-      // skill tomes: 35% generic
+      // skill tomes: some are generic
       const rng = DD.RNG('kit-tomes');
       const seen = {};
       for (let i = 0; i < 120; i++) {
@@ -1278,14 +1574,16 @@
       DD.Rewards.apply(DD.Rewards.consumableReward('con_bag_of_d4s'), { run: run });
       t.eq(run.consumables.join(','), 'con_red_drink,con_frost_flask,con_bag_of_d4s', 'three pockets filled');
       t.eq(DD.Rewards.apply(DD.Rewards.consumableReward('con_antidote'), { run: run }).reason, 'full', 'a full bag refuses a fourth');
-      // a real run fight: the learned skill is socketed, a drink comes out of the run's pockets
+      // a real run fight: the learned skill is socketed, a drink comes out of the run's pockets on the knight's turn
       if (DD.Encounter && DD.getEncounter('test_a1_normal')) {
         DD.Run.startCombat('test_a1_normal', 'normal');
         const cs = DD.Combat.state;
         t.ok(cs && cs.run === run, 'run combat started');
         const ku = cs.units.filter(function (u) { return u.defId === 'test_knight'; })[0];
         t.ok(ku && ku.skills.some(function (s) { return s.id === 'gen_throw_chair' && s.level === 3; }), 'the knight brought Throw Chair III');
-        if (cs.deploy && cs.deploy.active) cs.deploy.active = false;
+        if (!cs.order) DD.Combat.rollInitiative();
+        for (let guard = 0; guard < 40 && !cs.result && !DD.Combat.isTurnOf(ku); guard++) DD.Combat.endTurn();
+        t.ok(DD.Combat.isTurnOf(ku), 'the knight\'s turn comes round');
         t.ok(DD.Combat.useConsumable(ku, 0, ku.x, ku.y), 'the knight drinks the Red Drink from the run pockets');
         t.eq(run.consumables.join(','), 'con_frost_flask,con_bag_of_d4s', 'the run inventory lost it');
         t.tryRun('finish the run fight', function () { DD.AutoPlay.runBattle(30); });

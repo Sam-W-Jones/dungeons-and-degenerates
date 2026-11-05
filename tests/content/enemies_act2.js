@@ -4,10 +4,14 @@
  * == desc, neutral difficulty), each gimmick on the enemy's own turn (DD.AI.act or the real turn flow: reassembling
  * interns, grab + Root, mimosas + hollandaise oil, chain zap + Lure from over a pit, charges from where the cub stands,
  * the banshee's cone, dive + Stone Form, swarm halving, Mama's ⏳ Stomp + Vendetta, Raise Dead + Detention walls,
- * lightning-healed Gary + coils), every enemy taking a sensible turn, durations per own turn, encounters under
+ * lightning-healed Gary + coils), every enemy taking a sensible turn, v2 targeting (brutes stick to the hero next to
+ * them, divers dive, ranged keep their distance and get pinned, walks round a downed hero plugging a corridor), attacks
+ * of opportunity (each enemy's reaction skill, what never provokes), durations per own turn, encounters under
  * initiative (waves, survive, protect, destroy), robustness, previews vs reality, encounter builds and AutoPlay sims
- * with the fixture party at the act 2 level band (L2-4; numbers logged with verbose=1, deeper runs with sims=<seeds per
- * level>), plus the regression suite of the AutoPlay core fix (walking around walls to a destroy-objective object).
+ * with the fixture party at the act 2 level band (L2-4; no one-shots, nobody stuck; numbers logged with verbose=1,
+ * deeper runs with sims=<seeds per level>), the review (v2) regressions (foes-only areas next to a coworker, no grab
+ * through a coworker, Raise Dead's reach), plus the regression suite of the AutoPlay core fix (walking around walls to
+ * a destroy-objective object).
  */
 (function () {
   'use strict';
@@ -419,11 +423,16 @@
     const w = byDef('a2_wisp')[0], z = byDef('a2_zombie_unpaid')[0];
     const a = heroOf('test_mage'), b = heroOf('test_cleric'), c = heroOf('test_rogue');
     const ctx = DD.Targeting.buildCtx(w, slotOf(w, 'a2_wisp_zap'), { x: 4, y: 4 });
-    t.eq(ctx.tiles.map(key).join(' '), '4,4 5,5 4,6', 'the chain: target, nearest within 2, then the next');
+    t.eq(ctx.tiles.map(key).join(' '), '4,4 5,5', 'the chain: the target, then one jump to the nearest unit within 2 (v2: one jump)');
     const hp = [a.hp, b.hp, c.hp, z.hp];
     now(w, 'a2_wisp_zap', a);
-    t.ok(hp[0] - a.hp === 6 && hp[1] - b.hp === 6 && hp[3] - z.hp === 6, 'every link takes 6, the zombie friend included');
-    t.eq(hp[2] - c.hp, 0, 'far away: untouched');
+    t.ok(hp[0] - a.hp === 6 && hp[1] - b.hp === 6, 'both links take 6');
+    t.ok(hp[2] - c.hp === 0 && hp[3] - z.hp === 0, 'nobody else: the far rogue, and the zombie the bolt did not jump to');
+    // friend or foe: the jump goes to the nearest unit, the wisp's own side included
+    quiet({ heroes: [H(4, 4), H(6, 4, 'test_cleric')], enemies: [E(0, 4, 'a2_wisp'), E(4, 5, 'a2_zombie_unpaid')] });
+    const z2 = byDef('a2_zombie_unpaid')[0], c2 = heroOf('test_cleric'), hz = z2.hp, hc2 = c2.hp;
+    now(byDef('a2_wisp')[0], 'a2_wisp_zap', heroOf('test_mage'));
+    t.ok(hz - z2.hp === 6 && c2.hp === hc2, 'the zombie next to the target is nearer than the cleric: it takes the jump (6)');
     quiet({ heroes: [H(4, 4)], enemies: [E(1, 4, 'a2_wisp')] });
     act(function () { DD.Act.addStatus(heroOf('test_mage'), 'wet', { turns: 2 }); });
     const hp2 = heroOf('test_mage').hp;
@@ -746,20 +755,32 @@
     t.ok(tile(4, 5).obj && tile(4, 5).obj.id === 'a2_bone_wall', 'the other wall lasts through the next round');
     DD.Combat.endRound();
     t.ok(!tile(4, 5).obj || tile(4, 5).obj.id !== 'a2_bone_wall', 'then crumbles (rounds, not turns)');
-    // his turn: the Red Pen, then Raise Dead when there are piles
-    quiet({ w: 11, h: 11, heroes: [H(5, 8), H(2, 9, 'test_cleric')], enemies: [E(5, 2, 'a2_necro_ta')] });
+    // his turn, one thing (v2): Raise Dead when there are piles (or fewer than 2 interns) ...
+    quiet({ w: 11, h: 11, heroes: [H(5, 8), H(2, 9, 'test_cleric')], enemies: [E(5, 2, 'a2_necro_ta'), E(9, 1, 'a2_skeleton_intern'), E(9, 2, 'a2_skeleton_intern')] });
     let rec = recorder();
     const ta3 = byDef('a2_necro_ta')[0];
+    let hps = DD.Combat.heroes().map(function (h) { return h.hp; });
     act(function () { DD.Act.placeObject(8, 2, 'a2_bone_pile', { data: { timer: 2 } }); });
     turn(ta3);
-    t.eq(rec.usedBy('a2_necro_ta').join(), 'a2_ta_redpen,a2_ta_raise', 'with a pile on the map: Red Pen, then Raise Dead');
-    t.ok(DD.Combat.heroes().some(function (h) { return has(h, 'vulnerable'); }), 'someone got graded (Vulnerable)');
-    t.ok(byDef('a2_skeleton_intern').length === 3 && ta3.intents.length === 0, 'three interns at once, nothing telegraphed');
-    // a hero close by gets Detention (after the Red Pen)
+    t.eq(rec.usedBy('a2_necro_ta').join(), 'a2_ta_raise', 'with a pile on the map: Raise Dead, and only that');
+    t.ok(byDef('a2_skeleton_intern').length === 5 && ta3.intents.length === 0, '2 new interns + the pile, at once, nothing telegraphed');
+    t.ok(DD.Combat.heroes().every(function (h, i) { return h.hp === hps[i] && !has(h, 'vulnerable'); }), 'no Red Pen on a raising turn');
+    // ... else Detention on a hero within 3 (instead of the Red Pen) ...
     quiet({ w: 11, h: 11, heroes: [H(5, 4), H(2, 9, 'test_cleric')], enemies: [E(5, 2, 'a2_necro_ta'), E(9, 1, 'a2_skeleton_intern'), E(9, 2, 'a2_skeleton_intern')] });
     rec = recorder();
+    hps = DD.Combat.heroes().map(function (h) { return h.hp; });
     turn(byDef('a2_necro_ta')[0]);
-    t.ok(rec.usedBy('a2_necro_ta').indexOf('a2_ta_detention') >= 0 && rec.usedBy('a2_necro_ta')[0] === 'a2_ta_redpen', 'a hero close by: Red Pen, then Detention');
+    t.eq(rec.usedBy('a2_necro_ta').join(), 'a2_ta_detention', 'a hero 2 tiles away: Detention, and only that');
+    t.ok(DD.Combat.heroes().every(function (h, i) { return h.hp === hps[i]; }), 'Detention deals no damage');
+    // ... else the Red Pen
+    quiet({ w: 11, h: 11, heroes: [H(5, 8), H(2, 9, 'test_cleric')], enemies: [E(5, 2, 'a2_necro_ta'), E(9, 1, 'a2_skeleton_intern'), E(9, 2, 'a2_skeleton_intern')] });
+    rec = recorder();
+    hps = DD.Combat.heroes().map(function (h) { return h.hp; });
+    const ta5 = byDef('a2_necro_ta')[0];
+    turn(ta5);
+    const graded = DD.Combat.heroes().filter(function (h, i) { return hps[i] - h.hp === 11 && has(h, 'vulnerable'); });
+    t.eq(rec.usedBy('a2_necro_ta').join(), 'a2_ta_redpen', 'interns standing, nobody close: the Red Pen');
+    t.ok(graded.length === 1 && dist(ta5, graded[0]) >= 2 && dist(ta5, graded[0]) <= 6, 'one hero graded (11 + Vulnerable) from 2-6 tiles away');
     sanity(t, 'ta');
   });
 
@@ -873,8 +894,8 @@
         check: function (e, h, d) { return d === 5 && has(h, 'dazzled'); }, what: 'throws a Glitter Bomb (5 + Dazzle)' },
       { id: 'a2_mama_owlbear', cfg: { heroes: [H(4, 5, 'test_mage', { hp: 60 }), H(5, 4, 'test_cleric')], enemies: [E(4, 4, 'a2_mama_owlbear')] }, skill: null,
         check: function (e) { return e.intents.length === 1 && e.intents[0].windup && e.intents[0].skillId === 'a2_mama_stomp'; }, what: 'mauls or pounces, then winds up the Stomp' },
-      { id: 'a2_necro_ta', cfg: { w: 11, h: 11, heroes: [H(5, 8)], enemies: [E(5, 2, 'a2_necro_ta')] }, skill: 'a2_ta_redpen', also: 'a2_ta_raise',
-        check: function (e, h, d) { return d === 11 && has(h, 'vulnerable') && byDef('a2_skeleton_intern').length === 2; }, what: 'Red Pens (11 + Vulnerable), then raises 2 interns' },
+      { id: 'a2_necro_ta', cfg: { w: 11, h: 11, heroes: [H(5, 8)], enemies: [E(5, 2, 'a2_necro_ta')] }, skill: 'a2_ta_raise',
+        check: function (e, h, d) { return d === 0 && byDef('a2_skeleton_intern').length === 2; }, what: 'with no interns, raises 2 (and does nothing else)' },
       { id: 'a2_gary', cfg: { heroes: [H(5, 4)], enemies: [E(4, 4, 'a2_gary')] }, skill: 'a2_gary_clobber',
         check: function (e, h, d) { return d === 13 && dist(e, h) === 3; }, what: 'Clobbers (13) and knocks the hero back' },
       { id: 'a2_tesla_coil', cfg: { heroes: [H(4, 7)], enemies: [E(4, 4, 'a2_tesla_coil')] }, skill: 'a2_coil_arc',
@@ -897,6 +918,245 @@
       t.ok(used.length <= 2, c.id + ': at most two skills in one turn (' + used.length + ')');
       sanity(t, c.id);
     });
+  });
+
+  // =====================================================================================================
+  // v2 reach-aware targeting (DESIGN §8 "Targeting"): brutes stick to the hero next to them, ranged and summoners keep
+  // their distance (a melee hero next to them pins them), only the wisp and the gargoyle dive the weakest hero
+  const STYLE = { a2_skeleton_intern: 'melee', a2_zombie_unpaid: 'melee', a2_hollandaise: 'melee', a2_owlbear_cub: 'melee', a2_mama_owlbear: 'melee',
+    a2_gary: 'melee', a2_brunch_cultist: 'support', a2_banshee: 'ranged', a2_pixie_swarm: 'ranged', a2_tesla_coil: 'ranged', a2_necro_ta: 'summoner',
+    a2_wisp: 'skirmisher', a2_gargoyle: 'assassin' };
+  // what the inspect panel's passive line says about it
+  const SAYS = { melee: /sticks to that one/, support: /stays near its friends, out of melee/, ranged: /keeps (its|her) distance|Never moves/,
+    summoner: /keeping his distance/, skirmisher: /^Sneaky: .*weakest/, assassin: /^Sneaky: .*weakest/ };
+  T.suite('enemies_act2: targeting — brutes stick, divers dive, ranged keep their distance (v2)', function (t) {
+    t.eq(Object.keys(STYLE).sort().join(), ENEMIES.slice().sort().join(), 'a targeting style for every act 2 enemy');
+    ENEMIES.forEach(function (id) {
+      quiet({ heroes: [H(1, 1)], enemies: [E(6, 6, id)] });
+      const e = byDef(id)[0], st = DD.AI.styleOf(e);
+      t.eq(st.style, STYLE[id], id + ' targets as a ' + STYLE[id]);
+      t.eq(DD.AI.isDiver(e), STYLE[id] === 'skirmisher' || STYLE[id] === 'assassin', id + (DD.AI.isDiver(e) ? ' dives the weakest hero' : ' does not dive the weakest hero'));
+      t.ok(SAYS[STYLE[id]].test(DD.getEnemy(id).passive.desc), id + ' says how it picks its target: ' + DD.getEnemy(id).passive.desc);
+    });
+    // a brute next to the knight bites the knight, though a 5-HP mage is one step away (that step provokes the knight).
+    // (the mage is listed first: her turn, so the knight has no round-1 fixture Block)
+    function zombieCase(spent) {
+      quiet({ heroes: [H(5, 6, 'test_mage', { hp: 5 }), H(4, 4, 'test_knight')], enemies: [E(5, 4, 'a2_zombie_unpaid')] });
+      const k = heroOf('test_knight'), m = heroOf('test_mage'), z = byDef('a2_zombie_unpaid')[0];
+      if (spent) k.oppRound = DD.Combat.state.round;
+      const rec = recorder(), hk = k.hp;
+      turn(z);
+      return { k: k, m: m, z: z, rec: rec, knightLost: hk - k.hp };
+    }
+    let c = zombieCase(false);
+    t.eq(c.rec.usedBy('a2_zombie_unpaid').join(), 'a2_zombie_overtime', 'the engaged zombie bites');
+    t.ok(c.knightLost === 6 && !c.m.downed && pos(c.z) === '5,4', 'the knight it stands next to (7 − 1 armor), not the 5-HP mage a step away');
+    c = zombieCase(true);
+    t.ok(c.m.downed && c.knightLost === 0, 'with the knight\'s attack of opportunity spent, nothing pins it: the sure kill tempts it (the mage is down)');
+    // a diver ignores the knight next to it and swoops on the wounded mage (a brute's pick from there: the knight)
+    quiet({ w: 10, h: 10, heroes: [H(4, 4, 'test_knight'), H(3, 8, 'test_mage')], enemies: [E(3, 4, 'a2_gargoyle')] });
+    const g = byDef('a2_gargoyle')[0], gk = heroOf('test_knight'), gm = heroOf('test_mage');
+    gm.hp = Math.round(gm.maxHp / 2);
+    const brute = DD.AI.bestAttack(g, { skills: ['a2_gargoyle_dive'], noMove: true, style: 'melee' });
+    t.ok(brute && key(brute.target) === pos(gk), 'a brute in the gargoyle\'s spot would hit the knight next to it');
+    let rec = recorder();
+    const kh = gk.hp, mh = gm.hp;
+    turn(g);
+    t.ok(rec.usedBy('a2_gargoyle').join() === 'a2_gargoyle_dive,a2_gargoyle_stone' && mh - gm.hp === 8 && gk.hp === kh, 'the gargoyle dives on the wounded mage (8), the knight is untouched');
+    t.eq(dist(g, gm), 1, 'and lands next to her (a leap)');
+    // the wisp: picks on the wounded, zaps from 3+ tiles away, and blinking off the knight's elbow provokes nothing
+    quiet({ w: 11, h: 11, heroes: [H(4, 4, 'test_knight'), H(4, 8, 'test_mage'), H(8, 8, 'test_cleric')], enemies: [E(5, 4, 'a2_wisp')] });
+    const w = byDef('a2_wisp')[0], wm = heroOf('test_mage'), wk = heroOf('test_knight'), wc = heroOf('test_cleric');
+    wm.hp = 10;
+    t.ok(w.flags.noProvoke && DD.Act.opportunityOf(wk, w) === null, 'the wisp never provokes (it teleports): the knight next to it gets no attack of opportunity');
+    const bruteW = DD.AI.bestAttack(w, { skills: ['a2_wisp_zap'], noMove: true, style: 'melee' });
+    t.ok(bruteW && key(bruteW.target) === pos(wk), 'a brute in its spot would zap the knight next to it');
+    rec = recorder();
+    let aoo = 0;
+    const off = DD.Events.on('opportunity:attack', function () { aoo++; });
+    const hp3 = [wk.hp, wm.hp, wc.hp];
+    try { turn(w); } finally { off(); }
+    t.eq(rec.usedBy('a2_wisp').join(), 'a2_wisp_zap', 'the wisp zaps');
+    t.ok(hp3[1] - wm.hp === 6 && wk.hp === hp3[0] && wc.hp === hp3[2], 'the wounded mage (6), not the healthy knight next to it');
+    t.ok(aoo === 0 && wk.oppRound !== DD.Combat.state.round, 'it blinked away from the knight without an attack of opportunity');
+    t.ok(DD.Combat.heroes().every(function (h) { return dist(w, h) >= 3; }), 'and hovers 3+ tiles from every hero (' + pos(w) + ')');
+    // ranged: a melee hero next to the banshee pins her (floating off would provoke), until his reaction is spent
+    function bansheeCase(spent) {
+      quiet({ w: 10, h: 10, heroes: [H(4, 4, 'test_knight'), H(1, 8, 'test_mage')], enemies: [E(5, 4, 'a2_banshee')] });
+      const k = heroOf('test_knight'), b = byDef('a2_banshee')[0];
+      slotOf(b, 'a2_banshee_scream').cd = 2;
+      if (spent) k.oppRound = DD.Combat.state.round;
+      const r = recorder();
+      turn(b);
+      return { b: b, k: k, rec: r };
+    }
+    let bc = bansheeCase(false);
+    t.ok(bc.rec.usedBy('a2_banshee').join() === 'a2_banshee_review' && pos(bc.b) === '5,4' && has(bc.k, 'weak'), 'pinned by the knight, the banshee stays put and reviews him');
+    bc = bansheeCase(true);
+    t.ok(bc.rec.usedBy('a2_banshee').join() === 'a2_banshee_review' && DD.Combat.heroes().every(function (h) { return dist(bc.b, h) >= 2; }), 'unpinned, she floats off to keep her distance, then reviews');
+    // the TA with nothing to cast stays pinned too (walks price attacks of opportunity: closeIn)
+    function taCase(spent) {
+      quiet({ w: 10, h: 10, heroes: [H(3, 4, 'test_knight')], enemies: [E(4, 4, 'a2_necro_ta')] });
+      const k = heroOf('test_knight'), ta = byDef('a2_necro_ta')[0];
+      ['a2_ta_redpen', 'a2_ta_raise', 'a2_ta_detention'].forEach(function (id) { slotOf(ta, id).cd = 2; });
+      if (spent) k.oppRound = DD.Combat.state.round;
+      const hp = ta.hp;
+      turn(ta);
+      return { ta: ta, k: k, lost: hp - ta.hp };
+    }
+    let tc = taCase(false);
+    t.ok(pos(tc.ta) === '4,4' && tc.lost === 0, 'a TA next to the knight with every spell cooling down stays put (stepping off would cost him a slash)');
+    tc = taCase(true);
+    t.ok(dist(tc.ta, tc.k) >= 3 && tc.lost === 0, 'with the knight\'s reaction spent he backs off to keep his distance (' + pos(tc.ta) + ')');
+    // a downed hero plugging the short way through a wall: the zombie walks round by the other gap (the default
+    // approach alone parks in front of the plug: its distance field ignores units)
+    quiet({ w: 11, h: 7, heroes: [H(8, 3), H(5, 1, 'test_cleric')], enemies: [E(3, 1, 'a2_zombie_unpaid')],
+      terrain: function (tl) { if (tl.x === 5 && tl.y !== 1 && tl.y !== 5) tl.t = 'wall'; } });
+    const plug = heroOf('test_cleric'), zw = byDef('a2_zombie_unpaid')[0];
+    act(function () { DD.Act.damage(null, plug, 999); });
+    rec = recorder();
+    const trail = [];
+    for (let i = 0; i < 6 && !rec.usedBy('a2_zombie_unpaid').length; i++) { turn(zw); trail.push(pos(zw)); }
+    t.ok(plug.downed && rec.usedBy('a2_zombie_unpaid').length > 0, 'it gets to the mage by the long way round (' + trail.join(' → ') + ')');
+    t.ok(trail.some(function (p) { return p === '5,5' || +p.split(',')[0] > 5; }), 'through the far gap');
+    sanity(t, 'targeting');
+  });
+
+  // =====================================================================================================
+  T.suite('enemies_act2: attacks of opportunity — who strikes with what, and what never provokes (v2)', function (t) {
+    // each enemy's attack of opportunity is its first ready melee skill (its basic attack); ranged ones make none
+    const AOO = { a2_skeleton_intern: 'a2_intern_papercut', a2_zombie_unpaid: 'a2_zombie_overtime', a2_hollandaise: 'a2_hollandaise_slap',
+      a2_owlbear_cub: 'a2_cub_nibble', a2_pixie_swarm: 'a2_pixie_bite', a2_mama_owlbear: 'a2_mama_maul', a2_gary: 'a2_gary_clobber',
+      a2_brunch_cultist: null, a2_wisp: null, a2_banshee: null, a2_gargoyle: null, a2_necro_ta: null, a2_tesla_coil: null };
+    t.eq(Object.keys(AOO).sort().join(), ENEMIES.slice().sort().join(), 'a case for every act 2 enemy');
+    ENEMIES.forEach(function (id) {
+      quiet({ heroes: [H(1, 1)], enemies: [E(6, 6, id)] });
+      const sl = DD.Act.opportunitySlot(byDef(id)[0]);
+      t.eq(sl ? sl.id : null, AOO[id], id + ' strikes walkers with ' + (AOO[id] || 'nothing'));
+    });
+    t.eq(DD.getEnemy('a2_owlbear_cub').skills[0], 'a2_cub_nibble', 'the cub lists its Nibble first (its charge would be an 8 + push reaction)');
+    // a hero walking away from a zombie gets bitten; from Gary, clobbered and knocked back (the walk ends there)
+    quiet({ w: 10, h: 10, heroes: [H(4, 4, 'test_knight')], enemies: [E(5, 4, 'a2_zombie_unpaid')] });
+    const k = heroOf('test_knight'), z = byDef('a2_zombie_unpaid')[0];
+    k.block = 0;   // the fixture knight's round-1 Block
+    const prov = DD.Combat.provokes(k, 1, 4);
+    t.ok(prov.length === 1 && prov[0].unitId === z.id && prov[0].skillId === 'a2_zombie_overtime' && prov[0].dmg === 6, 'the move preview: "provokes 1", the zombie\'s bite for 6');
+    let hk = k.hp;
+    t.ok(DD.Combat.move(k, 1, 4) && hk - k.hp === 6 && pos(k) === '1,4', 'walking off: bitten for 6 on the way out, then on its way');
+    t.eq(z.oppRound, DD.Combat.state.round, 'the zombie\'s reaction is spent for the round');
+    quiet({ w: 10, h: 10, heroes: [H(5, 4)], enemies: [E(4, 4, 'a2_gary')] });
+    const m = heroOf('test_mage'), hm = m.hp;
+    t.ok(DD.Combat.move(m, 8, 4) && hm - m.hp === 13 && pos(m) === '7,4', 'walking away from Gary: Clobber (13) knocks the mage 2 tiles on, and the walk ends there');
+    // Mama's Maul as a reaction hits the walker only (not the 3 tiles of her row)
+    quiet({ w: 10, h: 10, heroes: [H(5, 4, 'test_knight'), H(4, 5)], enemies: [E(4, 4, 'a2_mama_owlbear')] });
+    const mk = heroOf('test_knight'), mm = heroOf('test_mage'), hh = [mk.hp, mm.hp];
+    DD.Combat.giveTurnTo(mm);
+    t.ok(DD.Combat.move(mm, 4, 8) && hh[1] - mm.hp === 12 && mk.hp === hh[0], 'leaving Mama: the walker takes her Maul (12), the knight beside it nothing');
+    // enemies walking away from a melee hero provoke it, on their own turn
+    quiet({ w: 10, h: 10, heroes: [H(4, 4, 'test_knight')], enemies: [E(5, 4, 'a2_skeleton_intern')] });
+    const ki = heroOf('test_knight'), it = byDef('a2_skeleton_intern')[0], hi = it.hp;
+    act(function () { DD.AI.moveTo(it, 8, 4); });
+    t.ok(hi - it.hp === 5 && ki.oppRound === DD.Combat.state.round, 'an intern walking off the knight eats his slash (5)');
+    // leaps, charges, pulls and throws never provoke
+    function noAoo(label, cfg, fn) {
+      quiet(Object.assign({ w: 10, h: 10 }, cfg));
+      let n = 0;
+      const off = DD.Events.on('opportunity:attack', function () { n++; });
+      const hps = DD.Combat.state.units.map(function (u) { return u.hp; });
+      try { act(fn); } finally { off(); }
+      t.eq(n, 0, label + ': no attack of opportunity');
+      return hps;
+    }
+    noAoo('the cub charges off the knight\'s elbow', { heroes: [H(4, 3, 'test_knight'), H(8, 4)], enemies: [E(4, 4, 'a2_owlbear_cub')] }, function () {
+      DD.AI.useNow(byDef('a2_owlbear_cub')[0], 'a2_cub_charge', { x: 5, y: 4 }, {});
+    });
+    t.ok(pos(byDef('a2_owlbear_cub')[0]) === '7,4' && heroOf('test_mage').hp < heroOf('test_mage').maxHp, 'the charge landed (a dash)');
+    noAoo('Mama pounces away from the knight', { heroes: [H(4, 3, 'test_knight'), H(8, 4)], enemies: [E(4, 4, 'a2_mama_owlbear')] }, function () {
+      DD.AI.useNow(byDef('a2_mama_owlbear')[0], 'a2_mama_pounce', heroOf('test_mage'), {});
+    });
+    t.eq(dist(byDef('a2_mama_owlbear')[0], { x: 7, y: 4 }), 0, 'she landed next to the mage (a leap)');
+    noAoo('the gargoyle dives away from the knight', { heroes: [H(4, 3, 'test_knight'), H(8, 4)], enemies: [E(4, 4, 'a2_gargoyle')] }, function () {
+      DD.AI.useNow(byDef('a2_gargoyle')[0], 'a2_gargoyle_dive', heroOf('test_mage'), {});
+    });
+    noAoo('Grabby Hands pulls the mage off an intern', { heroes: [H(5, 4)], enemies: [E(1, 4, 'a2_zombie_unpaid'), E(5, 5, 'a2_skeleton_intern')] }, function () {
+      DD.AI.useNow(byDef('a2_zombie_unpaid')[0], 'a2_zombie_grab', heroOf('test_mage'), {});
+    });
+    t.ok(pos(heroOf('test_mage')) === '2,4' && heroOf('test_mage').hp === heroOf('test_mage').maxHp, 'yanked next to the zombie, unbitten by the intern she left');
+    noAoo('Gary throws a zombie off the knight', { heroes: [H(2, 6, 'test_knight'), H(7, 4)], enemies: [E(2, 4, 'a2_gary'), E(2, 5, 'a2_zombie_unpaid')] }, function () {
+      DD.AI.useNow(byDef('a2_gary')[0], 'a2_gary_throw', { x: 7, y: 4 }, {});
+    });
+    t.ok(dist(byDef('a2_zombie_unpaid')[0], heroOf('test_mage')) <= 1, 'the thrown zombie lands by the mage');
+    // a hero walking off a ranged enemy is not struck
+    const hps = noAoo('the mage walks off the TA and the banshee', { heroes: [H(5, 4)], enemies: [E(4, 4, 'a2_necro_ta'), E(5, 5, 'a2_banshee')] }, function () {
+      DD.Combat.move(heroOf('test_mage'), 8, 3);
+    });
+    t.ok(pos(heroOf('test_mage')) === '8,3' && DD.Combat.state.units.every(function (u, i) { return u.hp === hps[i]; }), 'and walks away unharmed');
+    sanity(t, 'aoo');
+  });
+
+  // =====================================================================================================
+  // review (v2): DD.AI scores a friend standing in an area as friendly fire, also for areas that only hurt foes, so the
+  // banshee, Gary, the pixies and the gargoyle skipped their gimmick whenever a coworker was fighting their target;
+  // zombies grabbed heroes through their own coworkers (a bonk for both, no bite); Raise Dead put its second intern
+  // 4-5 tiles off ("1-3 tiles away")
+  T.suite('enemies_act2: review (v2) — foes-only areas, grabs through coworkers, Raise Dead\'s reach', function (t) {
+    // the banshee screams at a hero a zombie is fighting (the zombie in her cone is spared, as the desc says)
+    quiet({ heroes: [H(3, 4), H(8, 8, 'test_cleric')], enemies: [E(5, 4, 'a2_banshee'), E(3, 5, 'a2_zombie_unpaid')] });
+    let m = heroOf('test_mage'), z = byDef('a2_zombie_unpaid')[0], hm = m.hp;
+    turn(byDef('a2_banshee')[0]);
+    t.ok(has(m, 'stun') && hm - m.hp === 6 && z.hp === z.maxHp, 'the banshee screams (6 + Stun) past the zombie next to the mage, sparing it');
+    // Gary, who can't walk up, throws at a hero a zombie is fighting
+    quiet({ heroes: [H(5, 4), H(8, 8, 'test_cleric')], enemies: [E(1, 4, 'a2_gary'), E(5, 5, 'a2_zombie_unpaid')] });
+    byDef('a2_gary')[0].mov = 0;
+    m = heroOf('test_mage'); z = byDef('a2_zombie_unpaid')[0]; hm = m.hp;
+    turn(byDef('a2_gary')[0]);
+    t.ok(hm - m.hp === 11 && z.hp === z.maxHp, 'Gary throws (11) at the mage the zombie is fighting, sparing the zombie (he used to stand there doing nothing)');
+    // pixies glitter a hero a zombie is fighting
+    quiet({ heroes: [H(4, 4), H(8, 8, 'test_cleric')], enemies: [E(1, 4, 'a2_pixie_swarm'), E(4, 5, 'a2_zombie_unpaid')] });
+    byDef('a2_pixie_swarm')[0].mov = 0;
+    m = heroOf('test_mage'); z = byDef('a2_zombie_unpaid')[0]; hm = m.hp;
+    turn(byDef('a2_pixie_swarm')[0]);
+    t.ok(hm - m.hp === 5 && has(m, 'dazzled') && z.hp === z.maxHp && !has(z, 'dazzled'), 'the pixies glitter (5 + Dazzle) the mage, not the zombie next to her');
+    // the gargoyle dives the wounded mage even with an intern next to her (it lands on a free side; the intern is spared)
+    quiet({ heroes: [H(6, 4), H(2, 8, 'test_cleric')], enemies: [E(2, 4, 'a2_gargoyle'), E(6, 5, 'a2_skeleton_intern')] });
+    m = heroOf('test_mage');
+    m.hp = Math.round(m.maxHp / 2);
+    hm = m.hp;
+    const it = byDef('a2_skeleton_intern')[0], c = heroOf('test_cleric'), hc = c.hp;
+    turn(byDef('a2_gargoyle')[0]);
+    t.ok(hm - m.hp === 8 && c.hp === hc && it.hp === it.maxHp, 'the gargoyle dives the wounded mage beside the intern (a diver), the intern untouched');
+    // Grabby Hands: never through a coworker (the hero would only bonk into it); a clear line still yanks
+    quiet({ heroes: [H(5, 4)], enemies: [E(1, 4, 'a2_zombie_unpaid'), E(3, 4, 'a2_skeleton_intern')] });
+    byDef('a2_zombie_unpaid')[0].mov = 0;
+    const rec = recorder();
+    const it2 = byDef('a2_skeleton_intern')[0];
+    m = heroOf('test_mage'); hm = m.hp;
+    turn(byDef('a2_zombie_unpaid')[0]);
+    t.ok(rec.usedBy('a2_zombie_unpaid').indexOf('a2_zombie_grab') < 0 && it2.hp === it2.maxHp && pos(m) === '5,4' && m.hp === hm,
+      'an intern between: no grab (no bonk for the intern or the mage)');
+    quiet({ heroes: [H(5, 4)], enemies: [E(1, 4, 'a2_zombie_unpaid')] });
+    byDef('a2_zombie_unpaid')[0].mov = 0;
+    turn(byDef('a2_zombie_unpaid')[0]);
+    t.ok(pos(heroOf('test_mage')) === '2,4' && has(heroOf('test_mage'), 'root'), 'a clear line: yanked next to the zombie and Rooted');
+    // Raise Dead: every intern within 1-3 tiles of the TA, whatever tile he aims at
+    let worst = 0, n = 0;
+    [3, 8, 13].forEach(function (seed) {
+      quiet({ seed: seed, w: 11, h: 11, heroes: [H(1, 9)], enemies: [E(5, 3, 'a2_necro_ta')] });
+      const ta = byDef('a2_necro_ta')[0], slot = slotOf(ta, 'a2_ta_raise');
+      DD.Targeting.validTargets(ta, slot).forEach(function (p) {
+        const tiles = DD.Targeting.buildCtx(ta, slot, p).tiles;
+        n += tiles.length;
+        tiles.forEach(function (q) { const d = dist(q, ta); if (d < 1 || d > 3) worst = Math.max(worst, d); });
+        t.ok(tiles.length === 2 || tiles.length === 1, 'Raise Dead at ' + key(p) + ': 1-2 tiles');
+      });
+    });
+    t.ok(n > 40 && worst === 0, 'every Raise Dead tile is 1-3 tiles from the TA (' + n + ' tiles checked' + (worst ? ', one ' + worst + ' off' : '') + ')');
+    quiet({ heroes: [H(1, 8)], enemies: [E(5, 2, 'a2_necro_ta')] });
+    const ta = byDef('a2_necro_ta')[0];
+    turn(ta);
+    const raised = byDef('a2_skeleton_intern');
+    t.ok(raised.length === 2 && raised.every(function (u) { const d = dist(u, ta); return d >= 1 && d <= 3; }), 'on his turn: 2 interns, both 1-3 tiles from him (' + raised.map(pos).join(' ') + ')');
+    sanity(t, 'review v2');
   });
 
   // =====================================================================================================
@@ -962,7 +1222,26 @@
     for (let r = 0; r < 8 && !s.result; r++) { counts.push(DD.Combat.active('enemy').length); DD.Combat.endRound(); }
     t.ok(counts.length >= 4 && counts[1] > counts[0] && counts[2] > counts[1] && counts[3] > counts[2], 'graveyard shift: the waves arrive at rounds 2, 3 and 4 (' + counts.join(' → ') + ')');
     t.ok(s.result === 'victory' && s.round === 5, 'and holding out until the end of round 5 wins (' + s.result + ', round ' + s.round + ')');
-    // protect: the coffee machine
+    // protect: the coffee machine. v2 (no telegraphs): nobody can claw it before the heroes' first turns (checked in
+    // deployment, before any AI turn), and every side of it is one move from a hero, so the party can stand guard
+    const coffee = DD.getEncounter('a2_last_coffee');
+    ['normal', 'brutal'].forEach(function (diff) {
+      [3, 8, 13].forEach(function (seed) {
+        const setup = DD.Encounter.build(coffee, partyAt(LV), { rng: DD.RNG('a2v2:coffee:' + diff + ':' + seed), difficulty: diff, act: 2 });
+        DD.Combat.start(setup, { seed: seed, headless: true, difficulty: diff, kind: coffee.kind });
+        const m = DD.Combat.state.grid.tiles.filter(function (tl) { return tl.obj && tl.obj.id === 'a2_coffee_machine'; })[0];
+        const sides = DD.Grid.neighbors(m.x, m.y).filter(function (tl) { return DD.Grid.isWalkable(tl.x, tl.y); });
+        const early = DD.Combat.enemies().filter(function (e) {
+          const reach = DD.Grid.reachable(e, DD.Combat.effectiveMov(e));
+          return sides.some(function (p) { return reach.has(p.x + ',' + p.y) || (e.x === p.x && e.y === p.y); });
+        });
+        const label = 'last coffee (' + diff + ' #' + seed + ')';
+        t.eq(early.map(function (e) { return e.name + '@' + pos(e); }).join(), '', label + ': no enemy reaches the machine with its first move');
+        t.ok(sides.length === 4 && sides.every(function (p) {
+          return DD.Combat.heroes().some(function (h) { return pos(h) === key(p) || DD.Grid.reachable(h, DD.Combat.effectiveMov(h)).has(key(p)); });
+        }), label + ': every side of the machine is one move from some hero (or has one on it)');
+      });
+    });
     s = begin('a2_last_coffee', 3);
     t.eq(s.objective.type, 'protect', 'last coffee: a protect objective');
     const k = s.grid.tiles.filter(function (tl) { return tl.obj && tl.obj.id === 'a2_coffee_machine'; })[0];
@@ -1129,24 +1408,64 @@
     const ob = s.objective, prot = ob && ob.type === 'protect' && ob.objId ? ob.objId : null;
     const protHp = function () { let hp = 0; s.grid.tiles.forEach(function (tl) { if (tl.obj && tl.obj.id === prot) hp += tl.obj.hp; }); return hp; };
     const prot0 = prot ? protHp() : 0;
-    const res = DD.AutoPlay.runBattle(30);
+    // v2 sanity: one-shots (an enemy's turn takes a hero from full HP to down), heroes downed in round 1, and enemies
+    // that are stuck: 3 turns in a row with a hero in their reach (DD.AI.reachOf) doing nothing (no move, no skill), or
+    // 4 turns in a row doing nothing at all (turrets that can't move aside) — while some walk to a hero exists (a unit
+    // walled in by downed heroes or cliffs has nowhere to go)
+    const acts = {};
+    const pathToHero = function (u) {
+      return DD.Combat.heroes().some(function (h) {
+        return !h.dead && !h.downed && DD.Grid.neighbors(h.x, h.y).some(function (n) { return (n.x === u.x && n.y === u.y) || !!DD.Grid.path(u, n.x, n.y); });
+      });
+    };
+    const rec = function (u) { return acts[u.id] || (acts[u.id] = { def: u.defId, used: 0, cur: null, still: 0, reachStill: 0, stuck: false }); };
+    let r1 = 0, oneShots = 0;
+    const offs = [
+      DD.Events.on('turn:start', function (e) {
+        const u = e.unit;
+        if (!u || u.side !== 'enemy') return;
+        const a = rec(u);
+        if (DD.Combat.isStunned(u)) { a.cur = null; return; }
+        const tiles = DD.AI.reachOf(u).tiles;
+        a.cur = { at: pos(u), used: a.used, reach: DD.Combat.heroes().some(function (h) { return !h.dead && !h.downed && tiles.has(pos(h)); }),
+          full: DD.Combat.heroes().filter(function (h) { return !h.downed && h.hp >= h.maxHp; }) };
+      }),
+      DD.Events.on('turn:end', function (e) {
+        const a = e.unit && acts[e.unit.id], c = a && a.cur;
+        if (!c) return;
+        a.cur = null;
+        c.full.forEach(function (h) { if (h.downed) oneShots++; });
+        if (pos(e.unit) !== c.at || a.used > c.used || !pathToHero(e.unit)) { a.still = a.reachStill = 0; return; }
+        a.still++;
+        a.reachStill = c.reach ? a.reachStill + 1 : 0;
+        if (a.reachStill >= 3 || (a.still >= 4 && e.unit.mov > 0)) a.stuck = true;
+      }),
+      DD.Events.on('unit:downed', function () { if (s.round <= 1) r1++; }),
+    ];
+    DD.Act.addRule({ id: 'a2_sim_rec', name: 'Sim recorder', hooks: { onSkillUsed: function (ctx) {
+      if (!DD.Act.simulating && ctx && ctx.user && ctx.user.side === 'enemy' && !ctx.opportunity) rec(ctx.user).used++;
+    } } });
+    let res;
+    try { res = DD.AutoPlay.runBattle(30); } finally { offs.forEach(function (off) { off(); }); }
     let taken = 0;
     s.units.forEach(function (u) { if (u.kind === 'hero') taken += (s.stats.units[u.id] || {}).taken || 0; });
+    const idle = Object.keys(acts).filter(function (k) { return acts[k].stuck; }).map(function (k) { return acts[k].def; });
     return { win: res.result === 'victory', rounds: res.rounds, timeout: !!res.timeout, taken: taken / maxHp, downs: s.stats.downs || 0,
-      objLost: prot0 ? (prot0 - protHp()) / prot0 : 0, rolled: !!s.order };
+      objLost: prot0 ? (prot0 - protHp()) / prot0 : 0, rolled: !!s.order, r1Downs: r1, oneShots: oneShots, idle: idle };
   }
   function simSuite(name, ids) {
     T.suite('enemies_act2: autoplay sims (' + name + ')', function (t) {
       const per = Math.max(1, +t.param('sims', 1) || 1);
       ids.forEach(function (id) {
         const elite = ELITE.indexOf(id) >= 0;
-        let wins = 0, n = 0, rounds = 0, taken = 0, downs = 0, timeouts = 0, objLost = 0, rolled = 0;
-        const byLevel = [];
+        let wins = 0, n = 0, rounds = 0, taken = 0, downs = 0, timeouts = 0, objLost = 0, rolled = 0, r1 = 0, shots = 0;
+        const byLevel = [], idle = {};
         LEVELS.forEach(function (lv) {
           let w = 0;
           for (let k = 0; k < per; k++) {
             const r = sim(id, lv, Number(String(t.seed).replace(/\D/g, '') || 1) % 97 + k * 13 + lv);
-            n++; rounds += r.rounds; taken += r.taken; downs += r.downs; objLost += r.objLost;
+            n++; rounds += r.rounds; taken += r.taken; downs += r.downs; objLost += r.objLost; r1 += r.r1Downs; shots += r.oneShots;
+            r.idle.forEach(function (d) { idle[d] = (idle[d] || 0) + 1; });
             if (r.win) { wins++; w++; }
             if (r.timeout) timeouts++;
             if (r.rolled) rolled++;
@@ -1156,11 +1475,15 @@
         });
         const protect = DD.getEncounter(id).objective.type === 'protect';
         t.log(id + ' (' + (elite ? 'elite' : 'normal') + '): won ' + wins + '/' + n + ' [' + byLevel.join(', ') + '], avg rounds ' + (rounds / n).toFixed(1) +
-          ', HP lost ' + Math.round(100 * taken / n) + '% of party max, downs/fight ' + (downs / n).toFixed(1) +
-          (protect ? ', protected object lost ' + Math.round(100 * objLost / n) + '% of its HP' : ''));
+          ', HP lost ' + Math.round(100 * taken / n) + '% of party max, downs/fight ' + (downs / n).toFixed(1) + ', round-1 downs ' + r1 +
+          (protect ? ', protected object lost ' + Math.round(100 * objLost / n) + '% of its HP' : '') +
+          (Object.keys(idle).length ? ', idle: ' + JSON.stringify(idle) : ''));
         t.eq(rolled, n, id + ': every fight rolled initiative');
         t.eq(timeouts, 0, id + ': no timeouts');
         t.ok(rounds / n >= 2, id + ': fights last more than a round or two (' + (rounds / n).toFixed(1) + ')');
+        t.eq(shots, 0, id + ': no one-shots (no enemy turn takes a hero from full HP to down)');
+        t.eq(Object.keys(idle).join(), '', id + ': no enemy gets stuck (3 idle turns in a row with a hero in reach, or 4 idle turns)');
+        if (!elite) t.ok(wins / n >= 0.5, id + ': the fixture party wins at least half (' + wins + '/' + n + ')');
       });
     });
   }
@@ -1241,4 +1564,117 @@
   simSuite('hauntwood', ['a2_cub_scouts', 'a2_follow_the_lights', 'a2_mama_bear']);
   simSuite('academy', ['a2_last_coffee', 'a2_rooftop_critics', 'a2_office_hours']);
   simSuite('night shift and Gary', ['a2_graveyard_shift', 'a2_its_alive', 'a2_tenure_review']);
+
+  // =====================================================================================================
+  // v2 user requests (Nov 3): flyers ignore everything on the floor; heroes can aim attacks at explosive barrels
+  T.suite('enemies_act2: v2 requests (Nov 3) — flyers: no Lure into a pit, no bone-pile stomp', function (t) {
+    const from = DD.problems.length;
+    const pitAt = function (x, y) { return function (tl) { if (tl.x === x && tl.y === y) tl.t = 'pit'; }; };
+    // Lure from over a pit: a flyer is worth nothing (it would just hover there), a walker is the jackpot
+    quiet({ heroes: [H(3, 6), H(4, 6, 'test_cleric')], enemies: [E(1, 1, 'a2_wisp')], terrain: pitAt(3, 3) });
+    const w = byDef('a2_wisp')[0], m = heroOf('test_mage'), c = heroOf('test_cleric');
+    m.flags.flying = true;
+    act(function () { DD.Act.teleport(w, 3, 3); });
+    const lure = DD.getSkill('a2_wisp_lure');
+    const score = function (u) { return lure.aiScore({ user: w, targetUnit: u, skill: lure }); };
+    t.ok(score(m) < 0, 'Lure: a flying hero scores below zero (' + score(m) + ')');
+    t.ok(score(c) >= 10, 'Lure: a walking hero scores high (' + score(c) + ')');
+    // its turn over the pit with only a flyer in reach: no Lure, it zaps instead
+    quiet({ heroes: [H(3, 6)], enemies: [E(1, 1, 'a2_wisp')], terrain: pitAt(3, 3) });
+    const w2 = byDef('a2_wisp')[0], f = heroOf('test_mage');
+    f.flags.flying = true;
+    act(function () { DD.Act.teleport(w2, 3, 3); });
+    const rec = recorder();
+    turn(w2);
+    t.ok(rec.usedBy('a2_wisp').indexOf('a2_wisp_lure') < 0, 'over a pit with only a flyer in reach, its turn is no Lure (' + rec.usedBy('a2_wisp').join() + ')');
+    t.ok(pos(f) === '3,6', 'the flyer stays where it was');
+    // lured anyway (by hand): the flyer just hovers over the pit, as the passive says
+    quiet({ heroes: [H(3, 6)], enemies: [E(1, 1, 'a2_wisp')], terrain: pitAt(3, 3) });
+    const w3 = byDef('a2_wisp')[0], f3 = heroOf('test_mage');
+    f3.flags.flying = true;
+    act(function () { DD.Act.teleport(w3, 3, 3); });
+    const hf = f3.hp;
+    now(w3, 'a2_wisp_lure', f3);
+    t.ok(pos(f3) === '3,3' && f3.hp === hf && !f3.downed, 'a lured flyer hovers over the pit, unhurt');
+    t.ok(/flyers just hover/.test(DD.getEnemy('a2_wisp').passive.desc), 'the wisp passive says flyers just hover');
+    // a bone pile: walkers stomp it, flyers float over it (the AutoPlay hint agrees)
+    const PILE = 'a2_bone_pile';
+    [true, false].forEach(function (flying) {
+      const who = flying ? 'a flyer' : 'a walker';
+      quiet({ heroes: [H(3, 4)], enemies: [E(5, 4, 'a2_skeleton_intern')] });
+      const h = heroOf('test_mage');
+      h.flags.flying = flying;
+      act(function () { DD.Act.kill(byDef('a2_skeleton_intern')[0], null); });
+      t.ok(tile(5, 4).obj && tile(5, 4).obj.id === PILE, who + ': a pile on the floor');
+      t.eq(DD.getObject(PILE).autoplay(h) > 0, !flying, who + ': the AutoPlay hint ' + (flying ? 'has nothing to stomp' : 'says stomp it'));
+      t.ok(DD.Combat.move(h, 6, 4) && pos(h) === '6,4', who + ' crosses the pile');
+      t.eq(!!(tile(5, 4).obj && tile(5, 4).obj.id === PILE), flying, flying ? 'flying over it does not count: the pile is still there' : 'Crunch: the pile is gone');
+    });
+    t.ok(/flying over it doesn't count/.test(DD.getObject(PILE).desc), 'the pile says flying over it doesn\'t count');
+    t.eq(DD.problems.slice(from).filter(function (p) { return /^Error in /.test(p); }).length, 0, 'no swallowed errors');
+  });
+
+  // ---- map rotation: box props turn with the board (rotation plan §7 P2: def.yawAware) ------------------------------
+  /**
+   * Pixels of an object def painted at `yaw` on a fresh 160×200 canvas (the feet at 80, 160; zoom 1.5), through the painter
+   * the renderer hands it: the yawAware one when the def opts in, the billboard one when `billboard` is set.
+   */
+  function rotPx(id, inst, yaw, billboard) {
+    const def = DD.getObject(id), cv = document.createElement('canvas');
+    cv.width = 160; cv.height = 200;
+    const c = cv.getContext('2d');
+    c.translate(80, 160); c.scale(1.5, 1.5);
+    const obj = Object.assign({ id: id, hp: 0, maxHp: 0, data: {} }, JSON.parse(JSON.stringify(inst || {})));
+    DD.Iso.withYaw(yaw, function () {
+      const g = DD.Iso.painter(c, { yawAware: !billboard && def.yawAware === true, t: 0.8 });
+      g.obj = obj; g.tile = { x: 3, y: 4 }; g.zoom = 1.5; g.lw = 1.2; g.outline = '#1a1014';
+      g.pal = def.colors || def.palette || {};
+      def.draw.call(def, g, obj, 0.8);
+    });
+    return c.getImageData(0, 0, cv.width, cv.height).data;
+  }
+  function rotSame(a, b) { if (a.length !== b.length) return false; for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false; return true; }
+  /** Opaque pixels passing fn(r, g, b): how many, and their mean x (canvas px; the feet are at 80). */
+  function rotCount(d, fn) {
+    let n = 0, sx = 0;
+    for (let i = 0; i < d.length; i += 4) if (d[i + 3] === 255 && fn(d[i], d[i + 1], d[i + 2])) { n++; sx += (i / 4) % 160; }
+    return { n: n, x: n ? sx / n : 0 };
+  }
+  function rotHex(hex) {
+    const v = parseInt(hex.slice(1), 16);
+    return function (r, g, b) { return r === (v >> 16) && g === ((v >> 8) & 255) && b === (v & 255); };
+  }
+  /**
+   * Each case [id, inst]: the def opts in; at yaw 0 its turning painter draws exactly the billboard pixels (opting in never
+   * changes the default view); it paints at every angle without throwing, and turns (30° differs from 0°).
+   */
+  function rotTurns(t, cases) {
+    const yaws = [30, 37.5, 45, 90, 120, 180, 225, 270, 315];
+    cases.forEach(function (cs) {
+      const id = cs[0], inst = cs[1] || {}, tag = id + ' ' + JSON.stringify(inst.data || {}) + (inst.hp ? ' (' + inst.hp + ' HP)' : '');
+      t.ok(!!DD.getObject(id) && DD.getObject(id).yawAware === true, tag + ': opts in (yawAware)');
+      const p0 = t.tryRun(tag + ' at 0°', function () { return rotPx(id, inst, 0); });
+      t.ok(!!p0 && rotSame(p0, rotPx(id, inst, 0, true)), 'yaw 0: ' + tag + ' paints exactly what the billboard painter paints');
+      const bad = [];
+      yaws.forEach(function (y) {
+        const p = t.tryRun(tag + ' at ' + y + '°', function () { return rotPx(id, inst, y); });
+        if (!p || !rotCount(p, function () { return true; }).n) bad.push(y);
+        else if (y === 30 && p0 && rotSame(p, p0)) bad.push('30 (did not turn)');
+      });
+      t.eq(bad.join(','), '', tag + ' paints at ' + yaws.join(' / ') + '° and turns with the map');
+    });
+  }
+
+  T.suite('enemies_act2: the coffee machine turns with the map (box prop, yawAware)', function (t) {
+    if (!DD.Iso || !DD.Iso.withYaw || !DD.getObject('a2_coffee_machine')) { t.skip('map views or act 2 content not loaded'); return; }
+    const n0 = DD.problems.length, id = 'a2_coffee_machine';
+    rotTurns(t, [[id, { hp: 24, maxHp: 24 }], [id, { hp: 10, maxHp: 24 }], [id, { hp: 4, maxHp: 24 }]]);
+    // the menu screen is on its front (east), the health light on its south side; the back shows neither
+    const screen = rotHex('#1c2a2c');
+    const light = function (r, g, b) { return Math.abs(r - 0x59) < 40 && Math.abs(g - 0xe0) < 40 && Math.abs(b - 0x8a) < 40; };   // '#59e08a', anti-aliased
+    const n = [0, 90, 180, 270].map(function (y) { const p = rotPx(id, { hp: 24, maxHp: 24 }, y); return [rotCount(p, screen).n, rotCount(p, light).n]; });
+    t.eq(n.map(function (v) { return (v[0] > 3) + '/' + (v[1] > 0); }).join(' '), 'true/true true/false false/false false/true',
+      'screen / health light in view at 0°, 90°, 180°, 270°: east front, south side (px ' + JSON.stringify(n) + ')');
+    t.eq(DD.problems.slice(n0).filter(function (p) { return /^Error in /.test(p); }).length, 0, 'no swallowed errors');
+  }, { tags: ['render'] });
 })();

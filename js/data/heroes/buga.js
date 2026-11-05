@@ -4,7 +4,8 @@
  * carry the power): he points (Delegate), promises (Campaign Promise), flatters (Butter Up), hides behind people (Human
  * Shield), poses (Photo Op), pays (Bribe), ties things up in red tape (pull + Root), sheds flammable crumbs (Slow) and
  * plants pork-barrel spending (a lit explosive object). Passive: he takes the credit, and 2 gold, for every enemy an
- * ally defeats.
+ * ally defeats. His basic attack is ranged, so he never makes attacks of opportunity; Human Shield (a swap) and Red Tape
+ * (a pull) move units without provoking any, and Delegate's free swings are not reactions.
  * Registers the hero, 12 skills (basic, signature, a pool of 10), the buga_crumbs surface, the buga_pork_barrel object
  * and 3 hero items.
  */
@@ -127,10 +128,9 @@
     };
   }
   /** The ally swings its basic at t for free (re-checked: the previous swing may have moved or finished t). */
-  function swing(user, ally, t, empower) {
+  function swing(user, ally, t) {
     const slot = active(t) ? strikeAt(ally, t) : null;
     if (!slot) return false;
-    if (empower) A().addStatus(ally, 'empowered', {}, user);
     DD.FX.beam(user, ally, { color: GOLD, width: 2, ms: 200 });
     DD.FX.text(ally, '👉 Delegated!', { color: GOLD, size: 12 });
     DD.Combat.resolveSkill(ally, slot, { x: t.x, y: t.y }, { pay: false });
@@ -145,6 +145,11 @@
     if (Array.isArray(f.immune) && f.immune.indexOf('charmed') >= 0) return 'Incorruptible. Disgusting.';
     if (has(t, 'charmed')) return 'Already on the payroll.';
     return A().gold() >= L.gold ? null : 'Can\'t afford it (' + L.gold + ' gold).';
+  }
+
+  /** A planted barrel's name (shown when inspected) states its exact blast and kickbacks. */
+  function barrelLabel(data) {
+    return 'Pork Barrel (' + data.dmg + ' fire' + (data.gold > 0 ? ', +' + data.gold + ' gold' : '') + ')';
   }
 
   /** A pork barrel can stand on a free, dry, non-burning floor tile. */
@@ -257,9 +262,10 @@
   DD.registerObject({
     // hp 1: "as soon as it is hit" (any damage, even a 1-damage splash, pops it)
     id: 'buga_pork_barrel', name: 'Pork Barrel', blocksMove: true, blocksLos: false, hp: 1, height: 0.9, color: '#d24a5e',
-    smashable: true,
-    desc: 'Its fuse is lit: it explodes at the end of the round, or as soon as it is hit or set alight, for 8-12 fire damage ' +
-      '(by Pork Barrel level) to everything within 1 tile, whoever smashed it included. Taxpayer funded, pork filled.',
+    // volatile: it explodes when destroyed, so any hero's single-target attack can be aimed at it to set it off
+    smashable: true, volatile: true,
+    desc: 'Its fuse is lit: it explodes at the end of the round, or as soon as it is hit or set alight, for the fire damage in ' +
+      'its name (8-12 by Pork Barrel level) to everything within 1 tile, whoever smashed it included. Taxpayer funded, pork filled.',
     react: { fire: { destroy: true } },
     // AutoPlay: worth popping when foes (not friends, not the smasher) stand next to it; a lit one blows anyway at the end
     // of the round, so popping it early only lands the blast before the enemies act
@@ -317,15 +323,15 @@
 
   DD.registerSkill({
     id: 'buga_toast_of_the_town', name: 'Toast of the Town', owner: HERO, icon: '🥂', kind: 'buff',
-    tags: ['command', 'ally', 'empower', 'combo'],
+    tags: ['command', 'ally', 'combo'],
     ap: 2, cooldown: 0, hype: 100, levels: [{}],
     target: { type: 'unit', range: [1, 6], los: false, filter: 'enemy',
       canTarget: function (ctx) { return ctx.targetUnit && delegates(ctx.user, ctx.targetUnit, 1).length ? true : 'No ally can reach that foe.'; } },
     area: { shape: 'custom', fn: crewArea(99) },
     desc: function () {
-      return 'Point at a foe within 6 tiles: every ally who can hit it is Empowered (+50%) and makes its basic attack on it now, for free.';
+      return 'Point at a foe within 6 tiles: every ally who can hit it makes 2 free basic attacks on it.';
     },
-    flavor: '"To my brave volunteers!" He raises a glass. They charge. He does not.',
+    flavor: '"To my brave volunteers!" He raises a glass. They charge. Twice. He does not.',
     execute: function (ctx) {
       const u = ctx.user, t = ctx.targetUnit;
       if (!active(t)) return;
@@ -334,7 +340,9 @@
       DD.FX.shake(5, 300);
       DD.FX.particles(u, { kind: 'coins', count: 26 });
       A().log(u.name + ' raises a glass and gives a forty-minute toast. Everyone else does the fighting.', 'narrator');
-      delegates(u, t, 99).forEach(function (e) { swing(u, e.unit, t, true); });
+      // a dogpile: everyone swings, then everyone swings again (each swing re-checks that the foe is still there)
+      const crew = delegates(u, t, 99);
+      for (let round = 0; round < 2; round++) crew.forEach(function (e) { swing(u, e.unit, t); });
     },
   });
 
@@ -347,8 +355,8 @@
       canTarget: function (ctx) { return ctx.targetUnit && delegates(ctx.user, ctx.targetUnit, 1).length ? true : 'No ally can reach that foe.'; } },
     area: { shape: 'custom', fn: crewArea(function (ctx) { return (ctx.L && ctx.L.allies) || 1; }) },
     desc: function (L) {
-      return 'Point at a foe within 6 tiles: ' + (L.allies > 1 ? 'the ' + L.allies + ' allies best placed to hit it make their basic attacks' :
-        'the ally best placed to hit it makes its basic attack') + ' on it now, for free.';
+      return 'Point at a foe within 6 tiles: ' + (L.allies > 1 ? 'the ' + L.allies + ' best-placed allies make free basic attacks' :
+        'the best-placed ally makes a free basic attack') + ' on it.';
     },
     flavor: 'Leadership is mostly pointing.',
     execute: function (ctx) {
@@ -358,7 +366,7 @@
       if (!crew.length) { DD.FX.text(user, 'Nobody volunteers...', { color: '#dddddd', size: 13 }); return; }
       DD.FX.lunge(user, t);
       say(user, DELEGATE_LINES, 0.4);
-      crew.forEach(function (e) { swing(user, e.unit, t, false); });
+      crew.forEach(function (e) { swing(user, e.unit, t); });
     },
   });
 
@@ -369,8 +377,9 @@
     target: { type: 'unit', range: [1, 3], los: true, filter: 'enemy' },
     desc: function (L) { return 'Deal ' + L.dmg + ' damage to a foe within 3 tiles and pocket ' + L.gold + ' gold.'; },
     flavor: 'Loitering in a dungeon is a 2-gold fine. Loitering while undead is extra.',
-    // the gold is run value the dry run can't see: worth a little over a plain pamphlet
-    autoplayValue: function (ctx) { return ctx && ctx.L ? ctx.L.gold : 0; },
+    // the gold is run value the dry run can't see: worth a little over a plain pamphlet (a fine served on a barrel sets
+    // it off and collects nothing)
+    autoplayValue: function (ctx) { return ctx && ctx.L && ctx.targetUnit ? ctx.L.gold : 0; },
     execute: function (ctx) {
       const u = ctx.user, t = ctx.targetUnit;
       if (!t) return;
@@ -477,7 +486,7 @@
     levels: [{ r: 4, pull: 2 }, { r: 4, pull: 3 }, { r: 5, pull: 4 }],
     target: { type: 'unit', range: function (L) { return [2, L.r]; }, los: true, filter: 'enemy' },
     desc: function (L) {
-      return 'Pull a foe 2-' + L.r + ' tiles away up to ' + L.pull + ' tiles toward Buga and Root it (it can\'t move on its next turn).';
+      return 'Pull a foe 2-' + L.r + ' tiles away up to ' + L.pull + ' tiles toward Buga and Root it for its next turn.';
     },
     flavor: 'Please fill out Form 27-B in triplicate before attacking the Mayor.',
     execute: function (ctx) {
@@ -525,8 +534,8 @@
       canTarget: function (ctx) { return ctx.target && barrelSpotOk(ctx.target.x, ctx.target.y) ? true : 'No room for the barrel.'; } },
     area: { shape: 'circle', size: 1 },
     desc: function (L) {
-      return 'Plant a lit Pork Barrel within 4 tiles. At round end, or when hit or lit, it explodes: ' + L.boom +
-        ' fire damage to all within 1 tile' + (L.gold > 0 ? ', plus ' + L.gold + ' gold' : '') + '.';
+      return 'Plant a Pork Barrel within 4 tiles. It explodes at round end, or when hit or lit: ' + L.boom +
+        ' fire damage within 1 tile' + (L.gold > 0 ? ', +' + L.gold + ' gold' : '') + '.';
     },
     flavor: 'Taxpayer funded and highly explosive. Like most public works.',
     // the blast comes after the dry run (end of the round): foes next to the spot are worth most of it, allies cost it
@@ -542,7 +551,8 @@
       if (!p || !barrelSpotOk(p.x, p.y)) return;
       DD.FX.projectile(u, p, { kind: 'custom', arc: 1, draw: drawBarrelShot, ms: 360 });
       say(u, PORK_LINES, 0.45);
-      if (!A().placeObject(p.x, p.y, 'buga_pork_barrel', { data: { dmg: ctx.L.boom, gold: ctx.L.gold || 0, owner: u.id, fuse: 1 } })) return;
+      const data = { dmg: ctx.L.boom, gold: ctx.L.gold || 0, owner: u.id, fuse: 1 };
+      if (!A().placeObject(p.x, p.y, 'buga_pork_barrel', { label: barrelLabel(data), data: data })) return;
       DD.FX.tile(p.x, p.y, 'pulse', { color: '#ff8fa3' });
       DD.FX.text(p, 'THUNK!', { color: '#ffb3c1', size: 13 });
     },
@@ -555,8 +565,8 @@
     target: { type: 'tile', range: [1, 4], los: true, filter: 'any' },
     area: { shape: 'cross', size: function (L) { return L.r; } },
     desc: function (L) {
-      return 'Cover the bare floor of a ' + (4 * L.r + 1) + '-tile cross within 4 with flammable crumbs for ' + L.turns +
-        ' rounds: grounded foes on them are Slowed (−2 move).';
+      return 'Scatter flammable crumbs on the bare floor of a ' + (4 * L.r + 1) + '-tile cross within 4 for ' + L.turns +
+        ' rounds: grounded foes there are Slowed (−2 move).';
     },
     flavor: 'He sheds when he is nervous. He is always nervous.',
     execute: function (ctx) {
@@ -602,7 +612,8 @@
         unit.data.buga_toasted = true;
         DD.FX.text(unit, '🍞 DING!', { color: GOLD, size: 22 });
         A().log('DING! ' + unit.name + ' pops back out of the toaster, golden brown and re-elected.', 'heal');
-        A().revive(unit, TOASTER_HP);
+        // downed mid-walk (an attack of opportunity, a trap): he did go down, so that walk ends where he fell (DESIGN §4.2)
+        if (A().revive(unit, TOASTER_HP)) A().stopMove(unit);
       },
     },
   });
@@ -817,13 +828,14 @@
         'Remember, team: I take the credit, you take the hits.', 'Marwyn, you\'re up front. I\'ll be up back.',
         'I hereby declare this dungeon open... for business!', 'Roll for initiative? I\'d like a recount first.'],
       move: ['Pressing the flesh! Er, the crust.', 'A brisk constitutional!', 'Heading where the votes are.',
-        'Mind the crumbs.', 'Walking. Strictly for the cameras.'],
+        'Mind the crumbs.', 'Walking. Strictly for the cameras.', 'Hjalmar, if you rigged this floor, I\'m suing.'],
       kill: ['Another problem solved by the Mayor\'s office!', 'Taxes: collected. Permanently.', 'Your vote has been counted. Against you.',
         'Put that in the newsletter!', 'And THAT is why I won by a landslide.'],
       hurt: ['Not the crust!', 'I\'ll have you know I\'m artisanal!', 'My approval rating!', 'Ow! I\'m suing the dungeon!',
-        'Who\'s paying for this dent?'],
+        'Who\'s paying for this dent?', 'A cheap shot! I\'ll have you audited!'],
       lowhp: ['I\'m getting burnt out here!', 'Call my lawyer! And a medic! Lawyer first!', 'One more bite and I\'m crumbs!',
-        'Josiah! I need a potion and a press release!', 'This is not a good look for re-election.'],
+        'Josiah! I need a potion and a press release!', 'This is not a good look for re-election.',
+        'Basanos, stop looking at me like I\'m breakfast!'],
       downed: ['Tell the voters... I loved them... mostly their gold...', 'Toast... is... toast...', 'I demand... a recount...',
         'Butter me... one last time...'],
       revive: ['The Mayor has been re-elected!', 'POP! Fresh out of the toaster!', 'Rumors of my staleness were exaggerated.',
@@ -831,12 +843,14 @@
       ally_down: ['Tragic! I\'ll name a sewer after them.', 'Somebody get them up! They owe me taxes!', 'I declare a day of mourning! A half day.',
         'We lost a voter! Get them back on the rolls!', 'This is why I delegate. Wait...'],
       levelup: ['A promotion! I accept, on behalf of myself.', 'Mayor Buga: now with extra grain!', 'My approval rating just went up!',
-        'Stronger, crustier and more corrupt than ever!', 'I\'d like to thank... me. Mostly me.'],
+        'Stronger, crustier and more corrupt than ever!', 'I\'d like to thank... me. Mostly me.',
+        'Valdris, engrave this on my chain of office!'],
       victory: ['Another victory for the Mayor! You\'re all welcome.', 'The loot is now in municipal custody.',
         'A landslide! I will accept your applause now.', 'Ribbon-cutting in five minutes. Bring snacks.',
-        'Syllamin, write me a victory song. Make me taller.'],
-      idle: ['Has anyone seen my approval ratings?', 'Is it just me, or is this dungeon under-taxed?', 'I could go for a little jam right now.',
-        'Zarathor, is that bling municipal property?', 'Professor Marbles slept through my speech again.', 'Smile, everybody! Election year!'],
+        'Syllamin, write me a victory song. Make me taller.', 'Kiri, is the ethereal plane taxable? Asking for me.'],
+      idle: ['Betty, stop eating the ballots.', 'Is it just me, or is this dungeon under-taxed?', 'I could go for a little jam right now.',
+        'Zarathor, is that bling municipal property?', 'Professor Marbles slept through my speech again.',
+        'Pebbles, good boy! Now stop sniffing my crust.'],
       signature: ['People of the dungeon! I am the Toast of the Town!', 'Four more years! FOUR MORE YEARS!',
         'Let me be perfectly clear: I am magnificent. Sorry, Marwyn.', 'Ask not what your mayor can do for you!',
         'A toast! To my brave volunteers! Charge!'],

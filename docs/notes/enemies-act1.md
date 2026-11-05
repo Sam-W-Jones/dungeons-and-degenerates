@@ -1,225 +1,304 @@
 # ENEMIES-ACT1 — notes
 
-Files: `js/data/enemies/act1.js` (content), `tests/content/enemies_act1.js` (suites `enemies_act1: …`).
-Isolated run: `bash tools/test.sh "suite=enemies_act1&isolate=enemies/act1,enemies_act1"` (add `&verbose=1&n=6` for
-the balance tables). Scratch (debug pages, shots): `.tmp/enemies-act1/`, review probes and shots `.tmp/enemies-act1-review/`
-(`probe5.js`: real-hero / fixture balance sims with per-skill landing rates; run with
-`bash .tmp/enemies-act1-review/probe.sh "probe=probe5.js&suite=a1rev5&verbose=1&runs=5[&party=fixture][&enc=mimic]"`).
+Files: `js/data/enemies/act1.js` (content), `tests/content/enemies_act1.js` (13 suites `enemies_act1: …`).
+Isolated run: `bash tools/test.sh "suite=enemies_act1&isolate=enemies/act1,enemies_act1"` (add `&verbose=1&n=6` for the
+sim tables). Scratch: `.tmp/enemies-act1-v2/` — real-hero / fixture balance probe:
+`bash .tmp/enemies-act1-v2/probe.sh "probe=probe.js&party=real&lv=1,2&runs=6&verbose=1"` (`party=fixture`, `enc=<substr>`,
+`kind=normal|elite`; per-skill fired / landed / damage tally). Older v1 scratch: `.tmp/enemies-act1/`, `.tmp/enemies-act1-review/`.
 
-## Summary
+## v2 — initiative, no telegraphs, attacks of opportunity, reach-aware targeting (ACT 1 ENEMIES role)
 
-Act 1 ("The Leaky Flagon's Basement") regular enemies and encounters. Every id carries the `a1_` prefix.
+User requests this answers: initiative turns, no enemy telegraphs (elites at most one wind-up for their signature),
+no starting Block, simpler skills, and the latest playtest ("mobs prioritize the lowest health hero irrespective of
+range, melee feel weak" → attacks of opportunity + reach-aware targeting; difficulty "hard but fair").
 
-### Enemies (12) and their skills (23)
+### Summary
 
-| id | name | tier | HP / mov / armor | skills (anchor) | gimmick |
+- **Every act 1 enemy acts on its own initiative turn, at once** (move first, then one skill). Normal enemies never keep
+  a pending action; the **Mimic's Lid Slam is the act's one wind-up** (announced on its turn, lands at the start of its
+  next one; a stun / sleep / freeze / sheep interrupts it). The Bugbear and the Cube have none (Bar Stool and Jiggle Slam
+  are immediate).
+- **Initiative modifiers** (explicit on every enemy, shown in the inspect panel and most codex texts): rat +3, grunt +2,
+  kid +3, **Rep −2** ("he reads the minutes first"), slime −1, slimelet +1, Spore Bro −1, spider +2, **critic +1**
+  ("quick to judge"), **Mimic +2** ("waiting nine years for someone to touch it"), Bugbear −1, Cube −3.
+- **AI styles for the reach-aware targeting**: brutes stick to the hero next to them (`melee`: rat, grunt, slime,
+  slimelet; custom planners with `aiStyle: 'melee'`: Mimic, Bugbear, Cube), the kid and the critic keep their distance
+  (`ranged`, keepDistance 3), the Rep stays behind his friends (`support`), the Spore Bro goes for the biggest bunch
+  (`kamikaze`), and **the Cellar Spider is the act's one diver** (`skirmisher`: the wounded, the squishy and webbed prey,
+  even past the front line; it braves attacks of opportunity but never a lethal one).
+- **Tooltips** (`def.passive.desc`, the HUD inspect panel) all start "On its/his turn …" and say how it picks targets
+  ("keeps biting the one it is next to", "keeps his distance", "goes for the weakest prey it can reach") and how it
+  reacts to walkers (below).
+- **Attacks of opportunity** (engine rule: the first ready melee skill; review: Pack Tactics and the spider's webbed-prey
+  +3 ride on the reaction's `o.flat` via `modifyOpportunity`, so the move preview shows the real bite): rat Ankle Nibble (2 + Bleed), grunt Pointy
+  Stick (6, the leaver's tile only), slimelet Glorp (3), spider Sticky Snack (5/8), critic Lute (6), Mimic CHOMP (9 + 4
+  gold) **except while its lid is open** (Lid Slam wound up: `modifyOpportunity` cancels it, so stepping out of the slam is
+  a real, free window), **Bugbear: the throw** ("walking out on him gets you thrown out": 7 + 3-tile throw, ends the walk),
+  **Cube: Engulf** while it is ready (7 + Engulfed, ends the walk). None: the kid, the Rep, the Spore Bro and the **slime**
+  ("too gooey to swing at anyone walking away", stated in its tooltip).
+- **Custom planners price attacks of opportunity**: `spotsOf` tags every reachable spot with `api.aooCost` and drops
+  lethal walks; the Mimic's crowd spot and the shared `approach` subtract it; the Bugbear's throw / stool scores subtract
+  it and add `DD.AI.targetValue` (engaged first, threat, kills). E.g. he steps around a knight (eating the slash) to
+  throw him into a pit, but not just for a wall bump.
+- **Simplified skills** (one verb + at most one rider; done in the first v2 pass, kept and tested): Bear Hug removed;
+  Sticky Tongue = damage + pull (no Root); CHOMP = a plain bite (no hop); Engulf = damage + one status (`a1_engulfed`:
+  can't move, 3 acid at the start of each of the victim's turns, 10 damage to the Cube frees everyone; no AP drain, no
+  separate Root); Sporesplosion leaves no cloud (only a Spore Bro killed by someone else pops); Web Spit = Root + webs (no
+  damage); Strike Action = Inspired only (no Block).
+- **No combat-start Block**: nothing grants Block at the start. The union hall's **Hazard Pay** rule gives 2 Block to an
+  enemy that *starts its turn* within 2 tiles of a Strike Fund (mid-fight, positional, it lasts until its next turn
+  start; smash the funds). Rule `a1_hazard_pay`, declared by the encounter and by any placed fund (`init`), paid once per
+  turn.
+- **Durations** count the owner's own turns (Root / Taunt 1 = its next turn, Weak 2 / Inspired 2 / Engulfed 2 = its
+  next two turns; webs 3 rounds).
+- **Encounters under initiative**: waves arrive at a round start and act that round; survive 5 (Big Flush) ends at the
+  end of round 5; protect (Open Mic): the Last Keg has 30 HP and the round-2 wave kicks in the **east** kitchen door
+  (5+ tiles from the keg) instead of spawning next to it; destroy (Union Meeting): 3 funds + Hazard Pay.
+
+### Enemies (12)
+
+| id | tier | HP / mov / armor | init | style | skills (L1) | attack of opportunity |
+|---|---|---|---|---|---|---|
+| `a1_rat` Dire-ish Rat | minion | 9 / 5 / 0 | +3 | melee | Ankle Nibble 2 + Bleed 1, Pack Tactics +1 per other rat next to the victim (max +2) | nibble |
+| `a1_gob_grunt` Goblin Grunt | normal | 18 / 4 / 1 | +2 | melee | Pointy Stick 6 on the 2 tiles in front (friend / foe / object) · Rock Toss 4 lobbed, range 1-5, cd 1 | spear |
+| `a1_gob_kid` Slingshot Kid | normal | 14 / 4 / 0 | +3 | ranged 3 | Slingshot 5 to the first unit down a 6-tile line · Nyah Nyah! Taunt 1, cd 3 | — |
+| `a1_kobold_rep` Union Rep | normal | 16 / 3 / 1 | −2 | support | Strike Action! self + allies within 2 Inspired 2, cd 2 · Memo 5, range 1-6 | — |
+| `a1_slime` Sewer Slime | normal | 20 / 3 / 0 | −1 | melee | Splorch 5 to every adjacent foe; splits into 2 slimelets unless fire / a pit | — |
+| `a1_slimelet` Slimelet | minion | 7 / 3 / 0 | +1 | melee | Glorp 3 | glorp |
+| `a1_spore_bro` Spore Bro | normal | 15 / 4 / 0 | −1 | kamikaze | Sporesplosion 6 poison to adjacent units, dies; killed otherwise: poison cloud (Poison 2) | — |
+| `a1_spider` Cellar Spider | normal | 16 / 4 / 1 | +2 | **skirmisher** | Web Spit: cross, Root 1 + webs 3 rounds, lobbed 2-5, cd 2 · Sticky Snack 5, +3 vs Rooted / web-standing prey | bite |
+| `a1_critic` Bandit Bard Critic | normal | 17 / 3 / 0 | +1 | ranged 3 | Bad Review 4 + Weak 2, range 1-6 LOS, cd 1, spell · Lute 6 | lute |
+| `a1_mimic` Mimic | elite | 68 / 3 / 2 | +2 | custom (melee) | Sticky Tongue 4 + pull 3, straight 2-4, cd 2 · CHOMP 9 + 4 gold · **Lid Slam** wind-up: 7 to the 3×3, knockback 1, cd 3 | CHOMP (not while the lid is open) |
+| `a1_bugbear` Bugbear Bouncer | elite | 70 / 3 / 2 | −1 | custom (melee) | You're Not On The List 7 + throw 3 (bump 4 both, pits) · Bar Stool 6 r1, lobbed 2-5, cd 2 | the throw |
+| `a1_cube` Gelatinous Cube | elite | 70 / 2 / 2 | −3 | custom (melee) | Engulf 7 + Engulfed 2, cd 2 · Spit 4 lobbed 1-5 + bones, cd 1 · Jiggle Slam 8 to the 3×3, cd 3 (2+ foes around) | Engulf (when ready) |
+
+Elite planners: Mimic — crowded by 2+ foes (diagonals count) it winds up the Lid Slam (its whole turn), else CHOMPs a hero
+it can walk up to, else licks one in a straight line, else walks closer by walking distance. Bugbear — the best throw
+(walls, friends, explosive barrels, pits; he walks around his victim if it pays) or a stool into a group, else walks
+closer. Cube — Jiggle Slam when 2+ foes are around, else Engulf, else spit; it never moves while digesting and never
+re-engulfs the hero it holds.
+
+### Encounters (11: 8 normal, 3 elite; 3 handcrafted layouts) — unchanged except the Open Mic
+
+| id | kind | map | enemies (+ waves) | objective | minDepth |
 |---|---|---|---|---|---|
-| `a1_rat` | Dire-ish Rat | minion | 9 / 5 / 0 | `a1_rat_nibble` Ankle Nibble 2 + Bleed 1 (self) | Pack Tactics: +1 dmg per other rat next to the victim (max +2, def hook); the telegraph number includes it (`telegraphFlat`) |
-| `a1_gob_grunt` | Goblin Grunt | normal | 18 / 4 / 1 | `a1_gob_poke` Pointy Stick 6 on the 2 tiles in front, friend/foe/object (self, dir+line 2) · `a1_gob_rock` Rock Toss 4, lobbed, range 1-5, cd 1 (unit) | the spear reaches 2 tiles and pokes objects (goes for the protected keg) |
-| `a1_gob_kid` | Goblin Slingshot Kid | normal | 14 / 4 / 0 | `a1_kid_sling` Slingshot 5 to the first unit down a 6-tile line (self, dir+line, pierce false) · `a1_kid_nyah` Nyah Nyah! Taunt 1 turn, cd 3 (unit) | line shot hits whoever is in front (body-block it, or let his goblin friend eat it); taunts a hero (−50% dmg vs anyone but him) |
-| `a1_kobold_rep` | Kobold Union Rep | normal | 16 / 3 / 1 | `a1_rep_strike` Strike Action! Rep + allies within 2: +4 Block, Inspired 2 turns, cd 2 (self) · `a1_rep_memo` Strongly Worded Memo 5, range 1-6 (unit) | support AI behind the picket line; kill him first |
-| `a1_slime` | Sewer Slime | normal | 20 / 3 / 0 | `a1_slime_splorch` Splorch 5 to every adjacent foe (self, adjacent) | splits into 2 `a1_slimelet` on death unless killed by fire or a fall; poison immune, fire ×1.5; rubber duck |
-| `a1_slimelet` | Slimelet | minion | 7 / 3 / 0 | `a1_slimelet_glorp` Glorp 3 (self) | half a slime, no further split |
-| `a1_spore_bro` | Spore Bro | normal | 15 / 4 / 0 | `a1_spore_boom` Sporesplosion 6 poison to adjacent units (friend or foe) + poison cloud r1, dies (self) | kamikaze; push him back into his friends; killing him pops a poison cloud (Poison 2 to adjacent units, no damage) |
-| `a1_spider` | Cellar Spider | normal | 16 / 4 / 1 | `a1_spider_web` Web Spit 2 + Root 1 in a cross, lobbed range 2-5, webs 3 rounds, cd 2 (ground) · `a1_spider_bite` Sticky Snack 5, +3 vs webbed prey: Rooted or standing in a web (self, shown in the telegraph) | immune to Root (`flags.immune`), walks its own webs; fire ×1.5 |
-| `a1_critic` | Bandit Bard Critic | normal | 17 / 3 / 0 | `a1_critic_review` Bad Review 4 + Weak 2 turns, range 1-6 LOS, cd 1, **spell** (unit) · `a1_critic_lute` Lute to the Face 6 (self) | Weakens heroes from afar; Silence shuts him up |
-| `a1_mimic` | Mimic (Disappointed) | elite | 68 / 3 / 2 | `a1_mimic_tongue` Sticky Tongue 4 + pull 3 (no bump) + Root 1, straight line only (unit, fizzles out of line) · `a1_mimic_chomp` CHOMP 9 + swallows up to 4 party gold; tracks a target up to 2 away and hops 1 tile to bite (unit) · `a1_mimic_slam` Lid Slam 7 + knockback 1 (+3 if slammed into something) around it incl. diagonals, ⏳1, cd 3 (self) | two intents a round (bite + lick on different heroes); keep 3 tiles away and out of its row/column; swallowed gold is coughed back up on death; custom chest painter |
-| `a1_bugbear` | Bugbear Bouncer | elite | 70 / 3 / 2 | `a1_bugbear_bounce` You're Not On The List 7 + throw 3 down the marked line, bump 4 both (self, dir+line 4) · `a1_bugbear_hug` Bear Hug 4 + Root 1 to all adjacent foes, cd 2 (self) · `a1_bugbear_stool` Bar Stool Toss 6 r1, lobbed, ⏳1, cd 2, friend/foe/furniture (ground) | walks around his victim to throw it into walls / friends / barrels / pits; Bear Hug first so the throw can't be sidestepped |
-| `a1_cube` | Gelatinous Cube | elite | 70 / 2 / 2 | `a1_cube_engulf` Engulf 7 + `a1_engulfed` 2 turns, cd 2 (self) · `a1_cube_spit` Spit Out Previous Adventurer 4, lobbed range 1-5, leaves bones, cd 1 (unit) · `a1_cube_slam` Jiggle Slam 8 around it incl. diagonals, ⏳1, cd 3 (self) | immovable, stun immune, poison immune, fire ×1.5; Acidic Body: an adjacent foe that hits it with a skill takes 2 acid (ignores armor); 10 damage to it spits everyone out |
+| `a1_rats_in_the_cellar` | normal | cellar 10×10 | 5 rats; r2 +2 (S) +2 (E); r3 +2 (zone) | killAll | 0 |
+| `a1_goblin_ambush` | normal | warren 10×10 | 2 grunts, kid, rat; r2 grunt + kid (S) | killAll | 0 |
+| `a1_slime_time` | normal | sewer 10×10 | 3 slimes, rat; r2 +2 rats (S) | killAll | 0 |
+| `a1_fungus_among_us` | normal | warren 11×11 | 2 spore bros, grunt, kid, rat; r3 spore bro | killAll | 1 |
+| `a1_web_of_lies` | normal | cellar 10×10 | 2 spiders, critic, 2 rats; r2 spider | killAll | 1 |
+| `a1_union_meeting` | normal | layout 11×11 union hall | Rep (soapbox), 2 grunts, kid; r3 +2 rats; Hazard Pay | destroy 3 funds | 2 |
+| `a1_open_mic` | normal | layout 11×11 stage + bar | critic, 2 grunts, rat; r2 grunt + kid (**E**, the kitchen door) | protect the Last Keg (**30 HP**) | 2 |
+| `a1_big_flush` | normal | sewer 11×11 | slime, 2 rats; r2 +slime +2 rats (E), r3 slime + rat (S), r4 2 spore bros + rat (W) | survive 5 | 3 |
+| `a1_mimic_hoard` | elite | layout 11×11 treasure room | mimic (dais), 3 rats; r2 2 grunts (S) | killAll | 2 |
+| `a1_last_call` | elite | cellar 12×11 | bugbear, grunt, kid; r2 +2 rats (S) | killAll | 2 |
+| `a1_cube_cleanup` | elite | sewer 11×11 | cube, slime, rat | killAll | 3 |
 
-Elites use custom planners (`mimicPlan`, `bugbearPlan`, `cubePlan`): one move per plan (approaching by walking distance, a BFS
-field, so walls don't strand them), up to two intents a round, the big
-area hit always telegraphed one round ahead (`delay: 1`, stays put while charging), never wander off while digesting.
-Normal enemies use explicit AI styles (melee / ranged keepDistance 3 / support / kamikaze) plus `aiScore` tweaks
-(rats value bites with their pack, the kid taunts untaunted heroes, the Rep never buffs only himself, webs prefer
-un-Rooted heroes, the spider bites Rooted prey, the cube never re-engulfs).
+### Balance (AutoPlay, normal difficulty, levels 1-2 = where act 1 is played in v2)
 
-### Status, object
+Fixture party (knight / cleric / mage / rogue), the sim suites at `n=6` (12 fights per encounter):
 
-- `a1_engulfed` (debuff, refresh, 2 turns): Rooted (a separate core Root with the same turns), −1 AP and 3 acid
-  (`st.data.acid`) at the start of each of the victim's turns. Ends early when the cube takes 10 damage (`cube.data.jiggle`,
-  counted from the first meal: a second engulf does not reset it), dies, or the victim is moved out of reach
-  (onEnterTile / onTurnStart check) — release also removes the cube's Root.
-- `a1_strike_fund` (object, 8 HP, smashable, custom piggy-bank painter): at round end every enemy within 2 tiles gains
-  2 Block ("hazard pay"); breaking it spills 3 gold. Destroy-objective target of `a1_union_meeting`.
+| encounter | L1 | L2 | avg rounds | HP lost (of the party) |
+|---|---|---|---|---|
+| rats_in_the_cellar | 6/6, 20%, 0 downs | 6/6, 15% | 4.3 | 18% |
+| goblin_ambush | 6/6, 52%, 0.5 downs | 6/6, 38% | 5.0 | 45% |
+| slime_time | 6/6, 10% | 6/6, 12% | 3.8 | 11% |
+| fungus_among_us | 6/6, 26% | 6/6, 20% | 5.1 | 23% |
+| web_of_lies | 6/6, 24% | 6/6, 24%, 0.3 downs | 5.4 | 24% |
+| union_meeting | 6/6, 50%, 1.3 downs | 6/6, 48%, 0.8 downs | 6.8 | 49% |
+| open_mic | 6/6, 52%, 0.5 downs | 6/6, 40% | 5.1 | 46% |
+| big_flush | 6/6, 17% | 6/6, 28%, 0.2 downs | 4.9 | 22% |
+| **normal** | | | **5.0** | **29.7%, 0.23 downs a fight, 0 round-1 downs, won 96/96** |
+| mimic_hoard | 6/6, 70%, 0.7 downs | 6/6, 42% | 6.7 | 56% |
+| last_call | 6/6, 55% | 6/6, 69%, 0.8 downs | 10.1 | 62% |
+| cube_cleanup | 6/6, 38% | 6/6, 33% | 9.7 | 35% |
+| **elite** | | | **8.8** | **51.1%, 0.31 downs a fight, won 36/36** |
 
-### Encounters (11: 8 normal, 3 elite; 3 handcrafted layouts)
+Real heroes (random 4 of the 16, L1-2, starting kit + 1 skill at L2; probe, 12 fights per encounter): normal fights won
+96/96, 4.8 rounds, **20.1%** of the party's HP lost, 0.10 downs a fight (openers: slime_time 6%, rats 9%; hardest: union
+35%, open mic 32%, ambush 27%); elites won 36/36, 7.4 rounds, **38.4%**, 0.42 downs (last_call 48%, mimic 34%, cube 33%).
+The Last Keg ended at 12-30 of 30 HP (never lost). Landing rates (fired → hit a hero-side unit): bounce 100%, stool 100%,
+poke 93%, rock 100%, sling 99%, CHOMP 96%, tongue 93%, nibble 100%, spider bite 100%, engulf 94%, Jiggle Slam 100%,
+**Lid Slam 1 of 6** (AutoPlay always steps out of the marked square: the counterplay works; it costs the party tempo).
+Attacks of opportunity per fight (fixture sims): heroes 0.1, enemies 0.6 — brutes stay engaged, so heroes rarely get to
+punish walkers; enemies punish heroes who walk away.
+Brutal (real heroes, L1-2, 8 fights per encounter): normal fights won 59/64, 5.8 rounds, 40% HP, 0.83 downs (union hall
+L1 2/4 and open mic L1 2/4 the hardest, one keg lost); elites 24/24, 8.5 rounds, 51%, 0.67 downs.
 
-| id | kind | theme / map | enemies (+ waves) | objective | minDepth |
-|---|---|---|---|---|---|
-| `a1_rats_in_the_cellar` | normal | cellar 10×10 water, crates, kegs | 5 rats; r2 +2 (S) +2 (E); r3 +2 (zone) | killAll | 0 |
-| `a1_goblin_ambush` | normal | warren 10×10 rocks, hills | 2 grunts, kid, rat; r2 grunt + kid (S) | killAll | 0 |
-| `a1_slime_time` | normal | sewer 10×10 channel, slime | 3 slimes, rat; r2 +2 rats (S) | killAll | 0 |
-| `a1_fungus_among_us` | normal | warren 11×11 pits, mushrooms | 2 spore bros, grunt, kid, rat; r3 spore bro | killAll | 1 |
-| `a1_web_of_lies` | normal | cellar 10×10 web, crates, kegs | 2 spiders, critic, 2 rats; r2 spider | killAll | 1 |
-| `a1_union_meeting` | normal | **layout** cellar 11×11 (union hall: funds on the back table, chair rows, Rep's soapbox h2) | Rep (soapbox mark R), 2 grunts, kid; r3 +2 rats | destroy 3 `a1_strike_fund` | 2 |
-| `a1_open_mic` | normal | **layout** cellar 11×11 (stage h1, bar counter of barrels, the Last Keg 18 HP) | critic, 2 grunts, rat; r2 grunt + kid (S: the back door, behind the party and next to the keg) | protect `keg` | 2 |
-| `a1_big_flush` | normal | sewer 11×11 channel, water | slime, 2 rats; r2 slime + 2 rats (E), r3 slime + rat (S), r4 2 spore bros + rat (W) | survive 5 | 3 |
-| `a1_mimic_hoard` | elite | **layout** warren 11×11 (dais h1, LOS-blocking pillars vs the tongue, 2 chests, 4 gold piles) | mimic (mark M), 3 rats; r2 2 grunts (S: the room's goblin owners, back from lunch behind the party) | killAll | 2 |
-| `a1_last_call` | elite | cellar 12×11 barrels, kegs, crates, water | bugbear, grunt, kid; r2 +2 rats (S) | killAll | 2 |
-| `a1_cube_cleanup` | elite | sewer 11×11 pools, slime | cube, slime, rat | killAll | 3 |
+Tests guard (light balance): no timeouts, every encounter winnable, normal fights won ≥ 50% by the fixture party at
+L1-2, ≥ 2.5 rounds on average, the enemies land hits, heroes rarely go down in round 1 (≤ 5% of fights; measured 0),
+attacks of opportunity happen both ways, elites cost ≥ 1.2× the normal fights' HP share and last at least as long.
 
-Normal rewards `{ goldMult: 1, itemRarity: null }`, elites `itemRarity: 'rare'`. Weights 0.8-1.2.
+### Tests (`tests/content/enemies_act1.js`, rewritten for v2; 13 suites, ~3200 assertions)
 
-## Public API (for other authors)
+registry (DESIGN bands, explicit init and AI style per enemy, `DD.AI.styleOf` / `isDiver` / `Act.opportunitySlot` on
+real units, tooltips "On its turn …", no telegraph wording, only the Lid Slam says "Wind-up", waves in rounds 2-5, no
+start-of-fight scripting) · sprites · every skill fired at once (`DD.AI.useNow`: damage == desc, riders, friendly fire,
+Inspired +25%) · elite skills (tongue, CHOMP and gold, the Lid Slam wind-up: announced, listed, 3×3, lands at the
+Mimic's next turn start, knockback without bump, a stun interrupts it, no CHOMP while the lid is open; throws, stool at
+once, Engulf in the real turn flow) · attacks of opportunity with every act 1 skill (preview names and numbers, the throw,
+Engulf, the slime / kid / Rep / Spore Bro make none, a cooling-down Engulf makes none) · splits, pops, Hazard Pay at turn
+start · AI turns (every enemy acts 3 rounds with only its own skills and no pending action; brutes stick to the knight; the
+spider dives the wounded mage through the knight's attack of opportunity but not into a lethal one; the kid shoots from
+range and is pinned by the knight; the Spore Bro hugs two heroes; the Rep buffs / memos; the critic reviews a non-Weak hero;
+the spider webs out of reach; the Mimic winds up when crowded (the mage steps out free, the cleric eats 7), licks in a
+straight line, walks up and CHOMPs, walks around walls; the Bugbear's pit throw, wall-vs-pit attack-of-opportunity pricing,
+stool; the Cube digests in place) · HUD previews (splits, cooked slimes, spores, Engulf release, Mimic gold, the move
+preview's "provokes" damage == the real attacks of opportunity) · odd states (10 statuses × 12 enemies × 2 rounds; empty /
+no target / dead user) · gimmicks in the turn flow (a rat pack arriving bites 2 + 3 + 4, webbed bite 8 after the Root wore
+off, tongue / slam / CHOMP range, two-meal Engulf, a grunt pokes the keg, the east-door wave) · encounters on 12 seeds ×
+2 difficulties · AutoPlay sims (normal / elite, fixture L1-2, area-honesty watch).
+Mutation-checked: the spider as `melee`, the Bugbear ignoring the attack-of-opportunity cost and the Mimic biting while
+its lid is open each fail their tests. Isolated runs pass on seeds 1-3 (with the generic `content:` enemy / encounter
+suites). Last full `tools/test.sh` (no isolate): 704 suites, 67 failing sections, none in `enemies_act1:` or `content:`,
+no swallowed errors; the failures are other areas' v1 tests (bosses act 1-2 / DM calling `DD.AI.plan`, items, kit,
+passives, narrative XP, integration unlocks, act 2 sim bands).
 
-- Enemy ids above can be spawned by bosses/events (e.g. Grimble's interns could be `a1_gob_grunt` / `a1_gob_kid`; a
-  rat swarm `a1_rat`). Encounter ids work with the event API (`api.combat('a1_mimic_hoard')` for a "chest that wants a
-  hug" event, `api.combat('a1_last_call')` for a tavern brawl).
-- Status `a1_engulfed` (needs a living cube `source` adjacent to stay on) and object `a1_strike_fund`.
-- Nothing is exported on `DD` beyond the registrations.
+### Deviations
 
-## Balance (AutoPlay sims, normal difficulty)
-
-After the review (probe `.tmp/enemies-act1-review/probe5.js`, 5 fights per level, L1-4 normal / L2-4 elite; damage =
-HP lost by the four heroes, % = of the party's max HP). "before" = the same probe on the hand-off version.
-
-| encounter | fixture: wins, rounds, dmg (%) | real heroes: wins, rounds, % | notes |
-|---|---|---|---|
-| rats_in_the_cellar | 20/20, 4.0, 1.1 (1%) | 20/20, 3.7, 0.8% | the opener; rats die before most bites land |
-| goblin_ambush | 20/20, 4.3, 4.9 (4%) | 20/20, 3.6, 2.7% | |
-| slime_time | 20/20, 3.6, 3.9 (3%) | 20/20, 3.8, 2.2% | |
-| fungus_among_us | 20/20, 4.0, 20.2 (17%) | 20/20, 3.3, 5.1% | the spores are the act's normal-fight bite |
-| web_of_lies | 20/20, 4.0, 5.2 (4%) | 20/20, 3.7, 3.2% | |
-| union_meeting | 20/20, 6.0, 15.0 (12%) | 20/20, 5.8, 1.8% | |
-| open_mic | 20/20, 5.0, 17.0 (14%), keg 12/18 | 20/20, 3.6, 0.4%, keg hit in 9/20 | before: 5 (4%) / 1.3%, keg untouched in 39/40 |
-| big_flush | 20/20, 4.9, 3.6 (3%) | 20/20, 5.0, 2.1% | before: 1.5% / 1.3% |
-| **normal** | 160/160, 4.5, 8.8 (7.2%) | 160/160, 4.1, 2.3% | before: 5.8% / 2.3% |
-| mimic_hoard | 15/15, 6.0, 17.0 (13%) | 15/15, 4.8, 3.7% | before: 26 (20%), 4.0 r / **0.3%, 3.4 r** |
-| last_call | 15/15, 6.4, 21.3 (16%) | 15/15, 5.0, 2.8% | |
-| cube_cleanup | 15/15, 6.9, 21.0 (16%) | 15/15, 5.2, 5.4% | |
-| **elite** | 45/45, 6.4, 19.8 (15.0%) | 45/45, 5.0, 4.0% | before: 17.3% / 2.8% |
-
-No timeouts, no losses except the keg: one Last Keg loss in 32 real-hero L1 fights (the objective now matters). The
-layout fights are deterministic for the fixture party (same numbers every seed). Real hero kits (stuns, taunts, corgi
-body-blocks, heals) remain far stronger than the fixture party, as in acts 2 and 3 (their notes report 1-8% real-hero
-losses); see the Lead / balance request. Per-skill landing rates vs real heroes (fired → hit a hero-side unit): CHOMP
-47% (before 20%), tongue 24%, memo 39%, spores 43%, bar stool 44%, cube spit 70%, rat bites 10%, slingshot 4%.
-
-Tests guard: no timeouts, every fight winnable, normal fights won ≥ 50%, ≥ 2.5 rounds average, the enemies land hits,
-elites deal ≥ 1.25× the normal-fight average and last at least as long. (The author's 2× failed at `seed=2` after the
-review: a few normal fights now bite nearly as hard, and 2 runs per level are noisy; seeds 1-5 measure 1.36-2.6×.)
-
-## Deviations
-
-- Spore Bro's toadstool cap is an `overlay` painter, not `head.hat: 'mushroom'`: the generic `content:` sprite whitelist
-  (tests/content_tests.js) does not know the render-sprites extra hat and fails the spec. Same look, drawn by me.
-- `last_call` is procedural (cellar + barrels/kegs) and `union_meeting` is the third layout: on a procedural map
-  AutoPlay could get stuck behind an object wall in front of a strike fund (Manhattan approach, see Requests) and time
-  out; the hall layout keeps every fund reachable down open chair columns.
-- Lobbed shots (`los: false`: rock toss, web spit, cube spit, bar stool) and tracked shots with min range 1 (memo,
-  review, rock, spit) are deliberate: walking up to the thrower no longer dodges, breaking range/LOS still does.
-- Big area hits (Lid Slam, Bar Stool, Jiggle Slam) are planned with `delay: 1`; their desc says "Charges for a round".
-  The registry test enforces that only these three are ever delayed.
-- Movement inside a skill (review): CHOMP hops the Mimic one tile (teleport + jump FX, tile effects apply on landing)
-  when its tracked target is 2 tiles away; Rooted or boxed in, it does not bite.
-- Skill defs `a1_rat_nibble` and `a1_spider_bite` carry a pure `telegraphFlat(unit, intent)` (see Core fixes).
-
-## Core fixes
-
-- **`js/engine/ai.js` `AI.intentDmg`** (started by the first reviewer, finished, tested and recorded here): a skill def
-  may declare a pure `telegraphFlat(unit, intent) → number`, added to the telegraph number (after the multipliers, like
-  `d.flat` in the damage pipeline) when the skill deals damage. Skills without it are unchanged. Why: Pack Tactics
-  (+1 per packmate, `modifyOutgoingDamage` `d.flat`) and the spider's +3 vs webbed prey are flat bonuses that depend on
-  the victim, so the telegraph showed 2 while three rats around a hero bit for 4 each (DESIGN pillar 1: every enemy
-  shows what it will do). Regression: `enemies_act1: review fixes …` (three rats show 12 = bite 12; a dying packmate
-  drops the number at once; the webbed-prey bite shows and deals 8). Mutation-checked: disabling the fix fails 3 of its
-  assertions. Commented in place.
+- The Mimic makes **no attacks of opportunity while the Lid Slam is wound up** (its `modifyOpportunity` hook): without it,
+  "step away" (the wind-up's counterplay) cost the first hero a 9-damage CHOMP, so standing in the slam was usually the
+  better choice for a lone hero. Stated in the passive and the skill desc.
+- The Bugbear's attack of opportunity is his throw and the Cube's is Engulf (the engine picks the first ready melee skill);
+  kept on purpose (it is their joke) and stated in the tooltips. The slime makes none (its Splorch targets itself).
+- The spider is the only diver (`skirmisher`): DESIGN lists rogues / flyers / imps / assassins; act 1 has none of those,
+  and an ambush predator fits. Rats stay brutes (they are the act's most common enemy; diving rat packs would bring back
+  the "they all go for the squishy" complaint).
 
 ## Requests
 
-- **RULES (`tests/content_tests.js`)** **[Resolved at integration — see docs/notes/content-digest.md.]** add the render-sprites extras to `SPRITE` (`hat: 'mushroom'`, `beard:
-  'tentacles'`) so content can use them without failing `content: registry cross-references`.
-- **RULES (`js/engine/autoplay.js`)**: `approachMove` ranks reachable tiles by Manhattan distance to the objective /
-  foes, so a hero behind a wall of objects never walks around (seen as a 31-round timeout on a procedural
-  destroy-objective map). A path-distance field (like `AI`'s `fieldTo`) would fix it.
-- **RULES (docs)**: `stunLike` in `js/data/statuses.js` header is documented as "the unit loses its turn" but nothing
-  reads it; a custom stun-like status needs hooks (I used Root + an AP drain for `a1_engulfed`).
-- **RULES (`js/engine/autoplay.js`, review)**: `dangerAt` ignores `target.straight` for tracked intents, so a hero
-  targeted by the Sticky Tongue flees the whole range diamond instead of simply leaving the Mimic's row / column.
-- **RULES (docs, review)**: document the skill-level `telegraphFlat(unit, intent)` (Core fixes) next to the status one
-  in ARCHITECTURE §3.2 / §5.6; acts 2 and 3 and the DM already rely on it.
-- ~~BOSS-DM (`tests/content/boss_dm.js`)~~ resolved during the review by its owner: "DM Fiat still applies when his
-  turn comes (19)" read the mage's HP after the next round's house-rule roll (with act 1's enemies in the cameo pool
-  the RNG rolled Snack Break, heal 4, so it read 15 while the DM hit for 19); it now counts the hit itself.
-- **Lead / balance**: with every act 1 enemy at the top of the DESIGN §5 bands, AutoPlay real-hero parties take ~3
-  damage per act 1 fight (fixture party ~8, elites ~22). Telegraph dodging + 4 heroes × 3 AP of 1-AP basics (~45-50
-  damage a round) kill a DESIGN-sized normal fight (36-100 HP) in 2-3 rounds. If act 1 should bite harder, the cheapest
-  global knobs are the HP bands (+25%), enemy counts (5-6) or brutal-like scaling on normal difficulty; my numbers are
-  in one place per enemy and easy to retune. (Reviewer: still true after the review fixes, which removed the outliers
-  but not the gap: real parties lose 2.3% of their HP per normal fight and 4.0% per elite, the fixture party 7.2% / 15%.)
+- **RULES / HUD (`js/engine/ai.js` `reachOf`, threat shading)**: per-victim flat bonuses are not in the reach numbers
+  (the inspect panel's "can reach: X 2", the threat shading): Pack Tactics (+1 / +2) and the spider's +3 vs webbed prey
+  live in hooks. The skill-level `telegraphFlat(unit, intent)` only reaches wind-ups; `reachOf` could ask it with a
+  virtual intent per victim. (The attack-of-opportunity numbers are exact since the review: see Review (v2).) The
+  throw's bump (+4) is a rider (engine known issue).
+- **RULES (`js/data/terrain.js`, review)**: the Poison Puddle surface is `hazard: true` for everyone, so poison-immune
+  units (Sewer Slime, Slimelet, Spore Bro, Gelatinous Cube: `resist.poison: 0`) refuse to step in harmless puddles:
+  a slime with the only way to a hero through a puddle stands still (probe: slime / slimelet / spore bro / cube all
+  stayed put; the rat, who is not immune, rightly too). Sewers and warrens spawn puddles and the Spore Bro's pop makes
+  them. Suggest `hazard: function (unit) { return !(unit && unit.resist && unit.resist.poison === 0); }` (the engine
+  already supports per-unit hazard tests; `Grid.hazardAt` / `hazardDamage` / paths / `pathRisk` follow).
+- **Balance pass**: with real heroes act 1 normal fights cost ~20% of the party's HP and 0.1 downs a fight (elites ~38%,
+  0.4 downs). If "someone often goes down" is the target for regular fights, the cheapest per-encounter knobs here are
+  the openers (`a1_slime_time` 6%, `a1_rats_in_the_cellar` 9%: one more wave or enemy), Hazard Pay's Block, the keg's
+  HP, and the Lid Slam (dodged 5 of 6 times). All numbers are in one place per enemy / encounter.
+- **Lead (DESIGN §8 Act 1)**: could name the Cellar Spider as the act's diver and the Mimic's Lid Slam as its one elite
+  wind-up.
 
 ## Known issues
 
-- The rats / slimes / spider fights are the easy openers (depth 0-1): the party usually kills the swarm before most
-  bites land. Fungus (spores), union meeting, the keg raid and the elites are where act 1 starts to hurt.
-- Against real hero kits every act 1 fight is won losing 0.4-5% of the party's HP (elites 3-5%): the global balance
-  question in Requests, shared with acts 2 and 3.
-- `killAll` / `protect` fights end as soon as the enemies on the board are dead, so a fast party skips later waves
-  (fungus: 5 of 20 real-hero fights ended before the round-3 Spore Bro). That is the engine's rule (reward for speed).
-- Layout fights are deterministic for AutoPlay (same map, same opening), so their sim rows repeat across seeds.
-- The slingshot kid's line shot rarely lands (4% vs real heroes): a self-anchored line is one step to dodge. He is
-  fodder whose gimmick (the pebble hits the first unit, friend or foe) still reads.
-- The Mimic's chest painter and the strike fund piggy bank are custom canvas art; at zoom < 0.7 the chest's eyes and
-  the piggy's tag become a few pixels.
-- Engulfed heroes are shown by their status icon (🫧) and Root vines; there is no "inside the cube" sprite.
+- Rats walking up one by one bite 2 / 3 / 4 as the pack grows; the threat shading and the inspect panel's reach line
+  show 2 per rat (see Requests). The move preview's attack-of-opportunity numbers include the pack (review).
+- Poison-immune act 1 enemies avoid poison puddles like everyone else (see Requests, RULES terrain).
+- The Lid Slam is almost always dodged by AutoPlay (it steps out of the 3×3 for free); real players pay the AP.
+- Fixture parties lose more HP than real kits in normal fights (no stuns / taunts / corgis); elites are close.
+- `killAll` / `protect` fights end once the board is clear, so a fast party can skip a later wave (engine rule).
+- Engulfed heroes are shown by the status icon (🫧); there is no "inside the cube" sprite. The Mimic chest and the strike
+  fund piggy bank are custom canvas art (small at zoom < 0.7).
 
 ## Screenshots
 
-`.tmp/enemies-act1/g.png` (gallery=act1), `g_mimic.png`, `g_spider.png` (detail pages), `c_web.png`, `c_mimic.png`,
-`c_union.png`, `c_bar.png` (deployment views with telegraphs), `c_cube.png`, `c_fungus.png` (autoplay mid-fight).
-Review: `.tmp/enemies-act1-review/g_act1.png` (gallery with fixtures), `c_mimic_ap.png` (the goblin owners arrive
-behind the party, round 2), `c_web_big.png` (1920×1080 deployment).
+`.tmp/enemies-act1-v2/c_web.png` (Web of Lies under AutoPlay, round 1-2: webs, the initiative tracker, the round-2 spider
+joining). v1 shots: `.tmp/enemies-act1/`, `.tmp/enemies-act1-review/`. Review: `.tmp/a1rev3/` (below).
 
-Full `tools/test.sh` (no isolate) at hand-off: all 10 `enemies_act1:` suites pass; the 12 failing sections are other areas
-in flight (`bosses_act1` grimble/rat king — a second `grimble` enemy registration overrides the boss —, `passive-table`).
+## Requests (Nov 3) — content sweep for the user's v2 requests (flyers, barrels, aimed heals)
 
-## Review
+Act 1 has no flying enemy, so the sweep is about how act 1 treats flying heroes and summons (the engine skips every
+floor effect for flyers: DD.Grid.feelsFloor / feelsSurface).
+- **Cellar Spider**: "standing in a web" (Sticky Snack's +3, the diver's webbed-prey pick, its wind-up number) checks
+  `G().feelsSurface(u, tile.surface)`: a flyer over a web is not in it.
+- **Spore Bro**: the pop's spores are a Poison Puddle on the floor (Act.splash, which skips flyers). The passive, the desc
+  and the log line say so now ("his spores settle on the floor … flyers float over it"); they used to say "cloud".
+- **Bugbear Bouncer**: throwValue never values a pit for a flyer (it sails over; the tiles beyond are scored instead), and
+  any volatile object (DD.Act.isVolatile, not only `barrel_explosive`) is the +3 slam. The throw desc adds "(a flyer
+  sails over)".
+- **Barrels / aimed heals**: no act 1 object explodes (the Strike Fund spills gold), and no act 1 skill is a hero's, so
+  nothing is volatile, opted out or revive-capable here. The Leaky Flagon's barrels are the core `barrel_explosive`.
+- **Resolved**: the Requests item "Poison Puddle is a hazard for poison-immune units" (the engine's per-unit hazards:
+  `hazardStatus: 'poison'`).
+- **Tests**: `enemies_act1: v2 requests (Nov 3) — …` (12 assertions: the web bonus for walkers vs flyers, the spores vs a
+  flyer, the Bouncer picks the walker into a wall over the flyer by a pit (mutation-checked), a hero's attack sets off a
+  barrel and the blast hits the rat next to it).
 
-Adversarial review after hand-off (resumed after an interruption: the first reviewer had added the `ai.js` hook and the
-rat's `telegraphFlat`, untested and unrecorded; everything below was re-checked from the current files by running code).
+## Review (v2) — adversarial review of the act 1 v2 work (ADVERSARIAL REVIEWER role)
 
-Fixed, most severe first:
+Scope: this file's v2 conversion (initiative, no telegraphs, attacks of opportunity, reach-aware targeting). Files changed
+by the review: `js/data/enemies/act1.js`, `tests/content/enemies_act1.js`, this file. Scratch (Chrome-slot aware):
+`.tmp/a1rev3/probe.sh "probe=pN.js&verbose=1"` (p1 brute targets, p2 behaviour census, p3 idle reasons, p5 stuck census,
+p6 board clutter, p7 AoO previews / taunt / charm / Engulf / Lid Slam, p8 idle-melee board dumps, p9 poison puddles and
+webs), `.tmp/a1rev3/shot.sh` (+ `view.html`: `inspect=<defId>`, `turns=<n>`, `windup=1` opens the Mimic's lid).
+An interrupted earlier attempt (`.tmp/a1rev2/`, probes only, no edits) was reused for the census / idle probes.
 
-1. **Telegraphs lied about the rats** (core fix above): 3 rats around a hero showed 2 each and bit for 4 each. Now the
-   badge, the inspect text and AutoPlay's danger map all see 4.
-2. **The spider's gimmick never fired**: "+3 vs Rooted" is checked when the bite lands, but the web's Root (applied in
-   the enemy phase) wears off at the end of the hero's turn, before the bite planned on that hero resolves (probe: the
-   webbed hero took 5, not 8). The bonus now counts prey that is Rooted **or standing in a web**, the telegraph
-   shows it (8), the AI values it and the desc / codex say so.
-3. **Sticky Tongue dealt 7 where it said 4**: the pull bumped the hero into anything in between (+3 to both, a rat
-   included). The tongue now stops at obstacles without a bump, so the telegraphed number is the whole hit.
-4. **Lid Slam's knockback bump was undocumented** (7 shown, 10 dealt against a wall): `L.bump: 3` is passed explicitly
-   and stated in the desc.
-5. **Engulf: a second meal reset the "10 damage frees everyone" counter** for the hero already inside (12 damage dealt,
-   still engulfed). The count now starts with the first meal.
-6. **The Mimic was a pushover**: 0.3% of a real party's HP in 3.4 rounds (its self-anchored CHOMP was one step to
-   dodge and it died before it reached anyone). CHOMP now tracks a hero up to 2 tiles away and hops 1 tile to bite
-   (Rooted or boxed in: no bite; "keep 3 tiles away" is in the desc and codex), the tongue avoids the hero the CHOMP
-   already tracks, and the room's goblin owners (2 grunts) come back from lunch behind the party in round 2. Real
-   parties now lose 3.7% over 4.8 rounds, CHOMP lands 47% (was 20%); the fixture party 13% over 6 rounds.
-7. **"Protect the Last Keg" was never in danger**: the keg sat behind the hero line and the wave came from the far
-   side in round 3 (often skipped). The back-door wave now arrives in round 2 from the south, next to the keg; the
-   keg is hit in about half the real-hero fights and lost occasionally (1/32 at L1), so the objective matters.
-8. **The Big Flush (survive 5) was the softest fight**: waves now bring a second slime in round 2 and two Spore Bros in
-   round 4 (real 1.3 → 2.1%, fixture 1.5 → 3%).
+### Verified (probes + suites; held)
 
-Checked and left as is: every skill/status/object desc at its only level matches `execute` (incl. Bleed, Weak, Taunt,
-Inspired, Block timings in the real round flow); previews of hero skills against slimes (split / cooked), spores,
-the cube (release, Acidic Body) and the mimic (gold back) are exact; odd states (charm, silence, sheep, dazzle,
-confuse, taunt, root, stun, slow, weak) on every act 1 enemy for 2 rounds next to a pit and lava, empty / missing
-targets and dead users: no errors, no shared tiles; no `Math.random`; sprites distinct and readable at zoom 1
-(the spider's brown body is lower-contrast on cellar wood than on stone, outline and red eyes carry it).
+- **desc == effect** for all 20 skills (one level each), the Engulfed status, the Strike Fund and Hazard Pay: every
+  number fired at once (`DD.AI.useNow`), in the turn flow and as attacks of opportunity; Taunt (−50% to others),
+  Weak (−25%), Inspired (+25%), Bleed, the spore cloud (Poison 2 puddle, cross radius 1) as the descs say.
+- **v2 turns**: every enemy acts once on its own turn (move, then one skill); the only pending action after a turn is the
+  Mimic's Lid Slam (wound up, lands at its next turn start, then it acts that turn: e.g. slam 7 + CHOMP 9 on a hero who
+  stayed; stepping out is free while the lid is open); cooldowns: cd 1 = every other turn (Rock Toss, Bad Review, Spit).
+- **Attacks of opportunity**: the right skill per enemy (rat nibble, grunt spear on the leaver's tile only, slimelet,
+  spider, critic lute, Mimic CHOMP except while the lid is open, Bugbear throw, Cube Engulf while ready; none for the
+  kid, Rep, Spore Bro, slime); Engulf by reaction ends the walk next to the Cube; hero reactions on act 1 movers.
+- **Targeting**: taunted elites aim their custom planners at the taunter (Bar Stool / tongue / Spit at a far taunter);
+  charmed elites fight their own side; brutes stick when engaged; unengaged brutes pick the hero they can hurt most
+  (the knight's armor and the mage's threat send a rat past the nearer knight); the spider dives (never into a lethal
+  reaction); the kid stays pinned; Hazard Pay pays once per turn (`s.turn` is per unit turn).
+- **Idle turns** (real heroes, 132 fights): rats 68%, slimes 83%, Spore Bros 88% of turns without a skill — traced
+  (p3 / p8 board dumps): walking (mov 3-5 across 10×10-11×11 maps), queueing at channel bridges / chokepoints behind
+  friends, out of reach; 1-3% "could attack but didn't". Not a planner bug.
+- **Visuals**: `g_enemies.png` (all 12 sprites), `i_mimic.png` (inspect panel: tooltip, "Holds the line: … CHOMP ≈9",
+  Engaged chip on Marwyn), `w_mimic2.png` (Lid Slam: 3×3 hatched square + "Lid Slam 7" + ⏳ on the tracker),
+  `c_web.png` (webs; a rat Rooted by its own team's web — funny, kept).
+- Real-hero census (L1-2, normal, 132 fights): won 132/132, 5.3 rounds, 23.3% of party HP lost, 0.12 downs a fight,
+  0 round-1 downs; elites 27-32% HP. Enemy friendly fire is rare (grunt 24 HP over 376 turns). Brutal (88 fights):
+  won 85/88, 41% HP, 0.51 downs, 0 round-1 downs (Open Mic 5/8: the keg; Union Meeting 1.75 downs).
+- Suites: isolated `enemies_act1` + the generic `content:` suites green on seeds 1-3; full `tools/test.sh` after the
+  review: 796 suites, 2 failing sections, both `integration:` (v1 hero unlocks / "no XP" step: other areas), none in
+  `enemies_act1:` or `content:`, no swallowed "Error in" warnings.
 
-Tests added: `enemies_act1: odd states … and empty targets` (10 statuses × 12 enemies, every skill with empty / no
-target / dead user) and `enemies_act1: review fixes …` (26 assertions: rat telegraphs = bites incl. a dying packmate,
-webbed bite in the real round flow and on a web tile, tongue blocked without bump, slam bump, CHOMP hop straight /
-diagonal / lost / Rooted / boxed in, two-meal engulf, a grunt lining up on the keg, the back-door wave). Mutation check:
-reverting the core fix, the tongue's `bump: 0` and the jiggle guard fails 5 of them. Stale comments in the damage
-suite fixed; elite-vs-normal guard 2× → 1.25× (see Balance). All 12 `enemies_act1:` suites pass for `seed=1…7`.
+### Fixed (each with a regression assertion; mutation-checked)
 
-Full `tools/test.sh` (no isolate), three runs at the end of the review (505 suites): all 12 `enemies_act1:` suites pass
-every time and no act 1 warning reaches the console. The single failing section changed from run to run with other
-areas' files being edited at that moment: `boss_dm` (an RNG-dependent check its owner has since fixed, see Requests),
-`passive-table` (`rp_pet_rock`, passes in isolation a minute later) and `enemies_act2` (brunch cult; fails in its own
-isolation, with or without act 1).
+1. **Attack-of-opportunity previews lied for packs and webs.** Pack Tactics and the spider's +3 lived only in
+   `modifyOutgoingDamage`, so the move preview, the fewest-harm path choice and the AI / AutoPlay walk prices used the
+   base bite: three rats around the mage previewed 2 + 2 + 2 and bit 4 + 4 + 4 (+3 Bleed on the step); a spider next to
+   a web-standing hero previewed 5 and bit 8. Now both bonuses ride on the reaction itself (`modifyOpportunity` →
+   `o.flat`, guarded once per `o`; the damage hooks skip `d.opportunity`). Tests: "rat pack: the preview shows 2 + 2
+   packmates…", "three nibbles of 4 … as previewed", "spider: leaving a web costs 5 + 3…" (fail with the hooks removed).
+2. **Tooltips said "the nearest hero"** for the rat and the Sewer Slime; the reach-aware targeting does not pick the
+   nearest (probe p1: a rat runs past the nearer knight to bite the mage). Now "a hero it can reach (whoever it can hurt
+   most)" / "a hero it can reach …, sticking to the one it is next to".
+3. **A reaction CHOMP swallowed gold silently** (the log line was gated on `ctx.isIntent`, which reactions don't set).
+   It now logs "swallows N gold coins" on attacks of opportunity too (test asserts the line).
+
+### Deviations
+
+- None new. Kept the author's: the Mimic makes no reactions while its lid is open; the Bugbear's reaction is the throw and
+  the Cube's is Engulf; the spider is the act's one diver.
+
+### Requests (also listed under Requests above)
+
+- RULES (`terrain.js`): Poison Puddles should not be hazards for poison-immune units (slimes, Spore Bros, the Cube).
+- RULES / HUD: per-victim flat bonuses in `reachOf` (threat shading / inspect reach line).
+- BALANCE: act 1 normal fights stay mild for real heroes (~23% HP, 0.12 downs); the openers (Slime Time 9%, Rats 13%,
+  Big Flush 14%) are the cheapest knobs. Left to the v2 balance pass (DESIGN §5 v2 note; `tests/balance_tests.js` is in
+  the manifest but not on disk yet, so a balance phase is mid-flight) rather than retuned in a review.
+
+### Known issues
+
+- Threat shading / the inspect panel's reach line show a rat's 2 and a spider's 5 (Requests).
+- The Bugbear's reaction throw previews 7; a wall / friend bump (+4) or a pit is a rider the preview does not price.
+- In isolated runs (`isolate=…`) the loader reports `tests/balance_tests.js` missing (another area's file in flight).
+
+-----------------------------------------------------------------------------------------------------------------------
+
+## History (v1, before initiative) — condensed
+
+The v1 roster, encounters and review fixes (honest telegraph numbers via a skill-level `telegraphFlat`, the spider's
+webbed-prey bonus, the tongue's no-bump pull, Engulf's "first meal" counter, the Mimic's tracked CHOMP, the keg raid,
+the Big Flush waves) are described in this file's git history. Still relevant in v2: the core fix in `DD.AI.intentDmg`
+(a skill def may declare a pure `telegraphFlat(unit, intent)` added to a wind-up's number; act 1 keeps it on
+`a1_rat_nibble` / `a1_spider_bite` for content that winds them up), the `a1_engulfed` / `a1_strike_fund` defs and the
+three handcrafted layouts. Deviations kept from v1: the Spore Bro's toadstool cap is an `overlay` painter; `last_call` is
+procedural and `union_meeting` the third layout (every fund reachable down open chair columns); lobbed shots
+(`los: false`) and tracked shots with min range 1 are deliberate.

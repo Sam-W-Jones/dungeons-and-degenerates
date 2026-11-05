@@ -3,8 +3,10 @@
  * roll at run start and on level-ups (4 slots, levels I-III; rolling an owned one upgrades it).
  * Hooks get the instance { id, level, L, def, data } as their LAST argument; per-fight state lives in p.data
  * (unit ids, never unit references); randomness only through the combat RNG (DD.Combat.state.rng).
+ * v2 (initiative, per-unit turns): "your turn" = your own initiative turn (per-turn bookkeeping is keyed on
+ * state.turn), nobody starts a fight with Block, nothing reads enemy intents (only boss wind-ups exist).
  * Wording used in every desc: a "hit" deals 1+ damage after armor (Block counts); a "skill hit" is damage dealt by
- * a skill (cause 'skill'); "enemy skill hits" are skill hits on you by a hostile unit.
+ * a skill (cause 'skill', attacks of opportunity included); "enemy skill hits" are skill hits on you by a hostile unit.
  */
 (function () {
   'use strict';
@@ -20,6 +22,20 @@
   function hostile(a, b) { return !!a && !!b && DD.Grid.hostile(a, b); }
   function dist(a, b) { return Math.abs(a.x - b.x) + Math.abs(a.y - b.y); }
   function roundNo() { const s = S(); return s ? s.round : 0; }
+  /** Turns started so far this fight: constant during one unit's turn (v2 per-turn bookkeeping). */
+  function turnNo() { const s = S(); return s ? s.turn || 0 : 0; }
+  /** The unit's own initiative turn is under way (its summons share it). */
+  function ownTurn(u) { return !!u && DD.Act.isOwnTurn(u); }
+  /** p is one of u's Blessing instances (hooks fired for both sides of an attack of opportunity need the holder). */
+  function mine(u, p) { return !!u && (u.passives || []).indexOf(p) >= 0; }
+  /** u still has a turn coming this round: an initiative entry after the current one (a summon: its owner's). */
+  function stillToCome(u) {
+    const s = S();
+    if (!u || !s || !s.order) return false;
+    const o = (typeof DD.Combat.turnOwner === 'function' && DD.Combat.turnOwner(u)) || u;
+    for (let i = Math.max(0, s.turnIndex + 1); i < s.order.length; i++) if (s.order[i].unitId === o.id) return true;
+    return false;
+  }
   function actNo() {
     const s = S();
     const a = (s && s.run && s.run.act) || (s && s.encounter && s.encounter.act) || 1;
@@ -59,17 +75,27 @@
     }
     return false;
   }
-  /** Tiles some enemy intent is aimed at (tracking shots follow you anyway, so they don't count). */
-  function dangerTiles(u) {
+  /**
+   * Tiles an enemy could hit before u's next turn ('x,y' → 1): every AI foe's reach (DD.AI.threatMap, the HUD's
+   * threat shading) plus the tiles of hostile boss wind-ups. v2: there are no other telegraphs to read.
+   */
+  function threatTiles(u) {
     const out = {};
-    S().units.forEach(function (e) {
-      if (!active(e) || !hostile(e, u) || !e.intents) return;
-      e.intents.forEach(function (it) {
-        if (it.anchor === 'unit') return;
-        (DD.AI.intentTiles(e, it) || []).forEach(function (q) { out[q.x + ',' + q.y] = 1; });
+    if (DD.AI && typeof DD.AI.threatMap === 'function') DD.AI.threatMap(DD.Grid.effectiveSide(u)).forEach(function (v, k) { out[k] = 1; });
+    if (DD.AI && typeof DD.AI.windups === 'function') {
+      DD.AI.windups().forEach(function (w) {
+        if (!w.unit || !hostile(w.unit, u)) return;
+        (w.tiles || []).forEach(function (q) { out[q.x + ',' + q.y] = 1; });
       });
-    });
+    }
     return out;
+  }
+  /** Spots with the ones no enemy can reach first: those if there are any, else all of them. */
+  function calmFirst(u, spots) {
+    if (!spots.length) return spots;
+    const danger = threatTiles(u);
+    const calm = spots.filter(function (q) { return !danger[q.x + ',' + q.y]; });
+    return calm.length ? calm : spots;
   }
   function goblinoid(u) {
     const tags = (u && u.tags) || [];
@@ -111,6 +137,25 @@
   }
   function tagged(s, tag) { return Array.isArray(s.tags) && s.tags.indexOf(tag) >= 0; }
   function kitCount(rh, def, fn) { return kitOf(rh, def).filter(fn).length; }
+  const MELEE_UNIT = { enemy: 1, any: 1, notSelf: 1 };
+  const MELEE_TILE = { any: 1, enemy: 1, emptyOrUnit: 1, notSelf: 1 };
+  /**
+   * A melee damaging skill as the engine's attacks of opportunity read it (ARCHITECTURE §6.2): range 1, aimed at foes,
+   * never tagged 'ranged', an area attack only if tagged 'melee'. Read from the def (no unit, no range bonuses).
+   */
+  function meleeSkill(s) {
+    if (!s || typeof s.execute !== 'function' || tagged(s, 'ranged')) return false;
+    const L = DD.skillLevel(s, 1);
+    if (!L || !(+L.dmg > 0)) return false;
+    if (s.area && s.area.shape && s.area.shape !== 'single' && !tagged(s, 'melee')) return false;
+    const tg = s.target || {};
+    const type = tg.type || 'unit';
+    if (type === 'dir') return true;
+    if (type === 'unit' ? !MELEE_UNIT[tg.filter || 'enemy'] : type === 'tile' ? !MELEE_TILE[tg.filter || 'any'] : true) return false;
+    const r = tg.range;
+    const max = Array.isArray(r) ? +r[1] : typeof r === 'number' ? r : 1;
+    return max === 1;
+  }
   function guard(fn) {
     return function (rh, def) {
       try { def = heroOf(rh, def); return !!def && !!fn(rh, def); } catch (e) { return false; }
@@ -135,6 +180,8 @@
     gold: guard(function (rh, def) {
       return ['zarathor', 'buga'].indexOf(def.id) >= 0 || kitCount(rh, def, function (s) { return tagged(s, 'gold'); }) >= 1;
     }),
+    // a melee basic attack: the hero makes attacks of opportunity (v2)
+    melee: guard(function (rh, def) { return typeof def.basic === 'string' && meleeSkill(DD.getSkill(def.basic)); }),
   };
 
   function reg(def) { return DD.registerPassive(def); }
@@ -173,25 +220,32 @@
     flavor: "It's not fat. It's tactical padding.",
   });
 
+  // v2 initiative: hit them before they get their turn
   reg({
-    id: 'rp_muscle_tank_top', name: 'Muscle Tank Top', icon: '💪', rarity: 'common', tags: ['offense', 'stat'],
-    levels: [{ pct: 5 }, { pct: 8 }, { pct: 12 }],
-    stats: function (L) { return { dmg: L.pct / 100 }; },
-    desc: function (L) { return '+' + L.pct + '% damage.'; },
-    flavor: 'Sleeves are a social construct. So, apparently, is armor.',
+    id: 'rp_cheap_shot', name: 'Cheap Shot Artist', icon: '🥊', rarity: 'common', tags: ['offense', 'initiative'],
+    levels: [{ dmg: 2 }, { dmg: 3 }, { dmg: 4 }],
+    desc: function (L) { return 'Your skill hits on foes whose turn is still to come this round deal +' + L.dmg + ' damage.'; },
+    flavor: "Fights fair. 'Fair' meaning before the other guy has finished rolling initiative.",
+    hooks: {
+      modifyOutgoingDamage: function (d, p) { if (skillHit(d) && stillToCome(d.target)) d.flat += p.L.dmg; },
+    },
   });
 
+  // v2 attacks of opportunity: melee heroes hold the line (a pure modifyOpportunity, so the AI and the HUD see the bonus)
   reg({
-    id: 'rp_participation_trophy', name: 'Participation Trophy', icon: '🏆', rarity: 'common', tags: ['gold'],
-    levels: [{ gold: 5 }, { gold: 8 }, { gold: 12 }],
-    desc: function (L) { return 'After a won fight in which you scored no kills, the party gains ' + L.gold + ' gold.'; },
-    flavor: 'You showed up. That counts. The DM said so, and he was being nice.',
+    id: 'rp_hall_monitor', name: 'Hall Monitor', icon: '🦺', rarity: 'common', tags: ['offense', 'opportunity'],
+    levels: [{ dmg: 3, stop: false }, { dmg: 5, stop: false }, { dmg: 5, stop: true }],
+    requires: REQ.melee,
+    desc: function (L) {
+      return 'Your attacks of opportunity deal +' + L.dmg + ' damage' + (L.stop ? " and end the foe's walk right there." : '.') + ' Melee fighters only.';
+    },
+    flavor: 'Has a sash. Has a whistle. Has never once let anyone walk away from a conversation.',
     hooks: {
-      onKill: function (d, p) { p.data.kills = (p.data.kills || 0) + 1; },
-      onCombatEnd: function (unit, result, p) {
-        if (result !== 'victory' || p.data.kills) return;
-        const n = DD.Act.gainGold(p.L.gold);
-        if (n) { pop(unit, '🏆 +' + n + ' gold'); say(unit, p, 'the party gets ' + n + ' gold for trying.', 'hero'); }
+      modifyOpportunity: function (o, p) { if (mine(o.attacker, p)) o.flat += p.L.dmg; },
+      onOpportunityAttack: function (o, p) {
+        if (!p.L.stop || !mine(o.attacker, p) || !active(o.mover)) return;
+        DD.Act.stopMove(o.mover);
+        pop(o.mover, '🦺 No running!', '#ffe08a');
       },
     },
   });
@@ -237,10 +291,10 @@
   function rocky(unit, hp, maxHp) { return Object.assign({ hp: hp, maxHp: maxHp, rockyOf: unit.id }, ROCKY); }
   reg({
     id: 'rp_pet_rock', name: 'Pet Rock', icon: '🪨', rarity: 'common', tags: ['defense', 'object'],
-    levels: [{ block: 2 }, { block: 3 }, { block: 5 }],
+    levels: [{ block: 2 }, { block: 3 }, { block: 4 }],
     desc: function (L) {
-      return 'Rocky (a pet rock: 10 HP, too small to block anything) starts each fight beside you. At the start of each of your turns ' +
-        'he is somehow beside you again (if there is room): gain ' + L.block + ' Block.';
+      return 'Rocky the pet rock (10 HP, blocks nothing) starts each fight beside you. At the start of each of your turns he is ' +
+        'somehow beside you again (if there is room): +' + L.block + ' Block.';
     },
     flavor: "Rocky doesn't do much. Rocky doesn't have to. Nobody has ever seen Rocky move.",
     hooks: {
@@ -342,13 +396,14 @@
   });
 
   reg({
-    id: 'rp_overcaffeinated', name: 'Overcaffeinated', icon: '☕', rarity: 'common', tags: ['ap'],
-    levels: [{ boost: 1, crash: 3 }, { boost: 2, crash: 3 }, { boost: 2, crash: 0 }],
+    id: 'rp_overcaffeinated', name: 'Overcaffeinated', icon: '☕', rarity: 'common', tags: ['ap', 'initiative', 'stat'],
+    levels: [{ init: 2, boost: 1, crash: 3 }, { init: 3, boost: 2, crash: 3 }, { init: 4, boost: 2, crash: 0 }],
+    stats: function (L) { return { init: L.init }; },
     desc: function (L) {
-      const up = L.boost === 1 ? 'Round 1: +1 AP at the start of your turn.' : 'Rounds 1 and 2: +1 AP at the start of your turn.';
-      return up + (L.crash ? ' Round ' + L.crash + ': −1 AP (the crash).' : ' No crash. You have transcended sleep.');
+      const up = L.boost === 1 ? ' Round 1: +1 AP at the start of your turn.' : ' Rounds 1 and 2: +1 AP at the start of your turn.';
+      return '+' + L.init + ' initiative.' + up + (L.crash ? ' Round ' + L.crash + ': −1 AP (the crash).' : ' No crash: you have transcended sleep.');
     },
-    flavor: 'Seven espressos and a dream. The dream is mostly heart palpitations.',
+    flavor: 'Seven espressos and a dream. First in the initiative order, first to hear their own heartbeat.',
     hooks: {
       onTurnStart: function (unit, p) {
         const r = roundNo();
@@ -360,7 +415,7 @@
 
   reg({
     id: 'rp_superstitious', name: 'Afraid of Even Numbers', icon: '🔢', rarity: 'common', tags: ['offense', 'defense'],
-    levels: [{ dmg: 1, block: 2 }, { dmg: 2, block: 3 }, { dmg: 3, block: 4 }],
+    levels: [{ dmg: 1, block: 2 }, { dmg: 2, block: 3 }, { dmg: 3, block: 3 }],
     desc: function (L) {
       return 'Odd rounds: your skill hits on foes deal +' + L.dmg + ' damage. Even rounds: gain ' + L.block + ' Block at the start of your turn.';
     },
@@ -413,8 +468,8 @@
     id: 'rp_ghost_accountant', name: 'Haunted by a Ghost Accountant', icon: '👻', rarity: 'common', tags: ['gold', 'proc'],
     levels: [{ gold: 5, pct: 15 }, { gold: 8, pct: 10 }, { gold: 12, pct: 5 }],
     desc: function (L) {
-      return 'After each won fight the party gains ' + L.gold + ' gold (he found deductions). At the start of each of your turns: ' +
-        L.pct + '% chance you are Confused this turn (moving costs 2 AP).';
+      return 'After each won fight the party gains ' + L.gold + ' gold. At the start of each of your turns: ' + L.pct +
+        '% chance you are Confused this turn (moving costs 2 AP).';
     },
     flavor: 'Gerald died during tax season and never left. He is very good at his job. He is very loud.',
     hooks: {
@@ -435,8 +490,8 @@
     id: 'rp_sleepwalker', name: 'Sleepwalker', icon: '😴', rarity: 'common', tags: ['teleport', 'proc', 'defense'],
     levels: [{ pct: 25, block: 3, safe: false }, { pct: 25, block: 5, safe: false }, { pct: 25, block: 5, safe: true }],
     desc: function (L) {
-      return 'At the end of your turn: ' + L.pct + '% chance you sleepwalk — gain ' + L.block + ' Block and wander to a random free tile within 2' +
-        (L.safe ? ', never into a tile an enemy is aiming at.' : '.');
+      return 'At the end of your turn: ' + L.pct + '% chance you sleepwalk to a random free tile within 2' +
+        (L.safe ? ' (one no enemy can reach, if there is one)' : '') + ' and gain ' + L.block + ' Block.';
     },
     flavor: 'Fights in their sleep. Wakes up in a different room. Somehow it helps.',
     hooks: {
@@ -444,10 +499,7 @@
         if (!roll(p.L.pct)) return;
         DD.Act.addBlock(unit, p.L.block);
         let spots = safeTiles(unit, 2, 1);
-        if (p.L.safe && spots.length) {
-          const danger = dangerTiles(unit);
-          spots = spots.filter(function (q) { return !danger[q.x + ',' + q.y]; });
-        }
+        if (p.L.safe) spots = calmFirst(unit, spots);
         pop(unit, '😴 Zzz...', '#bfd0ff');
         if (!spots.length) return;
         const q = pick(spots);
@@ -494,12 +546,14 @@
     flavor: 'Has never paid sticker price. Banned from three bazaars and a lemonade stand.',
   });
 
+  // v2 leveling (no XP): runMods.xp is the hero's extra weight in the DM's level-up roll among the lowest-level
+  // heroes (DD.Passives.xpMult = 1 + xp); it never lets a hero jump the rotation
   reg({
-    id: 'rp_teachers_pet', name: "Teacher's Pet", icon: '🍎', rarity: 'common', tags: ['xp', 'run'],
-    levels: [{ pct: 10 }, { pct: 15 }, { pct: 25 }],
-    runMods: function (L) { return { xp: L.pct / 100 }; },
-    desc: function (L) { return 'You gain +' + L.pct + '% XP.'; },
-    flavor: 'Sits in the front row of every dungeon. Raises a hand before the trap goes off.',
+    id: 'rp_teachers_pet', name: "Teacher's Pet", icon: '🍎', rarity: 'common', tags: ['levelup', 'run'],
+    levels: [{ weight: 1.5 }, { weight: 2 }, { weight: 3 }],
+    runMods: function (L) { return { xp: L.weight - 1 }; },
+    desc: function (L) { return 'When the DM rolls which of the lowest-level heroes levels up next, you count as ' + L.weight + ' heroes.'; },
+    flavor: 'Sits in the front row of every dungeon. Brings the DM an apple. The DM has noticed.',
   });
 
   reg({
@@ -531,7 +585,7 @@
   reg({
     id: 'rp_dad_jokes', name: 'Dad Jokes', icon: '👨', rarity: 'common', tags: ['status', 'proc'],
     levels: [{ pct: 25 }, { pct: 35 }, { pct: 50 }],
-    desc: function (L) { return 'Each foe targeted by your basic attack has a ' + L.pct + '% chance to be Weakened for 1 turn (it groans so hard it loses its grip).'; },
+    desc: function (L) { return 'Each foe targeted by your basic attack (attacks of opportunity too) has a ' + L.pct + '% chance to be Weakened for 1 turn.'; },
     flavor: "Hi Hungry, I'm Dad. The goblin needs a minute.",
     hooks: {
       onSkillUsed: function (ctx, p) {
@@ -604,8 +658,8 @@
     levels: [{ miles: 8 }, { miles: 6 }, { miles: 5 }],
     requires: REQ.flyer,
     desc: function (L) {
-      return 'Every tile you move earns a mile. At the start of your turn, ' + L.miles + ' miles are redeemed (if you have them) for a random free ' +
-        'upgrade: +1 AP, 4 Block or Inspired for 1 turn. One upgrade per turn; spare miles carry over. Flyers only.';
+      return 'Each tile you move earns a mile. At the start of your turn, ' + L.miles + ' miles buy a random upgrade (one per turn): ' +
+        '+1 AP, 4 Block or Inspired for 1 turn. Flyers only.';
     },
     flavor: 'The miles never expire. The airline is a griffon named Doug. Doug upgrades you out of pity.',
     hooks: {
@@ -644,14 +698,15 @@
     id: 'rp_cardio_king', name: 'Cardio King', icon: '🏃', rarity: 'common', tags: ['offense', 'move'],
     levels: [{ block: 2, dmg: 2 }, { block: 3, dmg: 3 }, { block: 4, dmg: 4 }],
     desc: function (L) {
-      return 'Once per turn, when you have walked 4+ tiles this turn: gain ' + L.block + ' Block, and your next skill hit on a foe this turn deals +' +
+      return 'The first time each turn you have walked 4+ tiles: gain ' + L.block + ' Block, and your next skill hit on a foe this turn deals +' +
         L.dmg + ' damage.';
     },
     flavor: 'Never skips leg day. Never skips any day. Will not stop telling you about it.',
     hooks: {
       onMove: function (unit, path, p) {
-        const r = roundNo();
-        if (p.data.walkRound !== r) { p.data.walkRound = r; p.data.walked = 0; p.data.fired = false; p.data.pumped = false; }
+        if (!ownTurn(unit)) return;   // pushed, pulled or walked on someone else's turn: not cardio
+        const k = turnNo();
+        if (p.data.walkTurn !== k) { p.data.walkTurn = k; p.data.walked = 0; p.data.fired = false; p.data.pumped = false; }
         p.data.walked += (path && path.length) || 0;
         if (p.data.fired || p.data.walked < 4) return;
         p.data.fired = true;
@@ -660,7 +715,7 @@
         pop(unit, '🏃 Cardio!', '#9fffb0');
       },
       modifyOutgoingDamage: function (d, p) {
-        if (!p.data.pumped || p.data.walkRound !== roundNo() || S().phase !== 'player' || !skillHit(d)) return;
+        if (!p.data.pumped || p.data.walkTurn !== turnNo() || !ownTurn(d.source) || !skillHit(d)) return;
         p.data.pumped = false;
         d.flat += p.L.dmg;
       },
@@ -670,13 +725,16 @@
   reg({
     id: 'rp_swamp_thing', name: 'Swamp Thing', icon: '🐸', rarity: 'common', tags: ['offense', 'surface'],
     levels: [{ dmg: 2 }, { dmg: 3 }, { dmg: 4 }],
-    desc: function (L) { return 'While you stand on a surface (puddle, blood, oil, fire, holy ground...), your skill hits on foes deal +' + L.dmg + ' damage.'; },
+    desc: function (L) {
+      return 'While you stand in a surface (puddle, blood, oil, fire, a cloud...; flyers only count clouds), your skill hits on foes deal +' + L.dmg + ' damage.';
+    },
     flavor: 'Most comfortable ankle-deep in something. Does not want to know what.',
     hooks: {
       modifyOutgoingDamage: function (d, p) {
         if (!skillHit(d)) return;
         const t = DD.Grid.tile(d.source.x, d.source.y);
-        if (t && t.surface) d.flat += p.L.dmg;
+        // v2 request: a flyer is not ankle-deep in anything on the floor; a cloud (steam, smoke) wraps it all the same
+        if (t && t.surface && DD.Grid.feelsSurface(d.source, t.surface)) d.flat += p.L.dmg;
       },
     },
   });
@@ -825,25 +883,31 @@
     },
   });
 
+  // v2: the only d20 left in the game is initiative, so the dice are loaded there (rolled fights only)
   reg({
-    id: 'rp_loaded_dice', name: 'Loaded Dice', icon: '🎲', rarity: 'uncommon', tags: ['random', 'hype'],
-    levels: [{ bonus: 0 }, { bonus: 2 }, { bonus: 4 }],
+    id: 'rp_loaded_dice', name: 'Loaded Dice', icon: '🎲', rarity: 'uncommon', tags: ['random', 'initiative', 'hype'],
+    levels: [{ dice: 2, bonus: 0 }, { dice: 2, bonus: 2 }, { dice: 3, bonus: 2 }],
     desc: function (L) {
-      return 'At the start of each fight, roll a d20' + (L.bonus ? ' + ' + L.bonus + ' (max 20)' : '') + ': 1 → you are Vulnerable for 2 turns; ' +
-        '2-9 → 4 Block; 10-19 → Inspired for 1 turn; 20 → Inspired for 2 turns and +15 Hype.';
+      return 'You roll initiative with ' + L.dice + ' d20s and keep the best' + (L.bonus ? ' (+' + L.bonus + ' initiative)' : '') +
+        '. A natural 20: you are Inspired for 2 turns and the party gains 15 Hype.';
     },
     flavor: "They're not loaded. They're just... motivated. Please don't weigh them.",
     hooks: {
-      onCombatStart: function (unit, p) {
-        const nat = rng().int(1, 20);
-        const r = Math.min(20, nat + p.L.bonus);
-        p.data.roll = r;
-        pop(unit, '🎲 ' + r, r === 20 ? '#ffd23f' : r === 1 ? '#ff7b6b' : '#ffffff');
-        if (r <= 1) DD.Act.addStatus(unit, 'vulnerable', { turns: 2 }, unit);
-        else if (r <= 9) DD.Act.addBlock(unit, 4);
-        else if (r <= 19) DD.Act.addStatus(unit, 'inspired', { turns: 1 }, unit);
-        else { DD.Act.addStatus(unit, 'inspired', { turns: 2 }, unit); DD.Act.gainHype(15, 'natural 20'); }
-        say(unit, p, 'rolls a ' + r + (r === 20 ? '. NATURAL TWENTY!' : r === 1 ? '. Oh no.' : '.'));
+      modifyInitiative: function (r, p) {
+        const u = r.unit;
+        let best = r.roll;
+        const dice = [r.roll];
+        for (let i = 1; i < p.L.dice; i++) { const d = rng().int(1, 20); dice.push(d); if (d > best) best = d; }
+        r.total += best - r.roll + p.L.bonus;
+        r.init += p.L.bonus;
+        r.roll = best;
+        p.data.dice = dice;
+        pop(u, '🎲 ' + dice.join(' / '), best === 20 ? '#ffd23f' : '#ffffff');
+        if (best !== 20 || p.data.nat20) return;
+        p.data.nat20 = true;
+        DD.Act.addStatus(u, 'inspired', { turns: 2 }, u);
+        DD.Act.gainHype(15, 'natural 20');
+        say(u, p, 'rolls ' + dice.join(' and ') + '. NATURAL TWENTY!', 'hero');
       },
     },
   });
@@ -863,8 +927,8 @@
     id: 'rp_method_actor', name: 'Method Actor', icon: '🎭', rarity: 'uncommon', tags: ['random', 'meta'],
     levels: [{ pool: ['common'], lv: 2 }, { pool: ['common', 'uncommon'], lv: 2 }, { pool: ['uncommon', 'rare'], lv: 2 }],
     desc: function (L) {
-      return 'At the start of each fight, you improvise a role: gain a random ' + L.pool.join(' or ') + ' Blessing at level ' + DD.util.roman(L.lv) +
-        ' for that fight (one with an in-fight effect; never a stat boost, a hero-only one or one you already have).';
+      return 'Each fight you improvise a role: a random ' + L.pool.join(' or ') + ' Blessing at level ' + DD.util.roman(L.lv) +
+        ' for that fight only (never a stat boost, a hero-only one or one you have).';
     },
     flavor: 'Insists on a new backstory every session. The DM has stopped printing character sheets.',
     hooks: {
@@ -886,11 +950,13 @@
 
   const GREASE = [['root'], ['root', 'slow'], ['root', 'slow', 'stun']];
   reg({
-    id: 'rp_greased_up', name: 'Greased Up', icon: '🧈', rarity: 'uncommon', tags: ['defense', 'status'],
+    id: 'rp_greased_up', name: 'Greased Up', icon: '🧈', rarity: 'uncommon', tags: ['defense', 'status', 'opportunity'],
     levels: [{ ids: GREASE[0] }, { ids: GREASE[1] }, { ids: GREASE[2] }],
-    desc: function (L) { return 'You are immune to ' + andList((L.ids || []).map(statusWord)) + '.'; },
+    desc: function (L) { return "You can't be opportunity-attacked and are immune to " + andList((L.ids || []).map(statusWord)) + '.'; },
     flavor: 'Slathered in butter for reasons. Nobody can hold you. Nobody wants to.',
     hooks: {
+      // pure (the HUD's move preview, paths and the AI query it): only for the holder walking away
+      modifyOpportunity: function (o, p) { if (mine(o.mover, p)) o.cancel = true; },
       modifyStatus: function (s, p) {
         if ((p.L.ids || []).indexOf(s.id) < 0) return;
         s.cancel = true;
@@ -903,19 +969,16 @@
     id: 'rp_displacer_ancestry', name: 'Displacer Beast Ancestry', icon: '🐈‍⬛', rarity: 'uncommon', tags: ['teleport', 'proc', 'defense'],
     levels: [{ pct: 20 }, { pct: 30 }, { pct: 40 }],
     desc: function (L) {
-      return 'When an enemy skill hits you, ' + L.pct + '% chance you blink (after the hit) to a random free tile 2-3 tiles away, ' +
-        'avoiding tiles enemies are aiming at when it can.';
+      return 'When an enemy skill hits you: ' + L.pct + '% chance you blink (after the hit) to a random free tile 2-3 tiles away ' +
+        '(one no enemy can reach, if there is one).';
     },
     flavor: 'Great-grandma was a displacer beast. You inherited the blinking and the tentacle jokes.',
     hooks: {
       onTakeDamage: function (d, p) {
         const u = d.target;
         if (!hitByFoe(d) || d.amount <= 0 || !(u.hp > 0) || !roll(p.L.pct)) return;
-        let spots = safeTiles(u, 3, 2);
+        const spots = calmFirst(u, safeTiles(u, 3, 2));
         if (!spots.length) return;
-        const danger = dangerTiles(u);
-        const calm = spots.filter(function (q) { return !danger[q.x + ',' + q.y]; });
-        if (calm.length) spots = calm;
         const q = pick(spots);
         pop(u, '*blink*', '#c9b6ff');
         DD.Act.teleport(u, q.x, q.y);
@@ -973,7 +1036,7 @@
     requires: REQ.healer,
     stats: function (L) { return { heal: L.pct / 100 }; },
     desc: function (L) {
-      return '+' + L.pct + '% healing done.' + (L.cleanse ? ' Your heal skills also remove 1 debuff from each ally (and you) in their area.' : '') + ' Healers only.';
+      return '+' + L.pct + '% healing done.' + (L.cleanse ? ' Your heal skills also remove 1 debuff from each ally they reach (you too).' : '') + ' Healers only.';
     },
     flavor: 'Warm hands, cold puns, questionable license. Says "this might sting" and means it.',
     hooks: {
@@ -1000,9 +1063,7 @@
     id: 'rp_proud_pet_parent', name: 'Proud Pet Parent', icon: '🐶', rarity: 'uncommon', tags: ['summon'],
     levels: [{ hp: 4, pct: 10 }, { hp: 6, pct: 20 }, { hp: 8, pct: 30 }],
     requires: REQ.summoner,
-    desc: function (L) {
-      return 'Your summons get +' + L.hp + ' max HP and +' + L.pct + '% damage (when you summon them, or at the start of your turn). Summoners only.';
-    },
+    desc: function (L) { return 'Your summons get +' + L.hp + ' max HP and +' + L.pct + '% damage. Summoners only.'; },
     flavor: 'Has 400 photos of their summons. Will show you all of them. Mid-combat.',
     hooks: {
       onCombatStart: function (unit, p) { buffPets(unit, p); },
@@ -1022,7 +1083,8 @@
     hooks: {
       modifyCost: function (c, p) { if (c.hp > 0) c.hp = Math.max(0, c.hp - p.L.n); },
       onSkillUsed: function (ctx, p) {
-        if (!p.L.block || !ctx.skill || ctx.rpEcho || !active(ctx.user)) return;
+        // attacks of opportunity and echoes are free: nothing was paid, so no Block
+        if (!p.L.block || !ctx.skill || ctx.rpEcho || ctx.opportunity || !active(ctx.user)) return;
         if (+DD.resolve(ctx.skill.hpCost, ctx.L, ctx.user, 0) > 0) DD.Act.addBlock(ctx.user, p.L.block);
       },
     },
@@ -1053,14 +1115,14 @@
     id: 'rp_plot_armor', name: 'Plot Armor', icon: '📖', rarity: 'rare', tags: ['defense', 'survive'],
     levels: [{ block: 0, invuln: false }, { block: 6, invuln: false }, { block: 6, invuln: true }],
     desc: function (L) {
-      return 'Once per fight, a hit that would down you leaves you at 1 HP instead' +
+      return 'Once per fight, when you would go down, you stay up at 1 HP instead' +
         (L.invuln ? ', with ' + L.block + ' Block and Invulnerable for 1 turn.' : L.block ? ', with ' + L.block + ' Block.' : '.');
     },
     flavor: "You can't go down yet. You haven't finished your character arc.",
     hooks: {
-      onTakeDamage: function (d, p) {
-        const u = d.target;
-        if (p.data.used || u.hp > 0 || u.downed || u.dead) return;
+      // the engine's veto (ARCHITECTURE §5.3): nothing of a down happens, the hero keeps the 1 HP set here
+      preventDeath: function (u, d, p) {
+        if (p.data.used || u.kind !== 'hero') return false;
         p.data.used = true;
         u.hp = 1;
         DD.Act.touch();
@@ -1068,6 +1130,7 @@
         say(u, p, 'refuses to go down before the third act.', 'hero');
         if (p.L.block) DD.Act.addBlock(u, p.L.block);
         if (p.L.invuln) DD.Act.addStatus(u, 'invulnerable', { turns: 1 }, u);
+        return true;
       },
     },
   });
@@ -1129,9 +1192,9 @@
     flavor: "Says 'I get an extra attack' every turn. Has never once checked the class features.",
     hooks: {
       onKill: function (d, p) {
-        const u = d.credit, s = S();
-        if (!u || !d.target || d.target.side !== 'enemy' || s.phase !== 'player' || !active(u)) return;
-        if (p.data.round !== s.round) { p.data.round = s.round; p.data.n = 0; }
+        const u = d.credit;
+        if (!u || !d.target || d.target.side !== 'enemy' || !active(u) || !ownTurn(u)) return;
+        if (p.data.turn !== turnNo()) { p.data.turn = turnNo(); p.data.n = 0; }
         if (p.data.n >= p.L.n) return;
         p.data.n++;
         DD.Act.gainAp(u, 1);
@@ -1162,7 +1225,8 @@
     hooks: {
       onSkillUsed: function (ctx, p) {
         const u = ctx.user;
-        if (!ctx.slot || ctx.rpEcho || !active(u) || S().result) return;
+        // attacks of opportunity are reactions, not skills you use
+        if (!ctx.slot || ctx.rpEcho || ctx.opportunity || !active(u) || S().result) return;
         p.data.count = (p.data.count || 0) + 1;
         if (p.data.count % p.L.every === 0) surge(u, p, p.L.good ? { good: true } : null);
       },
@@ -1171,7 +1235,8 @@
 
   reg({
     id: 'rp_gold_plated_ego', name: 'Gold-Plated Ego', icon: '🥇', rarity: 'rare', tags: ['defense', 'gold'],
-    levels: [{ per: 20, max: 5 }, { per: 20, max: 7 }, { per: 15, max: 10 }],
+    // v2: no free shields — a rare, and in real runs the party often holds 100-200 gold
+    levels: [{ per: 30, max: 3 }, { per: 25, max: 4 }, { per: 20, max: 5 }],
     desc: function (L) { return 'At the start of your turn, gain 1 Block per ' + L.per + ' gold the party holds (max ' + L.max + ').'; },
     flavor: 'Literally gold-plated. Took a fireball to the face and asked if it brought out the shine.',
     hooks: {
@@ -1240,15 +1305,16 @@
     },
     flavor: 'Read the rules. Disagreed with them. The DM has stopped arguing.',
     hooks: {
+      // a query (the HUD asks on every hover): only reads p.data and the turn counter
       modifyCost: function (c, p) {
         if (!c.unit || !c.skill || !hasCooldown(c.unit, c.skill)) return;
-        if (p.data.usedRound !== roundNo()) { if (p.L.cheap && c.ap > 1) c.ap -= 1; return; }
+        if (p.data.usedTurn !== turnNo()) { if (p.L.cheap && c.ap > 1) c.ap -= 1; return; }
         c.ap += 1;
       },
       onSkillUsed: function (ctx, p) {
         const u = ctx.user;
-        if (!ctx.slot || !hasCooldown(u, ctx.skill)) return;
-        if (!ctx.rpEcho) p.data.usedRound = roundNo();
+        if (!ctx.slot || ctx.opportunity || !hasCooldown(u, ctx.skill)) return;
+        if (!ctx.rpEcho) p.data.usedTurn = turnNo();
         if (ctx.slot.cd > 0) DD.Act.setCooldown(u, ctx.skill.id, 0);
       },
     },
@@ -1264,7 +1330,8 @@
     hooks: {
       onSkillUsed: function (ctx, p) {
         const u = ctx.user, s = S();
-        if (p.data.echoing || ctx.rpEcho || !ctx.slot || ctx.slot === u.signature || !ctx.target || s.result || !active(u)) return;
+        // an attack of opportunity is a free reaction (once per round by rule), not a skill you use: it never echoes
+        if (p.data.echoing || ctx.rpEcho || ctx.opportunity || !ctx.slot || ctx.slot === u.signature || !ctx.target || s.result || !active(u)) return;
         if (!roll(p.L.pct) || !DD.Targeting.isValidTarget(u, ctx.slot, ctx.target.x, ctx.target.y)) return;
         p.data.echoing = true;
         try {
@@ -1285,9 +1352,12 @@
     flavor: 'Definitely a phoenix feather. Not a chicken feather dipped in hot sauce. Stop asking.',
     hooks: {
       onDowned: function (unit, d, p) {
-        if (p.data.used) return;
+        // still down? (an item may have revived the hero first: then the feather is kept for the next down)
+        if (p.data.used || !unit.downed || unit.dead) return;
         p.data.used = true;
         if (!DD.Act.revive(unit, p.L.pct / 100)) return;
+        // downed mid-walk (an attack of opportunity, a trap): he did go down, so that walk ends where he fell (DESIGN §4.2)
+        DD.Act.stopMove(unit);
         pop(unit, '🪶 RISE!', '#ff8a1a');
         DD.FX.explosion(unit, { radius: 1, color: '#ff7a1a' });
         DD.Act.damageTiles(unit, adjacentTiles(unit), p.L.dmg, { element: 'fire', filter: 'foes', cause: 'other', tags: ['rp_phoenix'] });
@@ -1366,12 +1436,13 @@
   });
 
   reg({
-    id: 'rp_cursed_loud_eater', name: 'Cursed: Loud Eater', icon: '🍗', rarity: 'cursed', tags: ['defense', 'taunt', 'cursed'],
-    levels: [{ armor: 2, heal: 3 }, { armor: 3, heal: 4 }],
-    stats: function (L) { return { armor: L.armor }; },
+    // v2: the taunt itself is control now (enemies must attack you), so the upside is the snack alone — with the old
+    // +2/+3 armor on top it out-scored every legendary in the sims, even on one hero
+    id: 'rp_cursed_loud_eater', name: 'Cursed: Loud Eater', icon: '🍗', rarity: 'cursed', tags: ['heal', 'taunt', 'cursed'],
+    levels: [{ heal: 3 }, { heal: 5 }],
     desc: function (L) {
-      return '+' + L.armor + ' armor; heal ' + L.heal + ' HP at the start of each of your turns (snacking). Downside: at the start of each round, ' +
-        'enemies within 3 tiles are Taunted by you (they plan their attacks on you).';
+      return 'Heal ' + L.heal + ' HP at the start of each of your turns (snacking). Downside: each round starts with ' +
+        'enemies within 3 tiles Taunted by you (they must attack you if they can).';
     },
     flavor: 'Crunches chips during stealth missions. The whole dungeon knows exactly where you are.',
     hooks: {
@@ -1440,11 +1511,11 @@
     hooks: {
       modifyCost: function (c, p) { if (c.unit && c.skill && listedAp(c.unit, c.skill) >= 2) c.ap -= 1; },
       onSkillUsed: function (ctx, p) {
-        if (!ctx.slot || ctx.rpEcho || !ctx.skill || listedAp(ctx.user, ctx.skill, ctx.L) < 2) return;
-        p.data.owed = roundNo();
+        if (!ctx.slot || ctx.rpEcho || ctx.opportunity || !ctx.skill || !ownTurn(ctx.user) || listedAp(ctx.user, ctx.skill, ctx.L) < 2) return;
+        p.data.owed = turnNo();
       },
       onTurnEnd: function (unit, p) {
-        if (p.data.owed !== roundNo()) return;
+        if (!p.data.owed || p.data.owed !== turnNo()) return;
         p.data.owed = 0;
         const paid = Math.min(p.L.hp, unit.hp - 1);
         if (paid <= 0) return;
@@ -1480,8 +1551,8 @@
     levels: [{ pct: 20, turns: 1 }, { pct: 35, turns: 1 }],
     stats: function (L) { return { dmg: L.pct / 100 }; },
     desc: function (L) {
-      return '+' + L.pct + '% damage. You are immune to fire damage and Burn. Downside: at the end of each of your turns, ' +
-        'the 4 tiles around you catch fire until the end of the round, allies or not.';
+      return '+' + L.pct + '% damage; immune to fire damage and Burn. Downside: at the end of each of your turns, ' +
+        'the 4 tiles around you catch fire until the round ends, allies or not.';
     },
     flavor: "Keeps bursting into flames. The doctor says it's stress. The fire says it's personal.",
     hooks: {
@@ -1526,17 +1597,19 @@
   }
   reg({
     id: 'rp_cursed_duck_mafia', name: 'Cursed: Duck Mafia Debt', icon: '🕶️', rarity: 'cursed', tags: ['ap', 'duck', 'cursed'],
-    levels: [{ base: 2 }, { base: 1 }],
+    // v2: hostile ducks act on their own initiative turns (no telegraphs), so the collectors come in smaller crews
+    levels: [{ ducks: [1, 2, 3] }, { ducks: [1, 1, 2] }],
     stats: function () { return { ap: 1 }; },
     desc: function (L) {
-      return '+1 AP every turn. Downside: at the start of each fight, Hostile Ducks join the enemies: ' + L.base + ' in act 1, ' + (L.base + 1) +
-        ' in act 2, ' + (L.base + 2) + ' in act 3.';
+      const n = L.ducks;
+      return '+1 AP every turn. Downside: at the start of each fight, Hostile Ducks join the enemies: ' +
+        (n[0] === n[1] ? n[0] + ' in acts 1-2, ' : n[0] + ' in act 1, ' + n[1] + ' in act 2, ') + n[2] + ' in act 3.';
     },
     flavor: 'You owe the Duck Mafia. They do not forget. They do not forgive. They do quack.',
     hooks: {
       onCombatStart: function (unit, p) {
         if (!DD.getEnemy('wm_duck_foe')) return;
-        const n = p.L.base + actNo() - 1;
+        const n = p.L.ducks[actNo() - 1] || 0;
         let came = 0;
         for (let i = 0; i < n; i++) {
           const at = mafiaSpot(unit);

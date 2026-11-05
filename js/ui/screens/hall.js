@@ -1,6 +1,7 @@
 /* Dungeons and Degenerates — js/ui/screens/hall.js
- * Hall of Fame (all persistent DD.Meta data): Records (runs, wins, best act, kills, deaths), Heroes (unlock grid with
- * hints), Codex (every registered enemy and boss; unseen ones are silhouettes), Blessings (every entry of the Table of
+ * Hall of Fame (all persistent DD.Meta data): Records (runs, wins, best act, kills, deaths), Heroes (v2: the whole
+ * roster — every hero is available from the start — with each hero's campaign record from the run history), Codex
+ * (every registered enemy and boss; unseen ones are silhouettes), Blessings (every entry of the Table of
  * Questionable Blessings by rarity; ones never rolled are ???) and History (past runs).
  * Params: { back: screenId, tab: 'records'|'heroes'|'codex'|'blessings'|'history' }.
  */
@@ -50,8 +51,10 @@
     const enemies = Object.keys(DD.defs.enemies || {}).filter(function (id) { return id.indexOf('test_') !== 0; });
     const seenCount = enemies.filter(function (id) { return seen('enemies', id) || seen('bosses', id); }).length;
     const bless = blessingDefs();
+    // v2: every hero is available from the start: the collection is "who has played a campaign", not unlocks
+    const recs = heroRecords();
     box.appendChild(el('div.rec-progress', null,
-      progress('Heroes unlocked', ids.filter(function (id) { return UI.isUnlocked(id); }).length, ids.length),
+      progress('Heroes who braved a campaign', ids.filter(function (id) { return !!recs[id]; }).length, ids.length),
       progress('Codex entries', seenCount, enemies.length),
       bless.length ? progress('Blessings discovered', bless.filter(function (d) { return seen('passives', d.id); }).length, bless.length) : null));
     return box;
@@ -102,23 +105,69 @@
     return el('div.prog', null, el('div.prog-h', null, el('span', null, label), el('span', null, a + ' / ' + b)), el('div.up-bar', null, el('div.up-fill', { style: { width: (b ? a / b * 100 : 0).toFixed(1) + '%' } })));
   }
 
+  /** Per-hero records from the run history: { runs, wins, kills, best (level), fallen (written out) }. */
+  function heroRecords() {
+    const out = {};
+    const rec = function (id) { return out[id] || (out[id] = { runs: 0, wins: 0, kills: 0, best: 0, fallen: 0 }); };
+    (meta().history || []).forEach(function (h) {
+      const won = h.result === 'victory' || h.result === 'win' || h.won === true;
+      const seen = {};
+      (h.party || h.heroes || []).forEach(function (p) {
+        const id = typeof p === 'string' ? p : p && p.id;
+        if (!id || seen[id]) return;
+        seen[id] = true;
+        const r = rec(id);
+        r.runs++;
+        if (won && !(p && p.dead)) r.wins++;
+        if (p && typeof p === 'object') {
+          r.kills += num(p.kills);
+          r.best = Math.max(r.best, num(p.level));
+          if (p.dead) r.fallen++;
+        }
+      });
+      // a hero written out and replaced by a recruit is no longer in the final party: the summary's `fallen` names them
+      (Array.isArray(h.fallen) ? h.fallen : []).forEach(function (id) {
+        if (typeof id !== 'string' || seen[id]) return;
+        seen[id] = true;
+        const r = rec(id);
+        r.runs++;
+        r.fallen++;
+      });
+    });
+    return out;
+  }
+
+  /** v2: every hero is available from the start — the roster with each hero's campaign record (no lock grid). */
   function heroes() {
     const UI = DD.UI, el = UI.el;
+    const recs = heroRecords();
+    const box = el('div.hall-roster');
     const grid = el('div.hall-heroes');
     UI.heroIds().forEach(function (id) {
       const d = DD.getHero(id);
-      const locked = !UI.isUnlocked(id);
-      const card = el('div.hh-card', { class: locked ? 'locked' : '', style: { '--hc': d.color || '#c9a24f' } },
-        UI.portrait(id, 84, { locked: locked }),
-        el('div.hh-name', null, locked ? '???' : d.name),
-        el('div.hh-sub', null, locked ? UI.unlockHint(d) : [d.race, d.cls].filter(Boolean).join(' ')),
-        locked ? null : el('div.hh-role', null, d.role || ''));
-      UI.tooltip(card, function () { return UI.heroTooltipHtml(id, { locked: locked }); });
+      const r = recs[id];
+      const line = r ? [plural(r.runs, 'campaign'), r.wins ? '👑 ' + r.wins : '', r.kills ? '💀 ' + r.kills : '', r.best ? 'best Lv ' + r.best : ''].filter(Boolean).join(' · ')
+        : 'Never played. Yet.';
+      const card = el('div.hh-card', { class: r ? 'played' : 'fresh', style: { '--hc': d.color || '#c9a24f' } },
+        UI.portrait(id, 56),
+        el('div.hh-text', null,
+          el('div.hh-name', { class: String(d.name || '').length > 12 ? 'long' : null }, d.name),
+          el('div.hh-sub', null, [d.race, d.cls].filter(Boolean).join(' ')),
+          el('div.hh-role', null, d.role || ''),
+          el('div.hh-rec', null, line + (r && r.fallen ? ' · ⚰️ ' + r.fallen : ''))));
+      UI.tooltip(card, function () { return UI.heroTooltipHtml(id, {}); });
       grid.appendChild(card);
     });
     if (!grid.children.length) grid.appendChild(el('div.empty-state', null, el('div.es-icon', null, '🪑'), el('div', null, 'No heroes registered.')));
-    return grid;
+    const played = Object.keys(recs).filter(function (id) { return !!DD.getHero(id); }).length;
+    const total = grid.querySelectorAll('.hh-card').length;
+    box.appendChild(UI.narration(!played ? 'The whole table is free. Every hero is ready for Session Zero.' :
+      played >= total ? 'All ' + total + ' heroes have braved a campaign. The DM is running out of excuses to kill them.' :
+        played + ' of ' + total + ' heroes have braved a campaign. The rest are "still making their character".', { cls: 'center' }));
+    box.appendChild(grid);
+    return box;
   }
+  function plural(n, w) { return n + ' ' + w + (n === 1 ? '' : 's'); }
 
   function codex() {
     const UI = DD.UI, el = UI.el;

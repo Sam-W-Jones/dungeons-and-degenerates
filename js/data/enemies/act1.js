@@ -9,8 +9,11 @@
  *     (throws heroes into walls, friends and pits; bar stools) · a1_cube (immovable, Engulf, Jiggle Slam)
  *   extras: status a1_engulfed · object a1_strike_fund + its rule a1_hazard_pay · 11 encounters (8 normal, 3 elite;
  *     3 handcrafted layouts).
- * Each enemy's gimmick is stated as exact text in def.passive (the HUD inspect panel). Elites use custom planners: one
- * move and one action per turn. Bosses: js/data/bosses/.
+ * Each enemy's gimmick and how it picks its targets are stated as exact text in def.passive (the HUD inspect panel).
+ * v2 targeting: brutes (melee / kamikaze) stick to the hero next to them, the kid and the critic keep their distance,
+ * the Rep stays behind his friends, and the spider is the act's one diver ('skirmisher': the wounded, the squishy,
+ * webbed prey). Elites use custom planners (aiStyle 'melee'): one move and one action per turn; their walks price the
+ * attacks of opportunity they would provoke (api.aooCost) and never take a lethal one. Bosses: js/data/bosses/.
  */
 (function () {
   'use strict';
@@ -60,12 +63,18 @@
   }
 
   // ---- planner helpers (custom AIs: they run on the unit's own turn and act at once) ------------------------
-  /** Where the unit could stand this turn: its tile first, then reachable tiles that are not hazards. */
+  /**
+   * Where the unit could stand this turn: its tile first, then reachable tiles that are not hazards. Each spot carries
+   * `aoo`: what the walk there costs in attacks of opportunity (api.aooCost; spots whose walk would drop it are left out).
+   */
   function spotsOf(unit, api) {
-    const out = [{ x: unit.x, y: unit.y, here: true, cost: 0 }];
+    const out = [{ x: unit.x, y: unit.y, here: true, cost: 0, aoo: 0 }];
     api.reachable(unit).forEach(function (e) {
       if (G().hazardAt(e.x, e.y, unit) || e.hazard) return;
       if (DD.AI.pathRisk && DD.AI.pathRisk(unit, e).lethal) return;
+      const aoo = api.aooCost(unit, e);
+      if (aoo === Infinity) return;
+      e.aoo = aoo;
       out.push(e);
     });
     return out;
@@ -89,7 +98,7 @@
       foes.forEach(function (f) { if (cheb(p, f) === 1) n++; });
       api.friends(unit).forEach(function (f) { if (cheb(p, f) === 1) friends++; });
       if (n < min) return;
-      const sc = n * 10 - friends * 12 - (p.cost || 0) * 0.2;
+      const sc = n * 10 - friends * 12 - (p.cost || 0) * 0.2 - (p.aoo || 0);
       if (sc > bestSc) { bestSc = sc; best = p; }
     });
     return best && bestSc > 0 ? best : null;
@@ -135,7 +144,10 @@
     }
     return dist;
   }
-  /** Walk toward the nearest foe by walking distance (Manhattan if walls cut it off), never onto hazards. */
+  /**
+   * Walk toward the nearest foe by walking distance (Manhattan if walls cut it off), never onto hazards; an attack of
+   * opportunity on the way weighs like a detour of a quarter tile per point of its cost.
+   */
   function approach(unit, api) {
     const foes = api.foes(unit);
     if (!foes.length) return false;
@@ -150,7 +162,7 @@
     let best = null, bestD = near(unit);
     spotsOf(unit, api).forEach(function (p) {
       if (p.here) return;
-      const d = near(p) + (p.cost || 0) * 0.01;
+      const d = near(p) + (p.cost || 0) * 0.01 + (p.aoo || 0) * 0.25;
       if (d < bestD) { bestD = d; best = p; }
     });
     return best ? stepTo(unit, api, best) : false;
@@ -313,7 +325,7 @@
     tags: ['beast', 'rat'], flags: {}, resist: {},
     // def.passive: the gimmick as the HUD inspect panel shows it (desc may be a function; enemy hooks live in def.hooks)
     passive: { name: 'Pack Tactics', icon: '🐀', desc: function () {
-      return 'On its turn it runs up and bites. Each other rat next to the victim adds +1 damage (max +' + lvl('a1_rat_nibble').pack + ').';
+      return 'On its turn it runs up and bites a hero it can reach (whoever it can hurt most), and keeps biting the one it is next to. Each other rat next to the victim adds +1 damage (max +' + lvl('a1_rat_nibble').pack + ').';
     } },
     sprite: { base: 'quadruped', scale: 0.72,
       palette: { skin: '#7d6b5d', cloth2: '#b9a796', belly: '#b9a796', hair: '#5e4f44', eye: '#ff4433', accent: '#e85d75', outline: '#1a1014' },
@@ -321,10 +333,17 @@
       head: { ears: 'rat', eyes: 'angry', mouth: 'fangs', face: 'eyepatch', size: 0.95 }, tail: 'rat' },
     skills: ['a1_rat_nibble'], ai: { style: 'melee' }, xp: 2, gold: [0, 2],
     hooks: {
-      // Pack Tactics: +1 skill damage per other (friendly) rat next to the victim, max +2
+      // Pack Tactics: +1 skill damage per other (friendly) rat next to the victim, max +2 (attacks of opportunity: below)
       modifyOutgoingDamage: function (d) {
-        if (d.cause !== 'skill' || !d.source || !d.target) return;
+        if (d.cause !== 'skill' || !d.source || !d.target || d.opportunity) return;
         d.flat += packBonus(d.source, d.target);
+      },
+      // ... on an attack of opportunity the pack bonus rides on o.flat, so the move preview ("provokes"), path choice and
+      // the AI's price of a walk show the real bite (pure; once per o: a rat mover's own hooks see the same o)
+      modifyOpportunity: function (o) {
+        if (!o.attacker || o.attacker.defId !== 'a1_rat' || o.a1Pack !== undefined) return;
+        o.a1Pack = packBonus(o.attacker, o.mover);
+        o.flat += o.a1Pack;
       },
     },
     barks: {
@@ -360,7 +379,7 @@
 
   DD.registerEnemy({ id: 'a1_gob_grunt', name: 'Goblin Grunt', act: 1, tier: 'normal', hp: 18, mov: 4, armor: 1, init: 2,
     tags: ['goblin'], flags: {}, resist: {},
-    passive: { name: 'Long Spear', icon: '🔱', desc: 'On his turn he walks up and spears both tiles in front of him, hitting friend, foe or object (he goes for protected kegs), or lobs a rock at someone further away.' },
+    passive: { name: 'Long Spear', icon: '🔱', desc: 'On his turn he walks up and spears both tiles in front of him, hitting friend, foe or object (he goes for protected kegs), and keeps at the hero he is next to; with nobody in reach he lobs a rock instead.' },
     sprite: { base: 'humanoid', scale: 0.9, build: 'slim', outfit: 'rags',
       palette: { skin: '#6fa04a', cloth: '#7a5a3a', cloth2: '#4e3a26', hair: '#2a2a1a', metal: '#8d9096', eye: '#ffde59', accent: '#c0392b',
         shield: '#a0a3a8', wood: '#7b5530', outline: '#1a1014' },
@@ -426,7 +445,7 @@
 
   DD.registerEnemy({ id: 'a1_gob_kid', name: 'Goblin Slingshot Kid', act: 1, tier: 'normal', hp: 14, mov: 4, armor: 0, init: 3,
     tags: ['goblin'], flags: {}, resist: {},
-    passive: { name: 'Line of Fire', icon: '🎯', desc: 'On his turn he keeps his distance and shoots straight down a row or column: the pebble hits the first unit in the way, friend or foe, so stand behind something. Or he taunts a hero.' },
+    passive: { name: 'Line of Fire', icon: '🎯', desc: 'On his turn he keeps his distance and shoots straight down a row or column: the pebble hits the first unit in the way, friend or foe, so stand behind something. Or he taunts a hero. Pin him with a melee hero: stepping away provokes an attack of opportunity.' },
     sprite: { base: 'humanoid', scale: 0.8, build: 'tiny', outfit: 'tunic',
       palette: { skin: '#86c25e', cloth: '#d9483b', cloth2: '#f2d24b', hair: '#3a2a1a', eye: '#2b2233', accent: '#4fb3ff', outline: '#1a1014' },
       head: { ears: 'goblin', eyes: 'big', mouth: 'grin', hair: 'none' }, extras: ['pouches'], overlay: kidOverlay },
@@ -485,9 +504,9 @@
     c.restore();
   }
 
-  DD.registerEnemy({ id: 'a1_kobold_rep', name: 'Kobold Union Rep', act: 1, tier: 'normal', hp: 16, mov: 3, armor: 1,
+  DD.registerEnemy({ id: 'a1_kobold_rep', name: 'Kobold Union Rep', act: 1, tier: 'normal', hp: 16, mov: 3, armor: 1, init: -2,
     tags: ['kobold'], flags: {}, resist: {},
-    passive: { name: 'Shop Steward', icon: '📢', desc: 'On his turn he stays behind his friends and calls Strike Action (allies within 2 tiles hit 25% harder) whenever one is near enough to hear it; otherwise he throws a memo.' },
+    passive: { name: 'Shop Steward', icon: '📢', desc: 'On his turn he stays behind his friends and calls Strike Action (allies within 2 tiles hit 25% harder) whenever one is near enough to hear it; otherwise he throws a memo at whoever he can see.' },
     sprite: { base: 'humanoid', scale: 0.84, build: 'tiny', outfit: 'tunic',
       palette: { skin: '#c86a2c', cloth: '#3f6fb5', cloth2: '#2a4a80', metal: '#f1c40f', hat: '#f1c40f', eye: '#2b2233', accent: '#e23b3b', sash: '#e23b3b', outline: '#1a1014' },
       head: { ears: 'pointy', hat: 'helmet', eyes: 'normal', mouth: 'open' }, tail: 'lizard', extras: ['sash'], overlay: picketSign },
@@ -498,7 +517,7 @@
       hurt: ['Workplace injury! I want a form!', 'That\'s a safety violation!', 'Ow! Hazard pay!'],
       death: ['The union... will remember...', 'I demand... a dental plan...', 'Tell them... I died on the clock.'],
     },
-    desc: 'Represents the dungeon\'s goblins in all labor disputes, mostly the ones about stabbing you. Stays behind the picket line and calls Strike Action: everyone near him hits harder. Kill him first and the strike collapses.' });
+    desc: 'Represents the dungeon\'s goblins in all labor disputes, mostly the ones about stabbing you. Slow off the mark (initiative −2): he reads the minutes first. Stays behind the picket line and calls Strike Action: everyone near him hits harder. Kill him first and the strike collapses.' });
 
   // =====================================================================================================
   // Sewer Slime — splits into two Slimelets (unless cooked or dropped into a pit)
@@ -548,7 +567,7 @@
 
   DD.registerEnemy({ id: 'a1_slime', name: 'Sewer Slime', act: 1, tier: 'normal', hp: 20, mov: 3, armor: 0, init: -1,
     tags: ['ooze', 'slime'], flags: {}, resist: { poison: 0, fire: 1.5 },
-    passive: { name: 'Mitosis', icon: '🟢', desc: 'On its turn it oozes up and splorches everyone next to it. Killed, it splits into two Slimelets unless the killing blow is fire or it falls into a pit.' },
+    passive: { name: 'Mitosis', icon: '🟢', desc: 'On its turn it oozes up to a hero it can reach and splorches everyone next to it, sticking to the one it is next to. Too gooey to swing at anyone walking away (no attacks of opportunity). Killed, it splits into two Slimelets unless the killing blow is fire or it falls into a pit.' },
     sprite: { base: 'blob', scale: 1.02, palette: { skin: '#86ad35', eye: '#1a1014', accent: '#f4d03f', outline: '#1a1014' },
       shape: { wobble: 1.6 }, head: { eyes: 'big', mouth: 'open' }, overlay: duckOverlay },
     skills: ['a1_slime_splorch'], ai: { style: 'melee' }, xp: 4, gold: [1, 3],
@@ -574,9 +593,9 @@
     },
     desc: 'Sewer runoff that achieved sentience and immediately regretted it. Slow to get going (initiative −1). Immune to poison, weak to fire. Splits into two Slimelets when killed, unless the killing blow is fire (cooked) or it falls into a pit. The duck is load-bearing.' });
 
-  DD.registerEnemy({ id: 'a1_slimelet', name: 'Slimelet', act: 1, tier: 'minion', hp: 7, mov: 3, armor: 0,
+  DD.registerEnemy({ id: 'a1_slimelet', name: 'Slimelet', act: 1, tier: 'minion', hp: 7, mov: 3, armor: 0, init: 1,
     tags: ['ooze', 'slime'], flags: {}, resist: { poison: 0, fire: 1.5 },
-    passive: { name: 'Half a Slime', icon: '💧', desc: 'On its turn it hops up and glorps someone next to it. It does not split again.' },
+    passive: { name: 'Half a Slime', icon: '💧', desc: 'On its turn it hops up and glorps the hero next to it. It does not split again.' },
     sprite: { base: 'blob', scale: 0.7, palette: { skin: '#a5c94a', eye: '#1a1014', outline: '#1a1014' }, shape: { wobble: 2.2 },
       head: { eyes: 'big', mouth: 'smile' } },
     skills: ['a1_slimelet_glorp'], ai: { style: 'melee' }, xp: 1, gold: [0, 1],
@@ -586,12 +605,13 @@
       hurt: ['blorp :(', 'Mommy!', 'Eep!'],
       death: ['*tiny pop*', 'bye bye...', 'blrp.'],
     },
-    desc: 'Half a Sewer Slime, twice as enthusiastic. Does not split again; it has used up its one trick.' });
+    desc: 'Half a Sewer Slime, twice as enthusiastic (initiative +1). Does not split again; it has used up its one trick.' });
 
   // =====================================================================================================
   // Spore Bro — kamikaze: walks up and explodes into poison; pops into spores if killed
   // =====================================================================================================
 
+  /** The pop: poison spores settle on the floor around him (a Poison Puddle; v2 flyers float over it, like any floor). */
   function sporeCloud(x, y, src) { A().splash(x, y, 1, 'poison', 2, src || null); }
 
   /** Spotted toadstool cap over the head (stocky humanoid head geometry), drawn as an overlay. */
@@ -629,19 +649,19 @@
 
   DD.registerEnemy({ id: 'a1_spore_bro', name: 'Spore Bro', act: 1, tier: 'normal', hp: 15, mov: 4, armor: 0, init: -1,
     tags: ['fungus', 'plant'], flags: {}, resist: { poison: 0 },
-    passive: { name: 'Bro Hug', icon: '🍄', desc: 'On his turn he walks up to a hero and explodes, hitting everyone next to him (he dies doing it). Killed by anything else, he pops into a poison cloud around him (Poison 2 to anyone in it).' },
+    passive: { name: 'Bro Hug', icon: '🍄', desc: 'On his turn he walks up to the biggest bunch of heroes he can reach and explodes, hitting everyone next to him (he dies doing it). Killed by anything else, he pops and his spores settle on the floor around him (a poison puddle, radius 1: Poison 2 to anyone standing in it; flyers float over it).' },
     sprite: { base: 'humanoid', scale: 0.92, build: 'stocky', outfit: 'tunic',
       palette: { skin: '#efe2c8', cloth: '#3fd18a', cloth2: '#1f8a55', hat: '#d1402c', metal: '#ffd34d', eye: '#2b2233', accent: '#b8f070', outline: '#1a1014' },
       head: { hat: 'none', hair: 'none', face: 'sunglasses', mouth: 'grin' }, bling: ['chain'],
       aura: { kind: 'bubbles', color: '#b8f070' }, overlay: sporeCap },
     skills: ['a1_spore_boom'], ai: { style: 'kamikaze' }, xp: 3, gold: [1, 3],
     hooks: {
-      // killed by anything but its own explosion: it pops into a harmless-looking (poison) spore cloud
+      // killed by anything but its own explosion: it pops and its spores carpet the floor (a poison puddle)
       onDeath: function (unit, d) {
         if (unit.data.exploded || (d && d.cause === 'fall')) return;
         DD.FX.particles(unit, { kind: 'poison', count: 14 });
         sporeCloud(unit.x, unit.y, null);
-        A().log('The Spore Bro pops into a cloud of spores. Hold your breath.', 'enemy');
+        A().log('The Spore Bro pops. His spores carpet the floor around him. Watch your step (flyers: carry on).', 'enemy');
       },
     },
     barks: {
@@ -650,7 +670,7 @@
       hurt: ['Bro, not cool.', 'You\'re harshing my spores.', 'Chill, bro!'],
       death: ['Spores... everywhere... bro...', 'Tell my mycelium I love them.', 'Pfffft.'],
     },
-    desc: 'A mushroom who lifts. Takes his time getting up (initiative −1), then walks up for a hug and explodes; kill him, root him or push him back into his friends before his turn. Killing him pops a spore cloud around him, so do it from range. Immune to poison, obviously.' });
+    desc: 'A mushroom who lifts. Takes his time getting up (initiative −1), then walks up for a hug and explodes; kill him, root him or push him back into his friends before his turn. Killing him spills poison spores on the floor around him, so do it from range (or from the air). Immune to poison, obviously.' });
 
   // =====================================================================================================
   // Cellar Spider — web Root (ground), bites Rooted prey harder; immune to Root
@@ -672,12 +692,13 @@
       ctx.tiles.forEach(function (p) { A().setSurface(p.x, p.y, 'web', ctx.L.web); });
     } });
   /** Prey the spider bites harder: Rooted, or standing in a web (the web's Root from the spider's turn wears off at the
-   *  end of the stuck hero's next turn, before the spider's next bite; the web under the hero is still there). */
+   *  end of the stuck hero's next turn, before the spider's next bite; the web under the hero is still there). A flyer
+   *  over a web is not standing in it (v2: flyers ignore the floor). */
   function webbed(u) {
     if (!active(u)) return false;
     if (has(u, 'root')) return true;
     const t = G().tile(u.x, u.y);
-    return !!(t && t.surface && t.surface.id === 'web');
+    return !!(t && t.surface && t.surface.id === 'web' && G().feelsSurface(u, t.surface));
   }
   eskill({ id: 'a1_spider_bite', name: 'Sticky Snack', icon: '🕷️', kind: 'attack', tags: ['melee'], anchor: 'self',
     levels: [{ dmg: 5, bonus: 3 }], target: { type: 'unit', range: [1, 1], filter: 'enemy' },
@@ -705,16 +726,24 @@
 
   DD.registerEnemy({ id: 'a1_spider', name: 'Cellar Spider', act: 1, tier: 'normal', hp: 16, mov: 4, armor: 1, init: 2,
     tags: ['beast', 'spider'], flags: { immune: ['root'] }, resist: { poison: 0.5, fire: 1.5 },
-    passive: { name: 'Web Walker', icon: '🕸️', desc: function () {
-      return 'On its turn it webs heroes from afar, or walks up and bites; prey that is Rooted or standing in a web takes +' + lvl('a1_spider_bite').bonus + '. Immune to Root (webs never stop it).';
+    passive: { name: 'Ambush Hunter', icon: '🕸️', desc: function () {
+      return 'On its turn it webs heroes from afar, or goes for the weakest prey it can reach (wounded, squishy or webbed) and bites, ' +
+        'even past your front line. Prey that is Rooted or standing in a web takes +' + lvl('a1_spider_bite').bonus + '. Immune to Root (webs never stop it).';
     } },
     sprite: { base: 'quadruped', scale: 1, palette: { skin: '#8a7461', cloth2: '#a8917b', belly: '#a8917b', eye: '#ff3a3a', accent: '#d42a2a', outline: '#1a1010' },
       shape: { legs: 'spider', body: 'round', snout: 'flat' }, head: { eyes: 'glow', mouth: 'fangs', size: 0.95 }, overlay: spiderOverlay },
-    skills: ['a1_spider_web', 'a1_spider_bite'], ai: { style: 'melee' }, xp: 4, gold: [2, 4],
+    // the act's diver: it picks on the weak (DD.AI 'skirmisher' targeting) and braves attacks of opportunity for it
+    skills: ['a1_spider_web', 'a1_spider_bite'], ai: { style: 'skirmisher' }, xp: 4, gold: [2, 4],
     hooks: {
-      // Sticky Snack bites webbed (Rooted or web-standing) targets harder
+      // Sticky Snack bites webbed (Rooted or web-standing) targets harder (attacks of opportunity: below)
       modifyOutgoingDamage: function (d) {
-        if (d.cause === 'skill' && d.skill && d.skill.id === 'a1_spider_bite' && webbed(d.target)) d.flat += DD.skillLevel(d.skill, 1).bonus || 0;
+        if (d.cause === 'skill' && !d.opportunity && d.skill && d.skill.id === 'a1_spider_bite' && webbed(d.target)) d.flat += DD.skillLevel(d.skill, 1).bonus || 0;
+      },
+      // ... a bite on prey leaving a web rides on o.flat, so the move preview and the AI's walk prices show the +3 (pure)
+      modifyOpportunity: function (o) {
+        if (!o.attacker || o.attacker.defId !== 'a1_spider' || !o.skill || o.skill.id !== 'a1_spider_bite' || o.a1Web !== undefined) return;
+        o.a1Web = webbed(o.mover) ? DD.skillLevel(o.skill, o.level || 1).bonus || 0 : 0;
+        o.flat += o.a1Web;
       },
     },
     barks: {
@@ -723,7 +752,7 @@
       hurt: ['*furious skittering*', 'My legs! Several of them!', 'Hiss!'],
       death: ['*curls up dramatically*', 'Seven legs... not enough...', 'Leave... the webs... up...'],
     },
-    desc: 'The cellar\'s oldest tenant; it has not paid rent since the Second Age, and it drops on you fast (initiative +2). Spits webs that Root (and keep Rooting whoever steps in), then bites prey that is Rooted or still standing in a web harder. Walks on its own webs: immune to Root. Weak to fire.' });
+    desc: 'The cellar\'s oldest tenant; it has not paid rent since the Second Age, and it drops on you fast (initiative +2). An ambush hunter: it ignores whoever stands in front and goes for whoever looks tastiest (the wounded and the squishy). Spits webs that Root (and keep Rooting whoever steps in), then bites prey that is Rooted or still standing in a web harder. Walks on its own webs: immune to Root. Weak to fire.' });
 
   // =====================================================================================================
   // Bandit Bard Critic — Bad Review (Weak); silence-able
@@ -749,9 +778,9 @@
     flavor: 'He cannot play it, but he can swing it.',
     execute: function (ctx) { lunge(ctx); say(ctx, 0.3); strike(ctx, ctx.foes, ctx.L.dmg); } });
 
-  DD.registerEnemy({ id: 'a1_critic', name: 'Bandit Bard Critic', act: 1, tier: 'normal', hp: 17, mov: 3, armor: 0,
+  DD.registerEnemy({ id: 'a1_critic', name: 'Bandit Bard Critic', act: 1, tier: 'normal', hp: 17, mov: 3, armor: 0, init: 1,
     tags: ['human', 'bandit', 'bard'], flags: {}, resist: {},
-    passive: { name: 'Everyone\'s a Critic', icon: '👎', desc: 'On his turn he keeps his distance and writes a Bad Review (damage + Weak) of a hero he can see, or swings his lute at anyone next to him. Silenced, he has nothing to say.' },
+    passive: { name: 'Everyone\'s a Critic', icon: '👎', desc: 'On his turn he keeps his distance and writes a Bad Review (damage + Weak) of a hero he can see, preferring one who is not Weak yet, or swings his lute at anyone next to him. Silenced, he has nothing to say.' },
     sprite: { base: 'humanoid', scale: 1, build: 'slim', outfit: 'coat',
       palette: { skin: '#e8c4a0', cloth: '#41285e', cloth2: '#d8c27a', hair: '#2a1a12', hat: '#1c1a22', eye: '#2b2233', accent: '#c0392b',
         scarf: '#c0392b', quill: '#f6f2ea', parchment: '#efe2b8', mask: '#1c1a22', outline: '#1a1014' },
@@ -764,7 +793,7 @@
       hurt: ['Critics are people too!', 'Violence? How pedestrian.', 'That\'s going in the review.'],
       death: ['Two... stars...', 'At least... it was short...', 'My memoir... unfinished...'],
     },
-    desc: 'A highwayman who robs travelers of their dignity. His Bad Reviews Weaken heroes; they are bardic magic, so Silence shuts him up. Up close he swings a lute he cannot play.' });
+    desc: 'A highwayman who robs travelers of their dignity. Quick to judge (initiative +1). His Bad Reviews Weaken heroes; they are bardic magic, so Silence shuts him up. Up close he swings a lute he cannot play.' });
 
   // =====================================================================================================
   // ELITE — Mimic (Disappointed)
@@ -808,7 +837,7 @@
         const got = A().loseGold(ctx.L.steal);
         u.data.gold = (u.data.gold || 0) + got;
         if (got > 0) DD.FX.particles(v, { kind: 'coins', count: 6 + got });
-        if (ctx.isIntent) {
+        if (ctx.isIntent || ctx.opportunity) {   // its turn or an attack of opportunity (not a preview): say what it took
           A().bark(u, got >= ctx.L.steal ? 'Mmm. Coins.' : got > 0 ? got + ' gold?! That\'s IT?' : 'No gold?! I am SO disappointed.');
           A().log(u.name + ' swallows ' + plural(got, 'gold coin') + '.', 'enemy');
         }
@@ -820,7 +849,7 @@
     levels: [{ dmg: 7, push: 1 }], target: { type: 'self' }, area: { shape: 'square', size: 1 },
     desc: function (L) {
       return 'Wind-up: the lid creaks open. At the start of the Mimic\'s next turn it slams down: ' + L.dmg + ' damage to every unit around the Mimic ' +
-        '(diagonals too), knocked back ' + plural(L.push, 'tile') + '. Step away or stun it.';
+        '(diagonals too), knocked back ' + plural(L.push, 'tile') + '. Step away (it can\'t bite you as you go) or stun it.';
     },
     flavor: 'The lid creaks open. Everybody back up.',
     execute: function (ctx) {
@@ -903,14 +932,18 @@
     if (hurt) g.text('!', 11, rim - gap - lh - 3, 7, '#ffe14a');
   }
 
-  DD.registerEnemy({ id: 'a1_mimic', name: 'Mimic (Disappointed)', act: 1, tier: 'elite', hp: 68, mov: 3, armor: 2,
+  DD.registerEnemy({ id: 'a1_mimic', name: 'Mimic (Disappointed)', act: 1, tier: 'elite', hp: 68, mov: 3, armor: 2, init: 2,
     tags: ['monstrosity', 'mimic'], flags: { large: true }, resist: { fire: 1.25 },
-    passive: { name: 'Creaky Lid', icon: '📦', desc: 'On its turn it CHOMPs whoever it can walk up to, else licks someone 2-4 tiles away in a straight line and pulls them in. When 2 or more foes stand around it, it winds up a Lid Slam instead (it lands at the start of its next turn).' },
+    passive: { name: 'Creaky Lid', icon: '📦', desc: 'On its turn it CHOMPs a hero it can walk up to (sticking to the one next to it), else licks someone 2-4 tiles away in a straight line and reels them in. Crowded by 2+ foes, it winds up a Lid Slam instead: it lands at the start of its next turn, and while the lid is open it can\'t bite anyone walking away.' },
     sprite: { base: 'custom', scale: 1.4, height: 40, width: 32, headY: -24, portrait: { x: 0, y: -22, r: 19 },
       palette: { wood: '#8a5a2b', metal: '#d4af37', skin: '#8a5a2b', eye: '#f4f0e0', accent: '#e8607a', outline: '#1a1014' },
       draw: drawMimic },
-    skills: ['a1_mimic_tongue', 'a1_mimic_chomp', 'a1_mimic_slam'], ai: mimicPlan, xp: 12, gold: [10, 16],
+    skills: ['a1_mimic_tongue', 'a1_mimic_chomp', 'a1_mimic_slam'], ai: mimicPlan, aiStyle: 'melee', xp: 12, gold: [10, 16],
     hooks: {
+      // the lid is open (Lid Slam wound up): no CHOMP for heroes stepping out of the slam (pure: paths and the HUD ask)
+      modifyOpportunity: function (o) {
+        if (o.attacker && o.attacker.defId === 'a1_mimic' && hasIntent(o.attacker, 'a1_mimic_slam')) o.cancel = true;
+      },
       onDeath: function (unit) {
         const n = unit.data.gold || 0;
         if (!n) return;
@@ -926,7 +959,7 @@
       hurt: ['Rude! I\'m an antique!', 'Watch the finish!', 'That\'s going to splinter.'],
       death: ['Should have been... a wardrobe...', 'Take the gold. It was never enough.', '*lid closes sadly*'],
     },
-    desc: 'A chest that wanted to eat a dragon hoard and keeps getting adventurers. It walks up and CHOMPs (swallowing party gold, coughed back up when it dies), or licks a hero in a straight line and reels them in. Crowd it and the lid creaks open: the Lid Slam lands at the start of its next turn, so back away or stun it. Iron bands: armor 2.' });
+    desc: 'A chest that wanted to eat a dragon hoard and keeps getting adventurers. It has been waiting nine years for someone to touch it (initiative +2). It walks up and CHOMPs (swallowing party gold, coughed back up when it dies), or licks a hero in a straight line and reels them in. Crowd it and the lid creaks open: the Lid Slam lands at the start of its next turn, so back away or stun it. Iron bands: armor 2.' });
 
   /**
    * One move and one action a turn: crowded by 2+ foes (diagonals count) → the lid creaks open (the Lid Slam wind-up is
@@ -963,7 +996,7 @@
   eskill({ id: 'a1_bugbear_bounce', name: 'You\'re Not On The List', icon: '🚪', kind: 'attack', tags: ['melee', 'push', 'throw'], anchor: 'self',
     levels: [{ dmg: 7, throw: 3, bump: 4 }], target: { type: 'dir' }, area: { shape: 'line', size: 4 },
     desc: function (L) {
-      return 'Grab the unit in front of him: deal ' + L.dmg + ' damage and throw it up to ' + L.throw + ' tiles straight away from him. Slamming into something deals ' + L.bump + ' more damage to it (and to the unit or object it hits); a pit drops it in.';
+      return 'Grab the unit in front of him: deal ' + L.dmg + ' damage and throw it up to ' + L.throw + ' tiles straight away from him. Slamming into something deals ' + L.bump + ' more damage to it (and to the unit or object it hits); a pit drops it in (a flyer sails over).';
     },
     flavor: 'Velvet rope policy, strictly enforced.',
     execute: function (ctx) {
@@ -1008,8 +1041,12 @@
       const o = G().unitAt(nx, ny);
       if (o) { sc += L.bump + (G().hostile(unit, o) ? L.bump : -L.bump * 1.5); break; }
       const t = G().tile(nx, ny);
-      if (t.obj && G().objBlocksMove(t.obj)) { sc += L.bump + (t.obj.id === 'barrel_explosive' ? 3 : 0); break; }
-      if (G().isDrop(nx, ny)) { sc += f.kind === 'hero' || A().isBoss(f) ? Math.ceil(f.maxHp * 0.25) + 3 : 25; break; }
+      if (t.obj && G().objBlocksMove(t.obj)) { sc += L.bump + (A().isVolatile(t.obj) ? 3 : 0); break; }
+      if (G().isDrop(nx, ny)) {
+        if (!G().isFlying(f)) { sc += f.kind === 'hero' || A().isBoss(f) ? Math.ceil(f.maxHp * 0.25) + 3 : 25; break; }
+        x = nx; y = ny;   // a flyer thrown over a pit just keeps flying (v2: it never falls)
+        continue;
+      }
       const td = G().terrain(t);
       if (td.walkable === false || !G().canStep(f, { x: x, y: y }, { x: nx, y: ny })) { sc += L.bump; break; }
       if (G().hazardAt(nx, ny, f)) sc += 4;
@@ -1031,8 +1068,9 @@
 
   /**
    * One move and one action a turn: throw the adjacent foe whose throw hurts most (he walks around his victim to aim it
-   * at walls, friends, barrels and pits) or lob a bar stool into a group further away, whichever scores higher; else
-   * walk closer.
+   * at walls, friends, barrels and pits, if that beats the attack of opportunity the walk provokes) or lob a bar stool
+   * into a group further away, whichever scores higher; else walk closer. Like every brute he sticks to the hero who
+   * stood next to him when his turn began (DD.AI.targetValue: engaged, threat, kills).
    */
   function bugbearPlan(unit, api) {
     const foes = api.foes(unit);
@@ -1040,14 +1078,18 @@
     const LB = lvl('a1_bugbear_bounce'), LS = lvl('a1_bugbear_stool');
     const canThrow = api.canUse(unit, 'a1_bugbear_bounce'), canStool = api.canUse(unit, 'a1_bugbear_stool');
     const rg = DD.Targeting.range(unit, DD.getSkill('a1_bugbear_stool'), 1);
+    const origin = { x: unit.x, y: unit.y };
     let best = null;
     const offer = function (o) { if (o.score > 0 && (!best || o.score > best.score)) best = o; };
     const consider = function (p) {
       at(unit, p, function () {
-        const bias = -(p.cost || 0) * 0.05;
+        const bias = -(p.cost || 0) * 0.2 - (p.aoo || 0);
         foes.forEach(function (f) {
           const d = G().dist(p, f);
-          if (canThrow && d === 1) offer({ p: p, skill: 'a1_bugbear_bounce', target: { x: f.x, y: f.y }, score: throwValue(unit, f, U.dirTo(p, f), LB) + bias });
+          if (canThrow && d === 1) {
+            const focus = DD.AI.targetValue(unit, f, DD.AI.estimate(unit, f, LB.dmg), 'melee', origin);
+            offer({ p: p, skill: 'a1_bugbear_bounce', target: { x: f.x, y: f.y }, score: throwValue(unit, f, U.dirTo(p, f), LB) + focus + bias });
+          }
           if (canStool && d >= Math.max(2, rg[0]) && d <= rg[1]) offer({ p: p, skill: 'a1_bugbear_stool', target: { x: f.x, y: f.y }, score: stoolValue(unit, f, LS) - 1 + bias });
         });
       });
@@ -1066,20 +1108,20 @@
 
   DD.registerEnemy({ id: 'a1_bugbear', name: 'Bugbear Bouncer', act: 1, tier: 'elite', hp: 70, mov: 3, armor: 2, init: -1,
     tags: ['goblinoid', 'bugbear'], flags: { large: true }, resist: {},
-    passive: { name: 'Bouncer', icon: '🚪', desc: 'On his turn he walks around the hero next to him and throws them into whatever hurts most (walls, friends, barrels, pits), or lobs a bar stool into a group further away.' },
+    passive: { name: 'Bouncer', icon: '🚪', desc: 'On his turn he throws the hero next to him into whatever hurts most (walls, friends, barrels, pits), stepping around them to aim it, or lobs a bar stool into a group further away. Walk away from him and his attack of opportunity is the throw.' },
     sprite: { base: 'humanoid', scale: 1.45, build: 'huge', outfit: 'tunic',
       palette: { skin: '#a8743f', cloth: '#1d1d24', cloth2: '#33333d', hair: '#6b4426', metal: '#d4af37', eye: '#ffd23f', accent: '#e23b3b',
         book: '#22222a', outline: '#140c08' },
       head: { ears: 'bear', hair: 'none', eyes: 'angry', mouth: 'tusks', face: 'sunglasses' },
       offhand: 'book', bling: ['chain'], overlay: securityOverlay },
-    skills: ['a1_bugbear_bounce', 'a1_bugbear_stool'], ai: bugbearPlan, xp: 12, gold: [8, 14],
+    skills: ['a1_bugbear_bounce', 'a1_bugbear_stool'], ai: bugbearPlan, aiStyle: 'melee', xp: 12, gold: [8, 14],
     barks: {
       spawn: ['You\'re not on the list.', 'No shirt, no shoes, no levels, no service.', 'Party of four? We\'re at capacity.'],
       attack: ['OUT.', 'Take it outside. I\'ll help.', 'Did I stutter?'],
       hurt: ['That\'s a lifetime ban.', 'Cute.', 'You just bought the bar a new window.'],
       death: ['Tell the manager... I quit...', 'Who\'s gonna... check IDs...', 'Last... call...'],
     },
-    desc: 'Head of security at the Leaky Flagon. Big, and slow to get going (initiative −1), because he checks a list nobody is on. Then he walks around whoever is next to him and throws them three tiles: into walls, friends, barrels or pits for extra pain. Lobs bar stools at groups further away.' });
+    desc: 'Head of security at the Leaky Flagon. Big, and slow to get going (initiative −1), because he checks a list nobody is on. Then he throws whoever is next to him three tiles: into walls, friends, barrels or pits for extra pain. Walking out on him gets you thrown out. Lobs bar stools at groups further away.' });
 
   // =====================================================================================================
   // ELITE — Gelatinous Cube: immovable, Engulf, Jiggle Slam
@@ -1157,12 +1199,13 @@
   DD.registerEnemy({ id: 'a1_cube', name: 'Gelatinous Cube', act: 1, tier: 'elite', hp: 70, mov: 2, armor: 2, init: -3,
     tags: ['ooze', 'cube'], flags: { immovable: true, stunImmune: true, large: true }, resist: { poison: 0, fire: 1.5 },
     passive: { name: 'Acidic Body', icon: '🫧', desc: function () {
-      return 'On its turn it Jiggle Slams when 2+ foes stand around it, else Engulfs a foe next to it, else spits a skeleton. ' +
-        'A foe that hits it with a skill from an adjacent tile takes ' + ACID_BODY + ' acid damage. ' + lvl('a1_cube_engulf').free + ' damage to it frees everyone inside.';
+      return 'On its turn it Jiggle Slams when 2+ foes stand around it, else Engulfs the foe next to it (it never moves while digesting), else spits a skeleton. ' +
+        'Walking away from it while Engulf is ready gets you Engulfed. A foe hitting it with a skill from next to it takes ' + ACID_BODY + ' acid. ' +
+        lvl('a1_cube_engulf').free + ' damage to it frees everyone inside.';
     } },
     sprite: { base: 'blob', scale: 1.55, palette: { skin: '#7fe08a', metal: '#e8c547', eye: '#1a1014', outline: '#16301a' },
       shape: { cube: true, translucent: true, wobble: 1 }, head: { eyes: 'big', mouth: 'smile' } },
-    skills: ['a1_cube_engulf', 'a1_cube_spit', 'a1_cube_slam'], ai: cubePlan, xp: 12, gold: [8, 14],
+    skills: ['a1_cube_engulf', 'a1_cube_spit', 'a1_cube_slam'], ai: cubePlan, aiStyle: 'melee', xp: 12, gold: [8, 14],
     hooks: {
       // Acidic Body: a foe that hits it from an adjacent tile with a skill gets splashed; enough damage makes it gag
       onTakeDamage: function (d) {
@@ -1201,6 +1244,7 @@
 
   const NORMAL = { goldMult: 1, itemRarity: null };
   const ELITE = { goldMult: 1, itemRarity: 'rare' };
+  const KEG_HP = 30;   // The Last Keg (a1_open_mic): five spear pokes
 
   DD.registerEncounter({ id: 'a1_rats_in_the_cellar', act: 1, kind: 'normal', name: 'Rats in the Cellar (Obviously)', weight: 1.2, minDepth: 0,
     intro: 'Every campaign starts with rats in a cellar. The DM has run this exact encounter forty times and is still proud of it.',
@@ -1286,11 +1330,12 @@
       '00000000000',
       '01111111111',
       '01111111111',
-    ], legend: { b: { obj: 'barrel' }, e: { zone: 'enemy' }, K: { obj: { id: 'keg', hp: 18, label: 'The Last Keg' } } } },
+    ], legend: { b: { obj: 'barrel' }, e: { zone: 'enemy' }, K: { obj: { id: 'keg', hp: KEG_HP, label: 'The Last Keg' } } } },
     enemies: [{ id: 'a1_critic', n: 1 }, { id: 'a1_gob_grunt', n: 2 }, { id: 'a1_rat', n: 1 }],
-    // the back door is behind the party, next to the keg: the wave turns "protect" into a real job
-    reinforcements: [{ round: 2, enemies: [{ id: 'a1_gob_grunt', n: 1 }, { id: 'a1_gob_kid', n: 1 }], edge: 'S',
-      text: 'More goblins push in through the back door, right next to the keg. They heard there was free beer.' }],
+    // v2: enemies reach the keg on the turn they arrive (no telegraph to answer), so the second wave kicks in the side
+    // door, a walk away from the keg (it used to land right next to it), and the keg is sturdier (it was 18 HP)
+    reinforcements: [{ round: 2, enemies: [{ id: 'a1_gob_grunt', n: 1 }, { id: 'a1_gob_kid', n: 1 }], edge: 'E',
+      text: 'More goblins kick in the kitchen door on the east side. They heard there was free beer.' }],
     objective: { type: 'protect', objId: 'keg' }, reward: NORMAL });
 
   DD.registerEncounter({ id: 'a1_big_flush', act: 1, kind: 'normal', name: 'The Big Flush', weight: 0.8, minDepth: 3,

@@ -1,5 +1,87 @@
 # AUTOPLAY notes
 
+## v2 requests — barrels, heals that revive, flyers and per-unit hazards (ENGINE role)
+
+Rules: `docs/notes/rules.md` "v2 requests — …". What changed in `js/engine/autoplay.js`:
+
+- **Barrels**: validTargets now lists volatile objects for single-target attacks, so the quick pass sees them; their
+  quick value is `blastValue(ctx, tile)`: one dry run per barrel and decision (from the actor's real tile, on other
+  dice) of `destroyObject` credited to the actor — foes' damage + Block × 0.5 + (15 + their threat) per kill, − allies'
+  damage × 1.5 − 40 per ally down, − 60 for a protected object lost, ±100 / 300 for a won / lost fight. The exact pass
+  replays the real use (`resolveSkill` detonates), so a shot that would hurt the actor or its friends is caught there.
+  The adjacent Smash interaction is unchanged (objective objects only).
+- **Heals aimed at a downed ally**: a revive-capable target (a `downedAlly` skill or, v2, a heal `revivesWith`) is
+  worth +20 in the quick pass only when `safeToRevive(tm, ally, hp)` (the Help Up check, now with the heal's HP), else
+  +2; `simGain` adds `REVIVE_GAIN` (12) for a revived ally (`diff.perUnit[id].revived`) when it is safe; the danger it
+  is in after the run counts through the allies' danger as before. Help Up and the rescue walk wait for an ally that a
+  ready heal can get up from where the unit stands (`healReviveReach`: only heals whose preview says "UP!", so content
+  that skips downed targets doesn't block Help Up).
+- **Flyers**: `bestHint` never offers stepping on a plate to a flyer, and `hintedTiles` (approach goals) skips
+  step-only objects (no interaction, not smashable) for flyers: it can't press them.
+- **Per-unit hazards**: walks, danger and approach fields read `DD.Grid.hazardAt` / `hazardDamage`, now per unit
+  (flyers, immunities); `surfaceGain` counts a laid-down hazard surface only for the units it can hurt
+  (`DD.Grid.surfaceHazard`). Closes the open request "fire treated as a hazard by Pebbles".
+- Suites: `autoplay: v2 — it shoots the barrel when the blast is worth more, never into its friends`, `… a heal aimed at a
+  downed ally gets it up from range (and Help Up waits for it)`, `… a flyer never walks onto a plate to press it; a
+  walker does`, `… lava is no hazard for a fireproof hero or a flyer`. Mutation-checked: disabling `healReviveReach` or
+  the flyer plate checks fails them.
+- **Review** (`docs/notes/rules.md` "v2 requests review"): pushing a foe next to a drop is worth the +10 quick / +1 exact
+  bonus only when the drop can hurt that foe (`DD.Grid.isEdge(x, y, foe)`: never a flyer, lava never a fireproof one);
+  `walkSig` and `walkGrid` read `DD.Grid.isFlying` (status flight) instead of `flags.flying`. Known: the quick value
+  of a melee barrel whack is taken from the actor's current tile (it ignores the blast on the tile it would whack from);
+  the exact pass replays it.
+
+## v2 attacks of opportunity + reach-aware enemies (ENGINE AoO role)
+
+Engine rule and AI targeting: `docs/notes/rules.md` "v2 — attacks of opportunity + reach-aware targeting". What changed
+in `js/engine/autoplay.js` (and why):
+
+- **The enemy model follows the new AI** (`targetScore(tm, src, u, est, hp, pos)`): the victim weights now use the AI's
+  own formula, `DD.AI.targetBonus(style, { kill, hurt, engaged, thr, maxHp, hero })` — engaged foes first for most
+  styles (a victim standing next to the enemy), threat and damage, kills +5/+7, divers (`assassin` / `skirmisher`) go
+  for kills, the wounded and the squishy. Each source carries `style` and `leave` = what walking away from the
+  hero-side units next to it costs it in attacks of opportunity (`DD.AI.aooCost` over the heroes that would strike:
+  `DD.Act.opportunityOf(hero, enemy)`; Infinity when they would drop it). A victim it can only reach by walking
+  (`hitsFromHere` false, not adjacent) loses `leave` from its score (and is dropped at Infinity), and its share of the
+  "it may go for anyone in reach" mix is ×0.3. So **an enemy engaged with a melee hero is expected to stick to it**:
+  standing next to an enemy shields the backline (body-blocking), and once the hero's reaction is spent
+  (`oppRound`), the model knows nothing holds the enemy any more. `AP.threats()` entries report `leave`.
+- **Walks are priced with the attacks of opportunity they provoke**: `makeCtx` positions carry `provokes` from
+  `Combat.reachable` (whose paths already provoke as few as possible); `walkDamage` adds each provoker's estimated hit
+  (`DD.AI.opportunityDmg`), `walkCost` adds 1.5 per attack (riders, a walk cut short) and the down cost when the hits
+  (after Block) would drop the hero. Every move-taking candidate uses it: (move +) skill options (quick and exact),
+  plain moves, approach moves, rescue walks (their lethality check too).
+- **Hit and run is not free next to a brute**: `escapeCost(ctx, pos, ap)` (attack, then step to the safest tile) adds
+  `leaveCost(ctx, pos)` — the attacks of opportunity of the enemies next to `pos` (stepping off a tile leaves the reach
+  of everyone next to it).
+- **Teleports / dashes to disengage** fall out of the above: their exact dry runs move the hero without provoking, so a
+  hero engaged by deadly melee foes Blinks rather than walks (suite below).
+- **Body-blocking candidates**: `bestMove` recomputes the allies' danger for up to MOVE_OTHERS (4) extra tiles next to
+  an enemy that threatens the others (`src.threat > 2`), besides the best 4 and the protect-guard tiles.
+- `TARGET_MIX` per victim (`mw`): Z / M sums replace the plain victim count (`src.M`), in `threatModel`, `exposure`,
+  `othersCost` and `AP.threats`.
+
+Tests (`tests/autoplay_tests.js`, 3 new suites, mutation-checked: without the AoO walk cost the first two fail, without
+the model's disengage cost / engaged formula the model suite fails):
+- `autoplay: v2 attacks of opportunity — the enemy model knows engaged foes stick and pay to walk past a melee hero`
+  (a grunt next to the knight: the knight's odds > 0.7, the wounded mage's < 0.25, `leave` > 9; the knight's reaction
+  spent → the mage is the likely target; not engaged at all → the kill).
+- `… — it does not walk away from a melee foe carelessly, it Blinks out` (a healthy mage next to a grunt fights from
+  where she stands; a wounded mage between a rooted brute and a rooted grunt, every walk provoking both lethally,
+  Blinks out without provoking anything).
+- `… — the knight engages the grunt heading for the wounded cleric (body-blocking)` (premise: left alone the grunt
+  walks up and downs the cleric; with AutoPlay the knight steps next to it and the engaged grunt sticks to him).
+
+Measurements: act-1 campaign sims, the same content with the engine before / after this pass (rules.md "Content
+suites this changes"): 2 × 120 runs, clears 50% → 52%, normal-fight downs 0.24 → 0.22 a fight; with the new engine and
+the pre-pass AutoPlay (`.tmp/aoo/sim_oldap.html`) 40 runs gave the same boss win rate as with this one (38% / 38%, a
+noisy small sample), so the difficulty shift comes from the rule, not from AutoPlay. Full campaign (12 runs): no errors,
+warnings or timeouts.
+
+Known issues: the model prices only the disengage cost from where the enemy stands now (not attacks of opportunity
+deeper in its walk); `walkFrom` (the escape walk) ignores attacks of opportunity on the way (only those of the tile it
+leaves); the HUD threat shading (`AI.threatMap`) still ignores pins.
+
 ## v2 — AUTOPLAY V2 (initiative order, no telegraphs, no Guard)
 
 Files (mine): `js/engine/autoplay.js`, `tests/autoplay_tests.js` (29 suites `autoplay: …`), this file. No other file

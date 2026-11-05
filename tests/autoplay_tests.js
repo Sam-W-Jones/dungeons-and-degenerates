@@ -656,4 +656,162 @@
     });
     t.log('real parties vs a goblin band: ' + wins + '/2 won');
   });
+
+  // ---- v2 attacks of opportunity (docs/notes/rules.md "Attacks of opportunity", "Targeting") ------------------------------
+  /** Run fn and record the attacks of opportunity that really happened: [{ a: attacker defId, m: mover defId }]. */
+  function opps(fn) {
+    const seen = [];
+    const off = DD.Events.on('opportunity:attack', function (e) { seen.push({ a: e.attacker.defId, m: e.mover.defId }); });
+    try { fn(); } finally { off(); }
+    return seen;
+  }
+
+  T.suite('autoplay: v2 attacks of opportunity — the enemy model knows engaged foes stick and pay to walk past a melee hero', function (t) {
+    if (missing(t, ['test_knight', 'test_mage', 'test_grunt'])) return;
+    // the grunt (4,4) is engaged with the knight (3,4); the mage (4,2) on 3 HP is one step away
+    const scene = function () {
+      arena({ heroes: [hero('test_mage', 4, 2), hero('test_knight', 3, 4)], enemies: [{ id: 'test_grunt', x: 4, y: 4 }] });
+      const m = unitOf('test_mage'), k = unitOf('test_knight'), g = unitOf('test_grunt');
+      m.hp = 3; k.block = 0;
+      return { m: m, k: k, g: g };
+    };
+    const share = function (sc, u) {
+      const th = DD.AutoPlay.threats(sc.m).filter(function (x) { return x.id === sc.g.id; })[0];
+      return { p: th && th.victims[u.id] ? th.victims[u.id].p : 0, leave: th ? th.leave : 0 };
+    };
+    let sc = scene();
+    const km = share(sc, sc.k), mm = share(sc, sc.m);
+    t.ok(km.leave > 9 && km.p > 0.7 && mm.p < 0.25, 'engaged with the knight: it is expected to stab him (' + km.p.toFixed(2) + ') and leave the wounded mage (' + mm.p.toFixed(2) + '); walking away costs it ' + km.leave.toFixed(1));
+    sc = scene();
+    sc.k.oppRound = S().round;
+    const k2 = share(sc, sc.k), m2 = share(sc, sc.m);
+    t.ok(k2.leave === 0 && m2.p > 0.7, 'once the knight\'s reaction is spent nothing holds it: the mage is the likely target (' + m2.p.toFixed(2) + ')');
+    sc = scene();
+    DD.Act.teleport(sc.k, 7, 7);
+    t.ok(share(sc, sc.m).p > 0.7, 'not engaged at all: it goes for the kill, like its own planner');
+  });
+
+  T.suite('autoplay: v2 attacks of opportunity — it does not walk away from a melee foe carelessly, it Blinks out', function (t) {
+    if (missing(t, ['test_mage', 'test_grunt', 'test_brute', 'test_blink'])) return;
+    // a healthy mage next to a grunt: shooting it from where she stands beats stepping off (a stab) to shoot from afar
+    arena({ heroes: [hero('test_mage', 4, 5)], enemies: [{ id: 'test_grunt', x: 5, y: 5 }] });
+    let m = unitOf('test_mage');
+    let log = [];
+    let seen = opps(function () { log = watch(function () { DD.AutoPlay.takeTurn(); }); });
+    t.ok(seen.length === 0, 'no attack of opportunity provoked (' + said(log) + ')');
+    t.ok(log.some(function (e) { return e.kind === 'skill'; }), 'it fights instead');
+    // a wounded mage between a brute and a grunt that can't follow (rooted): walking off would provoke both (lethal),
+    // so she Blinks
+    arena({ heroes: [hero('test_mage', 4, 5, 3, ['test_blink'])], enemies: [{ id: 'test_brute', x: 5, y: 5 }, { id: 'test_grunt', x: 4, y: 4 }] });
+    m = unitOf('test_mage');
+    m.hp = 9;
+    A().addStatus(unitOf('test_brute'), 'root', { turns: 1 }, m);
+    A().addStatus(unitOf('test_grunt'), 'root', { turns: 1 }, m);
+    t.ok(DD.AutoPlay.incomingAt(m, 4, 5).down > 0.5, 'premise: staying next to them would down her');
+    const away = DD.Combat.reachable(m).get('1,5');
+    t.ok(away && away.provokes.length === 2, 'premise: every walk away provokes both (' + (away && away.provokes.length) + ')');
+    seen = opps(function () { log = watch(function () { DD.AutoPlay.takeTurn(); }); });
+    t.eq(used(log, 'test_blink').length, 1, 'she Blinks (' + said(log) + ')');
+    t.ok(seen.length === 0 && !m.downed && m.hp === 9, 'without provoking anything (' + key(m) + ')');
+  });
+
+  T.suite('autoplay: v2 attacks of opportunity — the knight engages the grunt heading for the wounded cleric (body-blocking)', function (t) {
+    if (missing(t, ['test_knight', 'test_cleric', 'test_grunt'])) return;
+    // the grunt (5,4, move 3) can reach the cleric (1,4, 4 HP) this turn; the knight (3,6) acts first
+    const scene = function () {
+      arena({ heroes: [hero('test_knight', 3, 6), hero('test_cleric', 1, 4)], enemies: [{ id: 'test_grunt', x: 5, y: 4 }], enemyAi: true, noPlan: false });
+      const k = unitOf('test_knight'), c = unitOf('test_cleric'), g = unitOf('test_grunt');
+      DD.Combat.setOrder([k, g, c]);
+      c.hp = 4; k.block = 0;
+      return { k: k, c: c, g: g };
+    };
+    let sc = scene();
+    DD.Combat.endTurn();
+    t.ok(sc.c.downed, 'premise: left alone, the grunt walks up and stabs the cleric down');
+    sc = scene();
+    const log = watch(function () { DD.AutoPlay.takeTurn(); });
+    const engaged = DD.Grid.dist(sc.k, sc.g) === 1;
+    DD.Combat.endTurn();
+    t.ok(engaged, 'AutoPlay\'s knight steps up next to the grunt (' + key(sc.k) + '; ' + said(log) + ')');
+    t.ok(!sc.c.downed && sc.c.hp === 4, 'the engaged grunt sticks to the knight: the cleric is untouched');
+  });
+
+  // ---- v2 requests: barrels, heals that revive, flyers and the floor -------------------------------------------------
+  T.suite('autoplay: v2 — it shoots the barrel when the blast is worth more, never into its friends', function (t) {
+    if (missing(t, ['test_mage', 'test_knight', 'test_minion', 'test_grunt'])) return;
+    // three minions around a barrel: Magic Missile (4) kills nobody, the barrel (8 each) kills all three
+    arena({ heroes: [hero('test_mage', 1, 4, 1, [])], enemies: [{ id: 'test_minion', x: 5, y: 4 }, { id: 'test_minion', x: 4, y: 5 }, { id: 'test_minion', x: 4, y: 3 }],
+      objects: [{ x: 4, y: 4, id: 'barrel_explosive' }] });
+    let log = watch(function () { DD.AutoPlay.takeTurn(); });
+    const shot = log.filter(function (e) { return e.kind === 'skill' && e.x === 4 && e.y === 4; });
+    t.ok(shot.length === 1 && !DD.Grid.tile(4, 4).obj, 'the mage shoots the barrel (' + said(log) + ')');
+    t.eq(S().units.filter(function (u) { return u.defId === 'test_minion' && !u.dead; }).length, 0, 'all three minions blown up');
+    // the barrel sits between two allies and one grunt: the blast would hurt the party more than the grunt
+    arena({ heroes: [hero('test_mage', 1, 4, 1, []), hero('test_knight', 3, 4), hero('test_knight', 4, 5)], enemies: [{ id: 'test_grunt', x: 5, y: 4 }],
+      objects: [{ x: 4, y: 4, id: 'barrel_explosive' }] });
+    log = watch(function () { DD.AutoPlay.takeTurn(); });
+    t.ok(!!DD.Grid.tile(4, 4).obj, 'it leaves the barrel by its friends alone (' + said(log) + ')');
+  });
+
+  T.suite('autoplay: v2 — a heal aimed at a downed ally gets it up from range (and Help Up waits for it)', function (t) {
+    if (missing(t, ['test_cleric', 'test_knight', 'test_grunt', 'test_heal'])) return;
+    arena({ heroes: [hero('test_cleric', 1, 1, 1, ['test_heal']), hero('test_knight', 4, 1)], enemies: [{ id: 'test_grunt', x: 9, y: 9 }] });
+    const c = unitOf('test_cleric'), k = unitOf('test_knight');
+    A().kill(k, null);
+    t.ok(k.downed && DD.Grid.dist(c, k) === 3, 'premise: the knight is down 3 tiles away');
+    let log = watch(function () { DD.AutoPlay.takeTurn(); });
+    t.ok(used(log, 'test_heal').some(function (e) { return e.x === 4 && e.y === 1; }) && !k.downed, 'Patch Notes from range gets him up (' + said(log) + ')');
+    t.ok(k.hp >= 7, 'with the heal\'s HP (' + k.hp + ')');
+    // next to him: the heal (1 AP, 7 HP) instead of Help Up (2 AP, ¼ HP)
+    arena({ heroes: [hero('test_cleric', 3, 1, 1, ['test_heal']), hero('test_knight', 4, 1)], enemies: [{ id: 'test_grunt', x: 9, y: 9 }] });
+    const k2 = unitOf('test_knight');
+    A().kill(k2, null);
+    log = watch(function () { DD.AutoPlay.takeTurn(); });
+    t.ok(!k2.downed && used(log, 'test_heal').length >= 1 && k2.hp === 7, 'adjacent: the heal gets him up, no Help Up needed (' + said(log) + ', ' + k2.hp + ' HP)');
+  });
+
+  T.suite('autoplay: v2 — a flyer never walks onto a plate to press it; a walker does', function (t) {
+    if (missing(t, ['test_rogue', 'test_grunt'])) return;
+    const scene = function (fly) {
+      arena({ heroes: [hero('test_rogue', 2, 1)], enemies: [{ id: 'test_grunt', x: 9, y: 9 }], objects: [{ x: 4, y: 1, id: 'pressure_plate', autoplay: 12 }] });
+      const r = unitOf('test_rogue');
+      if (fly) r.flags = Object.assign({}, r.flags, { flying: true });
+      return r;
+    };
+    let r = scene(false);
+    let log = watch(function () { DD.AutoPlay.takeTurn(); });
+    t.ok(DD.Grid.tile(4, 1).obj.data.pressed, 'the walker presses the hinted plate (' + said(log) + ')');
+    r = scene(true);
+    log = watch(function () { DD.AutoPlay.takeTurn(); });
+    t.ok(!DD.Grid.tile(4, 1).obj.data.pressed && !(r.x === 4 && r.y === 1), 'the flyer does not go for it (it could not press it): ' + key(r) + ' (' + said(log) + ')');
+  });
+
+  T.suite('autoplay: v2 — lava is no hazard for a fireproof hero or a flyer (walks and danger per unit)', function (t) {
+    if (missing(t, ['test_rogue', 'test_minion'])) return;
+    // a minion (6 HP) in a nook: the only tile next to it, (4,5), is lava; the rogue's Stab (4 + Bleed) won't kill it
+    const scene = function (prep) {
+      arena({ heroes: [hero('test_rogue', 2, 5, 1, [])], enemies: [{ id: 'test_minion', x: 5, y: 5 }],
+        terrain: function (tl) { if ((tl.x === 6 && tl.y === 5) || (tl.x === 5 && (tl.y === 4 || tl.y === 6))) tl.t = 'wall'; if (tl.x === 4 && tl.y === 5) tl.t = 'lava'; } });
+      const r = unitOf('test_rogue');
+      prep(r);
+      return r;
+    };
+    const play = function (r) {
+      const hp = r.hp, log = watch(function () { DD.AutoPlay.takeTurn(); });
+      return { lost: hp - r.hp, stabs: used(log, 'test_stab').length, log: said(log), at: key(r) };
+    };
+    const end = function (u, x, y) { return DD.AutoPlay.incomingAt(u, x, y).dmg; };
+    let r = scene(function () {});
+    t.ok(end(r, 4, 5) > end(r, 3, 5) + 7, 'premise: ending a turn on lava is priced for a walker (' + end(r, 4, 5) + ' vs ' + end(r, 3, 5) + ')');
+    let w = play(r);
+    t.ok(w.lost === 0 && !w.stabs, 'a plain rogue does not wade into lava for a stab (' + w.at + ', ' + w.log + ')');
+    r = scene(function (u) { u.resist = { fire: 0 }; u.flags = Object.assign({}, u.flags, { immune: ['burn'] }); });
+    t.eq(end(r, 4, 5), end(r, 3, 5), 'fireproof: ending a turn on lava costs nothing');
+    w = play(r);
+    t.ok(w.stabs > 0 && w.lost === 0, 'a fireproof rogue walks onto the lava and stabs it (' + w.at + ', ' + w.log + ')');
+    r = scene(function (u) { u.flags = Object.assign({}, u.flags, { flying: true }); });
+    t.eq(end(r, 4, 5), end(r, 3, 5), 'a flyer: lava costs nothing either');
+    w = play(r);
+    t.ok(w.stabs > 0 && w.lost === 0, 'a flying rogue hovers over it and stabs it (' + w.at + ', ' + w.log + ')');
+  });
 })();

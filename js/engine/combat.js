@@ -6,6 +6,8 @@
  * turn) → rounds in that fixed order. A hero turn waits for the player and endTurn() ends it; AI turns resolve at once
  * (DD.AI.act), so endTurn() also runs every following AI turn until the next hero turn or the end of the fight.
  * Block and AP refresh at the start of a unit's own turn; statuses and cooldowns tick per own turn.
+ * Move actions provoke attacks of opportunity (DD.Act.opportunityOf; reachable() reports them, a provoking move can't be
+ * undone).
  * Public actions emit 'combat:changed'; the end of combat (hooks, 'combat:end', onEnd) is finalized when the
  * outermost public action completes, so effects never run on a half-resolved state.
  */
@@ -870,15 +872,15 @@
       else sl.fresh = false;
     }
   }
+  /** Ending a turn on a tile: its surface (flyers: airborne clouds only) and terrain (walkers only) onTurnEnd. */
   function tileTurnEnd(u) {
     const t = DD.Grid.tile(u.x, u.y);
     if (!t) return;
-    const fly = DD.Grid.isFlying(u);
     if (t.surface) {
       const sd = DD.getSurface(t.surface.id);
-      if (sd && typeof sd.onTurnEnd === 'function' && (!fly || sd.airborne)) DD.safe('surface ' + sd.id + ' onTurnEnd', sd.onTurnEnd, sd, [u, t]);
+      if (sd && typeof sd.onTurnEnd === 'function' && DD.Grid.feelsSurface(u, sd)) DD.safe('surface ' + sd.id + ' onTurnEnd', sd.onTurnEnd, sd, [u, t]);
     }
-    if (!active(u) || fly) return;
+    if (!active(u) || !DD.Grid.feelsFloor(u)) return;
     const td = DD.Grid.terrain(t);
     if (typeof td.onTurnEnd === 'function') DD.safe('terrain ' + td.id + ' onTurnEnd', td.onTurnEnd, td, [u, t]);
   }
@@ -1212,13 +1214,44 @@
   /** In deployment the first real action rolls initiative (then it counts only if it is that unit's turn). */
   function startIfDeploying(s) { if (s && s.phase === 'deploy' && !s.order && !s.result) Combat.rollInitiative(); }
 
-  /** Tiles the unit can move to with one move action (needs AP for a move, not rooted / held). */
+  /**
+   * Tiles the unit can move to with one move action (needs AP for a move, not rooted / held). v2: each path provokes
+   * as few attacks of opportunity as possible and entries carry `provokes: [unitIds]` (who strikes on the way; the HUD's
+   * "⚔ provokes N", details via Combat.provokes).
+   */
   Combat.reachable = function (unit) {
     if (!unit || !active(unit)) return new Map();
-    if (!playerSide(unit)) return Combat.cantMove(unit) ? new Map() : DD.Grid.reachable(unit, Combat.effectiveMov(unit));
+    if (!playerSide(unit)) return Combat.cantMove(unit) ? new Map() : DD.Grid.reachable(unit, Combat.effectiveMov(unit), { aoo: true });
     if (!controllable(unit) || Combat.cantMove(unit) || stunned(unit)) return new Map();
     if ((unit.ap || 0) < Combat.moveApCost(unit)) return new Map();
-    return DD.Grid.reachable(unit, Combat.effectiveMov(unit));
+    return DD.Grid.reachable(unit, Combat.effectiveMov(unit), { aoo: true });
+  };
+
+  /**
+   * The attacks of opportunity a move of the unit to (x, y) would provoke (the path Combat.reachable / move use):
+   * [{ unitId, name, skillId, skillName, dmg }] (dmg: the estimated hit after armor, before Block). Pure; [] if the
+   * tile is not reachable.
+   */
+  Combat.provokes = function (unit, x, y) {
+    const e = Combat.reachable(unit).get(x + ',' + y);
+    if (!e || !e.provokes || !e.provokes.length) return [];
+    return DD.Targeting.pure(function () {
+      const out = [];
+      let from = { x: unit.x, y: unit.y };
+      const seen = {};
+      for (let i = 0; i < e.path.length; i++) {
+        for (let k = 0; k < e.provokes.length; k++) {
+          const a = Combat.byId(e.provokes[k]);
+          if (!a || seen[a.id] || DD.Grid.dist(a, from) !== 1) continue;
+          const o = DD.Act.opportunityOf(a, unit, from, e.path[i]);
+          if (!o) continue;
+          seen[a.id] = 1;
+          out.push({ unitId: a.id, name: a.name, skillId: o.skill.id, skillName: o.skill.name, dmg: DD.AI.opportunityDmg(a, unit, from) });
+        }
+        from = e.path[i];
+      }
+      return out;
+    });
   };
 
   Combat.move = function (unit, x, y) {
@@ -1233,11 +1266,13 @@
       const ap0 = unit.ap, facing0 = unit.facing, dir0 = unit.lastDir;
       const m0 = s.mutations;
       unit.ap -= Combat.moveApCost(unit);
-      const walked = DD.Act.moveAlong(unit, e.path);
-      const clean = s.mutations === m0 && walked.length === e.path.length && active(unit) && unit.x === x && unit.y === y;
+      // a move action: leaving a tile next to opposing units provokes their attacks of opportunity
+      const walked = DD.Act.moveAlong(unit, e.path, { provoke: true });
+      // a move that provoked can't be undone (the attacks happened)
+      const clean = !walked.provoked && s.mutations === m0 && walked.length === e.path.length && active(unit) && unit.x === x && unit.y === y;
       s.undo = clean ? { unitId: unit.id, from: from, to: { x: x, y: y }, ap: ap0, facing: facing0, lastDir: dir0, path: walked, mutations: s.mutations, turn: s.turn } : null;
       DD.Act.maybeBark(unit, 'move', 0.06);
-      return walked.length > 0;
+      return walked.length > 0 || walked.provoked > 0;
     });
   };
 
@@ -1369,6 +1404,8 @@
   /**
    * Resolve a skill/consumable use (shared by heroes, AI actions, wind-ups and previews). opts: pay, consumable,
    * extra (buildCtx extras such as isIntent/intent/tiles/dir), quiet (no name popup).
+   * v2: aimed at a volatile object (ctx.targetObj, see DD.Targeting.aimsAtObjects) the use DETONATES it instead of
+   * running execute (DD.Act.detonate: the blast is credited to the user; costs are paid, riders don't happen).
    */
   Combat.resolveSkill = function (unit, slotOrDef, target, opts) {
     opts = opts || {};
@@ -1382,7 +1419,8 @@
     if (!opts.quiet) DD.FX.text(unit, (def.icon ? def.icon + ' ' : '') + def.name, { color: unit.side === 'hero' ? '#ffe9a8' : '#ffb0a0', size: 14 });
     DD.Act.beginSkill(unit, def, ctx);
     try {
-      DD.safe('execute of ' + def.id, def.execute, def, [ctx]);
+      if (ctx.targetObj) DD.Act.detonate(unit, ctx.target.x, ctx.target.y, def);
+      else DD.safe('execute of ' + def.id, def.execute, def, [ctx]);
     } finally {
       DD.Act.endSkill();
     }

@@ -4,7 +4,9 @@
  * every skill at every level in sandbox fights (desc == effect: damage, statuses, displacement, surfaces, costs,
  * cooldowns, ranges), Arrow from Beyond's landing at the start of her next turn, durations counted in own turns, the
  * signature, the items, previews against reality, v2 edge cases (stunned / silenced / sheep / charmed Kiri, targets
- * dying mid-skill, pits / lava / water / walls / map edges, AP) and AutoPlay battles at levels 1 / 3 / 5.
+ * dying mid-skill, pits / lava / water / walls / map edges, AP), attacks of opportunity (walking off a foe provokes;
+ * Ethereal Step, Fade Out and pushes don't; her bow never strikes; AutoPlay steps out of a lethal pin) and AutoPlay
+ * battles at levels 1 / 3 / 5.
  */
 (function () {
   'use strict';
@@ -151,14 +153,16 @@
         const txt = DD.skillDesc(d, lv, null);
         t.ok(txt && !/undefined|NaN|\[object/.test(txt), id + ' L' + lv + ' desc with a null user');
         const Lv = DD.skillLevel(d, lv);
-        ['dmg', 'mark', 'len', 'push', 'r'].forEach(function (k) {
+        ['dmg', 'arrow', 'mark', 'len', 'push', 'r'].forEach(function (k) {
           if (typeof Lv[k] === 'number' && Lv[k] > 0) t.ok(new RegExp('(^|[^0-9])' + Lv[k] + '([^0-9]|$)').test(txt), id + ' L' + lv + ' desc shows ' + k + ' ' + Lv[k]);
         });
         if (Lv.turns > 1) t.ok(txt.indexOf(Lv.turns + ' ') >= 0, id + ' L' + lv + ' desc shows turns ' + Lv.turns);
-        // DESIGN §6 Simplicity: one verb, read in one breath, no if/else clauses
+        // DESIGN §6 Simplicity: one verb, read in one breath (about 12 words + numbers), no if/else clauses
         const n = txt.split(/\s+/).length;
         words = Math.max(words, n);
-        t.ok(n <= 24, id + ' L' + lv + ' desc reads in one breath (' + n + ' words): ' + txt);
+        t.ok(n <= 20, id + ' L' + lv + ' desc reads in one breath (' + n + ' words): ' + txt);
+        const clauses = txt.split(/[.:;!?](\s|$)/).filter(function (x) { return x && x.trim(); }).length;
+        t.ok(clauses <= 2, id + ' L' + lv + ' desc is one sentence (a colon or one more clause at most): ' + txt);
         t.ok(!/\bif\b|\bunless\b|\botherwise\b/i.test(txt), id + ' L' + lv + ' desc has no conditions: ' + txt);
       }
       t.ok(!d.flavor || d.flavor.length <= 120, id + ' flavor ≤ 120');
@@ -174,8 +178,25 @@
       });
       t.ok(face[0] !== face[1] && face[1] !== face[2], id + ': every level looks different');
     });
-    // barks: every key 4-6 lines of ≤ 70 characters, in her voice
-    BARK_KEYS.forEach(function (k) {
+    // the ranges and areas the descs name are the real ones, at every level ("within N", "up to N tiles", "line of N
+    // tiles" = the target range; "within N of a tile" / "radius N" = the area)
+    ALL.forEach(function (id) {
+      const d = sk(id);
+      if (d.target.type === 'self') return;
+      for (let lv = 1; lv <= d.levels.length; lv++) {
+        const txt = DD.skillDesc(d, lv, null), Lv = DD.skillLevel(d, lv);
+        const nums = [];
+        txt.replace(/within (\d+)\b(?! of)|up to (\d+) tiles|line of (\d+) tiles/g, function (m, a, b, c) { nums.push(+(a || b || c)); return m; });
+        t.eq(nums.length ? nums[nums.length - 1] : null, DD.Targeting.range(null, d, lv)[1], id + ' L' + lv + ': the range in the desc is the real one');
+        const ar = /within (\d+) of a tile|radius (\d+)/.exec(txt);
+        if (d.area && d.area.shape !== 'custom' && d.area.shape !== 'single') {
+          t.eq(ar ? +(ar[1] || ar[2]) : null, DD.resolve(d.area.size, Lv, null, 1), id + ' L' + lv + ': the area in the desc is the real one');
+        } else t.ok(!ar, id + ' L' + lv + ': a single-target / line skill names no area');
+      }
+    });
+    t.ok(!h.flags.noProvoke && !h.flags.noOpportunity, 'no attack-of-opportunity flags: the rule applies to her as written (her skills are the way out)');
+    // barks: every key 4-6 lines of ≤ 70 characters, in her voice (+ the extra key 'provoked', fired by her passive)
+    BARK_KEYS.concat(['provoked']).forEach(function (k) {
       const lines = h.barks[k] || [];
       t.ok(lines.length >= 4 && lines.length <= 6, 'barks.' + k + ' has 4-6 lines (' + lines.length + ')');
       lines.forEach(function (line) {
@@ -265,7 +286,8 @@
       t.eq(f[3].hp + ',' + f[4].hp, '14,14', 'L' + lv + ': nothing past the line or beside it');
       t.eq(knight.hp, knight.maxHp, 'L' + lv + ': the ally in the line is unharmed');
       hypeIs(t, DD.Combat.state.hype - h0, hype().multiHit, 'L' + lv + ': +' + hype().multiHit + ' Hype for hitting 2+ foes');
-      t.eq(k.ap, 1, 'L' + lv + ': 2 AP');
+      t.eq(k.ap, 2, 'L' + lv + ': 1 AP');
+      t.eq(Lv.dmg, [4, 5, 6][lv - 1], 'L' + lv + ': ' + Lv.dmg + ' per foe (4 / 5 / 6)');
       // cooldown 1: unusable on her next turn, back the turn after
       DD.Combat.endTurn(); DD.Combat.endTurn();
       t.ok(DD.Combat.current() === k && /cooldown/i.test(String(DD.Combat.canUse(k, slot))), 'L' + lv + ': on cooldown on her next turn');
@@ -276,17 +298,20 @@
     const e = arena({ at: [7, 4], skills: [['kir_phase', 1]], enemies: [E(8, 4)] });
     t.eq(DD.Targeting.area(e.k, sk('kir_phase'), 1, { x: 8, y: 4 }).length, 1, 'map edge: 1 tile east of (7,4)');
     use(t, e.k, e.slot('kir_phase'), 8, 4, 'edge shot');
-    t.eq(e.foes[0].hp, 9, 'edge shot still hits');
+    t.eq(e.foes[0].hp, 14 - 4, 'edge shot still hits');
+    // one foe: Ghost Arrow hits harder; two in a line: Phase Shot wins for the same AP
+    t.ok(L('kir_phase', 1).dmg < L('kir_basic', 1).dmg && 2 * L('kir_phase', 1).dmg > L('kir_basic', 1).dmg && sk('kir_phase').ap === sk('kir_basic').ap,
+      'L1: 4 < 5 on one foe, 8 > 5 on two (both 1 AP)');
   });
 
   T.suite('hero_kiri: Ethereal Step I-III — a straight-line teleport through walls and units', function (t) {
     [1, 2, 3].forEach(function (lv) {
       const len = L('kir_step', lv).len;
-      const a = arena({ at: [1, 4], skills: [['kir_step', lv]], terrain: { '2,4': 'wall', '7,4': 'pit' }, enemies: [E(3, 4)] });
+      const a = arena({ at: [1, 4], skills: [['kir_step', lv]], terrain: { '2,4': 'wall', '1,2': 'pit' }, enemies: [E(3, 4)] });
       const k = a.k, slot = a.slot('kir_step');
       t.ok(valid(k, slot, 1 + len, 4) && !valid(k, slot, 2 + len, 4), 'L' + lv + ': up to ' + len + ' tiles');
       t.ok(!valid(k, slot, 2, 4) && !valid(k, slot, 3, 4) && !valid(k, slot, 2, 5), 'L' + lv + ': not into walls, onto units or off the line');
-      t.ok(!valid(k, slot, 7, 4), 'L' + lv + ': never into a pit');
+      t.ok(valid(k, slot, 1, 3) && !valid(k, slot, 1, 2) && valid(k, slot, 1, 1), 'L' + lv + ': never into a pit 2 tiles north (but past it)');
       DD.Act.addStatus(k, 'root', { turns: 1 }, a.foes[0]);
       t.ok(DD.Combat.cantMove(k) && DD.Combat.canUse(k, slot) === true, 'L' + lv + ': Rooted, she can still step (a teleport is not a move action)');
       use(t, k, slot, 1 + len, 4, 'L' + lv);
@@ -352,12 +377,12 @@
   T.suite('hero_kiri: Banishing Shot I-III — push away from Kiri (pits, lava, water, walls, edges, immovable)', function (t) {
     [1, 2, 3].forEach(function (lv) {
       const Lv = L('kir_banish', lv);
-      const a = arena({ at: [1, 4], skills: [['kir_banish', lv]], enemies: [E(3, 4)] });
+      const a = arena({ at: [1, 4], skills: [['kir_banish', lv]], enemies: [E(3, 4), E(3, 2), E(4, 2)] });
+      t.ok(valid(a.k, a.slot('kir_banish'), 3, 2) && !valid(a.k, a.slot('kir_banish'), 4, 2), 'L' + lv + ': range 4 (a foe 4 tiles away yes, 5 no)');
       use(t, a.k, a.slot('kir_banish'), 3, 4, 'L' + lv);
       const g = a.foes[0];
       t.ok(g.hp === 14 - Lv.dmg && g.x === 3 + Lv.push && g.y === 4, 'L' + lv + ': ' + Lv.dmg + ' damage, pushed ' + Lv.push + ' east to ' + g.x + ',' + g.y);
       t.eq(a.k.ap, 2, 'L' + lv + ': 1 AP');
-      t.ok(!valid(a.k, a.slot('kir_banish'), 6, 4) || g.x + 0 !== 6, 'L' + lv + ': range 4');
     });
     // into a pit: YEET (environmental kill, +envKill Hype)
     const p = arena({ at: [1, 4], skills: [['kir_banish', 1]], enemies: [E(3, 4)], terrain: { '4,4': 'pit' } });
@@ -384,6 +409,11 @@
     const im = arena({ at: [1, 4], skills: [['kir_banish', 1]], enemies: [E(3, 4, 'test_brute')] });
     use(t, im.k, im.slot('kir_banish'), 3, 4, 'immovable');
     t.ok(im.foes[0].x === 3 && im.foes[0].hp === 50 - (3 - 1), 'the immovable brute takes the hit (armor 1) and stays');
+    // damage, then push: a shot that kills pushes nobody into the foe behind (no collision for it)
+    const lk = arena({ at: [1, 4], skills: [['kir_banish', 1]], enemies: [E(3, 4), E(4, 4)] });
+    lk.foes[0].hp = 3;
+    use(t, lk.k, lk.slot('kir_banish'), 3, 4, 'lethal banish');
+    t.ok(lk.foes[0].dead && lk.foes[1].hp === 14 && lk.foes[1].x === 4, 'a lethal shot: the foe behind is not bumped (' + lk.foes[1].hp + ' HP)');
     // diagonal targets go along the longer axis, away from her
     const dg = arena({ at: [1, 4], skills: [['kir_banish', 1]], enemies: [E(3, 5)] });
     use(t, dg.k, dg.slot('kir_banish'), 3, 5, 'diagonal');
@@ -404,8 +434,9 @@
   });
 
   T.suite('hero_kiri: Arrow from Beyond I-III — it lands at the start of her next turn, wherever the target is', function (t) {
+    t.ok(!(L('kir_beyond', 1).dmg > 0) && L('kir_beyond', 1).arrow === 18, 'its number is L.arrow, not L.dmg (estimates read L.dmg as damage dealt now)');
     [1, 2, 3].forEach(function (lv) {
-      const dmg = L('kir_beyond', lv).dmg;
+      const dmg = L('kir_beyond', lv).arrow;
       const a = arena({ at: [1, 4], skills: [['kir_beyond', lv]], enemies: [E(5, 7, 'test_grunt', 3), E(8, 8)] });
       const k = a.k, g = a.foes[0];
       t.ok(valid(k, a.slot('kir_beyond'), 5, 7) && !valid(k, a.slot('kir_beyond'), 8, 8), 'L' + lv + ': range 7');
@@ -573,16 +604,21 @@
       t.ok(it && it.hero === 'kiri' && it.desc && it.flavor && it.flavor.length <= 120, id + ' registered for Kiri');
       t.ok(!it.stats.block, id + ': no combat-start Block (v2)');
     });
-    const bow = arena({ at: [1, 4], items: ['kir_ghostwood_bow'], enemies: [E(7, 4)] });
+    const bow = arena({ at: [1, 4], items: ['kir_ghostwood_bow'], skills: [['kir_phase', 1], ['kir_step', 1]], enemies: [E(7, 4)] });
     t.ok(valid(bow.k, bow.k.basic, 7, 4), 'Longbow: Ghost Arrow reaches 6');
+    t.ok(valid(bow.k, bow.slot('kir_step'), 5, 4) && !valid(bow.k, bow.slot('kir_step'), 6, 4), 'Longbow: Ethereal Step I goes up to 3 + 1 tiles');
+    const line = DD.Targeting.area(bow.k, sk('kir_phase'), 1, { x: 7, y: 4 });
+    t.ok(valid(bow.k, bow.slot('kir_phase'), 7, 4) && line.length === 6 && line[5].x === 7, 'Longbow: Phase Shot\'s line is 5 + 1 tiles and reaches the aimed tile');
     use(t, bow.k, bow.k.basic, 7, 4, 'bow shot');
     t.eq(bow.foes[0].hp, 14 - Math.round(5 * 1.1), 'Longbow: +10% damage (5 → ' + Math.round(5 * 1.1) + ')');
+    use(t, bow.k, bow.slot('kir_phase'), 7, 4, 'bow phase shot');
+    t.eq(bow.foes[0].hp, 14 - 6 - Math.round(4 * 1.1), 'Longbow: Phase Shot hits the foe 6 tiles away (4 +10% → ' + Math.round(4 * 1.1) + ')');
     const tag = arena({ at: [1, 4], items: ['kir_name_tag'] });
     t.ok(tag.k.init === 5 && tag.k.maxHp === 28, 'Name Tag: initiative +3 → +5, 28 max HP');
     const cl = arena({ at: [1, 4], items: ['kir_cloak_elsewhere'], skills: [['kir_step', 1], ['kir_phase', 1]] });
     t.ok(cl.k.maxHp === 30 && cl.k.armor === 1, 'Cloak: +6 max HP, +1 armor');
     t.eq(DD.Combat.costOf(cl.k, sk('kir_step'), 1).ap, 0, 'Cloak: Ethereal Step costs 0 AP');
-    t.eq(DD.Combat.costOf(cl.k, sk('kir_phase'), 1).ap, 2, 'Cloak: other skills cost as usual');
+    t.eq(DD.Combat.costOf(cl.k, sk('kir_phase'), 1).ap, 1, 'Cloak: other skills cost as usual (Phase Shot 1)');
     use(t, cl.k, cl.slot('kir_step'), 4, 4, 'free step');
     t.ok(cl.k.x === 4 && cl.k.ap === 3, 'a free step');
     // in a rolled fight her initiative modifier is +3 (+2 with the tag)
@@ -628,7 +664,12 @@
     const a = arena({ at: [1, 4], skills: [['kir_beyond', 2]], enemies: [E(5, 4)] });
     const prev = DD.Combat.preview(a.k, a.slot('kir_beyond'), 5, 4);
     const e = prev.perUnit[a.foes[0].id];
-    t.ok(e && e.dmg === 0 && e.statuses.indexOf('kir_incoming') >= 0 && /Arrow from Beyond 22/.test(e.text), 'Arrow from Beyond preview: "' + (e && e.text) + '"');
+    t.ok(e && e.dmg === 0 && e.statuses.indexOf('kir_incoming') >= 0 && /Foreshadowed 22/.test(e.text), 'Arrow from Beyond preview: "' + (e && e.text) + '"');
+    // the status reads as a state in the log, like every status ("… is Rooted.")
+    const n0 = DD.Combat.state.log.length;
+    use(t, a.k, a.slot('kir_beyond'), 5, 4, 'arrow for the log');
+    const lines = DD.Combat.state.log.slice(n0).map(function (l) { return l.text; });
+    t.ok(lines.some(function (l) { return /^Test Grunt is Foreshadowed \(22\)\.$/.test(l); }), 'log: "Test Grunt is Foreshadowed (22)." (' + lines.join(' | ') + ')');
   });
 
   // ---- v2 edge cases ----------------------------------------------------------------------------------------------------
@@ -669,11 +710,17 @@
     t.eq(DD.Combat.canUse(ap.k, ap.slot('kir_beyond')), 'Not enough AP.', '2 AP left: Arrow from Beyond needs 3');
     DD.Combat.endTurn();
     t.ok(/Not Kiri's turn/.test(String(DD.Combat.canUse(ap.k, ap.k.basic))), 'on the knight\'s turn she waits');
+    // Dazzled (hero: −1 max range): Phase Shot's line shrinks with its range, so it still ends on the aimed tile
+    const dz = arena({ at: [1, 4], skills: [['kir_phase', 1]], enemies: [E(5, 4), E(6, 4)] });
+    DD.Act.addStatus(dz.k, 'dazzled', { turns: 1 }, dz.foes[0]);
+    t.ok(valid(dz.k, dz.slot('kir_phase'), 5, 4) && !valid(dz.k, dz.slot('kir_phase'), 6, 4), 'dazzled: Phase Shot aims 4 tiles');
+    use(t, dz.k, dz.slot('kir_phase'), 5, 4, 'dazzled phase shot');
+    t.ok(dz.foes[0].hp === 14 - 4 && dz.foes[1].hp === 14, 'dazzled: the line is 4 tiles (the foe 5 away is spared)');
     // targets dying mid-skill: a Phase Shot line where the first foe dies keeps going
     const dy = arena({ at: [1, 4], skills: [['kir_phase', 1]], enemies: [E(2, 4), E(3, 4)] });
     dy.foes[0].hp = 2;
     use(t, dy.k, dy.slot('kir_phase'), 2, 4, 'dying line');
-    t.ok(dy.foes[0].dead && dy.foes[1].hp === 9, 'the first foe dies, the arrow carries on');
+    t.ok(dy.foes[0].dead && dy.foes[1].hp === 14 - 4, 'the first foe dies, the arrow carries on');
     // a Volley that kills a whole cluster ends the fight cleanly
     const vk = DD.Combat.sandbox({ w: 9, h: 9, seed: 3, enemyAi: false, heroes: [{ id: 'kiri', x: 1, y: 4, skills: [{ id: 'kir_volley', level: 3 }] }],
       enemies: [{ id: 'test_minion', x: 5, y: 4 }, { id: 'test_minion', x: 5, y: 5 }] });
@@ -682,6 +729,110 @@
     t.eq(vk.result, 'victory', 'killing the last foes mid-skill wins the fight');
     // initiative +3 from the def; v2 turn model: she acts on her own initiative slot
     t.eq(DD.Combat.initOf ? DD.Combat.initOf(arena({ at: [1, 4] }).k) : 3, 3, 'initiative modifier +3');
+  });
+
+  // ---- attacks of opportunity (DESIGN §4.2) ---------------------------------------------------------------------------
+  T.suite('hero_kiri: attacks of opportunity — walking off a foe provokes; Ethereal Step, Fade Out and pushes slip away; her bow never strikes', function (t) {
+    const seen = [];
+    const off = DD.Events.on('opportunity:attack', function (e) { seen.push(e.attacker.defId + '>' + e.mover.defId); });
+    const barks = [];
+    const mb = DD.Act.maybeBark;
+    DD.Act.maybeBark = function (u, key) { if (u && u.defId === 'kiri') barks.push(key); return mb.apply(this, arguments); };
+    const fresh = function () { seen.length = 0; barks.length = 0; };
+    try {
+      // walking off the grunt next to her: one free stab on the way out (the move preview says so), and no undo
+      let a = arena({ at: [3, 4], enemies: [E(4, 4)] });
+      let k = a.k, g = a.foes[0];
+      t.eq(DD.Act.opportunitySlot(k), null, 'a ranged basic: Kiri never makes attacks of opportunity');
+      const pv = DD.Combat.provokes(k, 0, 4);
+      t.ok(pv.length === 1 && pv[0].unitId === g.id && pv[0].dmg === 4, 'move preview: provokes the grunt (4) (' + JSON.stringify(pv) + ')');
+      fresh();
+      t.ok(DD.Combat.move(k, 0, 4), 'she walks off');
+      t.ok(k.hp === k.maxHp - 4 && k.x === 0 && k.y === 4, 'stabbed for 4 on the way out, and she kept going (' + k.x + ',' + k.y + ', ' + k.hp + ' HP)');
+      t.eq(seen.join(' '), 'test_grunt>kiri', 'exactly one attack of opportunity');
+      t.ok(barks.indexOf('provoked') >= 0, 'her passive asks for a "provoked" bark');
+      t.eq(g.oppRound, DD.Combat.state.round, 'the grunt has spent its attack of opportunity for the round');
+      t.eq(DD.Combat.canUndo(), false, 'a move that provoked can\'t be undone');
+      // walking up to a foe never provokes; an ordinary hit is not "provoked"
+      a = arena({ at: [1, 4], enemies: [E(4, 4)] });
+      fresh();
+      t.ok(DD.Combat.move(a.k, 3, 4) && seen.length === 0 && a.k.hp === a.k.maxHp, 'walking up next to it: nothing');
+      DD.Act.damage(a.foes[0], a.k, 4, { cause: 'skill' });
+      t.ok(a.k.hp === a.k.maxHp - 4 && barks.indexOf('provoked') < 0, 'a plain stab: no "provoked" bark');
+      // Ethereal Step is a teleport: out of a pincer without a scratch...
+      a = arena({ at: [3, 4], skills: [['kir_step', 1]], enemies: [E(4, 4), E(3, 5)] });
+      k = a.k;
+      t.eq(DD.Act.provokers(k, [{ x: 3, y: 3 }]).length, 2, 'walking out, she would provoke both grunts');
+      fresh();
+      use(t, k, a.slot('kir_step'), 3, 1, 'step out of the pincer');
+      t.ok(k.x === 3 && k.y === 1 && k.hp === k.maxHp && seen.length === 0, 'stepped out: no attack of opportunity');
+      // ...straight through the grunt and out the other side...
+      a = arena({ at: [3, 4], skills: [['kir_step', 1]], enemies: [E(4, 4)] });
+      fresh();
+      use(t, a.k, a.slot('kir_step'), 6, 4, 'step through the grunt');
+      t.ok(a.k.x === 6 && a.k.hp === a.k.maxHp && seen.length === 0 && a.foes[0].oppRound !== DD.Combat.state.round, 'through it: no swing, its reaction unspent');
+      // ...and while Rooted next to it (no move action at all)
+      a = arena({ at: [3, 4], skills: [['kir_step', 1]], enemies: [E(4, 4)] });
+      DD.Act.addStatus(a.k, 'root', { turns: 1 }, a.foes[0]);
+      t.eq(DD.Combat.reachable(a.k).size, 0, 'Rooted: she cannot walk anywhere');
+      fresh();
+      use(t, a.k, a.slot('kir_step'), 3, 1, 'rooted step');
+      t.ok(a.k.y === 1 && a.k.hp === a.k.maxHp && seen.length === 0, 'Rooted, she still steps away untouched');
+      // Fade Out: a Stealthed Kiri slips away on foot
+      a = arena({ at: [3, 4], skills: [['kir_fade', 1]], enemies: [E(4, 4)] });
+      k = a.k;
+      t.eq(DD.Combat.provokes(k, 0, 4).length, 1, 'before: walking off provokes the grunt');
+      use(t, k, a.slot('kir_fade'), 3, 4, 'fade');
+      t.eq(DD.Combat.provokes(k, 0, 4).length, 0, 'Stealthed: the move preview provokes nobody');
+      fresh();
+      t.ok(DD.Combat.move(k, 0, 4) && seen.length === 0 && k.hp === k.maxHp && has(k, 'stealth'), 'she walks off untouched, still Stealthed');
+      // Banishing Shot: push the grunt off her, then walk away for free
+      a = arena({ at: [3, 4], skills: [['kir_banish', 1]], enemies: [E(4, 4)] });
+      k = a.k; g = a.foes[0];
+      fresh();
+      use(t, k, a.slot('kir_banish'), 4, 4, 'banish the grunt off her');
+      t.ok(g.x === 6 && seen.length === 0, 'a push is not a move action: no attack of opportunity');
+      t.eq(DD.Combat.provokes(k, 0, 4).length, 0, 'the walk provokes nobody now');
+      t.ok(DD.Combat.move(k, 0, 4) && seen.length === 0 && k.hp === k.maxHp, 'she walks off for free');
+      // ...and pushing a foe out of the knight's reach gives the knight no free slash either
+      a = arena({ at: [1, 4], skills: [['kir_banish', 1]], enemies: [E(4, 4)], heroes: [{ id: 'test_knight', x: 4, y: 5 }] });
+      g = a.foes[0];
+      const knight = at(4, 5);
+      t.ok(DD.Act.provokers(g, [{ x: 4, y: 3 }]).indexOf(knight) >= 0, 'walking off, the grunt would provoke the knight');
+      fresh();
+      use(t, a.k, a.slot('kir_banish'), 4, 4, 'banish the grunt off the knight');
+      t.ok(g.x === 6 && g.hp === 14 - 3 && seen.length === 0 && knight.oppRound !== DD.Combat.state.round, 'pushed away: no slash on the way');
+      // Pinning Shot stops its walk, not its swing: Root is no escape for her
+      a = arena({ at: [3, 4], skills: [['kir_pin', 1]], enemies: [E(4, 4, 'test_grunt', 3)] });
+      k = a.k;
+      use(t, k, a.slot('kir_pin'), 4, 4, 'pin the grunt next to her');
+      fresh();
+      t.ok(DD.Combat.move(k, 2, 4) && seen.join(' ') === 'test_grunt>kiri' && k.hp === k.maxHp - 4, 'a Rooted grunt still stabs her as she walks off (' + seen.join(' ') + ')');
+      // a foe walking off Kiri gets nothing from her bow; walking off the knight beside her costs it a slash
+      a = arena({ at: [3, 4], enemies: [E(4, 4)] });
+      g = a.foes[0];
+      fresh();
+      DD.AI.moveTo(g, 7, 4);
+      t.ok(g.x !== 4 && g.hp === 14 && seen.length === 0, 'it walks off Kiri untouched (to ' + g.x + ',' + g.y + ')');
+      a = arena({ at: [3, 4], enemies: [E(4, 4)], heroes: [{ id: 'test_knight', x: 4, y: 5 }] });
+      g = a.foes[0];
+      fresh();
+      DD.AI.moveTo(g, 7, 4);
+      t.ok(seen.join(' ') === 'test_knight>test_grunt' && g.hp === 14 - 5, 'walking off both: the knight slashes, Kiri does not (' + seen.join(' ') + ')');
+      // AutoPlay: wounded between a rooted brute and a rooted grunt (every walk off provokes both, lethally), she steps out
+      a = arena({ at: [4, 5], level: 3, skills: [['kir_step', 1], ['kir_phase', 1]], enemies: [E(5, 5, 'test_brute'), E(4, 4, 'test_grunt', 3)] });
+      k = a.k;
+      k.hp = 9;
+      a.foes.forEach(function (f) { DD.Act.addStatus(f, 'root', { turns: 1 }, k); });
+      const away = DD.Combat.reachable(k).get('1,5');
+      t.ok(away && away.provokes.length === 2, 'premise: walking off provokes both (' + (away && away.provokes.length) + ')');
+      fresh();
+      DD.AutoPlay.takeTurn();
+      t.ok(a.slot('kir_step').cd > 0, 'AutoPlay uses Ethereal Step');
+      t.ok(seen.length === 0 && !k.downed && k.hp === 9 && DD.Grid.dist(k, a.foes[0]) > 1 && DD.Grid.dist(k, a.foes[1]) > 1,
+        'and gets out of reach without provoking anything (' + k.x + ',' + k.y + ')');
+      if (T.contentHelpers && T.contentHelpers.sanity) T.contentHelpers.sanity(t, 'attacks of opportunity');
+    } finally { off(); DD.Act.maybeBark = mb; }
   });
 
   // ---- AutoPlay ---------------------------------------------------------------------------------------------------------
@@ -698,7 +849,8 @@
     const used = {};
     const orig = DD.Combat.useSkill;
     const results = [];
-    let wins = 0;
+    let wins = 0, aoo = 0;
+    const offAoo = DD.Events.on('opportunity:attack', function (e) { if (e.mover && e.mover.defId === 'kiri') aoo++; });
     DD.Combat.useSkill = function (unit, slot) {
       const r = orig.apply(this, arguments);
       if (r && unit && slot && unit.defId === 'kiri') used[slot.id] = (used[slot.id] || 0) + 1;
@@ -733,18 +885,52 @@
       const before = used.kir_signature || 0;
       DD.AutoPlay.takeTurn();
       t.ok((used.kir_signature || 0) > before, 'AutoPlay uses Rain from the Other Side with 100 Hype and 4 foes in reach');
+      // three grunts lined up behind a wall: AutoPlay pierces them all with Phase Shot (12 damage + Hype for 1 AP)
+      const ln = arena({ at: [1, 4], level: 3, skills: [['kir_phase', 1], ['kir_step', 1]], enemies: [E(3, 4), E(4, 4), E(5, 4)], terrain: { '2,4': 'wall' } });
+      const ph0 = used.kir_phase || 0;
+      DD.AutoPlay.takeTurn();
+      t.ok((used.kir_phase || 0) > ph0 && ln.foes.every(function (f) { return f.hp < 14; }), 'AutoPlay pierces three lined-up grunts with Phase Shot');
       // a grunt on the lip of a pit: AutoPlay banishes it (an environmental kill beats any arrow)
       const p = arena({ at: [1, 4], level: 3, skills: [['kir_banish', 1], ['kir_phase', 1]], enemies: [E(4, 4), E(7, 7)], terrain: { '5,4': 'pit' } });
       const b0 = used.kir_banish || 0;
       DD.AutoPlay.takeTurn();
       t.ok((used.kir_banish || 0) > b0 && p.foes[0].dead, 'AutoPlay banishes a grunt into the pit behind it');
-    } finally { DD.Combat.useSkill = orig; }
+    } finally { DD.Combat.useSkill = orig; offAoo(); }
     t.log(results.join(' | '));
     t.log('Kiri skill uses: ' + Object.keys(used).map(function (k) { return k + '×' + used[k]; }).join(', '));
+    t.log('attacks of opportunity on Kiri: ' + aoo);
     t.ok((used.kir_basic || 0) > 0, 'Ghost Arrow used');
     t.ok((used.kir_phase || 0) > 0, 'Phase Shot used');
     const poolUsed = Object.keys(used).filter(function (k) { return POOL.indexOf(k) >= 0; });
     t.ok(poolUsed.length >= 6, 'at least 6 different pool skills used by AutoPlay (' + poolUsed.join(', ') + ')');
     t.ok(wins >= 9, 'the party wins most fixture fights (' + wins + '/' + fights.length + ')');
+  });
+
+  // ---- v2 requests (Nov 3): clouds, barrels ---------------------------------------------------------------------------
+  T.suite('hero_kiri: v2 requests — Ghost Mist is a cloud (it hangs over pits and lava), her arrows set barrels off through walls, Arrow from Beyond is for foes only', function (t) {
+    t.ok(DD.getSurface('kir_ghost_mist').airborne === true, 'Ghost Mist is airborne (a cloud, not a floor surface)');
+    // 1. over a pit and lava: the mist hangs there too, so a pit is no hole in it
+    const a = arena({ at: [1, 4], skills: [['kir_mist', 1]], terrain: { '4,4': 'pit', '4,2': 'lava' },
+      enemies: [E(6, 4, 'test_archer')], heroes: [{ id: 'test_cleric', x: 2, y: 4 }] });
+    const archer = a.foes[0];
+    t.ok(DD.Targeting.validTargets(archer, sk('test_arrow')).some(function (p) { return p.x === 2 && p.y === 4; }), 'before: the archer shoots the cleric across the pit');
+    use(t, a.k, a.slot('kir_mist'), 4, 3, 'mist next to the pit');
+    t.eq(surf(4, 4), 'kir_ghost_mist', 'the mist hangs over the pit');
+    t.eq(surf(4, 2), 'kir_ghost_mist', 'and over the lava');
+    t.ok(surf(3, 4) === null && surf(5, 4) === null, 'premise: on the archer\'s line, only the pit is misted');
+    t.ok(!DD.Targeting.validTargets(archer, sk('test_arrow')).some(function (p) { return p.x === 2 && p.y === 4; }), 'after: the misted pit blocks its sight');
+    // 2. barrels: Ghost Arrow sets one off behind a wall (Between Worlds); Arrow from Beyond can't be aimed at one
+    const b = arena({ at: [1, 4], skills: [['kir_beyond', 1], ['kir_pin', 1]], terrain: { '3,4': 'wall' },
+      objects: [{ x: 4, y: 4, id: 'barrel_explosive' }], enemies: [E(5, 4, 'test_grunt', 3), E(8, 8)] });
+    const g = b.foes[0], g0 = g.hp;
+    const objTargets = function (slot) { return DD.Targeting.validTargets(b.k, slot).filter(function (q) { return !!q.obj; }); };
+    t.ok(objTargets(b.k.basic).some(function (q) { return q.x === 4 && q.y === 4; }), 'Ghost Arrow can be aimed at the barrel behind the wall');
+    t.ok(objTargets(b.slot('kir_pin')).length === 1, 'so can Pinning Shot');
+    t.eq(objTargets(b.slot('kir_beyond')).length, 0, 'Arrow from Beyond can\'t (it lands next turn: foes only)');
+    t.ok(!valid(b.k, b.slot('kir_beyond'), 4, 4), '...and isValidTarget agrees');
+    const prev = previewThenUse(t, b.k, b.k.basic, 4, 4, 'Ghost Arrow at the barrel');
+    t.eq(prev.detonates, 'barrel_explosive', 'the preview detonates it');
+    t.ok(!DD.Grid.tile(4, 4).obj && g.hp < g0, 'it went off: the grunt next to it takes the blast');
+    t.eq(b.k.ap, 2, '1 AP');
   });
 })();

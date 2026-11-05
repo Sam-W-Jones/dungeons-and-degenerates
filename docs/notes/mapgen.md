@@ -134,3 +134,12 @@ within(list, r), freeTiles(x, y, r), tile(x, y), pick(list), isBoss(u), immovabl
   failing (layouts are their authors' responsibility).
 - The hoard's raised `gold` floor (cost 2) makes its treasure mounds slow to cross; intended as difficult
   terrain, worth a look in playtesting.
+
+## Requests (Nov 3) — wild magic and the turning map (CONTENT SWEEP, shared)
+
+- `wm_continental_drift`: "pushed 1 tile south (away from the compass needle)" — the old "(toward the bottom-left)" was
+  a screen direction, wrong once the map turns (rotation plan §7 P1). The HUD compass needle points grid north.
+- `wm_smite`: a flying foe stands in no water, so the bolt no longer electrifies the pool under it (v2: flyers ignore the
+  floor); the text ("Water it stands in") already said so.
+- `wm_barrel_roll` places `barrel_explosive` (volatile in terrain.js): heroes can shoot those barrels. `wm_duck_honk`
+  (the Confused Duck, hero side) can set one off too. Checked by "integration: v2 requests — … no screen-direction words".

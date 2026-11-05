@@ -2,8 +2,10 @@
  * Suites "hero_marwyn: …" for js/data/heroes/marwyn.js (owner: hero-marwyn), v2 (initiative, no telegraphs, no Guard,
  * one verb per skill): the hero def and its simplicity budget, the MAGNIFICENCE passive (one gain rule, the surge on
  * the next skill), every skill at every level in DD.Combat.sandbox fights (desc == effect, enemies acting on their own
- * turns, durations per own turn), the signature, the 3 items, HUD previews, v2 edge cases and AutoPlay battles (party
- * marwyn + test knight / cleric / mage) against the fixture encounters at levels 1 / 3 / 5.
+ * turns, durations per own turn), the signature, the 3 items, HUD previews, v2 edge cases, attacks of opportunity (his
+ * basic strikes foes that walk away; his leap / throws / pull / knockback never provoke) and AutoPlay battles (party
+ * marwyn + test knight / cleric / mage) against the fixture encounters at levels 1 / 3 / 5, every use of his skills in
+ * them audited (the passive's one rule, HUD previews == what happened).
  * Run: bash tools/test.sh "suite=hero_marwyn&isolate=heroes/marwyn,hero_marwyn"
  */
 (function () {
@@ -17,8 +19,10 @@
   const ALL_SKILLS = ['mrw_ginger_snap', 'mrw_behold'].concat(POOL);
   const ITEMS = ['mrw_yeet_gauntlets', 'mrw_loincloth', 'mrw_hand_mirror'];
   const BARK_KEYS = ['select', 'start', 'move', 'kill', 'hurt', 'lowhp', 'downed', 'revive', 'ally_down', 'levelup', 'victory', 'idle', 'signature'];
-  const HE = ['Zarathor', 'Syllamin', 'Marbles', 'Marwyn', 'Josiah', 'Corelos', 'Slate', 'Buga', 'Betty', 'Basanos'];
+  const HE = ['Zarathor', 'Syllamin', 'Marbles', 'Marwyn', 'Josiah', 'Corelos', 'Slate', 'Buga', 'Betty', 'Basanos', 'Valdris',
+    'Hjalmar', 'Pebbles'];
   const SHE = ['Ellaria', 'Sparrow', 'Kiri'];
+  const OTHERS = /Syllamin|Zarathor|Marbles|Ellaria|Josiah|Sparrow|Corelos|Slate|Buga|Kiri|Betty|Basanos|Valdris|Hjalmar|Pebbles/;
   const EAST = { x: 1, y: 0 };
 
   // ---- helpers -----------------------------------------------------------------------------------------
@@ -202,14 +206,19 @@
       t.ok(lines.length >= 4 && lines.length <= 6, 'barks.' + k + ': 4-6 lines (' + lines.length + ')');
       lines.forEach(function (l) {
         t.ok(typeof l === 'string' && l.length > 0 && l.length <= 70, 'bark ≤ 70 chars: ' + JSON.stringify(l) + ' (' + l.length + ')');
-        if (/Syllamin|Zarathor|Marbles|Ellaria|Josiah|Sparrow|Corelos|Slate|Buga|Kiri|Betty|Basanos/.test(l)) others++;
+        if (OTHERS.test(l)) others++;
         if (/MARWYN|MAGNIFICEN/.test(l)) caps++;
       });
     });
-    ['surge', 'maxed', 'taunt', 'yeet', 'landing', 'flex'].forEach(function (k) {
+    ['surge', 'maxed', 'taunt', 'yeet', 'landing', 'flex', 'opportunity'].forEach(function (k) {
       t.ok((h.barks[k] || []).length >= 3 && h.barks[k].every(function (l) { return l.length <= 70; }), 'extra bark key ' + k);
     });
     t.ok(others >= 8, 'barks name other heroes now and then, the new ones too (' + others + ')');
+    ['Kiri', 'Betty', 'Basanos', 'Valdris', 'Hjalmar', 'Pebbles'].forEach(function (n) {
+      let named = false;
+      for (const k in h.barks) if (h.barks[k].some(function (l) { return l.indexOf(n) >= 0; })) named = true;
+      t.ok(named, 'a bark for the newer party member ' + n);
+    });
     t.ok(caps >= 15, 'MAGNIFICENT, in capitals, a lot (' + caps + ')');
     // every player-facing text: no removed mechanics, pronouns as confirmed by the user
     const texts = [h.blurb, h.role, h.passive.name, h.passive.desc];
@@ -814,6 +823,38 @@
     setStacks(m, 5);
     const sg = surges(function () { use(t, m, m.basic, 3, 4, 'basic at 5 with the mirror'); });
     t.eq(sg.length, 2, 'a real surge with the mirror: two wild magic effects');
+    // review fix: when the first effect wins the fight, the second is skipped (no duck summoned after the victory)
+    DD.Combat.sandbox({ w: 9, h: 9, seed: 7, enemyAi: false, heroes: [{ id: 'marwyn', x: 2, y: 4, level: 1, items: ['mrw_hand_mirror'] }], enemies: [{ id: 'test_grunt', x: 6, y: 4, hpMult: 0.3 }] });
+    m = M();
+    setStacks(m, 5);
+    const WM = DD.WildMagic, pool0 = WM.pool, rng = DD.Combat.state.rng;
+    const ownWeighted = Object.prototype.hasOwnProperty.call(rng, 'weighted'), weighted0 = rng.weighted;
+    const wm = function (id) { return WM.list().filter(function (d) { return d.id === id; })[0]; };
+    WM.pool = function () { return [wm('wm_smite'), wm('wm_duck')]; };
+    rng.weighted = function (list) { return list[0]; };
+    let won = [];
+    try { won = DD.Marwyn.surge(m, rng); } finally { WM.pool = pool0; if (ownWeighted) rng.weighted = weighted0; else delete rng.weighted; }
+    t.ok(DD.Combat.state.result === 'victory' && won.length === 1 && won[0].id === 'wm_smite', 'mirror: Smite wins the fight, so the second effect is skipped (' + won.map(function (e) { return e.id; }) + ')');
+    t.ok(!DD.Combat.state.units.some(function (u) { return u.defId === 'wm_duck'; }), '... no duck appears after the victory');
+    // review v2 (pass 2): when the first effect takes the second one's target away (BEES! finishes the last non-boss foe
+    // while the boss stands, so Baa-d Luck has nobody to turn into a sheep), the mirror rolls another good effect that
+    // still applies, and the banner names the two that went off
+    fight({ heroes: [{ x: 2, y: 4, items: ['mrw_hand_mirror'] }], enemies: [{ id: 'test_boss', x: 8, y: 8 }, { id: 'test_minion', x: 4, y: 4, hpMult: 0.2 }] });
+    m = M();
+    setStacks(m, 5);
+    const minion = at(4, 4), rng2 = DD.Combat.state.rng, banner0 = DD.FX.banner;
+    const own2 = Object.prototype.hasOwnProperty.call(rng2, 'weighted'), weighted2 = rng2.weighted;
+    let firstPool = true, ban = null, two = [];
+    WM.pool = function () { if (firstPool) { firstPool = false; return [wm('wm_bees'), wm('wm_baa')]; } return pool0.apply(WM, arguments); };
+    rng2.weighted = function (list) { return list[0]; };
+    DD.FX.banner = function () { const ev = banner0.apply(this, arguments); if (!ban) ban = ev; return ev; };
+    try { two = DD.Marwyn.surge(m, rng2); } finally { WM.pool = pool0; DD.FX.banner = banner0; if (own2) rng2.weighted = weighted2; else delete rng2.weighted; }
+    const ids2 = two.map(function (e) { return e.id; });
+    t.ok(minion.dead && !DD.Combat.state.result, 'setup: BEES! finished the minion, the boss still stands');
+    t.ok(two.length === 2 && ids2[0] === 'wm_bees' && ids2[1] !== 'wm_baa' && ids2[1] !== 'wm_bees' && two.every(function (e) { return e.good === true; }),
+      'mirror: a second good effect still goes off, re-rolled instead of the fizzled Baa-d Luck (' + ids2 + ')');
+    t.ok(!foes().some(function (f) { return has(f, 'sheep'); }), '... and nobody turned into a sheep');
+    t.eq(ban && ban.sub, two.map(function (e) { return e.icon + ' ' + e.name; }).join(' + '), 'the banner names the two effects that went off');
     ITEMS.forEach(function (id, i) {
       DD.Combat.start({ grid: DD.Combat.emptyGrid(9, 9),
         heroes: [{ runHero: DD.Combat.makeRunHero({ id: 'marwyn', level: 3, items: [id], skills: [{ id: 'mrw_yeet', level: 2 }, { id: 'mrw_war_cry', level: 2 }, { id: 'mrw_hero_landing', level: 1 }] }), x: 1, y: 4 },
@@ -904,6 +945,14 @@
     use(t, m, m.skills[0], 3, 4, 'Cleave III killing minions');
     t.ok(dead('test_minion') === 2 && at(4, 5) && at(4, 5).hp === 7, 'dead foes are skipped, the living one is knocked back');
     t.eq(stacks(m), 1, 'kills or not: +1 MAGNIFICENCE');
+    // Cleave III's knockback is a real push: into a pit (environmental kill) and into water (Wet)
+    fight({ heroes: [{ x: 2, y: 4, skills: [{ id: 'mrw_cleave', level: 3 }] }], enemies: [{ id: 'test_grunt', x: 3, y: 3 }, { id: 'test_grunt', x: 3, y: 5 }, { id: 'test_grunt', x: 8, y: 8 }] });
+    setT(4, 3, 'pit'); setT(4, 5, 'water');
+    m = M();
+    const hype0 = DD.Combat.state.hype;
+    use(t, m, m.skills[0], 3, 4, 'Cleave III between a pit and a pond');
+    t.ok(dead('test_grunt') === 1 && DD.Combat.state.hype - hype0 >= 20, 'knocked into the pit: an environmental kill (+20 Hype)');
+    t.ok(at(4, 5) && at(4, 5).hp === 7 && has(at(4, 5), 'wet'), 'knocked into the water: 7 damage and Wet');
     fight({ heroes: [{ x: 1, y: 4, skills: ['mrw_yeet'] }], enemies: [{ id: 'test_minion', x: 2, y: 4, hpMult: 0.5 }, { id: 'test_grunt', x: 3, y: 4 }] });
     m = M();
     use(t, m, m.skills[0], 2, 4, 'YEET a 3-HP minion into a grunt');
@@ -958,9 +1007,214 @@
     t.ok(!has(m, 'thorns') && !has(m, 'mrw_rage'), 'Thorns and Rage end with that turn');
   });
 
-  // ---- 16. AutoPlay battles -------------------------------------------------------------------------------------
+  // ---- 16. attacks of opportunity (DESIGN §4.2) ------------------------------------------------------------------
+  /** 'opportunity:attack' events while fn runs: [{ a: attacker defId, m: mover defId, skill }]. */
+  function opportunities(fn) {
+    const seen = [];
+    const off = DD.Events.on('opportunity:attack', function (e) { seen.push({ a: e.attacker.defId, m: e.mover.defId, skill: e.skillId }); });
+    try { fn(); } finally { off(); }
+    return seen;
+  }
+  /** Bark keys asked for through maybeBark while fn runs (the line itself is a cosmetic roll). */
+  function barkKeys(fn) {
+    const keys = [], mb = DD.Act.maybeBark;
+    DD.Act.maybeBark = function (u, key) { keys.push(key); return mb.apply(this, arguments); };
+    try { fn(); } finally { DD.Act.maybeBark = mb; }
+    return keys;
+  }
+
+  T.suite('hero_marwyn: attacks of opportunity (he holds the line; his leap, throws, pulls and knockbacks never provoke)', function (t) {
+    // Ginger Snap is his attack of opportunity: a foe that walks away from him takes one, once per round
+    fight({ heroes: [{ x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }, { id: 'test_grunt', x: 2, y: 5 }] });
+    let m = M();
+    const g1 = at(3, 4), g2 = at(2, 5);
+    t.eq(A().opportunitySlot(m), m.basic, 'his melee basic attack is his attack of opportunity');
+    let asked = [];
+    let seen = opportunities(function () { asked = barkKeys(function () { DD.AI.moveTo(g1, 6, 4); }); });
+    t.ok(seen.length === 1 && seen[0].a === 'marwyn' && seen[0].m === 'test_grunt' && seen[0].skill === 'mrw_ginger_snap', 'the grunt walks away: Ginger Snap (' + JSON.stringify(seen) + ')');
+    t.ok(g1.hp === 14 - 5 && g1.x === 6, '5 damage, and it walks on');
+    t.ok(m.ap === 3 && !(m.basic.uses > 0) && !m.basic.usedThisTurn, 'free: no AP, no use');
+    t.eq(stacks(m), 1, 'it reached a foe: +1 MAGNIFICENCE (holding the line pumps him up)');
+    t.ok(asked.indexOf('opportunity') >= 0, 'he may shout about it (bark key "opportunity")');
+    seen = opportunities(function () { DD.AI.moveTo(g2, 2, 8); });
+    t.ok(seen.length === 0 && g2.hp === 14, 'one per round: the second grunt leaves unpunished');
+    DD.Combat.endTurn();
+    t.ok(DD.Combat.state.round === 2 && DD.Combat.current() === m, 'round 2, his turn');
+    A().teleport(g2, 2, 5);
+    seen = opportunities(function () { DD.AI.moveTo(g2, 2, 8); });
+    t.ok(seen.length === 1 && g2.hp === 9 && stacks(m) === 2, 'a new round, a new swing (+1 again)');
+    // at a full meter the swing is "his next skill": it surges (good wild magic, +10 Hype) on the foe's turn
+    fight({ heroes: [{ x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }, { id: 'test_grunt', x: 8, y: 8 }] });
+    m = M();
+    setStacks(m, 5);
+    let gains = [];
+    let sg = surges(function () { gains = hypeGains(function () { DD.AI.moveTo(at(3, 4), 6, 4); }); });
+    t.ok(sg.length === 1 && sg[0].good === true && sg[0].source === 'mrw_magnificence', 'at 5 MAGNIFICENCE the attack of opportunity surges (one good effect)');
+    t.eq(surgeHype(gains), '10', '... +10 party Hype');
+    t.eq(stacks(m), 1, '... the meter resets, then the swing adds 1');
+    DD.Combat.sandbox({ w: 9, h: 9, seed: 7, enemyAi: false, heroes: [{ id: 'marwyn', x: 2, y: 4, level: 1 }], enemies: [{ id: 'test_minion', x: 3, y: 4, hpMult: 0.5 }] });
+    m = M();
+    setStacks(m, 5);
+    sg = surges(function () { DD.AI.moveTo(foes()[0], 6, 4); });
+    t.ok(DD.Combat.state.result === 'victory' && sg.length === 0 && stacks(m) === 5, 'a swing that wins the fight: victory, no surge');
+    // walking away from a foe provokes it (the move preview says so); being hit adds nothing
+    fight({ heroes: [{ x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
+    m = M();
+    const e = DD.Combat.reachable(m).get('0,4');
+    t.ok(e && e.provokes.length === 1, 'walking away from the grunt provokes it');
+    const pv = DD.Combat.provokes(m, 0, 4);
+    t.ok(pv.length === 1 && pv[0].skillId === 'test_grunt_stab' && pv[0].dmg === 4, 'the move preview: a 4-damage stab (' + JSON.stringify(pv) + ')');
+    let hp = m.hp;
+    seen = opportunities(function () { t.ok(DD.Combat.move(m, 0, 4), 'he walks away anyway'); });
+    t.ok(seen.length === 1 && m.hp === hp - 4 && m.x === 0 && m.y === 4, 'stabbed on the way out (4), walk finished');
+    t.eq(stacks(m), 0, 'being hit adds no MAGNIFICENCE');
+    // Ginger Rage softens that stab, Gun Show's Thorns answer it (rooted foes still swing)
+    fight({ heroes: [{ x: 2, y: 4, skills: ['mrw_rage', 'mrw_gun_show'] }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
+    m = M();
+    let g = at(3, 4);
+    use(t, m, m.skills[0], 2, 4, 'Ginger Rage');
+    use(t, m, m.skills[1], 2, 4, 'Gun Show');
+    hp = m.hp;
+    DD.Combat.move(m, 0, 4);
+    t.ok(m.hp === hp - 2 && m.x === 0, 'Ginger Rage: the stab on the way out deals 2 (4 − 2)');
+    t.eq(g.hp, 14 - 2, 'and the rooted grunt eats Thorns 2 for it');
+    // the Loincloth: a foe he Taunted stabs him for 25% less on the way out too
+    fight({ heroes: [{ x: 2, y: 4, items: ['mrw_loincloth'], skills: ['mrw_war_cry'] }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
+    m = M();
+    use(t, m, m.skills[0], 2, 4, 'War Cry');
+    m.block = 0;
+    hp = m.hp;
+    DD.Combat.move(m, 0, 4);
+    t.eq(hp - m.hp, 3, 'Loincloth: the Taunted grunt\'s stab deals 3 instead of 4');
+    // mobility never provokes: his leap, his throws, his pull and his knockback
+    fight({ heroes: [{ x: 2, y: 4, skills: ['mrw_hero_landing'] }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }, { id: 'test_grunt', x: 2, y: 3 }, { id: 'test_grunt', x: 1, y: 4 }] });
+    m = M();
+    hp = m.hp;
+    seen = opportunities(function () { use(t, m, m.skills[0], 2, 7, 'Hero Landing out of three grunts'); });
+    t.ok(seen.length === 0 && m.hp === hp && m.x === 2 && m.y === 7, 'Hero Landing: a leap never provokes (out of three grunts, not a scratch)');
+    fight({ heroes: [{ x: 2, y: 4, skills: ['mrw_yeet'] }, { id: 'test_mage', x: 2, y: 5, hp: 5 }], enemies: [{ id: 'test_grunt', x: 3, y: 5 }, { id: 'test_grunt', x: 1, y: 5 }] });
+    m = M();
+    const mage = hero('test_mage');
+    seen = opportunities(function () { use(t, m, m.skills[0], 2, 5, 'YEET the pinned mage'); });
+    t.ok(seen.length === 0 && mage.hp === 5 && mage.x === 2 && mage.y === 8, 'YEET: a throw never provokes (the wounded mage flies out from between two grunts unhurt)');
+    fight({ heroes: [{ x: 4, y: 4, skills: ['mrw_magnetism'] }, { id: 'test_knight', x: 4, y: 0 }], enemies: [{ id: 'test_grunt', x: 4, y: 1 }] });
+    m = M();
+    g = at(4, 1);
+    seen = opportunities(function () { use(t, m, m.skills[0], 4, 4, 'Center of Attention'); });
+    t.ok(seen.length === 0 && g.x === 4 && g.y === 3 && g.hp === 14, 'Center of Attention: a pull never provokes (no swing from the knight it was next to)');
+    fight({ heroes: [{ x: 2, y: 4, skills: [{ id: 'mrw_cleave', level: 3 }] }, { id: 'test_knight', x: 3, y: 3 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
+    m = M();
+    g = at(3, 4);
+    seen = opportunities(function () { use(t, m, m.skills[0], 3, 4, 'Cleave III'); });
+    t.ok(seen.length === 0 && g.x === 4 && g.hp === 14 - 7, 'Glorious Cleave III: a knockback never provokes (7 damage, knocked off the knight, no swing)');
+    // the combo: LOOK AT MARWYN! drags a foe off the knight it was fighting, through the knight's attack of opportunity
+    function drag(shout) {
+      fight({ ai: true, heroes: [{ x: 2, y: 4, skills: ['mrw_war_cry'] }, { id: 'test_knight', x: 5, y: 4 }], enemies: [{ id: 'test_grunt', x: 4, y: 4 }] });
+      const mm = M(), k = hero('test_knight'), gg = at(4, 4);
+      if (shout) use(t, mm, mm.skills[0], 2, 4, 'War Cry at the grunt 2 tiles away');
+      let hits = {};
+      const ev = opportunities(function () { hits = hitsTaken(function () { DD.Combat.endRound(); }); });
+      return { m: mm, k: k, g: gg, seen: ev, hits: hits };
+    }
+    const calm = drag(false), loud = drag(true);
+    t.ok(calm.seen.length === 0 && calm.g.x === 4 && calm.hits[calm.k.id] > 0, 'control: the grunt sticks to the knight next to it');
+    t.ok(loud.seen.length === 1 && loud.seen[0].a === 'test_knight' && loud.seen[0].m === 'test_grunt', 'Taunted: it walks off the knight and eats his attack of opportunity');
+    t.ok(loud.g.hp === 14 - 5 && DD.Grid.dist(loud.g, loud.m) === 1 && !loud.hits[loud.k.id], '... 5 damage on its way to Marwyn; the knight is left alone');
+    t.eq(loud.hits[loud.m.id], 4, '... and it stabs Marwyn (into his Block)');
+    // the other half of the combo: a foe he Taunted only strikes its taunter, so a pinned ally walks away from it for free
+    function pinned(shout) {
+      fight({ heroes: [{ x: 2, y: 4, skills: ['mrw_war_cry'] }, { id: 'test_mage', x: 4, y: 5 }], enemies: [{ id: 'test_grunt', x: 4, y: 4 }] });
+      const mm = M(), mg = hero('test_mage');
+      if (shout) use(t, mm, mm.skills[0], 2, 4, 'War Cry at the grunt pinning the mage');
+      DD.Combat.endTurn();
+      const pv = DD.Combat.provokes(mg, 6, 7), hp0 = mg.hp;
+      const ev = opportunities(function () { t.ok(DD.Combat.move(mg, 6, 7), 'the mage walks off the grunt'); });
+      return { pv: pv, ev: ev, lost: hp0 - mg.hp, at: mg.x + ',' + mg.y };
+    }
+    const stuck = pinned(false), freed = pinned(true);
+    t.ok(stuck.pv.length === 1 && stuck.ev.length === 1 && stuck.lost === 4, 'control: walking off the grunt costs the mage its stab (4)');
+    t.ok(freed.pv.length === 0 && freed.ev.length === 0 && freed.lost === 0 && freed.at === '6,7', 'Taunted by Marwyn: the grunt only strikes him, so the mage walks away unhurt (the move preview agrees)');
+    // no swing while he is incapacitated, nor at the foe that charmed him
+    ['stun', 'sleep', 'frozen', 'sheep'].forEach(function (sid) {
+      fight({ heroes: [{ x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
+      const gg = at(3, 4);
+      A().addStatus(M(), sid, { turns: 1 });
+      const ev = opportunities(function () { DD.AI.moveTo(gg, 6, 4); });
+      t.ok(ev.length === 0 && gg.hp === 14, sid + ': no attack of opportunity');
+    });
+    fight({ heroes: [{ x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
+    g = at(3, 4);
+    A().addStatus(M(), 'charmed', { turns: 1 }, g);
+    seen = opportunities(function () { DD.AI.moveTo(g, 6, 4); });
+    t.ok(seen.length === 0 && g.hp === 14, 'charmed by the grunt: he lets his charmer go');
+    // the "opportunity" bark belongs to reactions only
+    fight({ heroes: [{ x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
+    m = M();
+    asked = barkKeys(function () { use(t, m, m.basic, 3, 4, 'Ginger Snap on his own turn'); });
+    t.ok(asked.indexOf('opportunity') < 0, 'a Ginger Snap on his own turn never asks for the "opportunity" bark (' + asked.join(',') + ')');
+  });
+
+  // ---- 17. AutoPlay battles -------------------------------------------------------------------------------------
+  /**
+   * Invariants on every real use of his skills while fn runs (review v2): the passive's one rule (a full meter surges
+   * unless the fight is decided, the meter resets, then +1 if a foe was in the area, +2 more for Ginger Rage; nothing
+   * else moves it) and, for each skill AutoPlay picks, the HUD preview == what happened (HP, KOs, movement, Hype).
+   * Nested uses (one of his skills resolving inside another) are skipped. → { acc, accBad, prev, prevBad, bad }
+   */
+  function audited(fn) {
+    const out = { acc: 0, accBad: 0, prev: 0, prevBad: 0, bad: [] };
+    const rs0 = DD.Combat.resolveSkill, us0 = DD.Combat.useSkill;
+    let depth = 0, nested = false, surgeCount = 0;
+    const off = DD.Events.on('wildmagic:surge', function (e) { if (e.source === 'mrw_magnificence') surgeCount++; });
+    DD.Combat.resolveSkill = function (unit, slotOrDef, target, opts) {
+      const r = DD.Targeting.resolve(slotOrDef), def = r && r.def;
+      if (A().simulating || !unit || unit.defId !== 'marwyn' || !def || DD.getSkill(def.id) !== def) return rs0.apply(this, arguments);
+      if (depth > 0) nested = true;
+      const ctx0 = DD.Targeting.buildCtx(unit, slotOrDef, target, opts && opts.extra);
+      const before = stacks(unit), s0 = surgeCount, decided0 = !!DD.Combat.state.result;
+      depth++;
+      let res;
+      try { res = rs0.apply(this, arguments); } finally { depth--; }
+      if (depth > 0) return res;
+      if (nested) { nested = false; return res; }
+      if (unit.dead || unit.downed) return res;
+      const surged = surgeCount > s0;
+      const expect = Math.min(5, (surged ? 0 : before) + (ctx0 && ctx0.foes.length ? 1 : 0) +
+        (def.id === 'mrw_rage' ? DD.skillLevel(def, r.level).stacks : 0));
+      const problem = before >= 5 && !surged && !DD.Combat.state.result ? 'a full meter did not surge' :
+        before < 5 && surged ? 'surged below a full meter (' + before + ')' :
+        decided0 && surged ? 'surged after the fight was decided' :
+        stacks(unit) !== expect ? 'MAGNIFICENCE ' + before + ' → ' + stacks(unit) + ', expected ' + expect : '';
+      out.acc++;
+      if (problem) { out.accBad++; out.bad.push(def.id + (opts && opts.extra && opts.extra.opportunity ? ' (attack of opportunity)' : '') + ': ' + problem); }
+      return res;
+    };
+    DD.Combat.useSkill = function (unit, slot, x, y) {
+      if (A().simulating || !unit || unit.defId !== 'marwyn') return us0.apply(this, arguments);
+      const s = DD.Combat.state, prev = DD.Combat.preview(unit, slot, x, y), hype0 = s.hype, before = {};
+      s.units.forEach(function (o) { before[o.id] = { hp: o.hp, dead: !!o.dead, downed: !!o.downed, x: o.x, y: o.y }; });
+      const ok = us0.apply(this, arguments);
+      if (!ok || !prev || prev.uncertain) return ok;
+      out.prev++;
+      const id = (slot && slot.id) + ' @' + x + ',' + y + ': ';
+      s.units.forEach(function (o) {
+        const b = before[o.id], e = prev.perUnit[o.id];
+        if (!b || b.dead) return;
+        const ko = (o.dead && !b.dead) || (o.downed && !b.downed);
+        const lost = b.hp - o.hp, shown = e ? (e.dmg || 0) - (e.heal || 0) : 0;
+        if (lost !== shown) { out.prevBad++; out.bad.push(id + o.name + ' HP ' + lost + ', preview ' + shown); }
+        if (ko !== !!(e && e.lethal)) { out.prevBad++; out.bad.push(id + o.name + ' KO ' + ko + ', preview ' + !!(e && e.lethal)); }
+        if (!o.dead && !ko && (o.x !== b.x || o.y !== b.y) !== !!(e && e.moved)) { out.prevBad++; out.bad.push(id + o.name + ' movement differs from the preview'); }
+      });
+      if (s.hype - hype0 !== prev.hype) { out.prevBad++; out.bad.push(id + 'Hype ' + (s.hype - hype0) + ', preview ' + prev.hype); }
+      return ok;
+    };
+    try { fn(); } finally { DD.Combat.resolveSkill = rs0; DD.Combat.useSkill = us0; off(); }
+    return out;
+  }
   function battles(t, plans) {
     const totals = {};
+    const audit = { acc: 0, accBad: 0, prev: 0, prevBad: 0, bad: [] };
     let fought = 0, wins = 0, skillUses = 0, turned = 0;
     plans.forEach(function (p, i) {
       const enc = DD.getEncounter(p.enc);
@@ -980,7 +1234,11 @@
       } } });
       const off = DD.Events.on('turn:start', function (ev) { if (ev.unit && ev.unit.defId === 'marwyn') turns++; });
       let r = null;
-      try { r = DD.AutoPlay.runBattle(30); } finally { off(); }
+      try {
+        const a = audited(function () { r = DD.AutoPlay.runBattle(30); });
+        ['acc', 'accBad', 'prev', 'prevBad'].forEach(function (k) { audit[k] += a[k]; });
+        a.bad.forEach(function (b) { audit.bad.push(p.enc + ' L' + p.level + ' ' + b); });
+      } finally { off(); }
       fought++;
       if (r.result === 'victory') wins++;
       if (turns > 0) turned++;
@@ -990,6 +1248,10 @@
       t.log(p.enc + ' L' + p.level + ' → ' + r.result + ' in ' + r.rounds + ' rounds; Marwyn ' + turns + ' turns: ' + JSON.stringify(counts));
       A().removeRule('mrw_usage_probe');
     });
+    t.log('audit: ' + audit.acc + ' uses accounted, ' + audit.prev + ' certain previews compared');
+    t.eq(audit.accBad, 0, 'MAGNIFICENCE follows its one rule on every use in these fights' + (audit.bad.length ? ': ' + audit.bad.slice(0, 4).join(' | ') : ''));
+    t.eq(audit.prevBad, 0, 'every skill AutoPlay picked did what its HUD preview said' + (audit.bad.length ? ': ' + audit.bad.slice(0, 4).join(' | ') : ''));
+    t.ok(audit.acc >= 2 * fought && audit.prev >= fought, 'the audit saw his skills in use (' + audit.acc + ' uses, ' + audit.prev + ' previews)');
     return { totals: totals, fought: fought, wins: wins, uses: skillUses, turned: turned };
   }
 
@@ -1025,5 +1287,107 @@
     t.ok(res.uses >= 10, 'he uses his skills (' + res.uses + ')');
     t.ok(Object.keys(res.totals).filter(function (k) { return k !== 'mrw_ginger_snap'; }).length >= 6, 'many different skills used (' + Object.keys(res.totals).length + ')');
     t.ok(res.wins >= 6, 'the party mostly wins (' + res.wins + '/' + res.fought + ')');
+  });
+
+  // YEET has no dmg number, so AutoPlay's quick pass (which picks the move + skill options worth an exact dry run) only
+  // sees a throw through YEET's autoplayValue hint
+  T.suite('hero_marwyn: AutoPlay walks up and YEETs a foe into a pit (the throw hint)', function (t) {
+    const hint = DD.getSkill('mrw_yeet').autoplayValue;
+    t.ok(typeof hint === 'function', 'YEET has an autoplayValue hint');
+    fight({ heroes: [{ x: 3, y: 4, skills: ['mrw_yeet'] }, { id: 'test_knight', x: 3, y: 5 }],
+      enemies: [{ id: 'test_grunt', x: 4, y: 4 }, { id: 'test_grunt', x: 3, y: 7 }, { id: 'test_grunt', x: 2, y: 4 }, { id: 'test_grunt', x: 8, y: 0 }] });
+    setT(6, 4, 'pit');
+    let m = M(), sl = give(m, 'mrw_yeet', 1);
+    const ctxAt = function (x, y) { return DD.Targeting.buildCtx(m, sl, { x: x, y: y }); };
+    t.eq(hint(ctxAt(4, 4)), 14 + 15, 'a foe thrown into the pit: worth its HP + a kill');
+    t.eq(hint(ctxAt(3, 5)), -1.5 * 6 + 6, 'an ally thrown into a foe: the crash hurts a friend (−1.5 × 6) and a foe (+6)');
+    t.eq(hint(ctxAt(2, 4)), 6, 'a foe thrown into the map edge after 2 tiles: one crash');
+    const exact = ctxAt(4, 4);
+    exact.autoplay = { preview: {} };
+    t.eq(hint(exact), 0, 'the exact pass measures the real throw: the hint adds nothing there');
+    // plenty of plain hits on offer (they fill the quick pass's shortlist), one throw into a pit two steps away
+    fight({ heroes: [{ x: 1, y: 4, skills: ['mrw_yeet'] }],
+      enemies: [{ id: 'test_grunt', x: 4, y: 4 }, { id: 'test_grunt', x: 1, y: 2 }, { id: 'test_grunt', x: 2, y: 6 }, { id: 'test_grunt', x: 0, y: 6 }, { id: 'test_grunt', x: 8, y: 0 }] });
+    setT(6, 4, 'pit');
+    m = M();
+    const g = at(4, 4);
+    DD.AutoPlay.takeTurn();
+    t.ok(g.dead && m.x === 3 && m.y === 4 && DD.Combat.state.stats.envKills === 1, 'AutoPlay walked next to the grunt and YEETed it into the pit (Marwyn at ' + m.x + ',' + m.y + ')');
+  });
+
+  // AutoPlay's gain counts a Taunt as 1 and Block as 0.1 a point, and its quick estimate of a leap ignores the Taunt:
+  // without these two hints BEHOLD and Hero Landing were never used in campaign sims
+  T.suite('hero_marwyn: AutoPlay hints (Hero Landing bodyguards a wounded ally, BEHOLD when the party is in trouble)', function (t) {
+    const landing = DD.getSkill('mrw_hero_landing').autoplayValue, behold = DD.getSkill('mrw_behold').aiScore;
+    t.ok(typeof landing === 'function' && typeof behold === 'function', 'Hero Landing has an autoplayValue hint, BEHOLD an aiScore');
+    // the mage acts first in the order, then Marwyn; the grunt next to the 4-HP mage acts before her next turn
+    function rescue(skills) {
+      fight({ ai: true, heroes: [{ id: 'test_mage', x: 5, y: 4, hp: 4 }, { x: 3, y: 3, skills: skills }], enemies: [{ id: 'test_grunt', x: 6, y: 4 }, { id: 'test_grunt', x: 8, y: 0 }] });
+      DD.Combat.endTurn();
+      return M();
+    }
+    let m = rescue(['mrw_hero_landing']);
+    let sl = m.skills[0];
+    t.ok(DD.Combat.current() === m, 'Marwyn\'s turn');
+    const ctxAt = function (x, y) { return DD.Targeting.buildCtx(m, sl, { x: x, y: y }); };
+    t.eq(landing(ctxAt(6, 3)), 3, 'a landing next to the grunt that is on the mage: 3');
+    t.eq(landing(ctxAt(3, 1)), 0, 'a landing next to nobody: 0');
+    const exact = ctxAt(6, 3);
+    exact.autoplay = { preview: {} };
+    t.eq(landing(exact), 0, 'the exact pass measures the real leap: the hint adds nothing there');
+    A().addStatus(at(6, 4), 'taunt', { turns: 1 }, m);
+    t.eq(landing(ctxAt(6, 3)), 0, 'a foe he already Taunted is not worth another landing');
+    m = rescue(['mrw_hero_landing']);
+    const mage = hero('test_mage'), g = at(6, 4);
+    DD.AutoPlay.takeTurn();
+    t.ok(m.x === 6 && m.y === 3 && has(g, 'taunt') && st(g, 'taunt').source === m.id, 'AutoPlay leapt next to the grunt and Taunted it (Marwyn at ' + m.x + ',' + m.y + ')');
+    const hits = hitsTaken(function () { DD.Combat.endTurn(); });
+    t.ok(!hits[mage.id] && !mage.downed, 'the wounded mage survives the grunt\'s turn');
+    // BEHOLD: 4 per foe that is not next to him and not Taunted by him yet
+    fight({ heroes: [{ id: 'test_mage', x: 6, y: 4, hp: 8 }, { x: 1, y: 1 }], enemies: [{ id: 'test_grunt', x: 6, y: 3 }, { id: 'test_grunt', x: 7, y: 4 }, { id: 'test_grunt', x: 6, y: 5 }, { id: 'test_grunt', x: 1, y: 2 }] });
+    DD.Combat.endTurn();
+    m = M();
+    const ctxB = function () { return DD.Targeting.buildCtx(m, m.signature, { x: m.x, y: m.y }); };
+    t.eq(behold(ctxB()), 3 * 4, 'BEHOLD hint: the 3 grunts on the mage count, the one next to him does not');
+    A().addStatus(at(6, 3), 'taunt', { turns: 1 }, m);
+    t.eq(behold(ctxB()), 2 * 4, 'a grunt he already Taunted no longer counts');
+    A().removeStatus(at(6, 3), 'taunt');
+    DD.Combat.state.hype = 100;
+    DD.AutoPlay.takeTurn();
+    t.ok(DD.Combat.state.hype === 0 && foes().every(function (f) { return has(f, 'taunt') && st(f, 'taunt').source === m.id; }), 'AutoPlay unleashed BEHOLD with three grunts around the wounded mage (Hype ' + DD.Combat.state.hype + ')');
+  });
+
+  // ---- v2 requests (user, Nov 3): flyers ignore the floor, barrels ---------------------------------------------
+  T.suite('hero_marwyn: v2 requests — Keg Stand puddles miss flyers, his axe and his head set barrels off (in his face)', function (t) {
+    // 1. Keg Stand splashes the FLOOR: grounded units there get Wet, a flyer above the puddle stays dry
+    fight({ heroes: [{ x: 4, y: 4, skills: ['mrw_keg_stand'] }], enemies: [{ id: 'test_grunt', x: 5, y: 4 }, { id: 'test_grunt', x: 3, y: 4 }, { id: 'test_grunt', x: 8, y: 8 }] });
+    let m = M();
+    const walker = at(5, 4), flyer = at(3, 4);
+    flyer.flags = Object.assign({}, flyer.flags, { flying: true });   // test setup: a flying foe
+    use(t, m, m.skills[0], 4, 4, 'Keg Stand between a walker and a flyer');
+    t.ok(has(walker, 'wet') && !has(flyer, 'wet'), 'the walker is Wet, the flyer is not (the desc says grounded units)');
+    t.ok(tile(3, 4).surface && tile(3, 4).surface.id === 'water', 'the puddle is under the flyer all the same');
+    t.ok(/grounded units there get Wet/.test(DD.skillDesc(DD.getSkill('mrw_keg_stand'), 1, null)), 'Keg Stand desc: grounded units');
+    // YEET's flight path and the AutoPlay throw hint read hazards per unit: lava under a flyer's path is no threat to it
+    fight({ heroes: [{ x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }, { id: 'test_grunt', x: 8, y: 8 }], terrain: function (tl) { if (tl.x === 5 && tl.y === 4) tl.t = 'lava'; } });
+    const f = at(3, 4);
+    t.ok(DD.Grid.hazardAt(5, 4, f) !== null, 'lava is a hazard for the walking grunt');
+    f.flags = Object.assign({}, f.flags, { flying: true });
+    t.eq(DD.Grid.hazardAt(5, 4, f), null, 'and none once it flies');
+
+    // 2. barrels: Ginger Snap whacks an adjacent one (he is in the blast); Use Your Head too, paying its 2 HP
+    fight({ heroes: [{ x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 4, y: 4 }, { id: 'test_grunt', x: 8, y: 8 }], objects: [{ x: 3, y: 4, id: 'barrel_explosive' }] });
+    m = M();
+    const g = at(4, 4);
+    t.ok(DD.Targeting.validTargets(m, m.basic).some(function (q) { return q.obj && q.x === 3 && q.y === 4; }), 'Ginger Snap: the adjacent barrel is a target');
+    const pv = DD.Combat.preview(m, m.basic, 3, 4);
+    t.ok(pv.detonates === 'barrel_explosive' && pv.perUnit[m.id].dmg === 8 && pv.perUnit[g.id].dmg === 8, 'preview: 8 to Marwyn and 8 to the grunt');
+    use(t, m, m.basic, 3, 4, 'Ginger Snap at the barrel');
+    t.ok(!tile(3, 4).obj && m.hp === m.maxHp - 8 && g.hp === 6 && m.ap === 2, 'KABOOM: both take 8, 1 AP (he calls it "a close shave")');
+    fight({ heroes: [{ x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 8, y: 8 }], objects: [{ x: 3, y: 4, id: 'barrel_explosive' }] });
+    m = M();
+    const sl = give(m, 'mrw_headbutt', 1);
+    use(t, m, sl, 3, 4, 'Use Your Head on the barrel');
+    t.ok(!tile(3, 4).obj && m.hp === m.maxHp - 2 - 8 && m.ap === 1 && sl.cd === 3, 'he pays 2 HP, then eats the 8; 2 AP, cooldown 3 (no Stun on a barrel)');
   });
 })();

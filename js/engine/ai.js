@@ -11,6 +11,9 @@
  * the START of the unit's next turn (AI.resolveWindups, called by DD.Combat), unless it is stunned / asleep / frozen /
  * polymorphed or dead by then. AI.reachOf / AI.threatMap estimate where AI units could strike before their foes' next
  * turn (HUD threat shading, AutoPlay's danger model).
+ * v2 targeting: reach-aware - what it can hit THIS turn (walk cost, LOS, attacks of opportunity its walk would provoke as
+ * a cost, never a lethal one); foes it is engaged with first, then threat and damage, low HP only a tiebreak; divers
+ * ('assassin' / 'skirmisher') go for the weak. Walks are move actions (fewest-provoke paths; they provoke).
  */
 (function () {
   'use strict';
@@ -52,6 +55,12 @@
     if (!active(o) || !G().hostile(u, o) || has(o, 'stealth')) return false;
     return !taunt || o === taunt;
   }
+
+  // v2 targeting (DESIGN §8 "Targeting"): divers go for the weak; everyone else sticks to the foe it is engaged with
+  const DIVERS = { assassin: 1, skirmisher: 1 };
+  // bonus for hitting a foe that stood next to it at the start of its turn ("engaged"), by style
+  const ENGAGED = { melee: 4, kamikaze: 4, support: 2, summoner: 1, ranged: 1, coward: 0, assassin: 0, skirmisher: 0 };
+  function isDiver(style) { return !!(style && DIVERS[style.style]); }
 
   function styleSpec(ai) {
     if (ai && typeof ai === 'object') return { style: ai.style || 'melee', keepDistance: ai.keepDistance !== undefined ? ai.keepDistance : (ai.style === 'ranged' || ai.style === 'summoner' ? 3 : 0) };
@@ -115,9 +124,13 @@
     if (u.side === 'enemy') m *= (S().difficulty && S().difficulty.dmg) || 1;
     return m;
   }
-  /** Rough damage of `dmg` from u to o (ignores hooks; reads statuses' declared takenMult, e.g. the DM's Exposed). */
-  function estimate(u, o, dmg, element) {
+  /**
+   * Rough damage of `dmg` from u to o (ignores hooks; reads statuses' declared takenMult, e.g. the DM's Exposed).
+   * noEmpower: an attack of opportunity (Empowered is neither used nor consumed by it).
+   */
+  function estimate(u, o, dmg, element, noEmpower) {
     let m = outMult(u);
+    if (noEmpower && has(u, 'empowered')) m /= 1.5;
     const tu = G().tile(u.x, u.y), to = G().tile(o.x, o.y);
     if (tu && to && (tu.h || 0) > (to.h || 0)) m *= 1.25;
     if (has(o, 'vulnerable')) m *= 1.25;
@@ -156,6 +169,123 @@
     return Math.max(0, Math.round(L.dmg * outMult(unit)) + telegraphFlat(unit));
   }
 
+  // ---- attacks of opportunity (DD.Act.opportunityOf) -------------------------------------------------
+  /**
+   * Estimated damage of attacker's attack of opportunity on mover (after armor, before Block). from: the tile the mover
+   * would leave (its modifyOpportunity flat / mult are read there); without it, the attacker's opportunity skill as is.
+   */
+  function oppDmg(attacker, mover, from) {
+    const o = from ? DD.Act.opportunityOf(attacker, mover, from) : null;
+    if (from && !o) return 0;
+    const sl = o ? o.slot : DD.Act.opportunitySlot(attacker);
+    const def = sl && skillOf(sl.id);
+    if (!def) return 0;
+    const L = DD.skillLevel(def, sl.level || 1);
+    const base = (L && L.dmg > 0 ? L.dmg : 0) * (o ? o.mult : 1) + (o ? o.flat : 0);
+    return base > 0 ? estimate(attacker, mover, base, elementOf(def), true) : 0;
+  }
+  AI.opportunityDmg = function (attacker, mover, from) { return attacker && mover ? DD.Targeting.pure(function () { return oppDmg(attacker, mover, from); }) : 0; };
+
+  /**
+   * What walking pos.path costs the AI in attacks of opportunity (pos.provokes from a reachable({ aoo: true }) entry):
+   * Infinity if their estimated hits would drop it, else the damage × 1.5 (divers 0.5, kamikazes 0.75) + 2 per attack.
+   * A taunted unit goes for its taunter whatever it costs (0.5 per attack), unless that would drop it.
+   */
+  function aooCost(unit, pos, style, taunted) {
+    const ids = pos && pos.provokes;
+    if (!ids || !ids.length) return 0;
+    const dmg = aooHits(unit, pos);
+    if (dmg >= (unit.hp || 0) + (unit.block || 0)) return Infinity;
+    if (taunted) return 0.5 * ids.length;
+    const w = isDiver(style) ? 0.5 : style && style.style === 'kamikaze' ? 0.75 : 1.5;
+    return dmg * w + 2 * ids.length;
+  }
+  /** The first tile of the walk to pos (its start, then the path, the destination aside) that is next to attacker a. */
+  function leavingNext(a, unit, pos) {
+    if (Math.abs(a.x - unit.x) + Math.abs(a.y - unit.y) === 1) return { x: unit.x, y: unit.y };
+    const path = pos.path || [];
+    for (let i = 0; i < path.length - 1; i++) if (Math.abs(a.x - path[i].x) + Math.abs(a.y - path[i].y) === 1) return path[i];
+    return null;
+  }
+  /** Estimated damage of the attacks of opportunity on the walk to pos (each read on the tile it is left from). */
+  function aooHits(unit, pos) {
+    const ids = (pos && pos.provokes) || [];
+    let dmg = 0;
+    for (let i = 0; i < ids.length; i++) {
+      const a = DD.Combat.byId(ids[i]);
+      if (a) dmg += oppDmg(a, unit, leavingNext(a, unit, pos) || { x: unit.x, y: unit.y });
+    }
+    return dmg;
+  }
+  function tauntedNow(u) { const t = taunter(u); return !!t && G().hostile(u, t); }
+  AI.aooCost = function (unit, pos, style) {
+    return DD.Targeting.pure(function () { return aooCost(unit, pos, style ? styleArg(unit, style) : styleOf(unit), tauntedNow(unit)); });
+  };
+  /** The estimated damage (after armor, before Block) of the attacks of opportunity a walk to pos provokes (pos.provokes). */
+  AI.aooDamage = function (unit, pos) {
+    if (!unit || !pos || !pos.provokes || !pos.provokes.length) return 0;
+    return DD.Targeting.pure(function () { return aooHits(unit, pos); });
+  };
+
+  /** Opposing units next to u that would make an attack of opportunity if it walked away now. Pure. */
+  AI.engaged = function (u) {
+    if (!active(u)) return [];
+    return DD.Targeting.pure(function () {
+      return S().units.filter(function (a) { return !a.dead && G().dist(a, u) === 1 && !!DD.Act.opportunityOf(a, u, null); });
+    });
+  };
+
+  /** The best damage number of a unit's damaging skills (its "threat" to the AI), signature aside. */
+  function threatOf(o) {
+    let best = 0;
+    DD.Combat.slotsOf(o).forEach(function (sl) {
+      if (o.signature && sl === o.signature) return;
+      const d = skillOf(sl.id);
+      const L = d && DD.skillLevel(d, sl.level || 1);
+      if (L && L.dmg > best) best = L.dmg;
+    });
+    return best;
+  }
+
+  /**
+   * How much an AI unit wants to hit foe o for est damage, on top of est (v2 targeting), from the facts { kill, hurt
+   * (0..1 HP missing), engaged, thr, maxHp, hero }. Most styles: +4 for the foe it is engaged with (next to it at the
+   * start of its turn: melee brutes stick; support 2, ranged / summoner 1, coward 0), up to +3 for a dangerous foe (¼ of
+   * its best damage number), +5 for a kill (+2 heroes), low HP only as a nudge (×1.5). Divers ('assassin' /
+   * 'skirmisher'): +14 for a kill (+6 heroes), the wounded ×8 and the squishy (low max HP) up to +4, no engagement.
+   * The kill part counts for every foe an action hits, the focus part (who it would rather hit) once per action, for the
+   * best foe in its area (an AoE is not worth more just for touching several engaged heroes).
+   * tc: { origin: {x,y} where it started its turn, thr: threat cache }.
+   */
+  function killBonus(style, f) { return f.kill ? (isDiver(style) ? 14 + (f.hero ? 6 : 0) : 5 + (f.hero ? 2 : 0)) : 0; }
+  function focusBonus(style, f) {
+    if (isDiver(style)) return (f.hurt || 0) * 8 + Math.max(0, Math.min(4, (30 - (f.maxHp || 30)) / 4));
+    let b = (f.hurt || 0) * 1.5 + Math.min(3, 0.25 * (f.thr || 0));
+    if (f.engaged) { const e = ENGAGED[style && style.style]; b += e === undefined ? 4 : e; }
+    return b;
+  }
+  function bonusOf(style, f) { return killBonus(style, f) + focusBonus(style, f); }
+  function targetFacts(o, est, tc) {
+    let thr = tc && tc.thr ? tc.thr[o.id] : undefined;
+    if (thr === undefined) { thr = threatOf(o); if (tc && tc.thr) tc.thr[o.id] = thr; }
+    const origin = tc && tc.origin;
+    return { kill: est > 0 && est >= o.hp + (o.block || 0), hurt: 1 - o.hp / Math.max(1, o.maxHp), thr: thr, maxHp: o.maxHp,
+      hero: o.kind === 'hero', engaged: !!origin && Math.abs(o.x - origin.x) + Math.abs(o.y - origin.y) === 1 };
+  }
+  function targetBonus(u, o, est, style, tc) { return bonusOf(style, targetFacts(o, est, tc)); }
+  /** AI.targetValue(u, o, est, style?, origin?) — the targeting bonus above for u hitting o (origin: u's turn-start tile). */
+  AI.targetValue = function (u, o, est, style, origin) {
+    if (!u || !o) return 0;
+    return targetBonus(u, o, est || 0, style ? styleArg(u, style) : styleOf(u), { origin: origin || { x: u.x, y: u.y }, thr: {} });
+  };
+  /** AI.targetBonus(style, { kill, hurt, engaged, thr, maxHp, hero }) — the same formula from facts (AutoPlay's model). */
+  AI.targetBonus = function (style, facts) { return bonusOf(style && style.style ? style : styleSpec(style) || { style: 'melee' }, facts || {}); };
+  AI.threatOf = threatOf;
+  AI.isDiver = function (styleOrUnit) {
+    if (styleOrUnit && styleOrUnit.style) return isDiver(styleOrUnit);
+    return styleOrUnit && styleOrUnit.id !== undefined ? isDiver(styleOf(styleOrUnit)) : !!DIVERS[styleOrUnit];
+  };
+
   // ---- scoring ----------------------------------------------------------------------------------
   function isSummonSkill(def) { return def.kind === 'summon' || (def.tags || []).indexOf('summon') >= 0; }
 
@@ -176,13 +306,14 @@
   }
   function isSupportSkill(def, L) { return def.kind === 'heal' || def.kind === 'buff' || (L && L.heal > 0 && !(L.dmg > 0)); }
 
-  function scoreAction(unit, slot, def, target, style, taunt) {
+  /** tc (v2 targeting): { origin: the tile it started its turn on, thr: threat cache } — see targetBonus. */
+  function scoreAction(unit, slot, def, target, style, taunt, tc) {
     const L = DD.skillLevel(def, slot.level);
     const tiles = DD.Targeting.area(unit, def, slot.level, target);
     const dmg = L && L.dmg > 0 ? L.dmg : 0;
     const heal = L && L.heal > 0 ? L.heal : 0;
     const el = elementOf(def);
-    let score = 0, foesHit = 0, hitsTaunter = false;
+    let score = 0, foesHit = 0, hitsTaunter = false, focus = 0;
     const seen = {};
     for (let i = 0; i < tiles.length; i++) {
       const o = G().unitAt(tiles[i].x, tiles[i].y);
@@ -193,9 +324,9 @@
         foesHit++;
         if (dmg) {
           const est = estimate(unit, o, dmg, el);
-          score += est;
-          if (est >= o.hp + (o.block || 0)) score += 12 + (o.kind === 'hero' ? 6 : 0);
-          score += (1 - o.hp / Math.max(1, o.maxHp)) * 3;
+          const f = targetFacts(o, est, tc);
+          score += est + killBonus(style, f);
+          focus = Math.max(focus, focusBonus(style, f));
         } else if (!isSupportSkill(def, L)) score += 3;
       } else if (!G().hostile(unit, o)) {
         if (dmg && (def.tags || []).indexOf('safe') < 0 && o !== unit) score -= estimate(unit, o, dmg, el) * 1.2;
@@ -207,6 +338,7 @@
       }
     }
     if (taunt && !hitsTaunter) return -1;
+    score += focus;
     score += protectedObjectScore(unit, def, tiles, dmg);
     if (isSummonSkill(def)) {
       const mine = S().units.filter(function (o) { return active(o) && o.side === unit.side && o.kind === 'summon' && o.ownerId === unit.id; }).length;
@@ -248,11 +380,12 @@
   }
   AI.pathRisk = pathRisk;
 
+  /** pos.aoo: its aooCost (computed while the unit still stands on its own tile). */
   function positionScore(unit, pos, style, foes, friends) {
     let sc = 0;
     const risk = pathRisk(unit, pos);
-    if (risk.lethal) return -Infinity;
-    sc -= risk.penalty;
+    if (risk.lethal || pos.aoo === Infinity) return -Infinity;
+    sc -= risk.penalty + (pos.aoo || 0);
     if (pos.edge) sc -= 1;
     const d = foes.length ? nearestDist(pos, foes) : 0;
     const lowHp = unit.hp < unit.maxHp * 0.5;
@@ -278,7 +411,8 @@
       default:
         sc -= d * 0.3;
     }
-    sc -= (pos.cost || 0) * 0.05;
+    // v2: what it reaches this turn: a long walk is a (small) cost, except for divers
+    sc -= (pos.cost || 0) * (isDiver(style) ? 0.05 : 0.2);
     return sc;
   }
 
@@ -399,22 +533,26 @@
     if (!slots.length) return null;
     const foes = AI.targetsFor(unit);
     const friends = S().units.filter(function (o) { return active(o) && o !== unit && !G().hostile(unit, o); });
-    const positions = [{ x: unit.x, y: unit.y, cost: 0, path: [], hazard: null, edge: G().isEdge(unit.x, unit.y) }];
+    const positions = [{ x: unit.x, y: unit.y, cost: 0, path: [], hazard: null, edge: G().isEdge(unit.x, unit.y, unit), provokes: [] }];
     if (!opts.noMove && !noMove(unit)) {
-      DD.Grid.reachable(unit, DD.Combat.effectiveMov(unit)).forEach(function (e) { positions.push(e); });
+      // a move action: the paths provoke as few attacks of opportunity as possible, and those they do are a cost
+      DD.Grid.reachable(unit, DD.Combat.effectiveMov(unit), { aoo: true }).forEach(function (e) { positions.push(e); });
+      for (let p = 1; p < positions.length; p++) positions[p].aoo = aooCost(unit, positions[p], style, !!taunt);
     }
     let best = null;
     const ox = unit.x, oy = unit.y;
+    const tc = { origin: { x: ox, y: oy }, thr: {} };
     try {
       for (let p = 0; p < positions.length; p++) {
         const pos = positions[p];
         unit.x = pos.x; unit.y = pos.y;
         const ps = positionScore(unit, pos, style, foes, friends);
+        if (ps === -Infinity) continue;
         for (let i = 0; i < slots.length; i++) {
           const def = skillOf(slots[i].id);
           const cands = candidates(unit, slots[i], def, taunt);
           for (let c = 0; c < cands.length; c++) {
-            const sc = scoreAction(unit, slots[i], def, cands[c], style, taunt);
+            const sc = scoreAction(unit, slots[i], def, cands[c], style, taunt, tc);
             if (!(sc > 0)) continue;
             const total = sc + ps;
             if (total > 0 && (!best || total > best.score)) best = { moveTo: { x: pos.x, y: pos.y }, path: pos.path, skillId: def.id, slot: slots[i], target: cands[c], score: total, actionScore: sc };
@@ -426,14 +564,87 @@
     return best;
   };
 
+  /**
+   * Every foe the unit could hit THIS turn (AI.targetsFor: taunt and stealth respected) with the cheapest way to do it
+   * using a ready damaging skill: [{ unit, skillId, target: {x,y}, moveTo: {x,y}, path, cost, provokes: [unitIds],
+   * aoo (their cost, see aooCost), engaged (it stood next to the foe at the start), est (damage estimate) }], one per
+   * foe (fewest attacks of opportunity, then the cheapest walk, then the most damage), sorted engaged first, then fewest
+   * attacks of opportunity, cheapest walk, most damage. opts: { skills: [ids], noMove, style }. Pure. For custom
+   * planners that pick their own target: prefer list[0] (or a diver's pick) over "the weakest hero on the map".
+   */
+  AI.reachableTargets = function (unit, opts) {
+    opts = opts || {};
+    if (!active(unit) || !S()) return [];
+    return DD.Targeting.pure(function () {
+      const style = opts.style ? styleArg(unit, opts.style) : styleOf(unit);
+      const taunt = taunter(unit);
+      const slots = usableSlots(unit, opts.skills).filter(function (sl) {
+        const d = skillOf(sl.id), L = d && DD.skillLevel(d, sl.level);
+        return !!(L && L.dmg > 0);
+      });
+      if (!slots.length) return [];
+      const positions = [{ x: unit.x, y: unit.y, cost: 0, path: [], provokes: [], aoo: 0 }];
+      if (!opts.noMove && !noMove(unit)) {
+        G().reachable(unit, DD.Combat.effectiveMov(unit), { aoo: true }).forEach(function (e) {
+          const c = aooCost(unit, e, style, !!taunt);
+          if (c !== Infinity && !pathRisk(unit, e).lethal) { e.aoo = c; positions.push(e); }
+        });
+      }
+      const origin = { x: unit.x, y: unit.y };
+      const best = {};
+      const ox = unit.x, oy = unit.y;
+      try {
+        for (let p = 0; p < positions.length; p++) {
+          const pos = positions[p];
+          unit.x = pos.x; unit.y = pos.y;
+          for (let i = 0; i < slots.length; i++) {
+            const def = skillOf(slots[i].id), L = DD.skillLevel(def, slots[i].level);
+            const el = elementOf(def);
+            const cands = candidates(unit, slots[i], def, taunt);
+            for (let c = 0; c < cands.length; c++) {
+              const tiles = DD.Targeting.area(unit, def, slots[i].level, cands[c]);
+              for (let k = 0; k < tiles.length; k++) {
+                const o = G().unitAt(tiles[k].x, tiles[k].y);
+                if (!o || !isFoe(unit, o, taunt)) continue;
+                const e = { unit: o, skillId: def.id, target: { x: cands[c].x, y: cands[c].y }, moveTo: { x: pos.x, y: pos.y }, path: pos.path,
+                  cost: pos.cost || 0, provokes: (pos.provokes || []).slice(), aoo: pos.aoo || 0,
+                  engaged: Math.abs(o.x - origin.x) + Math.abs(o.y - origin.y) === 1, est: estimate(unit, o, L.dmg, el) };
+                const cur = best[o.id];
+                if (!cur || e.provokes.length < cur.provokes.length || (e.provokes.length === cur.provokes.length &&
+                  (e.cost < cur.cost || (e.cost === cur.cost && e.est > cur.est)))) best[o.id] = e;
+              }
+            }
+          }
+        }
+      } finally { unit.x = ox; unit.y = oy; }
+      const out = Object.keys(best).map(function (k) { return best[k]; });
+      out.sort(function (a, b) {
+        return (b.engaged ? 1 : 0) - (a.engaged ? 1 : 0) || a.provokes.length - b.provokes.length || a.cost - b.cost || b.est - a.est;
+      });
+      return out;
+    });
+  };
+
+  /** Who would make an attack of opportunity on the unit if it walked to (x, y) now ([unitIds]), or null if it can't. */
+  AI.provokes = function (unit, x, y) {
+    if (!active(unit) || noMove(unit)) return null;
+    if (unit.x === x && unit.y === y) return [];
+    const e = G().reachable(unit, DD.Combat.effectiveMov(unit), { aoo: true }).get(x + ',' + y);
+    return e ? e.provokes.slice() : null;
+  };
+
   // ---- movement --------------------------------------------------------------------------------
-  /** Walk along the cheapest path within the unit's movement, now (an AI move on its turn). */
+  /**
+   * Walk there now (an AI move action on its turn): the given path, else the one provoking the fewest attacks of
+   * opportunity within its movement, then the cheapest. Leaving tiles next to opposing units provokes their attacks of
+   * opportunity (one that downs, stuns, roots or moves it ends the walk). True if it arrived.
+   */
   AI.moveTo = function (unit, x, y, path) {
     if (!active(unit) || noMove(unit)) return false;
     if (unit.x === x && unit.y === y) return true;
-    const p = path && path.length ? path : G().path(unit, x, y, { maxCost: DD.Combat.effectiveMov(unit) });
+    const p = path && path.length ? path : G().path(unit, x, y, { maxCost: DD.Combat.effectiveMov(unit), aoo: true });
     if (!p || !p.length) return false;
-    const walked = DD.Act.moveAlong(unit, p);
+    const walked = DD.Act.moveAlong(unit, p, { provoke: true });
     return walked.length > 0 && unit.x === x && unit.y === y;
   };
 
@@ -465,16 +676,18 @@
     if (noMove(unit)) return false;
     const foes = AI.targetsFor(unit);
     if (!foes.length) return false;
-    const reach = G().reachable(unit, DD.Combat.effectiveMov(unit));
+    const reach = G().reachable(unit, DD.Combat.effectiveMov(unit), { aoo: true });
     if (!reach.size) return false;
     const g = S().grid;
+    const taunted = tauntedNow(unit);
     let best = null, bestScore;
     if (style.style === 'coward') {
       const here = nearestDist(unit, foes);
       reach.forEach(function (e) {
         const risk = pathRisk(unit, e);
-        if (risk.lethal) return;
-        const sc = nearestDist(e, foes) * 2 - risk.penalty - e.cost * 0.1;
+        const aoo = aooCost(unit, e, style, taunted);
+        if (risk.lethal || aoo === Infinity) return;
+        const sc = nearestDist(e, foes) * 2 - risk.penalty - aoo - e.cost * 0.1;
         if (sc > here * 2 && (best === null || sc > bestScore)) { best = e; bestScore = sc; }
       });
     } else {
@@ -483,11 +696,12 @@
       const hereVal = field[unit.y * g.w + unit.x];
       reach.forEach(function (e) {
         const risk = pathRisk(unit, e);
-        if (risk.lethal) return;
+        const aoo = aooCost(unit, e, style, taunted);
+        if (risk.lethal || aoo === Infinity) return;
         let v = field[e.y * g.w + e.x];
         if (!isFinite(v)) v = 200 + nearestDist(e, foes);
         if (keep && nearestDist(e, foes) < keep) v += (keep - nearestDist(e, foes)) * 2;
-        v += risk.penalty + e.cost * 0.01;
+        v += risk.penalty + aoo + e.cost * 0.01;
         if (best === null || v < bestScore) { best = e; bestScore = v; }
       });
       if (best && isFinite(hereVal) && bestScore >= hereVal) best = null;
@@ -497,7 +711,8 @@
   }
 
   function wander(unit) {
-    const reach = G().reachable(unit, 2);
+    // a sheep's stroll is a move action too: walking away from a hero's elbow provokes ("Baa." *bonk*)
+    const reach = G().reachable(unit, 2, { aoo: true });
     const list = [];
     reach.forEach(function (e) { if (!G().hazardAt(e.x, e.y, unit) && !e.hazard) list.push(e); });
     if (!list.length) { DD.FX.text(unit, 'Baa.', { color: '#ffffff', size: 14 }); return; }
@@ -907,7 +1122,12 @@
       heroes: function () { return DD.Combat.active('hero'); },
       foes: function (u) { return AI.targetsFor(u || unit); },
       friends: function (u) { return DD.Combat.friendsOf(u || unit); },
-      reachable: function (u) { u = u || unit; return noMove(u) ? new Map() : G().reachable(u, DD.Combat.effectiveMov(u)); },
+      // v2: move-action paths (fewest attacks of opportunity first); entries carry provokes: [unitIds]
+      reachable: function (u) { u = u || unit; return noMove(u) ? new Map() : G().reachable(u, DD.Combat.effectiveMov(u), { aoo: true }); },
+      reachableTargets: function (u, opts) { return AI.reachableTargets(u || unit, opts); },
+      provokes: function (u, x, y) { return AI.provokes(u || unit, x, y); },
+      engaged: function (u) { return AI.engaged(u || unit); },
+      aooCost: function (u, pos) { return AI.aooCost(u || unit, pos); },
       moveTo: function (u, x, y) { return AI.moveTo(u, x, y); },
       act: function (u, skillId, target, opts) { const it = AI.useNow(u || unit, skillId, target, opts); return !!(it && it.resolved); },
       windUp: function (u, skillId, target, opts) { return AI.windUp(u || unit, skillId, target, opts); },

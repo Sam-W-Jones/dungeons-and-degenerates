@@ -4,7 +4,8 @@
  *  - top bar: round + whose turn it is, the INITIATIVE TRACKER (portraits in turn order from the acting unit on,
  *    a divider where the next round starts, units joining next round, downed / stunned marks; hover = highlight on
  *    the board, click = inspect), objective (+ MAPGEN's joke subtitle), active rules, incoming reinforcements,
- *    autoplay badge, animation speed and menu buttons; DM narration caption (moves low when it would hide a
+ *    autoplay badge, animation speed, the map view buttons (⟲ Q · a compass that turns with the board and resets the
+ *    view · ⟳ R; render:view) and menu buttons; DM narration caption (moves low when it would hide a
  *    wind-up bubble; fades while the pointer is under it) and an idle_dm line after 30 s without input
  *  - deployment: free swaps in the green zone, then a big "Roll for Initiative!" button (or Space): the dice
  *    moment (DD.FXRender.moments.initiative) shows every unit's d20 + modifier, sorts them, then the tracker
@@ -35,6 +36,8 @@
   const SKILL_KEYS = ['1', '2', '3', '4', '5', '6'];
   const CONS_KEYS = ['7', '8', '9', '0'];
   const GRACE_MS = 380;      // turn-ending input is ignored this long after control returns (double-click guard)
+  const SKIP_HOLD_MS = 420;  // …and this long after a key / click skipped an animation (a skip never also acts)
+  const ACT_HOLD_MS = 260;   // …and a press that rolled initiative / ended a turn never also skips what it started
   const BUSY_DIM_MS = 260;   // the action bar only dims for animations longer than this (no flicker)
   const HINT_MS = 2600;      // transient hint messages
   const LOG_MAX = 160;       // log lines kept in the DOM
@@ -47,7 +50,11 @@
 
   const OBJ_ICON = { lever: '🕹️', chest: '🧰', fountain: '⛲', valve: '🔧', mirror: '🪞', brazier: '🔥', keg: '🍺', totem: '🗿', bookshelf: '📚', d20: '🎲', coffin: '⚰️', statue: '🗽' };
   const OBJECTIVE_ICON = { killAll: '⚔️', boss: '👑', survive: '⏳', destroy: '💥', protect: '🛡️', custom: '📜' };
-  const EDGE_NAME = { N: 'top-right edge', E: 'bottom-right edge', S: 'bottom-left edge', W: 'top-left edge', zone: 'enemy side' };
+  // reinforcement edges: grid sides by outward normal, named by where they sit on screen at the current map rotation
+  // (edgeName); 'top-right' / 'bottom-right' / 'bottom-left' / 'top-left' for N / E / S / W in the classic view
+  const EDGE_NORMAL = { N: [0, -1], E: [1, 0], S: [0, 1], W: [-1, 0] };
+  const EDGE_NAME = { zone: 'enemy side' };
+  const SCREEN_DIRS = ['right', 'bottom-right', 'bottom', 'bottom-left', 'left', 'top-left', 'top', 'top-right'];
   const FILTER_TEXT = {
     enemy: 'an enemy', ally: 'an ally', allyOrSelf: 'an ally (or yourself)', any: 'any unit', notSelf: 'another unit',
     empty: 'an empty tile', emptyOrUnit: 'a tile', downedAlly: 'a downed ally', object: 'an object',
@@ -362,7 +369,8 @@
     }).filter(Boolean).sort(function (a, b) { return b.dmg - a.dmg; });
   }
   function reachText(list) {
-    return list.slice(0, 3).map(function (r) { return r.unit.name + ' ' + r.dmg; }).join(', ') + (list.length > 3 ? ' +' + (list.length - 3) : '');
+    // "(+1 more)", never "Kid 5 +1" (that reads like damage)
+    return list.slice(0, 3).map(function (r) { return r.unit.name + ' ' + r.dmg; }).join(', ') + (list.length > 3 ? ' (+' + (list.length - 3) + ' more)' : '');
   }
   /** The hero the threat shading is computed for: the selected hero-side unit, else the acting one. */
   function threatHero() {
@@ -406,6 +414,64 @@
       return { tiles: tiles.filter(function (t) { return t.dmg > 0; }), ref: hero ? Math.max(8, num(hero.hp)) : 20, hero: hero };
     });
   }
+
+  // ---- v2 attacks of opportunity (DESIGN §4.2): a MOVE away from an adjacent melee foe gives it a free hit ---------
+  /** The skill a unit makes attacks of opportunity with now (its melee basic / first ready melee skill), or null. */
+  function oppSlot(u) {
+    if (!u || !DD.Act || typeof DD.Act.opportunitySlot !== 'function' || (u.flags && u.flags.noOpportunity)) return null;
+    return memo('oppSlot:' + u.id, function () { return DD.safe('HUD opportunitySlot', DD.Act.opportunitySlot, DD.Act, [u]) || null; });
+  }
+  function oppSkillName(sl) { const d = sl ? DD.getSkill(sl.id) : null; return d ? d.name : ''; }
+  /** Its attack of opportunity is spent this round (each unit makes at most one per round). */
+  function oppSpent(u) { const s = S(); return !!s && !!u && num(u.oppRound, -1) === num(s.round, -2); }
+  function oppEst(a, mover, from) {
+    if (!DD.AI || typeof DD.AI.opportunityDmg !== 'function') return 0;
+    return Math.max(0, Math.round(num(DD.safe('HUD opportunityDmg', DD.AI.opportunityDmg, DD.AI, from ? [a, mover, from] : [a, mover]))));
+  }
+  /**
+   * The attacks of opportunity a move of u to (x, y) provokes, read from the engine's path (Combat.reachable entries'
+   * `provokes`, details from Combat.provokes): { list: [{ unit, name, skillName, dmg }], total, lethal }.
+   */
+  function provokeInfo(u, x, y) {
+    return memo('aoo:' + u.id + ':' + key(x, y), function () {
+      const out = { list: [], total: 0, lethal: false };
+      const e = reachOf(u).get(key(x, y));
+      if (!e || !e.provokes || !e.provokes.length) return out;
+      const raw = call('HUD provokes', C(), 'provokes', [u, x, y]) || [];
+      raw.forEach(function (p) {
+        const a = p && byId(p.unitId);
+        if (a) out.list.push({ unit: a, name: a.name, skillName: p.skillName || '', dmg: Math.max(0, Math.round(num(p.dmg))) });
+      });
+      // an engine without the detail query: every attacker the path names, with its estimate from here
+      e.provokes.forEach(function (id) {
+        if (out.list.some(function (r) { return r.unit.id === id; })) return;
+        const a = byId(id);
+        if (a) out.list.push({ unit: a, name: a.name, skillName: oppSkillName(oppSlot(a)), dmg: oppEst(a, u) });
+      });
+      out.total = out.list.reduce(function (t, r) { return t + r.dmg; }, 0);
+      out.lethal = out.total > 0 && out.total >= num(u.hp) + num(u.block);
+      return out;
+    });
+  }
+  /** Foes next to u that would strike if it walked away now: [{ unit, skillName, dmg }], hardest first. */
+  function engagedBy(u) {
+    const s = S();
+    if (!u || !active(u) || !s || !s.order || s.result || deploying(s) || !DD.AI || typeof DD.AI.engaged !== 'function') return [];
+    return memo('eng:' + u.id, function () {
+      return (DD.safe('HUD engaged', DD.AI.engaged, DD.AI, [u]) || []).map(function (a) {
+        return { unit: a, skillName: oppSkillName(oppSlot(a)), dmg: oppEst(a, u) };
+      }).sort(function (a, b) { return b.dmg - a.dmg; });
+    });
+  }
+  /** Adjacent foes that hold the line but already used their attack of opportunity this round: walking away is free. */
+  function spentGuards(u) {
+    const s = S();
+    if (!u || !active(u) || !s || !s.order || s.result) return [];
+    return s.units.filter(function (a) {
+      return active(a) && a !== u && DD.Grid.dist(a, u) === 1 && DD.Grid.hostile(a, u) && oppSpent(a) && !isStunnedU(a) && !!oppSlot(a);
+    });
+  }
+  function aooList(list) { return list.map(function (r) { return r.name + ' ' + r.dmg; }).join(' · '); }
 
   /**
    * Aura threats (shared definition): damage `unit` would take standing on (x, y) from enemies' NON-telegraphed
@@ -523,9 +589,17 @@
   function previewAt(u, t) {
     const k = 'pv:' + u.id + ':' + M.mode.kind + ':' + (M.mode.kind === 'skill' ? M.mode.pos : M.mode.index) + ':' + key(t.x, t.y);
     return memo(k, function () {
-      if (M.mode.kind === 'skill') return DD.safe('HUD preview', C().preview, C(), [u, M.mode.slot, t.x, t.y]);
-      const def = armedDef();
-      return def ? DD.safe('HUD preview', DD.Targeting.preview, DD.Targeting, [u, def, { x: t.x, y: t.y }]) : null;
+      const run = function () {
+        if (M.mode.kind === 'skill') return DD.safe('HUD preview', C().preview, C(), [u, M.mode.slot, t.x, t.y]);
+        const def = armedDef();
+        return def ? DD.safe('HUD preview', DD.Targeting.preview, DD.Targeting, [u, def, { x: t.x, y: t.y }]) : null;
+      };
+      const e = armedEntry(u, t);
+      if (!e || !e.obj) return run();
+      // aimed at an explosive object: also note what each blast is ("8 fire damage within 1 tile")
+      const w = watchBlasts(run);
+      if (w.value && !w.value.explosions) w.value.hudBlasts = w.blasts;
+      return w.value;
     });
   }
   /** Engine preview → renderer badges: dmg counts Block absorbed too (the HP bar splits it), extras as icons. */
@@ -536,40 +610,49 @@
       const e = per[id] || {};
       const parts = [];
       if (e.uncertain) parts.push('?');
+      // v2: a heal aimed at a downed ally gets it up: "UP! 7 HP" (the renderer's green revive badge)
+      const up = revivedIn(e);
+      if (up) parts.push(upText(e));
       if (e.block > 0) parts.push('+' + e.block + '🛡');
       (e.statuses || []).slice(0, 3).forEach(function (sid) { const ic = statusIcon(sid); if (ic) parts.push(ic); });
       if (e.moved) parts.push('↷');
-      out[id] = { dmg: num(e.dmg) + num(e.blocked), heal: num(e.heal), lethal: !!e.lethal, text: parts.join(' ') };
+      out[id] = { dmg: num(e.dmg) + num(e.blocked), heal: up ? 0 : num(e.heal), lethal: !!e.lethal, text: parts.join(' ') };
+      if (up) out[id].revive = true;
     });
     return out;
   }
-  /** One-line summary of a preview for the hint bar (foes hit, KOs, friendly fire, Hype, objects). */
-  function previewSummary(u, p) {
+  /** One-line summary of a preview for the hint bar (foes hit, KOs, friendly fire, revives, Hype, objects, blasts). */
+  function previewSummary(u, p, at) {
     if (!p) return '';
     const per = p.perUnit || {};
-    let foes = 0, allies = 0, kos = 0, heals = 0, total = 0;
+    let foes = 0, kos = 0, heals = 0, total = 0;
+    const allies = [], ups = [];
     Object.keys(per).forEach(function (id) {
       const t = byId(id), e = per[id];
       if (!t || t === u) return;
+      if (revivedIn(e)) { ups.push('🆘 ' + upText(e).replace('UP! ', 'UP! ' + t.name + ' gets back up with ') + ' (0 AP now; ' + upWhen(t) + ')'); return; }
       const hostile = DD.Grid.hostile(u, t);
       const hurt = num(e.dmg) + num(e.blocked);
-      if (hurt > 0) { if (hostile) { foes++; total += hurt; } else allies++; }
+      if (hurt > 0) { if (hostile) { foes++; total += hurt; } else allies.push(t.name + (e.lethal ? ' 💀' : '')); }
       if (e.lethal && hostile) kos++;
       if (e.heal > 0 && !hostile) heals++;
     });
     const parts = [];
+    // aimed at an explosive object: what goes off first, then who the blast catches
+    if (p.detonates && at) parts.push('💥 ' + blastLine(p, at));
+    ups.forEach(function (x) { parts.push(x); });
     if (foes) parts.push('Hits ' + plural(foes, 'foe') + ' for ' + total + (p.uncertain ? '?' : ''));
     if (kos) parts.push('💀 ' + kos + ' KO');
     if (heals) parts.push('💚 heals ' + plural(heals, 'ally', 'allies'));
-    if (allies) parts.push('⚠ hits ' + plural(allies, 'ally', 'allies') + '!');
+    if (allies.length) parts.push('⚠ hits ' + (allies.length <= 2 ? allies.join(' and ') : allies.length + ' allies') + '!');
     if (p.hype > 0) parts.push('+' + p.hype + ' Hype');
-    (p.objects || []).slice(0, 2).forEach(function (o) {
+    (p.objects || []).filter(function (o) { return !(p.detonates && at && o.x === at.x && o.y === at.y); }).slice(0, 2).forEach(function (o) {
       const d = DD.getObject(o.id);
       if (o.destroyed) parts.push('💥 ' + (d ? d.name : o.id));
     });
     (p.spawned || []).slice(0, 2).forEach(function (sp) { parts.push('✨ ' + sp.name); });
     const self = per[u.id];
-    if (self && self.dmg > 0) parts.push('costs you ' + self.dmg + ' HP');
+    if (self && self.dmg > 0) parts.push(p.detonates ? '⚠ ' + u.name + ' is in the blast: −' + self.dmg + (self.lethal ? ' 💀' : '') : 'costs you ' + self.dmg + ' HP');
     return parts.join(' · ');
   }
   function invalidReason(u, p) {
@@ -578,6 +661,17 @@
     const tg = def.target || {};
     if (tg.type === 'dir') return 'Aim at a tile next to ' + u.name + '.';
     if (tg.type === 'self') return 'This one only targets ' + u.name + '.';
+    // v2: a barrel this skill can't set off; a downed ally this skill can't get up
+    const ref = armedRef();
+    const there = DD.Grid.unitAt(p.x, p.y);
+    const boom = !there && volatileObj(p.x, p.y);
+    if (boom && (tg.type || 'unit') === 'unit' && !aimsAtObjects(u, ref)) {
+      return def.name + ' can\'t set off the ' + objName(boom) + ': aim a single-target attack at it' + (C().smashable && C().smashable(boom) ? ', or Smash it from next to it' : '') + '.';
+    }
+    const friendly = tg.filter === 'ally' || tg.filter === 'allyOrSelf' || tg.filter === 'any' || tg.filter === 'notSelf';
+    if (there && there.downed && !there.dead && !DD.Grid.hostile(u, there) && friendly && !revivesWith(u, ref)) {
+      return there.name + ' is down and ' + def.name + ' won\'t get ' + there.name + ' up: only a single-target heal does (or Help Up, 2 AP, from an adjacent tile).';
+    }
     const r = DD.safe('HUD range', DD.Targeting.range, DD.Targeting, [u, def, armedLevel()]) || [0, 0];
     const d = Math.abs(p.x - u.x) + Math.abs(p.y - u.y);
     if (d < r[0] || d > r[1]) return 'Out of range (' + (r[0] === r[1] ? r[1] : r[0] + '–' + r[1]) + ' tiles).';
@@ -591,8 +685,133 @@
     if (tg.type === 'dir') return 'Aim with the mouse and click a direction';
     const r = DD.safe('HUD range', DD.Targeting.range, DD.Targeting, [u, def, armedLevel()]) || [1, 1];
     const rt = r[1] <= 1 ? 'adjacent' : 'range ' + (r[0] === r[1] ? r[1] : r[0] + '–' + r[1]);
-    const what = tg.type === 'tile' ? (FILTER_TEXT[tg.filter] && tg.filter !== 'any' ? FILTER_TEXT[tg.filter] : 'a tile') : (FILTER_TEXT[tg.filter || 'enemy'] || 'a target');
+    let what = tg.type === 'tile' ? (FILTER_TEXT[tg.filter] && tg.filter !== 'any' ? FILTER_TEXT[tg.filter] : 'a tile') : (FILTER_TEXT[tg.filter || 'enemy'] || 'a target');
+    // v2 (user requests): the extra targets on offer right now — explosive objects, downed allies
+    if (tg.type !== 'tile') {
+      const list = armedTargets(u);
+      const objs = list.filter(function (p) { return p.obj; });
+      const downs = list.filter(function (p) { return p.revive; });
+      if (objs.length) what += ' or 💥 ' + (objs.length === 1 ? 'the ' + objName(volatileObj(objs[0].x, objs[0].y)) : objs.length + ' things that go boom');
+      if (downs.length) {
+        const d0 = DD.Grid.unitAt(downs[0].x, downs[0].y);
+        what += ' or 🆘 ' + (downs.length === 1 && d0 ? 'downed ' + d0.name + ' (back UP)' : downs.length + ' downed allies (back UP)');
+      }
+    }
     return 'Click ' + what + ' (' + rt + ')';
+  }
+
+  // ---- v2 user requests: barrels you can shoot, heals that get a downed ally up, flyers over the floor ----------------
+  /** The armed skill's target entry on tile p: { x, y, obj } = a volatile object, { revive: true } = a downed ally. */
+  function armedEntry(u, p) {
+    if (!u || !p) return null;
+    const list = armedTargets(u);
+    for (let i = 0; i < list.length; i++) if (list[i].x === p.x && list[i].y === p.y) return list[i];
+    return null;
+  }
+  /** The object on (x, y) when it explodes once destroyed (DD.Act.isVolatile: barrels, Pork Barrels…), else null. */
+  function volatileObj(x, y) {
+    const t = DD.Grid.tile(x, y);
+    return t && t.obj && DD.Act && typeof DD.Act.isVolatile === 'function' && DD.Act.isVolatile(t.obj) ? t.obj : null;
+  }
+  function objName(o) { const d = o ? DD.getObject(o.id) : null; return o ? String(o.label || (d && d.name) || o.id) : 'barrel'; }
+  function aimsAtObjects(u, ref) { return !!(u && ref && DD.Targeting && typeof DD.Targeting.aimsAtObjects === 'function' && DD.Targeting.aimsAtObjects(u, ref)); }
+  function revivesWith(u, ref) { return !!(u && ref && DD.Targeting && typeof DD.Targeting.revivesWith === 'function' && DD.Targeting.revivesWith(u, ref)); }
+  /** Flying (flags or a status that grants flight): it ignores everything on the floor (DD.Grid.isFlying). */
+  function flying(u) { return !!u && (DD.Grid && typeof DD.Grid.isFlying === 'function' ? !!DD.Grid.isFlying(u) : !!(u.flags && u.flags.flying)); }
+  /** "🪽 Flying: ignores floor effects — … Clouds and gases still reach Syllamin." (DD.UI.flyLine; heroes by name) */
+  function flyLine(u) {
+    const who = u.kind === 'hero' ? u.name : 'it';
+    return typeof DD.UI.flyLine === 'function' ? DD.UI.flyLine(who) : '🪽 Flying: ignores floor effects. Clouds and gases still reach ' + who + '.';
+  }
+
+  /**
+   * Run fn (a preview) while watching DD.Act.explode: the explosions its dry run sets off, first one per tile, as
+   * { x, y, radius, dmg, element } (explode's options with its defaults: radius 1, 8, fire). Every call goes through
+   * unchanged and the watch is gone before this returns. (Request ENGINE: carry these on the preview itself.)
+   */
+  function watchBlasts(fn) {
+    const A = DD.Act;
+    const orig = A && A.explode;
+    const seen = {}, list = [];
+    if (typeof orig !== 'function') return { value: fn(), blasts: list };
+    A.explode = function (src, x, y, o) {
+      if (!seen[key(x, y)]) {
+        seen[key(x, y)] = 1;
+        const op = o || {};
+        list.push({ x: x, y: y, radius: op.radius === undefined ? 1 : num(op.radius, 1), dmg: op.dmg === undefined ? 8 : num(op.dmg), element: op.element === undefined ? 'fire' : op.element || '' });
+      }
+      return orig.apply(this, arguments);
+    };
+    try { return { value: fn(), blasts: list }; } finally { A.explode = orig; }
+  }
+  /** "Detonate: Explosive Barrel — 8 fire damage within 1 tile" (+ chain explosions) for a preview aimed at an object. */
+  function blastLine(p, t) {
+    const d = blastDetail(p, t);
+    return 'Detonate: ' + objName(volatileObj(t.x, t.y)) + (d ? ' — ' + d : '');
+  }
+  /** "8 fire damage within 1 tile + 1 chain explosion" ('' when the dry run recorded no explosion). */
+  function blastDetail(p, t) {
+    const list = (p && (p.explosions || p.hudBlasts)) || [];
+    const b = list.filter(function (x) { return x.x === t.x && x.y === t.y; })[0] || list[0];
+    if (!b) return '';
+    const more = list.length - 1;
+    return (num(b.dmg) > 0 ? b.dmg + ' ' + (b.element ? b.element + ' ' : '') + 'damage' : 'a blast') + ' within ' + plural(num(b.radius, 1), 'tile') +
+      (more > 0 ? ' + ' + plural(more, 'chain explosion') : '');
+  }
+  /** "UP! 7 HP" (a range and a chance when the heal is uncertain) for a preview entry that gets a downed ally up. */
+  function upText(e) {
+    const lo = e.healMin !== undefined ? num(e.healMin) : num(e.heal), hi = e.healMax !== undefined ? num(e.healMax) : num(e.heal);
+    const ch = e.revivedChance !== undefined && e.revivedChance < 1 ? ' ' + Math.round(e.revivedChance * 100) + '%' : '';
+    return 'UP! ' + (lo !== hi ? lo + '–' + hi : num(e.heal)) + ' HP' + ch;
+  }
+  function revivedIn(e) { return !!e && (!!e.revived || num(e.revivedChance) > 0); }
+  /** When a revived ally acts: 0 AP now, its own initiative turn ("acts next", "acts in 3 turns, next round"). */
+  function upWhen(ally) {
+    const ii = initInfo(ally);
+    // [requests verify] no nested parentheses inside "(0 AP now; …)" and no pronoun after a hero's name
+    return ii && !ii.cur ? turnWhen(ii).replace(' (next round)', ', next round') : 'acts in initiative order';
+  }
+  /**
+   * The selected unit's ready skills / consumables whose aim reaches this downed ally right now and would get it up
+   * (DD.Targeting.revivesWith + a validTargets entry with revive): [{ name, key }] in action-bar order.
+   */
+  function reviveOptions(ally) {
+    const u = selectedUnit();
+    if (!M || !u || !ally || !ally.downed || ally.dead || !controllable(u) || !DD.Targeting) return [];
+    return memo('revopt:' + u.id + ':' + ally.id, function () {
+      const out = [];
+      const reaches = function (ref) {
+        const list = DD.safe('HUD valid targets', DD.Targeting.validTargets, DD.Targeting, [u, ref]) || [];
+        return list.some(function (p) { return p.revive && p.x === ally.x && p.y === ally.y; });
+      };
+      barSlots(u).forEach(function (it, i) {
+        if (!it.slot || i >= SKILL_KEYS.length || !revivesWith(u, it.slot) || C().canUse(u, it.slot) !== true || !reaches(it.slot)) return;
+        const r = DD.Targeting.resolve(it.slot);
+        out.push({ name: r ? r.def.name : it.slot.id, key: SKILL_KEYS[i] });
+      });
+      if (u.kind === 'hero') {
+        consumableList().forEach(function (id, i) {
+          const d = DD.getConsumable(id);
+          if (!d || i >= CONS_KEYS.length || !revivesWith(u, d) || C().canUseConsumable(u, i) !== true || !reaches(d)) return;
+          out.push({ name: d.name, key: CONS_KEYS[i] });
+        });
+      }
+      return out;
+    });
+  }
+  /** "Mostly Medicine (2) gets Marwyn back up from here" or how a downed ally gets up at all. */
+  function reviveHow(ally) {
+    const o = reviveOptions(ally);
+    if (o.length) return 'Press ' + o[0].key + ' (' + o[0].name + ')' + (o.length > 1 ? ' or ' + o.slice(1, 3).map(function (x) { return x.key + ' (' + x.name + ')'; }).join(' or ') : '') + ', then click ' + ally.name + ': back UP with the healed HP. Or Help Up (2 AP) from an adjacent tile.';
+    return 'Aim a single-target heal at ' + ally.name + ' (back up with the healed HP), or Help Up (2 AP, 25% HP) from an adjacent tile.';
+  }
+  /** The floor of this tile does something (terrain effect, a non-cloud surface, a ground object): flyers skip all of it. */
+  function floorEffects(t) {
+    if (!t) return false;
+    const td = DD.getTerrain(t.t) || {};
+    const sd = t.surface ? DD.getSurface(t.surface.id) : null;
+    const ground = t.obj && !(DD.Grid.objBlocksMove && DD.Grid.objBlocksMove(t.obj));
+    return !!((sd && !sd.airborne) || td.hazard || td.liquid || td.pit || td.slide || num(td.cost, 1) > 1 || td.onEnter || td.onTurnEnd || ground);
   }
 
   // ---- css --------------------------------------------------------------------------------------------------------------
@@ -620,6 +839,9 @@
 .hud-obj .ho-flavor { font-size: .76rem; font-style: italic; color: var(--text-2); line-height: 1.25; }
 .hud-obj .ho-chips { display: flex; flex-wrap: wrap; justify-content: center; gap: .3rem; margin-top: .18rem; }
 .hud-obj .ho-chips:empty { display: none; }
+.hud-obj { transition: opacity .25s ease; }
+.hud-obj.peek, .hud-obj.peek * { pointer-events: none !important; }
+.hud-obj.peek { opacity: .32; }
 .hud-chip { pointer-events: auto; display: inline-flex; align-items: center; gap: .3em; padding: .06em .55em; border-radius: 999px; font-size: .7rem; font-weight: 700; color: var(--text); background: rgba(0,0,0,.38); border: 1px solid rgba(198,156,75,.45); cursor: help; white-space: nowrap; }
 .hud-chip.rule { border-color: rgba(190,150,255,.6); color: #ece2ff; }
 .hud-chip.wave { border-color: rgba(255,120,100,.65); color: #ffd6cc; }
@@ -630,6 +852,17 @@
 .hud-tr { flex: 0 0 auto; display: flex; gap: .35rem; align-items: flex-start; pointer-events: none; }
 .hud-tr .btn { min-height: 2.25rem; }
 .hud-tr .hud-speed { min-width: 3.4rem; }
+.hud-view { flex: 0 0 auto; display: flex; pointer-events: none; }
+.hud-view .btn.hud-vbtn { min-width: 2.25rem; padding: 0 .4rem; letter-spacing: 0; border-radius: 0; }
+.hud-view .btn.hud-vbtn:first-child { border-radius: 7px 0 0 7px; }
+.hud-view .btn.hud-vbtn:last-child { border-radius: 0 7px 7px 0; }
+.hud-view .btn.hud-vbtn + .btn.hud-vbtn { margin-left: -1px; }
+.hud-vbtn .btn-label { display: flex; align-items: center; justify-content: center; }
+.hud-vbtn .hv-ico { display: block; width: 1.15rem; height: 1.15rem; }
+.hud-vbtn .hv-rose { position: relative; display: block; width: 1.45rem; height: 1.45rem; border-radius: 50%; background: radial-gradient(circle, rgba(64,42,24,.95) 0 50%, rgba(18,11,7,.95) 100%); box-shadow: inset 0 0 0 1px rgba(198,156,75,.65), 0 1px 0 rgba(0,0,0,.5); }
+.hud-vbtn .hv-needle { position: absolute; left: 0; top: 0; width: 100%; height: 100%; transition: transform .1s linear; filter: drop-shadow(0 1px 0 rgba(0,0,0,.55)); }
+.hud-vbtn.hv-compass.turned .hv-rose { box-shadow: inset 0 0 0 1px var(--gold-4), 0 0 7px 1px rgba(243,211,138,.55); }
+.static-ui .hud-vbtn .hv-needle { transition: none; }
 
 .hud-party { position: absolute; left: var(--hg); top: 4.05rem; width: var(--hl); display: flex; flex-direction: column; gap: .38rem; pointer-events: none; max-height: calc(100% - 4.5rem); overflow-y: auto; overflow-x: visible; padding: .1rem .2rem .3rem 0; scrollbar-width: none; }
 .hud-party::-webkit-scrollbar { display: none; }
@@ -781,6 +1014,9 @@
 .hi-line b { color: var(--gold-4); }
 .hi-line.warn { color: #ffc4b8; }
 .hi-line.good { color: #b8f0b2; }
+.hi-line.boom { color: #ffd59a; }
+.hi-line.revive { color: #c6f7cf; }
+.hi-line.fly { color: #d6e9ff; }
 .hi-flavor { font-size: .76rem; font-style: italic; color: var(--text-3); line-height: 1.35; border-top: 1px solid rgba(198,156,75,.2); padding-top: .35rem; }
 
 .hud-log { position: absolute; top: 4.05rem; right: var(--hg); width: 17.6rem; display: flex; flex-direction: column; padding: .38rem .45rem .45rem; pointer-events: auto; z-index: 2; }
@@ -793,6 +1029,8 @@
 .hud-log .hl-round::before, .hud-log .hl-round::after { content: ''; flex: 1 1 auto; height: 1px; background: rgba(198,156,75,.25); }
 .hud-log .log-line { font-size: .74rem; line-height: 1.32; animation: hud-rise .25s ease-out both; }
 .hud-log .log-line.narrator { display: flex; gap: .35rem; align-items: flex-start; }
+.hud-log .log-line.aoo { padding: .06rem .35rem; margin: .1rem 0; border-radius: 4px; font-weight: 700; color: #ffe1a8; background: linear-gradient(90deg, rgba(150,96,24,.45), rgba(90,56,14,.12)); border-left: 3px solid #f0b54a; }
+.hud-log .log-line.aoo::before { content: '⚔️ '; }
 .hud-log .log-line .hl-dm { flex: 0 0 auto; font-family: var(--f-display); font-style: normal; font-weight: 900; font-size: .5rem; padding: .08rem .25rem; margin-top: .12rem; border-radius: 3px; color: #2a180a; background: linear-gradient(180deg,#ffe7a3,#d7a94e); }
 .hud-log .hl-empty { font-size: .74rem; font-style: italic; color: var(--text-3); padding: .2rem; }
 
@@ -818,7 +1056,7 @@
 .hud-menu .hm-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
 .hud-menu .hm-label { font-family: var(--f-display); font-weight: 700; color: var(--gold-4); }
 .hud-menu .hm-desc { font-size: .8rem; color: var(--text-3); }
-.hud-menu .hm-controls { display: grid; grid-template-columns: auto 1fr; gap: .25rem .9rem; font-size: .84rem; padding: .6rem .8rem; border-radius: 8px; background: rgba(0,0,0,.25); border: 1px solid rgba(198,156,75,.25); }
+.hud-menu .hm-controls { display: grid; grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr); align-items: baseline; gap: .3rem .75rem; font-size: .84rem; padding: .6rem .8rem; border-radius: 8px; background: rgba(0,0,0,.25); border: 1px solid rgba(198,156,75,.25); }
 .hud-menu .hm-controls .k { font-weight: 700; color: var(--gold-3); white-space: nowrap; }
 .hud-result { display: flex; flex-direction: column; gap: .9rem; }
 .hud-result .hr-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr)); gap: .5rem; }
@@ -832,6 +1070,11 @@
 /* aura threats (enemy hooks.threatAt): party cards, inspect panel, move hint */
 .hc-threat { grid-column: 1 / -1; display: flex; align-items: center; gap: .3rem; margin-top: .05rem; padding: .06rem .4rem; border-radius: 5px; font-size: .66rem; font-weight: 800; line-height: 1.35; color: #ffe2d6; background: linear-gradient(90deg, rgba(170,50,30,.55), rgba(120,30,20,.25)); border: 1px solid rgba(255,130,100,.55); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hc-threat.lethal { background: linear-gradient(90deg, rgba(200,30,30,.75), rgba(140,20,20,.35)); border-color: #ff8f80; animation: hud-pulse 1.2s ease-in-out infinite; }
+.hc-engaged { grid-column: 1 / -1; margin-top: .05rem; padding: .04rem .4rem; border-radius: 5px; font-size: .64rem; font-weight: 800; line-height: 1.35; color: #ffe6b8; background: linear-gradient(90deg, rgba(150,96,24,.5), rgba(90,56,14,.18)); border: 1px solid rgba(240,181,74,.55); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hc-engaged.lethal { color: #ffe2d6; background: linear-gradient(90deg, rgba(200,30,30,.7), rgba(140,20,20,.3)); border-color: #ff8f80; }
+.hi-line.aoo { color: #ffe1a8; }
+.hi-line.aoo.own { color: #d9ecff; }
+.hi-line.aoo.spent { color: var(--text-3); }
 .hi-line.aura { color: #ffcfbd; }
 .hud-hint.good { border-color: rgba(140,230,130,.7); color: #dcffd5; }
 
@@ -902,6 +1145,8 @@
 .hud-card.wait:hover { filter: none; }
 .hc-when { font-size: .66rem; font-weight: 700; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hc-when.bank { color: #9fe0ff; }
+.hc-when.revive { color: #9df5b0; }
+.hc-when.down { color: #ffb4a6; }
 .hc-init { position: absolute; left: .18rem; top: .2rem; min-width: 1.05rem; height: 1.05rem; padding: 0 .16rem; border-radius: 999px; display: flex; align-items: center; justify-content: center; font-size: .56rem; font-weight: 900; color: #2a180a; background: linear-gradient(180deg,#ffe7a3,#d7a94e); border: 1px solid #fff0bd; box-shadow: 0 1px 3px rgba(0,0,0,.6); z-index: 1; pointer-events: none; }
 .hc-init:empty { display: none; }
 .hud-card.cur .hc-init { background: linear-gradient(180deg,#fff6d0,#f3d38a); box-shadow: 0 0 8px rgba(243,211,138,.8); }
@@ -1086,6 +1331,8 @@
     if (u.side === 'hero' && M) {
       const auras = cardAuras(u, S());
       if (auras.length) h += '<div class="tt-aura">' + esc(auraLine(auras, u)) + (auras.length > 1 || auras[0].label !== auras[0].unit.name ? ' — ' + esc(auras.map(auraDetail).join(' · ')) : '') + '. Move out of it before you end the turn.</div>';
+      const eng = engagedBy(u);
+      if (eng.length) h += '<div class="tt-aura">⚔ ' + esc('Engaged: moving away provokes ' + eng.map(function (r) { return r.unit.name + (r.skillName ? ' (' + r.skillName + ')' : '') + ' ' + r.dmg; }).join(', ') + '. Skill dashes, pushes and teleports don\'t.') + '</div>';
     }
     if (u.kind === 'hero' && d.passive) h += '<div class="tt-desc"><b>' + esc(d.passive.name || 'Passive') + ':</b> ' + esc(d.passive.desc || '') + '</div>';
     if (u.kind === 'hero') h += blessingsHtml(u);
@@ -1094,10 +1341,88 @@
     if (items.length) h += '<div class="tt-target">🎒 ' + esc(items.join(' · ')) + '</div>';
     const scars = (u.scars || []).map(function (id) { const sc = DD.getScar(id); return sc ? (sc.icon || '🩹') + ' ' + sc.name : null; }).filter(Boolean);
     if (scars.length) h += '<div class="tt-target">' + esc(scars.join(' · ')) + '</div>';
-    if (u.downed) h += '<div class="tt-foot">Downed. An adjacent ally can Help Up (2 AP) to revive them at 25% HP.</div>';
+    if (flying(u) && !u.downed) h += '<div class="tt-target">' + esc(flyLine(u)) + '</div>';
+    if (u.downed) {
+      const o = M ? reviveOptions(u) : [];
+      h += '<div class="tt-foot">Downed: ' + esc(u.name) + '\'s turns are skipped. A single-target heal aimed at ' + esc(u.name) + ' gets ' + esc(u.name) + ' back up with the healed HP; an adjacent ally can also Help Up (2 AP) at 25% HP.' +
+        (o.length ? '<br>💚 Ready now: ' + esc(o.map(function (x) { return x.name + ' (' + x.key + ')'; }).join(', ')) + '.' : '') + '</div>';
+    }
     else if (u.side === 'hero') h += '<div class="tt-foot">' + (selectable(u) ? 'Click to select · Tab cycles this turn\'s units' : 'Click to inspect · it acts on its own initiative turn') + '</div>';
     h += '</div>';
     return h;
+  }
+
+  // ---- map view (rotation) -----------------------------------------------------------------------------------------
+  // The battlefield turns (DD.Render: Q / R quarter turns, middle-drag to any angle, Home resets; purely visual). The
+  // HUD adds turn buttons around a compass whose needle turns with the board, and names board edges by where they are
+  // on screen now. The keys themselves live in DD.Input (no hotkeys on these buttons).
+  const ICON_TURN_L = '<svg class="hv-ico" viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10A6 6 0 1 0 10 4" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"/><path d="M6.6 4 11 1.2V6.8Z" fill="currentColor"/></svg>';
+  const ICON_TURN_R = '<svg class="hv-ico" viewBox="0 0 20 20" aria-hidden="true"><path d="M16 10A6 6 0 1 1 10 4" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"/><path d="M13.4 4 9 1.2V6.8Z" fill="currentColor"/></svg>';
+  // drawn pointing up (rotation 0); the red half marks the classic view's top-right edge (grid north, -y)
+  const ICON_NEEDLE = '<svg class="hv-needle" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2.4 12.9 10H7.1Z" fill="#ec5a40"/><path d="M7.1 10H12.9L10 17.6Z" fill="#efe3c4"/><circle cx="10" cy="10" r="1.25" fill="#2a1a0e"/></svg>';
+
+  function svgNode(markup) { const s = document.createElement('span'); s.innerHTML = markup; return s.firstChild; }
+  function canView(fn) { return !!(DD.Render && typeof DD.Render[fn] === 'function'); }
+  function viewYaw() { return canView('getYaw') ? num(DD.Render.getYaw()) : 0; }
+  /** Screen offset (px, y down) of the ground vector (u, v) at a view yaw: DD.Iso's projection (yaw 0's without it). */
+  function groundToScreen(u, v, yaw) {
+    const V = DD.Iso && typeof DD.Iso.makeView === 'function' ? DD.Iso.makeView(yaw) : null;
+    if (V) return { x: V.ax * u + V.bx * v, y: V.ay * u + V.by * v };
+    return { x: (u - v) * 32, y: (u + v) * 16 };
+  }
+  /** Map-like screen angle (deg; 0 = right, clockwise) of a ground direction: the iso 2:1 squash undone. */
+  function groundAngle(u, v, yaw) { const p = groundToScreen(u, v, yaw); return Math.atan2(p.y * 2, p.x) * 180 / Math.PI; }
+  /** 'top-right edge' etc.: where a board edge (N / E / S / W, or 'zone') is on screen at the view (default: live). */
+  function edgeName(edge, yaw) {
+    const n = EDGE_NORMAL[edge];
+    if (!n) return EDGE_NAME[edge] || String(edge || 'somewhere');
+    const a = groundAngle(n[0], n[1], yaw === undefined ? viewYaw() : yaw);
+    return SCREEN_DIRS[((Math.round(a / 45) % 8) + 8) % 8] + ' edge';
+  }
+  /** Signed turn away from the classic view in (-180, 180]: positive = clockwise. */
+  function turnedBy(yaw) { const y = ((num(yaw) % 360) + 360) % 360; return y > 180 ? y - 360 : y; }
+  function viewNow(yaw) {
+    const t = turnedBy(yaw), a = Math.round(Math.abs(t) * 10) / 10;
+    return a === 0 ? 'Classic view.' : 'Turned ' + (a % 1 ? a.toFixed(1) : a.toFixed(0)) + '° ' + (t > 0 ? 'clockwise' : 'counter-clockwise') + '.';
+  }
+  function viewTip(which) {
+    const now = viewNow(viewYaw());
+    if (which === 'reset') {
+      return '<div class="tt"><div class="tt-title">🧭 Reset view (Home)</div><div class="tt-desc">' + now + ' Click to turn the map back to the classic view and fit the board. The needle turns with the board: its red tip points where the top-right edge of the classic view went.</div><div class="tt-flavor">North is wherever the DM says it is.</div></div>';
+    }
+    const left = which === 'left';
+    return '<div class="tt"><div class="tt-title">' + (left ? '⟲ Turn the map (Q)' : '⟳ Turn the map (R)') + '</div><div class="tt-desc">A quarter turn ' + (left ? 'counter-clockwise' : 'clockwise') + ' to the next classic view. Middle-drag (hold the mouse wheel) turns it to any angle; Home resets.</div><div class="tt-foot">' + now + '</div><div class="tt-flavor">' +
+      (left ? 'Somebody bumps the table. The minis survive. Mostly.' : 'Rotate the table. Never the DM\'s screen.') + '</div></div>';
+  }
+
+  /** The top-right view cluster: ⟲ (Q) · compass (reset, Home) · ⟳ (R). Hidden when the renderer cannot turn. */
+  function buildViewCluster() {
+    const E = M.els;
+    const opts = function (cls, which) { return { cls: 'small ghost hud-vbtn ' + cls, tooltip: function () { return viewTip(which); }, tooltipOpts: { pos: 'bottom' } }; };
+    E.turnL = DD.UI.button(svgNode(ICON_TURN_L), function () { if (canView('turn')) DD.Render.turn(-1); }, opts('hv-left', 'left'));
+    E.needle = svgNode(ICON_NEEDLE);
+    E.compass = DD.UI.button(el('span.hv-rose', null, E.needle), function () { if (canView('resetView')) DD.Render.resetView(); }, opts('hv-compass', 'reset'));
+    E.turnR = DD.UI.button(svgNode(ICON_TURN_R), function () { if (canView('turn')) DD.Render.turn(1); }, opts('hv-right', 'right'));
+    // icon-only buttons: name them for screen readers (the rich tooltips are hover-only)
+    E.turnL.setAttribute('aria-label', 'Turn the map counter-clockwise (Q)');
+    E.compass.setAttribute('aria-label', 'Reset the view (Home)');
+    E.turnR.setAttribute('aria-label', 'Turn the map clockwise (R)');
+    E.view = el('div.hud-view', null, E.turnL, E.compass, E.turnR);
+    if (!canView('turn')) E.view.classList.add('hud-hidden');
+    return E.view;
+  }
+
+  /** Point the compass needle at grid north for the view (default: live); it lights up while the map is turned. */
+  function updateCompass(yaw) {
+    if (!M || !M.els.needle) return;
+    if (yaw === undefined || !isFinite(+yaw)) yaw = viewYaw();
+    const target = groundAngle(0, -1, +yaw) + 90;
+    // kept unwrapped, so the needle's short transition never spins the long way round
+    const prev = M.needleDeg;
+    const deg = prev === undefined ? target : prev + (((target - prev) % 360 + 540) % 360 - 180);
+    M.needleDeg = deg;
+    M.els.needle.style.transform = 'rotate(' + deg.toFixed(2) + 'deg)';
+    M.els.compass.classList.toggle('turned', Math.abs(turnedBy(yaw)) >= 0.05);
   }
 
   // ---- layout -----------------------------------------------------------------------------------------------------
@@ -1117,7 +1442,7 @@
     E.speed = DD.UI.button(speedLabel(), cycleSpeed, { cls: 'small ghost hud-speed', tooltip: '<div class="tt"><div class="tt-title">Animation speed</div><div class="tt-desc">Click to cycle 1× / 1.5× / 2× / 3×. Also in Settings. Space skips the enemy turn animations.</div></div>' });
     E.menu = DD.UI.button('Menu', openMenu, { cls: 'small ghost', icon: '☰', tooltip: '<div class="tt"><div class="tt-title">Menu (Esc)</div><div class="tt-desc">Speed, sound, controls, and the dignified exits.</div></div>' });
     E.auto = DD.UI.button('Autoplay', function () { if (DD.Main && DD.Main.stopAutoplay) DD.Main.stopAutoplay(); M.dirty = true; refresh(); }, { cls: 'small hud-hidden', icon: '🤖', tooltip: '<div class="tt"><div class="tt-title">Autoplay is on</div><div class="tt-desc">The DM\'s cousin is playing for you. Click to take the dice back.</div></div>' });
-    E.tr = el('div.hud-tr', null, E.auto, E.speed, E.menu);
+    E.tr = el('div.hud-tr', null, E.auto, E.speed, buildViewCluster(), E.menu);
     E.top = el('div.hud-top', null, E.round, E.center, E.tr);
     // party
     E.party = el('div.hud-party');
@@ -1173,8 +1498,8 @@
     // the initiative dice moment (DD.FXRender.moments.initiative): a scrim + tray, click to skip
     E.rollScrim = el('div.hud-rollscrim.hud-hidden');
     E.rollTray = el('div.hud-rolltray.panel.hud-hidden');
-    E.rollScrim.addEventListener('click', function () { skipMoment(); });
-    E.rollTray.addEventListener('click', function () { skipMoment(); });
+    E.rollScrim.addEventListener('click', function () { if (!actHeld()) skipMoment(); });
+    E.rollTray.addEventListener('click', function () { if (!actHeld()) skipMoment(); });
     root.appendChild(E.top);
     root.appendChild(E.party);
     root.appendChild(E.inspect);
@@ -1187,6 +1512,8 @@
     E.ribbon.addEventListener('click', function () { if (M && M.endSkip) M.endSkip(); });
     // a right-click over a HUD panel cancels targeting / unpins, exactly like one on the board
     root.addEventListener('contextmenu', function (e) { e.preventDefault(); onRightClick(); });
+    // HUD buttons never take keyboard focus: Space and Enter belong to the game, and a focused button would fire again
+    root.addEventListener('mousedown', function (e) { const b = e.target && e.target.closest ? e.target.closest('button') : null; if (b) e.preventDefault(); });
   }
 
   // ---- top bar ----------------------------------------------------------------------------------------------------
@@ -1220,7 +1547,10 @@
         return n + '× ' + (d ? d.name : e.id);
       }).join(', ');
       const chip = el('span.hud-chip.wave' + (left <= 1 ? '.soon' : ''), null, '🚩 Reinforcements ' + (left <= 1 ? 'next round' : 'in ' + left + ' rounds'));
-      DD.UI.tooltip(chip, '<div class="tt"><div class="tt-title">Reinforcements — round ' + w.round + '</div><div class="tt-desc">' + esc(names || 'More enemies') + (w.edge ? ' from the ' + esc(EDGE_NAME[w.edge] || w.edge) : '') + '.</div><div class="tt-flavor">The DM rolled for random encounters. Again.</div></div>', { pos: 'bottom' });
+      // a function: the edge is named for the map's rotation when the tooltip shows
+      DD.UI.tooltip(chip, function () {
+        return '<div class="tt"><div class="tt-title">Reinforcements — round ' + w.round + '</div><div class="tt-desc">' + esc(names || 'More enemies') + (w.edge ? ' from the ' + esc(edgeName(w.edge)) : '') + '.</div><div class="tt-flavor">The DM rolled for random encounters. Again.</div></div>';
+      }, { pos: 'bottom' });
       return chip;
     });
   }
@@ -1432,10 +1762,11 @@
     c.mov = el('span.hc-mov');
     c.status = el('div.hc-status');
     c.threat = el('div.hc-threat.hud-hidden');
+    c.engaged = el('div.hc-engaged.hud-hidden');
     c.tag = el('span.hc-tag.hud-hidden');
     c.init = el('span.hc-init');
     c.el = el('div.hud-card' + (u.kind === 'summon' ? '.summon' : ''), { style: { '--hc': color } },
-      c.portrait, el('div.hc-name', null, c.name, c.lvl), c.hp.el, el('div.hc-row', null, c.ap, c.when, c.mov), c.status, c.threat, c.tag, c.init);
+      c.portrait, el('div.hc-name', null, c.name, c.lvl), c.hp.el, el('div.hc-row', null, c.ap, c.when, c.mov), c.status, c.threat, c.engaged, c.tag, c.init);
     bindCard(c);
     return c;
   }
@@ -1461,13 +1792,20 @@
     const bank = num(u.apBank);
     if (bank) return { text: '⚡ ' + signed(bank) + ' AP next turn', cls: 'bank' };
     if (!ii) return { text: '', cls: '' };
-    if (u.downed) return { text: 'Skipped while down', cls: '' };
-    if (M.moment || (shownTurn() || {}).pending) return { text: '🎲 #' + ii.pos + ' in the order', cls: '' };
+    if (u.downed) {
+      // v2: a heal aimed at a downed ally gets it up — say so on the card (with the key when one reaches it now)
+      const o = reviveOptions(u);
+      return o.length ? { text: '💚 Heal back up (' + o[0].key + ')', cls: 'revive' } : { text: '🆘 Down: heal or Help Up', cls: 'down' };
+    }
+    // the dice are still rolling: no spoilers (the tray reveals the order)
+    if (M.moment) return { text: '🎲 Rolling…', cls: '' };
+    if ((shownTurn() || {}).pending) return { text: '🎲 #' + ii.pos + ' in the order', cls: '' };
     const sl = shownSlot(u);
     if (!sl) return { text: 'acts in ' + ii.inTurns, cls: '' };
     if (sl.cur) return { text: '▶ Acting now', cls: '' };
     if (sl.dist === 1) return { text: '⏭ Acts next', cls: '' };
-    return { text: (sl.nextRound ? '✓ Acted · ' : '') + 'acts in ' + sl.dist, cls: '' };
+    // "in 6 turns", not "in 6" (seconds? rounds?): turns of the initiative order, as the tracker counts them
+    return { text: sl.nextRound ? '✓ Acted · in ' + sl.dist + ' turns' : 'acts in ' + sl.dist + ' turns', cls: '' };
   }
 
   /** Click = select (a unit of the acting turn) or inspect (anyone else), hover = highlight on the board, tooltip =
@@ -1477,7 +1815,7 @@
       const v = byId(c.id);
       if (!v) return;
       if (!canSelectNow()) { lockedFeedback(M.enemyPlayback || M.moment ? 'enemy' : lockReason()); return; }
-      if (v.downed) { hint(v.name + ' is down. Move an ally next to them and use Help Up (2 AP).', 'warn'); return; }
+      if (v.downed) { hint(v.name + ' is down. ' + reviveHow(v), 'warn'); return; }
       if (!selectable(v)) { notTheirTurn(v); return; }
       select(c.id, { bark: true, center: true });
     });
@@ -1554,7 +1892,7 @@
       c.when.className = 'hc-when' + (w.cls ? ' ' + w.cls : '') + (myTurn || !w.text ? ' hud-hidden' : '');
     }
     const ii = s.order ? initInfo(u) : null;
-    const badge = u.kind === 'hero' && ii && ii.pos ? String(ii.pos) : '';
+    const badge = u.kind === 'hero' && ii && ii.pos && !M.moment ? String(ii.pos) : '';
     if (c.init.textContent !== badge) c.init.textContent = badge;
     c.mov.textContent = '👣 ' + effMov(u);
     const ss = statusSig(u);
@@ -1586,6 +1924,13 @@
     if (c.threat.textContent !== line) c.threat.textContent = line;
     c.threat.classList.toggle('hud-hidden', !line);
     c.threat.classList.toggle('lethal', !!line && lethal);
+    // attacks of opportunity: the foes next to it that would punish a move away ("⚔ Engaged: Goblin Grunt 4")
+    const eng = u.kind === 'hero' && !u.downed ? engagedBy(u) : [];
+    const total = eng.reduce(function (a, r) { return a + r.dmg; }, 0);
+    const et = !eng.length ? '' : '⚔ Engaged: ' + (eng.length === 1 ? eng[0].unit.name + ' ' + eng[0].dmg : eng.length + ' foes, up to ' + total);
+    if (c.engaged.textContent !== et) c.engaged.textContent = et;
+    c.engaged.classList.toggle('hud-hidden', !et);
+    c.engaged.classList.toggle('lethal', !!et && total >= num(u.hp) + num(u.block));
   }
 
   /** The panel group a summon belongs to: its owner when the owner has a card, else the orphans' group. */
@@ -1760,8 +2105,11 @@
   function iaInfo(ia) {
     const t = DD.Grid.tile(ia.x, ia.y);
     const od = t && t.obj ? DD.getObject(t.obj.id) : null;
-    if (ia.kind === 'helpUp') { const o = byId(ia.unitId); return { icon: '🆘', name: 'Help Up', sub: o ? o.name : 'ally', desc: 'Revive ' + (o ? o.name : 'a downed ally') + ' at 25% HP. Costs 2 AP.' }; }
-    if (ia.kind === 'smash') return { icon: '🔨', name: 'Smash', sub: od ? od.name : 'object', desc: 'Deal ' + num(ia.dmg, 5) + ' damage to the ' + (od ? od.name : 'object') + ' (' + (t && t.obj ? t.obj.hp + '/' + t.obj.maxHp + ' HP' : '') + ').' };
+    if (ia.kind === 'smash') {
+      const boom = t && t.obj && volatileObj(ia.x, ia.y) ? ' 💥 It explodes when destroyed, and Smash is done from right next to it: a ranged attack aimed at it sets it off from a safer distance.' : '';
+      return { icon: '🔨', name: 'Smash', sub: od ? od.name : 'object', desc: 'Deal ' + num(ia.dmg, 5) + ' damage to the ' + (od ? od.name : 'object') + ' (' + (t && t.obj ? t.obj.hp + '/' + t.obj.maxHp + ' HP' : '') + ').' + boom };
+    }
+    if (ia.kind === 'helpUp') { const o = byId(ia.unitId); return { icon: '🆘', name: 'Help Up', sub: o ? o.name : 'ally', desc: 'Revive ' + (o ? o.name : 'a downed ally') + ' at 25% HP. Costs 2 AP. (A single-target heal aimed at ' + (o ? o.name : 'a downed ally') + ' also works, with the healed HP.)' }; }
     return { icon: OBJ_ICON[ia.objId] || '🖐️', name: ia.label || 'Use', sub: od ? od.name : 'object', desc: (od && od.desc) || 'Interact with it and see what happens.' };
   }
 
@@ -1856,11 +2204,17 @@
   function threatTip() {
     return '<div class="tt"><div class="tt-title">👁 Threat shading (hold Alt · T toggles)</div><div class="tt-desc">Tints every tile enemies could hit before this hero\'s next turn (where they can walk + reach with an attack that is ready), plus aura damage. Darker = more damage; hatched = enough to drop the selected hero.</div><div class="tt-foot">An estimate: walls are not counted past their walk. Boss wind-ups are always shown (⏳ red tiles).</div></div>';
   }
+  /** Why Undo is refused right now. */
+  function undoWhy() {
+    const s = S();
+    if (s && M.provokedTurn === s.turn) return 'That move provoked an attack of opportunity: the hit happened, so it can\'t be undone.';
+    return 'Only the last move can be undone, and only if nothing else happened since.';
+  }
   function undoTip() {
     const s = S();
     const ok = !!(C() && C().canUndo && C().canUndo());
     const u = ok && s && s.undo ? byId(s.undo.unitId) : null;
-    return '<div class="tt"><div class="tt-title">Undo Move (Z)</div><div class="tt-desc">' + (ok ? 'Take back ' + esc(u ? u.name : 'the') + '\'s last move and get the AP back.' : 'Only the last move can be undone, and only if nothing else happened since.') + '</div><div class="tt-flavor">Rewind. The DM sighs audibly.</div></div>';
+    return '<div class="tt"><div class="tt-title">Undo Move (Z)</div><div class="tt-desc">' + (ok ? 'Take back ' + esc(u ? u.name : 'the') + '\'s last move and get the AP back.' : esc(undoWhy())) + '</div><div class="tt-flavor">Rewind. The DM sighs audibly.</div></div>';
   }
 
   function renderEndCluster(s, lock) {
@@ -1877,6 +2231,9 @@
     const deploy = deploying(s);
     let label = 'End Turn', sub = '';
     if (deploy) { label = '🎲 Roll!'; sub = 'Start the fight'; }
+    // the dice moment / AI turns on screen: "Next: X" would be a spoiler or stale — say what Space does instead
+    else if (M.moment) sub = '🎲 Rolling…';
+    else if (M.enemyPlayback && !s.result) sub = '⏩ Space skips';
     else if (!s.result) {
       const next = upcoming();
       const n = next[0];
@@ -1953,6 +2310,30 @@
       el('div.ha-desc', null, (info && info.desc) || DD.skillDesc(r.def, r.level, u) || ''));
   }
 
+  /** Does u hold the line? Its attack of opportunity (skill, ≈ damage on the hero it threatens, spent this round) or
+   *  why it makes none (DESIGN §4.2). */
+  function holdLine(u) {
+    const foe = !playerSide(u);
+    const sl = oppSlot(u);
+    if ((u.flags || {}).noOpportunity) return el('div.hi-line', null, '· Never makes attacks of opportunity.');
+    if (!sl) return el('div.hi-line', null, foe ? '· No melee attack ready: walking away from it is free.' : '· No melee basic attack: foes can walk away from ' + u.name + ' freely.');
+    if (isStunnedU(u) || hasSt(u, 'sheep')) return el('div.hi-line', null, '· No attacks of opportunity while incapacitated.');
+    const name = oppSkillName(sl);
+    const spent = oppSpent(u);
+    if (foe) {
+      // the engine's rule (DD.Act.opportunityOf): a Dazzled / Confused AI unit never strikes, a taunted one only its taunter
+      const dz = hasSt(u, 'dazzled') ? 'Dazzled' : hasSt(u, 'confused') ? 'Confused' : '';
+      if (dz) return el('div.hi-line', null, '· No attacks of opportunity while ' + dz + ': walking away from it is free.');
+      const tn = DD.AI && typeof DD.AI.taunter === 'function' ? DD.safe('HUD taunter', DD.AI.taunter, DD.AI, [u]) : null;
+      const h = threatHero();
+      const est = h && (!tn || tn === h) ? oppEst(u, h) : 0;
+      const only = tn ? ' (taunted: only ' + tn.name + ' provokes it)' : '';
+      return el('div.hi-line.aoo' + (spent ? '.spent' : ''), null, '⚔ Holds the line: walking away from it provokes ' + name + (est ? ' (≈' + est + ' to ' + h.name + ')' : '') + only + (spent ? ' — already used this round.' : ', once per round.'));
+    }
+    // v2 integrator: "takes a free hit (The Family Hammer)" — skill names don't read as a noun after "a free"
+    return el('div.hi-line.aoo.own' + (spent ? '.spent' : ''), null, '🛡 Holds the line: a foe walking away from ' + u.name + ' takes a free hit (' + name + ')' + (spent ? ' — already used this round.' : ', once per round.'));
+  }
+
   function initBadge(u) {
     const ii = initInfo(u);
     if (!ii) return null;
@@ -1989,7 +2370,8 @@
     if (!(u.kind === 'summon' && u.ownerId && !foe)) stats.push(el('span.pill', { title: 'Initiative modifier (added to the d20)' }, '🎲 Init ' + signed(initMod(u))));
     if (!foe && num(u.apBank)) stats.push(el('span.pill', { style: { color: '#bfe9ff' } }, '⚡ ' + signed(u.apBank) + ' AP next turn'));
     const fl = u.flags || {};
-    if (fl.flying) stats.push(el('span.pill', null, '🪽 Flying'));
+    const flies = flying(u);
+    if (flies) stats.push(el('span.pill', { title: flyLine(u).replace(/^🪽 /, '') }, '🪽 Flying'));
     if (fl.immovable) stats.push(el('span.pill', null, '🗿 Immovable'));
     if (fl.stunImmune) stats.push(el('span.pill', null, '💫 Stun-immune'));
     Object.keys(u.resist || {}).forEach(function (k) {
@@ -2000,6 +2382,15 @@
     box.push(el('div.hi-stats', null, stats));
     const chips = statusChips(u);
     if (chips.length) box.push(el('div.hi-status', null, chips));
+    if (flies && !u.downed) box.push(el('div.hi-line.fly', null, flyLine(u)));
+    // v2: a downed hero gets up from Help Up or from a single-target heal aimed at it (with the healed HP)
+    if (u.downed && u.kind === 'hero' && !foe) {
+      const ar = M.mode.kind !== 'move' ? armedEntry(selectedUnit(), u) : null;
+      const pe = ar && ar.revive ? (previewAt(selectedUnit(), u) || {}).perUnit : null;
+      const e = pe ? pe[u.id] : null;
+      if (revivedIn(e)) box.push(el('div.hi-line.good', null, '🎯 Click: ' + (armedDef() || {}).name + ' gets ' + u.name + ' back up — ' + upText(e) + ' (0 AP now; ' + upWhen(u) + ').'));
+      else box.push(el('div.hi-line.revive', null, '🆘 Downed: skipped until revived. ' + reviveHow(u)));
+    }
     if (foe) {
       // enemy-level passive (def.passive: { name, desc, icon? }; desc may be (unit) => string for live numbers)
       const pv = d.passive;
@@ -2038,6 +2429,7 @@
         else if (r.tiles.size) box.push(el('div.hi-line.good', null, '✓ ' + when + ': no hero within its reach (move ' + effMov(u) + ' + attack).'));
         else box.push(el('div.hi-line', null, when + ': no damaging attack ready.'));
       }
+      box.push(holdLine(u));
       const slots = (C().slotsOf(u) || []).filter(Boolean);
       if (slots.length) {
         box.push(el('div.hi-sec', null, 'Abilities'));
@@ -2055,6 +2447,14 @@
       }
       if (reach.length) box.push(el('div.hi-line.reach', null, '⚠ Enemies that can reach this tile before its next turn: ' + reachText(reach)));
       else if (u.side === 'hero' && !u.downed && !auras.length && !wus.length) box.push(el('div.hi-line.good', null, '✓ No enemy can reach this tile before its next turn.'));
+      // attacks of opportunity: who punishes a move away, whose reaction is spent, and whether it holds the line itself
+      if (!u.downed && S().order) {
+        const eng = engagedBy(u);
+        if (eng.length) box.push(el('div.hi-line.aoo', null, '⚔ Engaged — a move away provokes: ' + eng.map(function (r) { return r.unit.name + ' ' + r.dmg + (r.skillName ? ' (' + r.skillName + ')' : ''); }).join(', ') + '. Skill dashes, pushes and teleports don\'t.'));
+        const spent = spentGuards(u);
+        if (spent.length) box.push(el('div.hi-line.good', null, '✓ ' + DD.UI.andList(spent.map(function (a) { return a.name; })) + ' already used ' + (spent.length > 1 ? 'their attacks' : 'its attack') + ' of opportunity this round.'));
+        box.push(holdLine(u));
+      }
       if (auras.length) {
         box.push(el('div.hi-sec', null, '⚠ Auras: ' + auraTotal(auras) + ' before its next turn'));
         auras.slice(0, 4).forEach(function (t) { box.push(el('div.hi-line.aura', null, auraDetail(t))); });
@@ -2085,6 +2485,27 @@
       const ia = DD.Act && DD.Act.interactionOf ? DD.safe('HUD interactionOf', DD.Act.interactionOf, DD.Act, [t.obj, selectedUnit()]) : null;
       box.push(el('div.hi-line', { html: '<b>' + esc(t.obj.label || od.name) + '</b>' + esc(hp) + (od.desc ? ' — ' + esc(od.desc) : '') }));
       if (ia) box.push(el('div.hi-line.good', null, '🖐️ ' + ia.label + ' (' + ia.ap + ' AP) from an adjacent tile.'));
+      // v2: explosive objects are targets — any single-target attack in range and sight sets one off
+      const boom = !DD.Grid.unitAt(t.x, t.y) && volatileObj(t.x, t.y);
+      if (boom) {
+        const smash = C().smashable && C().smashable(boom);
+        box.push(el('div.hi-line.boom', null, '💥 Volatile: aim a single-target attack at it (in range and line of sight) and it goes off' + (smash ? ' — or Smash it from next to it' : '') + '. Its blast catches everyone around it, friends included.'));
+        const su = selectedUnit();
+        const def = M.mode.kind !== 'move' ? armedDef() : null;
+        if (def && su && controllable(su)) {
+          const e = armedEntry(su, t);
+          if (e && e.obj) { const bd = blastDetail(previewAt(su, t), t); box.push(el('div.hi-line.good', null, '🎯 Click: ' + def.name + ' sets it off' + (bd ? ' — ' + bd : '') + '.')); }
+          else if (!aimsAtObjects(su, armedRef())) box.push(el('div.hi-line', null, '· ' + def.name + ' can\'t set it off.'));
+          else box.push(el('div.hi-line', null, '· ' + def.name + ' can\'t reach it from here.'));
+        }
+      }
+    }
+    // v2: flyers ignore everything on the floor (clouds still reach them)
+    const fsel = selectedUnit();
+    if (fsel && flying(fsel) && active(fsel)) {
+      const sd = t.surface ? DD.getSurface(t.surface.id) : null;
+      if (sd && sd.airborne) box.push(el('div.hi-line.warn', null, '☁️ ' + sd.name + ' hangs in the air: it reaches flyers too.'));
+      if (floorEffects(t)) box.push(el('div.hi-line.fly', null, '🪽 ' + fsel.name + ' flies over this floor: none of it applies.'));
     }
     const wus = windupsAt(t.x, t.y, null);
     if (wus.length) {
@@ -2114,7 +2535,9 @@
       return;
     }
     const u = tgt.unit;
-    const sig = u ? 'u' + u.id + ':' + M.gen + ':' + !!tgt.pinned + ':' + statusSig(u) + ':' + (u.intents || []).length : 't' + tgt.tile.x + ',' + tgt.tile.y + ':' + M.gen + ':' + M.sel;
+    // the armed skill / consumable is part of it (v2: "🎯 Click: … sets it off" / "… gets Marwyn back up")
+    const armed = M.mode.kind + ':' + (M.mode.kind === 'skill' ? M.mode.pos : M.mode.kind === 'cons' ? M.mode.index : '');
+    const sig = (u ? 'u' + u.id + ':' + M.gen + ':' + !!tgt.pinned + ':' + statusSig(u) + ':' + (u.intents || []).length : 't' + tgt.tile.x + ',' + tgt.tile.y + ':' + M.gen + ':' + M.sel) + ':' + armed;
     if (sig !== M.inspectSig) {
       M.inspectSig = sig;
       E.inspect.innerHTML = '';
@@ -2128,7 +2551,8 @@
 
   /**
    * Put the inspect panel in the top-left or top-right corner (over the log), whichever hides fewer units —
-   * the inspected one counts six times. Board corners are mostly empty on an isometric diamond.
+   * the inspected one counts six times. Coverage is measured on screen, so it holds at any map rotation; the
+   * render:view handler re-runs this once a turn settles.
    */
   function placeInspect(p) {
     const E = M.els;
@@ -2199,7 +2623,7 @@
     const u = selectedUnit();
     if (deploying(s)) return deployHint(s, u);
     if (!u) return { text: 'Click a hero (or press <b>Tab</b>) to give orders.' };
-    if (!controllable(u)) return { text: u.downed ? esc(u.name) + ' is down. An adjacent ally can <b>Help Up</b> (2 AP).' : '' };
+    if (!controllable(u)) return { text: u.downed ? esc(u.name) + ' is down. An adjacent ally can <b>Help Up</b> (2 AP), or aim a <b>heal</b> at ' + esc(u.name) + ' to get ' + esc(u.name) + ' back UP.' : '' };
     if (threatOn() && M.hover && M.mode.kind === 'move' && !M.cardHover) {
       const tt = threatHint(u, M.hover);
       if (tt) return tt;
@@ -2209,7 +2633,7 @@
       if (!def) return { text: '' };
       const t = aimTarget(u, M.hover);
       let sum = '';
-      if (t) sum = previewSummary(u, previewAt(u, t));
+      if (t) sum = previewSummary(u, previewAt(u, t), t);
       // Blood Price: who pays the HP cost instead
       if (M.mode.kind === 'skill') {
         const lvl = armedLevel();
@@ -2224,7 +2648,19 @@
       const e = reachOf(u).get(key(h.x, h.y));
       if (e) {
         const parts = [];
+        // attacks of opportunity: who strikes on this walk (the engine's fewest-provoke path), how hard
+        const pv = provokeInfo(u, h.x, h.y);
+        if (pv.list.length) {
+          const one = pv.list.length === 1;
+          parts.push('⚔ <b>Provokes ' + pv.list.length + '</b> attack' + (one ? '' : 's') + ' of opportunity: <b>' + esc(aooList(pv.list)) + '</b>' +
+            (one && pv.list[0].skillName ? ' (' + esc(pv.list[0].skillName) + ')' : one ? '' : ' (up to ' + pv.total + ')') +
+            (pv.lethal ? ' — 💀 enough to drop ' + esc(u.name) : '') + '. Can\'t be undone. <span class="hh-dim">Skill dashes, pushes and teleports never provoke.</span>');
+        }
         if (e.hazard) parts.push('⚠ The path crosses <b>' + esc(hazardName(e.hazard)) + '</b> — it will hurt.');
+        // Bleeding: every move action costs its stacks when the walk ends (DD.Act.bleedTick) — on top of any free hits
+        const bl = (u.statuses || []).filter(function (x) { return x && x.id === 'bleed'; })[0];
+        const bleed = bl ? Math.max(0, Math.round(num(bl.stacks))) : 0;
+        if (bleed > 0) parts.push('🩸 <b>Bleeding ' + bleed + '</b>: this move costs ' + bleed + ' HP when it ends' + (pv.total + bleed >= num(u.hp) + num(u.block) ? ' 💀' : '') + '.');
         const wus = windupsAt(h.x, h.y, null);
         if (wus.length) parts.push('⏳ <b>' + esc(wus.map(function (w) { return w.d.label + (w.d.dmg ? ' ' + w.d.dmg : ''); }).join(' + ')) + '</b> lands here ' + esc(windupWhen(wus[0].d)) + '.');
         // auras (enemy threatAt): what ending the turn on this tile costs, or that it escapes the current one
@@ -2237,7 +2673,10 @@
         if (e.edge) parts.push('Next to a drop — easy to get shoved in.');
         if (parts.length) return { text: parts.join(' '), cls: 'warn' };
         const escape = now0.length ? ' ✓ Out of ' + esc(now0.map(function (t) { return t.label; }).join(' and ')) + ' here (' + auraTotal(now0) + ' where ' + esc(u.name) + ' stands).' : '';
-        return { text: 'Move here: ' + moveCost(u) + ' AP' + (e.cost ? ' (path cost ' + e.cost + ' of ' + effMov(u) + ')' : '') + '.' + escape + (escape ? '' : ' <span class="hh-dim">· hold <b>Alt</b> for enemy reach</span>'), cls: escape ? 'good' : '' };
+        // next to foes whose attack of opportunity is spent this round: this walk away is free
+        const spent = spentGuards(u);
+        const free = spent.length ? ' ✓ ' + esc(DD.UI.andList(spent.map(function (a) { return a.name; }))) + ' already used ' + (spent.length > 1 ? 'their attacks' : 'its attack') + ' of opportunity this round: no free hit.' : '';
+        return { text: 'Move here: ' + moveCost(u) + ' AP' + (e.cost ? ' (path cost ' + e.cost + ' of ' + effMov(u) + ')' : '') + '.' + escape + free + (escape || free ? '' : ' <span class="hh-dim">· hold <b>Alt</b> for enemy reach</span>'), cls: escape || free ? 'good' : '' };
       }
     }
     if (num(u.ap) <= 0) {
@@ -2266,14 +2705,19 @@
     const rs = reachersAt(h.x, h.y);
     const auras = auraThreats(u, h.x, h.y);
     const wus = windupsAt(h.x, h.y, null);
-    if (!rs.length && !auras.length && !wus.length) return { text: '👁 Out of every enemy\'s reach (estimate: their move + a ready attack).', cls: 'good' };
+    // the walk there provokes attacks of opportunity: that comes first (it happens now, the rest later)
+    const pv = reachOf(u).get(key(h.x, h.y)) ? provokeInfo(u, h.x, h.y) : null;
+    const pre = pv && pv.list.length ? '⚔ <b>Provokes ' + pv.list.length + '</b> on the way: <b>' + esc(aooList(pv.list)) + '</b>' + (pv.lethal ? ' 💀' : '') + ' · ' : '';
+    if (!rs.length && !auras.length && !wus.length) return { text: pre + '👁 Out of every enemy\'s reach (estimate: their move + a ready attack).', cls: pre ? 'warn' : 'good' };
     const parts = [];
     if (rs.length) parts.push(plural(rs.length, 'enemy', 'enemies') + ' can reach this tile: <b>' + esc(reachText(rs)) + '</b>');
     if (auras.length) parts.push('auras: <b>' + esc(auras.map(function (t) { return t.label + ' ' + t.dmg; }).join(' + ')) + '</b>');
     if (wus.length) parts.push('⏳ <b>' + esc(wus.map(function (w) { return w.d.label + (w.d.dmg ? ' ' + w.d.dmg : ''); }).join(' + ')) + '</b> lands here');
     const tot = rs.reduce(function (a, r) { return a + r.dmg; }, 0) + auraTotal(auras) + wus.reduce(function (a, w) { return a + num(w.d.dmg); }, 0);
-    const lethal = tot >= num(u.hp) + num(u.block) ? ' 💀 enough to drop ' + esc(u.name) + '.' : '.';
-    return { text: '👁 ' + parts.join(' · ') + ' — up to ' + tot + lethal, cls: 'warn' };
+    // the walk's own attacks of opportunity land first: they count toward "enough to drop" too
+    const walk = pv && pv.list.length ? pv.total : 0;
+    const lethal = tot + walk >= num(u.hp) + num(u.block) ? ' 💀 enough to drop ' + esc(u.name) + (walk && tot < num(u.hp) + num(u.block) ? ' with the walk\'s ' + walk : '') + '.' : '.';
+    return { text: pre + '👁 ' + parts.join(' · ') + ' — up to ' + tot + lethal, cls: 'warn' };
   }
 
   function renderHint() {
@@ -2291,6 +2735,13 @@
     ov.moveTiles = []; ov.path = []; ov.pathHazard = false; ov.targetTiles = []; ov.areaTiles = [];
     ov.previews = {}; ov.deployTiles = []; ov.interactTiles = [];
     ov.threat = null; ov.reach = null;
+    ov.objTargets = []; ov.reviveTargets = [];
+  }
+  /** Target tiles → overlay, plus the v2 extras: explosive objects (💥 marker) and downed allies a heal gets up. */
+  function setTargets(ov, list) {
+    ov.targetTiles = list.slice();
+    ov.objTargets = list.filter(function (p) { return p.obj; }).map(function (p) { return { x: p.x, y: p.y }; });
+    ov.reviveTargets = list.filter(function (p) { return p.revive; }).map(function (p) { const d = DD.Grid.unitAt(p.x, p.y); return d ? d.id : null; }).filter(Boolean);
   }
 
   /** The enemy being inspected (hover, tracker hover or pin), for its reach on the board. */
@@ -2344,7 +2795,7 @@
       const reach = reachOf(u);
       if (M.hoverSlot != null) {
         const item = barSlots(u)[M.hoverSlot];
-        if (item && item.slot) ov.targetTiles = DD.safe('HUD valid targets', DD.Targeting.validTargets, DD.Targeting, [u, item.slot]) || [];
+        if (item && item.slot) setTargets(ov, DD.safe('HUD valid targets', DD.Targeting.validTargets, DD.Targeting, [u, item.slot]) || []);
         return;
       }
       reach.forEach(function (e, k) { if (!dset[k]) ov.moveTiles.push({ x: e.x, y: e.y }); });
@@ -2352,11 +2803,22 @@
       const h = M.hover;
       if (h && !dset[key(h.x, h.y)]) {
         const e = reach.get(key(h.x, h.y));
-        if (e) { ov.path = (e.path || []).map(function (p) { return { x: p.x, y: p.y }; }); ov.pathHazard = !!e.hazard; }
+        if (e) {
+          ov.path = (e.path || []).map(function (p) { return { x: p.x, y: p.y }; });
+          ov.pathHazard = !!e.hazard;
+          // a walk that provokes attacks of opportunity is a dangerous one: red path, the hit on the mover ("-6 ⚔")
+          // and a ⚔ over every foe that strikes
+          const pv = provokeInfo(u, h.x, h.y);
+          if (pv.list.length) {
+            ov.pathHazard = true;
+            ov.previews[u.id] = { dmg: pv.total, heal: 0, lethal: pv.lethal, text: '⚔' };
+            pv.list.forEach(function (r) { ov.previews[r.unit.id] = { dmg: 0, heal: 0, lethal: false, text: '⚔' }; });
+          }
+        }
       }
       return;
     }
-    ov.targetTiles = armedTargets(u).slice();
+    setTargets(ov, armedTargets(u));
     const t = aimTarget(u, M.hover);
     if (t) {
       const p = previewAt(u, t);
@@ -2531,6 +2993,7 @@
   }
 
   function doMove(u, x, y) {
+    M.provokedTurn = -1; // set again by 'opportunity:attack' if this walk provokes
     const ok = DD.safe('HUD move', C().move, C(), [u, x, y]);
     if (!ok) { hint('Can\'t move there.', 'bad'); return false; }
     afterAction(u);
@@ -2562,7 +3025,7 @@
     if (!M) return;
     const lock = lockReason();
     if (lock && lock !== 'modal') { lockedFeedback(lock); return; }
-    if (!C().canUndo()) { hint('Nothing to undo — only the last move, and only if nothing else happened since.', 'bad'); return; }
+    if (!C().canUndo()) { hint(M.provokedTurn === S().turn ? undoWhy() : 'Nothing to undo — only the last move, and only if nothing else happened since.', 'bad'); return; }
     const s = S();
     const id = s.undo && s.undo.unitId;
     if (DD.safe('HUD undo', C().undo, C())) {
@@ -2572,15 +3035,28 @@
     }
   }
 
+  /** The input guard window from now: real input only (headless tests act at once unless DD.HUD.realInput(true)). */
+  function graceFrom(ms) { return DD.headless && !(M && M.realInput) ? 0 : now() + ms; }
+  /** A key / click just skipped an animation: neither the same press nor a quick second one may also act. */
+  function holdAfterSkip() { if (M) M.graceUntil = Math.max(M.graceUntil, graceFrom(SKIP_HOLD_MS)); }
+  /** A press just rolled initiative / ended a turn: a double tap (or key bounce) must not also skip what it started —
+   *  the dice moment it never showed, the enemy turn it never showed. */
+  function holdAfterAct() { if (M) M.actHoldUntil = graceFrom(ACT_HOLD_MS); }
+  function actHeld() { return !!M && now() < M.actHoldUntil; }
+
   function doEndTurn(fromKey) {
     if (!M) return false;
     const s = S();
+    if (actHeld()) return false;
     // the dice moment: Space / click skips it (only it: the turns after it still play)
     if (M.moment) { skipMoment(); return false; }
     const lock = lockReason();
     // Space always skips playing animations — also the final ones of a finished fight (the hand-off waits for them).
     if (fxBusy() && (lock === 'busy' || lock === 'over')) { skipAnimations(); return false; }
     if (lock && lock !== 'modal') { lockedFeedback(lock); return false; }
+    // the playback just ended but the HUD has not handed the turn over on screen yet (its loop runs after the
+    // renderer's): hand it over now — that starts the grace window, so a skip press can't also end this turn
+    if (M.turnPending || M.enemyPlayback) refresh();
     if (now() < M.graceUntil) return false;
     if (s && deploying(s)) return doRoll();
     if (!s || s.phase !== 'player') return false;
@@ -2588,6 +3064,7 @@
     M.pinned = null;
     const ok = DD.safe('HUD endTurn', C().endTurn, C());
     if (!ok && fromKey !== 'silent') hint('Can\'t end the turn right now.', 'bad');
+    if (ok) holdAfterAct();
     M.dirty = true;
     if (!fxBusy()) refresh(); else { M.gen++; refreshView(); }
     return !!ok;
@@ -2605,6 +3082,7 @@
     sound('click');
     const ok = DD.safe('HUD rollInitiative', C().rollInitiative, C());
     if (!ok) { hint('The dice refuse to roll. (No fight to start.)', 'bad'); return false; }
+    holdAfterAct();
     M.trackFresh = true;
     M.dirty = true;
     if (!fxBusy()) refresh(); else refreshView();
@@ -2613,7 +3091,10 @@
 
   function skipAnimations() {
     if (!DD.FX || !fxBusy()) return;
-    DD.safe('HUD skip', DD.FX.flush, DD.FX);
+    holdAfterSkip();
+    // flushing starts every queued marker once: the dice moment must not pop up for that instant
+    M.flushing = true;
+    try { DD.safe('HUD skip', DD.FX.flush, DD.FX); } finally { if (M) M.flushing = false; }
     tick();
   }
 
@@ -2645,6 +3126,7 @@
     renderInspect();
     renderHint();
     updateDmPeek();
+    updateObjPeek();
     highlightChip();
   }
 
@@ -2652,6 +3134,8 @@
     if (!M || !p || p.x === undefined || p.x === null) return;
     const s = S();
     if (!s) return;
+    // the second click of the double click that opened the fight (a map node) lands on nothing
+    if (DD.UI.inShowGuard && DD.UI.inShowGuard()) return;
     if (M.endHandled && M.endSkip) { M.endSkip(); return; }
     const lock = lockReason();
     if (lock && lock !== 'modal') { lockedFeedback(lock); return; }
@@ -2680,7 +3164,7 @@
       if (clicked.downed && u && controllable(u)) {
         const ia = interactionsOf(u).filter(function (i) { return i.kind === 'helpUp' && i.unitId === clicked.id; })[0];
         if (ia) { doInteract(u, ia); return; }
-        hint(clicked.name + ' is down. Move next to them and use Help Up (2 AP).', 'warn');
+        hint(clicked.name + ' is down. ' + reviveHow(clicked), 'warn');
         return;
       }
       if (!clicked.downed) notTheirTurn(clicked);
@@ -2724,8 +3208,9 @@
     if (!M || e.ctrlKey || e.metaKey || e.altKey) return false;
     const k = e.key;
     const lower = String(k || '').toLowerCase();
-    if (M.endHandled && M.endSkip && (k === ' ' || k === 'Enter')) { if (!e.repeat) M.endSkip(); return true; }
-    if (M.moment && (k === ' ' || k === 'Spacebar' || k === 'Enter' || k === 'Escape')) { if (!e.repeat) skipMoment(); return true; }
+    // the end-of-fight ribbon: Space / Enter hurries the hand-off — not the press that skipped the last animations
+    if (M.endHandled && M.endSkip && (k === ' ' || k === 'Enter')) { if (!e.repeat && now() >= M.graceUntil) M.endSkip(); return true; }
+    if (M.moment && (k === ' ' || k === 'Spacebar' || k === 'Enter' || k === 'Escape')) { if (!e.repeat && !actHeld()) skipMoment(); return true; }
     if (k === 'Escape') {
       if (M.mode.kind !== 'move') onRightClick();
       else if (M.pinned) onRightClick();
@@ -2734,7 +3219,7 @@
     }
     if (k === ' ' || k === 'Spacebar') { if (!e.repeat) doEndTurn('key'); return true; }
     if (k === 'Tab') { if (canSelectNow()) cycle(e.shiftKey ? -1 : 1); else lockedFeedback(lockReason()); return true; }
-    if (e.repeat) return SKILL_KEYS.indexOf(k) >= 0 || CONS_KEYS.indexOf(k) >= 0 || lower === 'z' || lower === 'e' || lower === 't';
+    if (e.repeat) return SKILL_KEYS.indexOf(k) >= 0 || CONS_KEYS.indexOf(k) >= 0 || lower === 'z' || lower === 'e' || lower === 't' || k === 'Enter';
     if (lower === 't') { setThreatSticky(!M.threatSticky); return true; }
     if (lower === 'z') { doUndo(); return true; }
     if (lower === 'e') {
@@ -2744,9 +3229,10 @@
       return true;
     }
     if (k === 'Enter') {
+      // the combat screen owns Enter (confirm the armed skill): it never falls through to activate a focused button
       const u = selectedUnit();
-      if (M.mode.kind !== 'move' && u) { const t = aimTarget(u, M.hover); if (t) { useArmed(u, t); return true; } }
-      return false;
+      if (M.mode.kind !== 'move' && u && !lockReason()) { const t = aimTarget(u, M.hover); if (t) useArmed(u, t); }
+      return true;
     }
     const si = SKILL_KEYS.indexOf(k);
     if (si >= 0) { pressSlot(si); return true; }
@@ -2767,7 +3253,7 @@
    * One log line (revealed in step with playback). v2: lines logged during a unit's turn get a "Goblin Grunt's turn"
    * header the first time that turn shows anything — turns where nothing happened leave no trace.
    */
-  function appendLog(entry, instant, turn) {
+  function appendLog(entry, instant, turn, aoo) {
     const E = M.els;
     const list = E.logList;
     const stick = list.scrollTop + list.clientHeight >= list.scrollHeight - 12;
@@ -2804,20 +3290,30 @@
     const cls = entry.cls || 'system';
     const line = cls === 'narrator'
       ? el('div.log-line.narrator', null, el('span.hl-dm', null, 'DM'), el('span', null, entry.text))
-      : el('div.log-line.' + cls, null, entry.text);
+      : el('div.log-line.' + cls + (aoo ? '.aoo' : ''), null, entry.text);
     if (instant) line.style.animation = 'none';
     list.appendChild(line);
     while (list.children.length > LOG_MAX) list.removeChild(list.firstChild);
     if (stick) list.scrollTop = list.scrollHeight;
     // the initiative moment shows its DM line in the tray: no second copy in the caption
     if (cls === 'narrator' && !instant && entry.text !== M.momentLine) showDm(entry.text);
+    if (aoo && !instant) aooShown(aoo);
+  }
+
+  /** An attack of opportunity reached the screen: the first one of a fight explains the rule (in step with playback). */
+  function aooShown(a) {
+    if (M.aooTaught) return;
+    M.aooTaught = true;
+    hint(a.heroHit
+      ? '⚔ Attack of opportunity! Walking away from ' + a.attacker + ' gave it a free hit on ' + a.mover + '. Skill dashes, pushes and teleports never provoke.'
+      : '⚔ Attack of opportunity! ' + a.mover + ' walked away from ' + a.attacker + ' and took a free hit. Melee heroes hold the line.', 'warn');
   }
 
   function revealLog() {
     if (!M || !M.logQueue.length) return;
     const q = DD.FX ? DD.FX.queue : [];
     const head = q.length ? q[0].id : Infinity;
-    while (M.logQueue.length && M.logQueue[0].fxId < head) { const x = M.logQueue.shift(); appendLog(x.entry, false, x.turn); }
+    while (M.logQueue.length && M.logQueue[0].fxId < head) { const x = M.logQueue.shift(); appendLog(x.entry, false, x.turn, x.aoo); }
   }
 
   function showDm(text) {
@@ -2872,6 +3368,25 @@
     at(best);
     M.dmPlace = best;
     updateDmPeek();
+  }
+
+  /**
+   * The objective panel sits over the back of the board: when a unit (or the hovered tile) is under it, it fades and
+   * lets clicks through, so nobody hides behind "Defeat all enemies" (a first-time player could not find the spider).
+   */
+  function updateObjPeek(force) {
+    if (!M || (DD.headless && !force) || !DD.Render || typeof DD.Render.worldToScreen !== 'function' || !S()) return;
+    const E = M.els;
+    if (E.obj.classList.contains('hud-hidden')) return;
+    const r = E.obj.getBoundingClientRect();
+    if (!r.width) return;
+    // the panel's own box, not the faded one (opacity does not change it)
+    let peek = coverCost(r, unitBoxes().map(function (b) { return Object.assign({}, b, { w: 1 }); })) > 0;
+    if (!peek && M.hover) {
+      const q = DD.Render.worldToScreen(M.hover.x, M.hover.y);
+      peek = q.x > r.left && q.x < r.right && q.y > r.top && q.y - 20 < r.bottom;
+    }
+    if (E.obj.classList.contains('peek') !== peek) E.obj.classList.toggle('peek', peek);
   }
 
   /** The caption fades while the pointer is on a tile (or a unit's sprite) underneath it. */
@@ -2932,7 +3447,7 @@
   // ---- the initiative dice moment (hosted for fx_render's 'initiative' marker) -------------------------------------
   /** fx_render asks: show a moment for this roll? (rolled dice only, and only when someone can see it) */
   function momentWants(evt) {
-    return !!M && (!DD.headless || !!M.forceMoments) && !!evt && Array.isArray(evt.order) && evt.order.some(function (r) { return r && r.roll > 0; });
+    return !!M && !M.flushing && (!DD.headless || !!M.forceMoments) && !!evt && Array.isArray(evt.order) && evt.order.some(function (r) { return r && r.roll > 0; });
   }
   /** Build the dice tray for an 'initiative' marker; returns how long playback waits for it (ms at speed 1). */
   function startMoment(evt) {
@@ -3029,6 +3544,7 @@
   function skipMoment() {
     const mo = M && M.moment;
     if (!mo) return;
+    holdAfterSkip();
     mo.evt.elapsed = Math.max(num(mo.evt.elapsed), num(mo.evt.ms));
     endMoment();
   }
@@ -3175,7 +3691,8 @@
     const controls = [['Left click', 'Select · move · use · confirm'], ['Right click / Esc', 'Cancel targeting · unpin'], ['1 – 6', 'Basic, skills, signature'],
       ['7 – 0', 'Consumables'], ['E', 'Interact / Help Up'], ['Tab', 'Next unit of this turn (hero + summons)'], ['Space', 'Roll initiative · end turn · skip animations'],
       ['Z', 'Undo last move'], ['Hold Alt / T', 'Threat shading: where enemies can reach'],
-      ['WASD / drag', 'Pan the camera'], ['Wheel', 'Zoom'], ['F', 'Recenter the board']];
+      ['WASD / drag', 'Pan the camera'], ['Wheel', 'Zoom'], ['Middle drag', 'Rotate the map to any angle'], ['Q / R', 'Turn the map 90°'],
+      ['Shift + wheel', 'Rotate the map (or swipe · twist)'], ['Home', 'Reset the view'], ['F', 'Recenter the board']];
     const body = el('div.hud-menu', null,
       row('Animation speed', 'Applies immediately.', seg),
       row('Sound effects', null, toggle(st.sfx !== false, function (on) { st.sfx = on; })),
@@ -3238,7 +3755,7 @@
     M.enemyPlayback = false;
     if (M.turnPending && s.phase === 'player' && !s.result) {
       M.turnPending = 0;
-      M.graceUntil = DD.headless ? 0 : now() + GRACE_MS;
+      M.graceUntil = Math.max(M.graceUntil, graceFrom(GRACE_MS));
       M.autoAdvance = null;
       noteInput(); // the idle clock starts with the turn
       // v2: the acting hero is selected (another hero's card only inspects)
@@ -3291,6 +3808,7 @@
     if (!busy) idleCheck();
     // the camera settles and units walk while a caption shows: keep it off them (a few checks a second)
     if (M.els.dm.classList.contains('show') && now() >= M.dmCheckAt) { M.dmCheckAt = now() + 400; placeDm(); }
+    if (now() >= M.objCheckAt) { M.objCheckAt = now() + 350; updateObjPeek(); }
   }
 
   /** Per-frame cheap updates while animations play: HP/Block bars follow unit.vis. */
@@ -3335,6 +3853,7 @@
     M.idleNext = 0;
     M.barSig = ''; M.topSig = ''; M.inspectSig = null; M.hintSig = null; M.hypeShown = null; M.goldShown = null;
     M.trackSig = ''; M.shownTurnSig = null; M.turns = []; M.logTurn = null; M.logTurnShown = null; M.rollLine = null;
+    M.aooTaught = false; M.provokedTurn = -1;
     if (M.moment) { M.moment = null; M.els.rollTray.classList.add('hud-hidden'); M.els.rollScrim.classList.add('hud-hidden'); }
     M.logQueue = [];
     M.logRound = null;
@@ -3405,10 +3924,34 @@
       if (!fxBusy()) revealLog();
     });
     on('initiative:joined', function () { M.dirty = true; M.trackSig = ''; });
+    // attacks of opportunity: mark the engine's log line (logged just before this event) and remember a provoking
+    // move of the acting hero (it can't be undone)
+    on('opportunity:attack', function (e) {
+      if (!e) return;
+      const a = e.attacker || byId(e.attackerId), m = e.mover || byId(e.moverId);
+      const info = { attacker: a ? a.name : 'a foe', mover: m ? m.name : 'someone', heroHit: !!m && playerSide(m) };
+      const isLine = function (t) { return /attack of opportunity/i.test(String(t || '')); };
+      const last = M.logQueue[M.logQueue.length - 1];
+      if (last && !last.aoo && last.entry && isLine(last.entry.text)) last.aoo = info;
+      else {
+        const lines = M.els.logList.querySelectorAll('.log-line');
+        const ln = lines[lines.length - 1];
+        if (ln && !ln.classList.contains('aoo') && isLine(ln.textContent)) { ln.classList.add('aoo'); aooShown(info); }
+      }
+      const s = S();
+      if (m && s && controllable(m)) M.provokedTurn = s.turn;
+      M.dirty = true;
+    });
     on('windup:start', function () { M.dirty = true; });
     on('windup:cancel', function () { M.dirty = true; });
     on('hype:changed', function () { M.dirty = true; });
     on('input:tileHover', onHover);
+    // map rotation: the compass follows the board; once the view settles the inspect panel re-picks its corner (the
+    // peeks and the DM caption re-check on their own timers)
+    on('render:view', function (e) {
+      updateCompass(e ? e.yaw : undefined);
+      if (e && e.moving === false && M.inspected && !M.els.inspect.classList.contains('hud-hidden')) placeInspect(M.inspected.unit || M.inspected.tile);
+    });
     on('input:tileClick', function (p) { if (p && p.button !== undefined && p.button !== 0) return; onTileClick(p); });
     on('input:rightClick', function (p) { if (p && p.key === 'Escape') return; onRightClick(); });
   }
@@ -3443,7 +3986,7 @@
       root: root, els: {}, offs: [], cards: {}, memo: { gen: -1, v: {} }, gen: 0,
       stateId: null, sel: null, mode: { kind: 'move' }, hover: null, pinned: null, inspected: null, inspectHp: null,
       hoverSlot: null, hoverIa: null, cardHover: null, trackHover: null, focusUi: null,
-      busy: false, busySince: 0, enemyPlayback: false, turnPending: 0, deployPending: false, graceUntil: 0, autoAdvance: null,
+      busy: false, busySince: 0, enemyPlayback: false, turnPending: 0, deployPending: false, graceUntil: 0, actHoldUntil: 0, autoAdvance: null,
       endHandled: false, endSkip: null, endTimer: 0, ribbonTimer: 0, dmTimer: 0,
       dirty: true, liveDirty: true, partyIds: '', partyIdsRaw: '', compactAll: false, barSig: '', topSig: '', inspectSig: null, hintSig: null, hintMsg: null, hypeShown: null,
       idleSince: now(), idleNext: 0, dmPlace: 'top', dmCheckAt: 0,
@@ -3451,8 +3994,10 @@
       // v2
       turns: [], trackSig: '', trackFresh: false, chipHl: undefined, shownTurnSig: null, logTurn: null, logTurnShown: null,
       moment: null, rollLine: null, threatHold: false, threatSticky: !!(DD.Storage.get('hud', {}) || {}).threat,
+      flushing: false, realInput: false, objCheckAt: 0,
     };
     buildLayout(root);
+    updateCompass();
     subscribe();
     bindThreatKeys();
     // any input (pointer, wheel, keys — over the board or the panels) restarts the idle clock
@@ -3537,6 +4082,16 @@
     /** Where the DM caption sits: 'top' (under the objective) or 'low' (above the hint bar). */
     dmPlace: function () { return M ? (M.els.dm.parentNode === M.els.barWrap ? 'low' : 'top') : null; },
     placeDm: function () { placeDm(true); },
+    /** Map rotation: where a board edge ('N' / 'E' / 'S' / 'W' / 'zone') is on screen at `yaw` (default: the live view). */
+    edgeName: function (edge, yaw) { return edgeName(edge, yaw); },
+    /** Map rotation: the compass needle's CSS rotation in degrees, [0, 360) (45 = up-right in the classic view). */
+    compass: function () { return M && M.needleDeg !== undefined ? ((M.needleDeg % 360) + 360) % 360 : null; },
+    /** Re-check whether a unit (or the hovered tile) is under the objective panel; true when it is faded through. */
+    objPeek: function () { if (!M) return false; updateObjPeek(true); return M.els.obj.classList.contains('peek'); },
+    /** The tooltip HTML of a unit's party card / portrait (v2 requests: downed heals, flying). */
+    unitTip: function (id) { const u = byId(id && id.id ? id.id : id); return M && u ? unitTooltipHtml(u) : ''; },
+    /** v2 requests: the selected unit's ready heals that would get this downed ally up now: [{ name, key }]. */
+    reviveOptions: function (id) { const u = byId(id && id.id ? id.id : id); return M && u ? reviveOptions(u).slice() : []; },
     // ---- v2 ----
     /** "Roll for Initiative!" (deployment). */
     rollInitiative: function () { return doRoll(); },
@@ -3564,6 +4119,10 @@
     skipMoment: function () { skipMoment(); },
     /** Tests: host the dice moment even headless (FX must not be instant for the marker to play). */
     forceMoments: function (on) { if (M) M.forceMoments = on !== false; },
+    /** Tests: apply the real-input guard windows headless too (after a skip / when control returns). */
+    realInput: function (on) { if (M) { M.realInput = on !== false; if (!M.realInput) { M.graceUntil = 0; M.actHoldUntil = 0; } } },
+    /** ms left in the input guard window (turn-ending input is ignored until 0). */
+    graceLeft: function () { return M ? Math.max(0, Math.round(M.graceUntil - now())) : 0; },
     /** Hover a tracker portrait (null clears): the board highlight + inspect panel follow. */
     hoverTracker: function (unitId) { if (!M) return; M.trackHover = unitId && unitId.id ? unitId.id : unitId || null; computeOverlay(); renderInspect(); highlightChip(); },
     clickTracker: function (unitId) { const u = byId(unitId && unitId.id ? unitId.id : unitId); if (u) clickTracker(u); },

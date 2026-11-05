@@ -288,8 +288,9 @@
     decay: 'never', defaultTurns: -1,
     desc: function (st) {
       const u = holderOf(st);
-      return 'Owes ' + st.stacks + ' HP, paid at the start of its next turn (ignores Block, never below 1 HP).' +
-        (!u || collateral(u) ? ' Every foe that dies first pays off ' + payoffFor(u) + ' of it.' : '');
+      const his = !u || collateral(u);   // Corelos (he/him) is the one who signs things; anyone else is "its"
+      return 'Owes ' + st.stacks + ' HP, paid at the start of ' + (his ? 'his' : 'its') + ' next turn (ignores Block, never below 1 HP).' +
+        (his ? ' Every foe that dies first pays off ' + payoffFor(u) + ' of it.' : '');
     },
     hooks: { onTurnStart: function (unit, st) { collect(unit, st); } },
   });
@@ -587,20 +588,18 @@
       A().damage(ctx.user, u, ctx.L.dmg);
     },
   });
+  // one verb at every level (the Lawyer's levels grow its HP and its poke); Block for it comes from Soul Contract
   skill({
     id: 'cor_imp_objection', owner: 'summon', name: 'Objection!', icon: '🙅', kind: 'utility', tags: ['taunt', 'ranged'], ap: 1, cooldown: 2,
-    levels: [{ block: 0 }, { block: 3 }, { block: 5 }],
+    levels: [{ turns: 1 }],
     target: { type: 'unit', range: [1, 4], los: true, filter: 'enemy' },
-    desc: function (L) {
-      return 'Taunt a foe: on its next turn it must attack this Lawyer if it can.' + (L.block ? ' The Lawyer gains ' + L.block + ' Block.' : '');
-    },
+    desc: function () { return 'Taunt a foe: on its next turn it must attack this Lawyer if it can.'; },
     flavor: '"Objection! Leading the witness! The witness is my client! My client is a goblin!"',
     execute: function (ctx) {
       const u = ctx.targetUnit;
-      if (!u) return;
+      if (!active(u)) return;
       FX().text(ctx.user, 'OBJECTION!', { color: '#ffcf4a', size: 17 });
-      A().addStatus(u, 'taunt', { turns: 1 }, ctx.user);
-      if (ctx.L.block) A().addBlock(ctx.user, ctx.L.block);
+      A().addStatus(u, 'taunt', { turns: ctx.L.turns }, ctx.user);
     },
   });
 
@@ -639,7 +638,7 @@
   });
   DD.registerItem({
     id: 'cor_notarized', name: 'Notarized Soul (Photocopy)', slot: 'armor', rarity: 'legendary', icon: '📄', hero: HERO, stats: { hp: 6 },
-    desc: '+6 max HP. Once per combat, instead of going down Corelos stays up with half his HP and takes ' + NOTARIZED_DEBT + ' Debt.',
+    desc: '+6 max HP. Once per combat, instead of going down Corelos stays up at half his max HP and takes ' + NOTARIZED_DEBT + ' Debt.',
     flavor: 'The original is in a vault in Hell. This copy is legally binding on most planes.',
     hooks: {
       preventDeath: function (u) {
@@ -731,11 +730,13 @@
       start: ['Gentlemen, I believe you\'re standing on my runes.', 'Let\'s settle this out of court. Violently.',
         'Per my last rune, you are all in breach.', 'Everyone signed the waiver? Marwyn, that\'s a napkin.', 'I\'ve drafted a strongly worded explosion.',
         'Betty, do NOT eat the contract before they sign it.'],
-      move: ['Changing venue.', 'Mind the runes. They\'re for them, not you.', 'Walking. Billing for it.', 'Strategic relocation. Totally not fleeing.'],
-      kill: ['Contract terminated.', 'Your soul has been processed. Next!', 'Collateral: collected.', 'That\'s what the fine print was for.', 'Paid in full. With you.'],
+      move: ['Changing venue.', 'Mind the runes. They\'re for them, not you.', 'Walking. Billing for it.', 'Strategic relocation. Totally not fleeing.',
+        'Stepping carefully. Hjalmar was here first.'],
+      kill: ['Contract terminated.', 'Your soul has been processed. Next!', 'Collateral: collected.', 'That\'s what the fine print was for.', 'Paid in full. With you.',
+        'Pebbles, fetch the soul! Good boy. Do NOT chew it.'],
       hurt: ['That goes on your tab.', 'Ow! Adding that to the settlement.', 'Assaulting a sorcerer? That\'s a felony.', 'Unacceptable terms!'],
       lowhp: ['I may have overextended my credit.', 'Somebody co-sign me. Anybody. Buga?', 'The patron is calling. I\'m not picking up.',
-        'Low on HP. High on liabilities.'],
+        'Low on HP. High on liabilities.', 'Valdris, forge me a loophole. Any size.'],
       downed: ['I... never read... the fine print...', 'Tell my patron... the check\'s in the mail...', 'This... voids... my warranty...', 'Repossessed...'],
       revive: ['Back! Death\'s paperwork is a nightmare.', 'I appealed. I won.', 'My soul was in escrow. I\'m out.', 'Loophole found. Resuming.'],
       ally_down: ['Man down! Is that covered? IS THAT COVERED?', 'Get up! You still owe me money!', 'Someone help them! I\'ll bill you later.',

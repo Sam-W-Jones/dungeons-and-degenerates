@@ -1,5 +1,6 @@
 /* Dungeons and Degenerates — js/ui/screens/party_select.js
- * Party select: roster of every hero (locked ones show their unlock hint), a details panel (portrait, blurb, role,
+ * Party select: roster of every hero (v2: all sixteen are available from the start; the lock UI only shows for a hero
+ * def with an unlock condition, none today), a details panel (portrait, blurb, role,
  * complexity, stats, passive, basic, signature, starting skills and skill pool with tooltips), four party slots,
  * difficulty picker, "Roll for Party" and Start → DD.Run.newRun(heroIds, difficulty). Remembers the last party.
  */
@@ -243,7 +244,7 @@
         st.refs.diffNote = el('div.ps-diff-note');
         footer.appendChild(st.refs.diffNote);
         const actions = el('div.ps-actions');
-        st.refs.rollBtn = UI.button('Roll for Party', roll, { icon: '🎲', cls: 'roll', hotkey: 'r', tooltip: '<div class="tt"><div class="tt-desc">Let the dice pick four unlocked heroes. They always do anyway.</div></div>' });
+        st.refs.rollBtn = UI.button('Roll for Party', roll, { icon: '🎲', cls: 'roll', hotkey: 'r', tooltip: '<div class="tt"><div class="tt-desc">Let the dice pick the party. They always do anyway.</div></div>' });
         st.refs.start = UI.button('Start Campaign', start, { cls: 'primary big', icon: '⚔️', hotkey: 'Enter', showKey: false });
         actions.appendChild(st.refs.rollBtn);
         actions.appendChild(st.refs.start);

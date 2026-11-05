@@ -1,8 +1,10 @@
 /* Dungeons and Degenerates — js/data/heroes/sparrow.js
  * Hero: Sparrow the Hemogoblin, goblin blood mage (she/her). v2 kit, one verb per skill: most of her spells cost HP,
  * and her passive Blood Price makes an adjacent Bleeding foe pay those costs instead. Bleed is her signature status:
- * her own payoffs (Juice Box, Blood Puppet Show) and every ally who shoves a Bleeding foe cash it in. Registers the
- * hero, 12 skills (basic, signature, 10 pool skills), the Blood Clone summon (+2 summon skills) and 3 hero items.
+ * her own payoffs (Juice Box, Blood Puppet Show) and every ally who shoves a Bleeding foe cash it in. Her melee basic
+ * is also her attack of opportunity (a foe walking off her gets shivved); Goblin Mode and Vein Glory teleport, so they
+ * never provoke. Registers the hero, 12 skills (basic, signature, 10 pool skills), the Blood Clone summon (+2 summon
+ * skills) and 3 hero items.
  */
 (function () {
   'use strict';
@@ -133,6 +135,7 @@
       const u = foeOf(ctx);
       if (!u) return;
       lunge(ctx, u);
+      if (ctx.opportunity) DD.Act.maybeBark(ctx.user, 'opportunity', 0.5);   // cosmetic: a foe walked off her
       A().damage(ctx.user, u, ctx.L.dmg);
       bleed(ctx.user, u, ctx.L.bleed);
     },
@@ -165,12 +168,15 @@
 
   // ---- skill pool -----------------------------------------------------------------------------------
   // setups: Hemo-Glob, Thousand Paper Cuts (Bleed for her passive, Juice Box and every ally's shove), Blood Drive
-  // (an ally's next big hit), Blood Puppet Show (Bleeding foes dragged into pits, lava, water or an ally's AoE)
+  // (an ally's next big hit), Blood Puppet Show (Bleeding foes dragged into pits, lava, water or an ally's AoE).
+  // Attacks of opportunity: Dazzled foes (Say It, Don't Spray It) make none, so the party can walk off them, and foes
+  // Taunted by her clone (Evil Twin) only strike the clone.
   skill({
     id: 'spa_hemoglob', name: 'Hemo-Glob', icon: '🩸', kind: 'spell', tags: ['ranged', 'blood', 'bleed'], ap: 1, hpCost: 2, cooldown: 1,
     levels: [{ dmg: 6, bleed: 1 }, { dmg: 8, bleed: 1 }, { dmg: 9, bleed: 2 }],
     target: { type: 'unit', range: [1, 5], filter: 'enemy', los: true },
-    desc: function (L, user) { return 'Lob your own blood at a foe within 5: deal ' + L.dmg + ' damage and Bleed ' + bleedN(L.bleed, user) + '.'; },
+    // "Lob blood", not "your own blood": with a donor in reach it is someone else's (Blood Price)
+    desc: function (L, user) { return 'Lob blood at a foe within 5: deal ' + L.dmg + ' damage and Bleed ' + bleedN(L.bleed, user) + '.'; },
     flavor: 'It\'s not a phase. It\'s a projectile.',
     execute: function (ctx) {
       const u = foeOf(ctx);
@@ -183,7 +189,7 @@
 
   skill({
     id: 'spa_juicebox', name: 'Juice Box', icon: '🧃', kind: 'spell', tags: ['blood', 'drain', 'heal'], ap: 2, cooldown: 2,
-    levels: [{ dmg: 5, per: 2 }, { dmg: 7, per: 2 }, { dmg: 8, per: 3 }],
+    levels: [{ dmg: 5, per: 3 }, { dmg: 7, per: 3 }, { dmg: 8, per: 4 }],
     target: { type: 'unit', range: [1, 2], filter: 'enemy', los: true },
     desc: function (L) {
       return 'Drain a foe within 2: deal ' + L.dmg + ' damage +' + L.per + ' per Bleed on it, and heal half the damage dealt (rounded up).';
@@ -203,7 +209,7 @@
 
   skill({
     id: 'spa_papercuts', name: 'Thousand Paper Cuts', icon: '📄', kind: 'spell', tags: ['aoe', 'ranged', 'bleed'], ap: 2, hpCost: 2, cooldown: 2,
-    levels: [{ dmg: 3, bleed: 2 }, { dmg: 4, bleed: 2 }, { dmg: 5, bleed: 3 }],
+    levels: [{ dmg: 4, bleed: 2 }, { dmg: 5, bleed: 2 }, { dmg: 6, bleed: 3 }],
     target: { type: 'tile', range: [1, 4], filter: 'any', los: true }, area: { shape: 'circle', size: 1 },
     desc: function (L, user) {
       return 'Blood confetti on a tile within 4: every foe in radius 1 takes ' + L.dmg + ' damage and gains Bleed ' + bleedN(L.bleed, user) + '.';
@@ -226,7 +232,7 @@
 
   skill({
     id: 'spa_spray', name: 'Say It, Don\'t Spray It', icon: '💦', kind: 'spell', tags: ['aoe', 'blood', 'dazzle'], ap: 2, hpCost: 2, cooldown: 2,
-    levels: [{ dmg: 3, len: 2 }, { dmg: 4, len: 2 }, { dmg: 5, len: 3 }],
+    levels: [{ dmg: 4, len: 2 }, { dmg: 5, len: 2 }, { dmg: 6, len: 3 }],
     target: { type: 'dir' }, area: { shape: 'cone', size: function (L) { return L.len; } },
     desc: function (L) {
       return 'Spray a cone of length ' + L.len + ': foes take ' + L.dmg + ' damage and are Dazzled (their next attacks land 1 tile off).';
@@ -247,7 +253,7 @@
 
   skill({
     id: 'spa_scab', name: 'Scab Armor', icon: '🩹', kind: 'buff', tags: ['defense', 'blood'], ap: 1, hpCost: 3, cooldown: 2,
-    levels: [{ block: 8 }, { block: 10 }, { block: 12, thorns: 3 }],
+    levels: [{ block: 8 }, { block: 10 }, { block: 10, thorns: 3 }],   // III: one added rider, not bigger numbers too
     target: { type: 'self' },
     desc: function (L) {
       return 'Gain ' + L.block + ' Block' + (L.thorns ? ', plus Thorns ' + L.thorns + ' until the end of your next turn.' : '.');
@@ -334,7 +340,8 @@
     aiScore: function (ctx) { return ctx.targetUnit && !A().hasStatus(ctx.targetUnit, 'empowered') ? 3 : 0; },
     execute: function (ctx) {
       const u = ctx.user, a = ctx.targetUnit, L = ctx.L;
-      if (!active(a) || a === u || DD.Grid.hostile(u, a)) return;
+      // a downed ally too: the aimed heal gets it back up (engine), then the Empower lands on the risen
+      if (!a || a.dead || a === u || DD.Grid.hostile(u, a)) return;
       DD.FX.beam(u, a, { color: BLOOD, width: 3 });
       DD.FX.particles(a, { kind: 'hearts', count: 6 });
       A().heal(u, a, L.heal);
@@ -347,6 +354,8 @@
     levels: [{ dmg: 15 }, { dmg: 19 }, { dmg: 22 }],
     target: {
       type: 'unit', range: [1, 3], filter: 'enemy', los: true,
+      // never at an explosive barrel: the dart is the point (and gutting a barrel point-blank is a 22-damage selfie)
+      objects: false,
       canTarget: function (ctx) { return ctx.targetUnit && landingSpot(ctx.user, ctx.targetUnit) ? true : 'No room to land next to it.'; },
     },
     desc: function (L) { return 'Dart next to a foe within 3 and gut it for ' + L.dmg + ' damage.'; },
@@ -454,6 +463,7 @@
     hooks: {
       onEnterTile: function (unit, tile) {
         if (!active(unit) || !tile || !tile.surface || tile.surface.id !== 'blood' || unit.hp >= unit.maxHp) return;
+        if (!DD.Grid.feelsSurface(unit, tile)) return;   // a flying Sparrow can't reach the puddle (floor effect)
         A().setSurface(tile.x, tile.y, null);
         DD.FX.particles(tile, { kind: 'blood', count: 8 });
         DD.FX.text(unit, 'Slurp!', { color: '#ff8a9a', size: 13 });
@@ -564,6 +574,7 @@
         'Following the blood trail. Yum.',
         'Don\'t look at me. Seriously.',
         'Tiny feet. Big plans.',
+        'Watch for banana peels. Hjalmar\'s been here.',
       ],
       kill: [
         'Your blood\'s mine now. Finders keepers.',
@@ -578,7 +589,7 @@
         'Ow. Rude. Accurate, but rude.',
         'Pain is just blood leaving with attitude.',
         'That\'s gonna scab beautifully.',
-        'Free sample. Don\'t get used to it.',
+        'Valdris! Forge me armor. Black. Spiky. NOW.',
         'Syllamin, your mom jokes can\'t hurt me. My mom\'s a crypt.',
       ],
       lowhp: [
@@ -587,6 +598,7 @@
         'Josiah, I need a refill. The red kind.',
         'Low HP. High drama. My natural habitat.',
         'One more cut and I\'m a raisin.',
+        'Pebbles, sit on my wound. Cauterize it. Good boy.',
       ],
       downed: [
         'Tell my blood... I loved it...',
@@ -630,6 +642,14 @@
         'Slate, you don\'t even bleed. It\'s upsetting.',
         'Basanos, stop sniffing my blood vials. Down. DOWN.',
         'Betty, do NOT eat the vials. They\'re not snacks.',
+      ],
+      // her attacks of opportunity (Shiv Happens on a foe walking off her)
+      opportunity: [
+        'Ghosting me? I\'ll haunt your veins.',
+        'Rude. You didn\'t even say bye. *stab*',
+        'Your back looked lonely. Gave it a shiv.',
+        'Nobody leaves the blood drive early.',
+        'Exit fee: one artery. Thanks.',
       ],
       signature: [
         'CRIMSON TIIIIDE!',

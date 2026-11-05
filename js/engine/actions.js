@@ -6,7 +6,8 @@
  * changes are suppressed; markUncertain() tells the preview that its outcome depends on chance.
  * v2 (initiative): statuses applied during their owner's own turn are `fresh` (the end of that turn does not count),
  * gainAp outside the unit's turn is banked for its next turn, units arriving after initiative roll for a slot, and a
- * stun-like or polymorph interrupts pending wind-ups.
+ * stun-like or polymorph interrupts pending wind-ups. Attacks of opportunity: a move action (moveAlong with provoke)
+ * leaving a tile next to an opposing melee unit lets it strike once (once per round per attacker; opportunityOf).
  */
 (function () {
   'use strict';
@@ -367,6 +368,8 @@
     if (Array.isArray(f.immune) && f.immune.indexOf(id) >= 0) return true;
     return false;
   }
+  /** The unit can't get this status (flags.immune, stunImmune for stun-likes and sheep, bosses vs sheep). Pure. */
+  Act.immuneTo = function (unit, id) { return !!unit && immuneTo(unit, id); };
 
   /** Apply a status. opts: number (stacks) or { stacks = 1, turns, silent }. Returns the instance or null. */
   Act.addStatus = function (target, id, opts, src) {
@@ -428,29 +431,38 @@
       if (target.statuses[i].id !== id) continue;
       target.statuses.splice(i, 1);
       bump();
-      if (!opts.silent) {
-        const def = DD.getStatus(id);
-        FX().status(target, id, opts.text || ('−' + (def ? def.name : id)), { removed: true });
-      }
+      const def = DD.getStatus(id);
+      if (!opts.silent) FX().status(target, id, opts.text || ('−' + (def ? def.name : id)), { removed: true });
+      landed(target, def);
       return true;
     }
     return false;
   };
 
+  /**
+   * [v2 review] A status that granted flight (def `flying`) is gone: a unit that no longer flies over a pit or deep
+   * water falls in (heroes and bosses climb out hurt). Other floor effects reach it from its next entry / turn end.
+   */
+  function landed(unit, def) {
+    if (!def || !def.flying || !active(unit) || G().isFlying(unit) || !G().isDrop(unit.x, unit.y)) return;
+    fall(unit, currentCredit());
+  }
+
   /** Remove up to `count` statuses of a type ('debuff'|'buff'), most recent first. Returns the number removed. */
   Act.cleanse = function (target, type, count) {
     if (!target || !target.statuses) return 0;
     type = type || 'debuff';
-    let n = 0;
+    let n = 0, wings = null;
     const max = count === undefined || count === null ? Infinity : count;
     for (let i = target.statuses.length - 1; i >= 0 && n < max; i--) {
       const def = DD.getStatus(target.statuses[i].id);
-      if (def && def.type === type) { target.statuses.splice(i, 1); n++; }
+      if (def && def.type === type) { target.statuses.splice(i, 1); n++; if (def.flying) wings = def; }
     }
     if (n) {
       bump();
       FX().text(target, type === 'debuff' ? 'Cleansed!' : 'Dispelled!', { color: type === 'debuff' ? '#9fffb0' : '#d0b0ff', size: 15 });
       Act.log(target.name + (type === 'debuff' ? ' shrugs off ' : ' loses ') + U.plural(n, type) + '.', 'status');
+      landed(target, wings);
     }
     return n;
   };
@@ -506,17 +518,25 @@
       dealt: 0, blocked: 0, killed: false, overkill: 0, highGround: false,
       credit: src || currentCredit(),
     };
+    // an attack of opportunity's hit (content: "+2 damage on attacks of opportunity" → if (d.opportunity) d.flat += 2)
+    const opp = sk && src && sk.user === src && sk.extra && sk.extra.opportunity ? sk.extra.opportunity : null;
+    d.opportunity = !!opp;
     if (has(target, 'invulnerable') || (target.flags && target.flags.invulnerable)) {
       if (!opts.silent) FX().text(target, 'Invulnerable!', { color: '#ffffff', size: 14 });
       return 0;
     }
     const offensive = !ENV_CAUSE[cause] && !opts.reflect;
     if (src && offensive) {
+      if (opp && opp.mover === target) {
+        d.flat += Number(opp.flat) || 0;
+        if (typeof opp.mult === 'number' && isFinite(opp.mult) && opp.mult >= 0) d.mult *= opp.mult;
+      }
       DD.Hooks.fire('modifyOutgoingDamage', src, d);
       if (has(src, 'weak')) d.mult *= 0.75;
       if (has(src, 'inspired')) d.mult *= 1.25;
       if (src.dmgBonus) d.mult *= 1 + src.dmgBonus;
-      if (cause === 'skill' && has(src, 'empowered')) {
+      // a free reaction neither uses nor consumes Empowered ("its next damaging skill")
+      if (cause === 'skill' && has(src, 'empowered') && !opp) {
         d.mult *= 1.5;
         if (sk && sk.user === src) sk.empowerUsed = true; else Act.removeStatus(src, 'empowered', { silent: true });
       }
@@ -640,23 +660,47 @@
   };
 
   /**
+   * v2 (user request): this heal is the one AIMED at a downed ally by a single-target healing skill or consumable
+   * (DD.Targeting marks it: the running skill's ctx.reviveTarget), so it gets the ally back up. Area heals, regen,
+   * lifesteal, passives and round-end heals never aim at anyone downed (status heals never count).
+   */
+  function aimedRevive(target, opts) {
+    if (!target || target.dead || !target.downed || target.kind !== 'hero' || opts.cause === 'status') return false;
+    const sk = Act.currentSkill();
+    return !!(sk && sk.extra && sk.extra.reviveTarget === target);
+  }
+
+  /**
    * Heal (not downed/dead units). opts: silent, cause. The source's item heal bonus applies, then the target's
-   * modifyHeal(h) hooks (h = { unit, src, base, amount, cause, cancel }: incoming healing). Returns HP healed.
+   * modifyHeal(h) hooks (h = { unit, src, base, amount, cause, cancel, revive }: incoming healing). Returns HP healed.
+   * v2: a heal aimed at a downed ally (aimedRevive) gets it back on its feet with the healed amount as HP (at least 1, at
+   * most its max HP; 0 AP, it acts on its own slot) — a normal revive (Act.revive: log, FX, narration, bark); a
+   * cancelled heal (modifyHeal) does not revive.
    */
   Act.heal = function (src, target, amount, opts) {
     opts = opts || {};
-    if (!active(target)) return 0;
+    const reviving = aimedRevive(target, opts);
+    if (!active(target) && !reviving) return 0;
     amount = Number(amount);
     if (!isFinite(amount) || amount <= 0) return 0;
     const base = amount;
     const bonus = src && opts.cause !== 'status' ? Number(src.healBonus) : 0;
     if (bonus && isFinite(bonus)) amount = Math.max(0, amount * (1 + bonus));
     // [phase 4, passives-table request] incoming-heal modifiers (no second heal needed for "+N% healing received")
-    const h = { unit: target, src: src || null, base: base, amount: amount, cause: opts.cause || null, cancel: false };
+    const h = { unit: target, src: src || null, base: base, amount: amount, cause: opts.cause || null, cancel: false, revive: reviving };
     DD.Hooks.fire('modifyHeal', target, h);
     if (h.cancel) return 0;
     amount = Number(h.amount);
     if (!isFinite(amount) || amount <= 0) return 0;
+    if (reviving) {
+      if (!target.downed || target.dead) return 0;
+      const hp = U.clamp(Math.round(amount), 1, target.maxHp);
+      if (!Act.revive(target, null, { hp: hp, by: src })) return 0;
+      const st = statOf(src);
+      if (st) st.heals += hp;
+      DD.Hooks.fire('onHealed', target, target, hp, src || null);
+      return hp;
+    }
     const healed = Math.max(0, Math.min(target.maxHp - target.hp, Math.round(amount)));
     target.hp += healed;
     bump();
@@ -804,18 +848,24 @@
     return true;
   };
 
-  /** Revive a downed hero at a fraction of max HP (min 1). */
-  Act.revive = function (target, hpFraction) {
+  /**
+   * Revive a downed hero at a fraction of max HP (min 1), or exactly opts.hp (1..max HP). It has 0 AP and acts on its
+   * own initiative slot (one already passed this round: next round).
+   */
+  Act.revive = function (target, hpFraction, opts) {
+    opts = opts || {};
     if (!target || target.dead || !target.downed) return false;
-    let frac = Number(hpFraction === undefined ? 0.25 : hpFraction);
+    let frac = Number(hpFraction === undefined || hpFraction === null ? 0.25 : hpFraction);
     if (!isFinite(frac)) frac = 0.25;
+    const exact = Number(opts.hp);
     target.downed = false;
-    target.hp = U.clamp(Math.round(target.maxHp * frac), 1, target.maxHp);
+    target.hp = U.clamp(Math.round(opts.hp !== undefined && isFinite(exact) ? exact : target.maxHp * frac), 1, target.maxHp);
     target.ap = 0;
     bump();
     FX().revive(target);
     FX().sound('heal');
-    Act.log(target.name + ' is back on their feet (' + target.hp + ' HP).', 'heal');
+    // [requests verify] no pronoun after a hero's name (every hero has their own; narrator.js convention)
+    Act.log(target.name + ' is back up (' + target.hp + ' HP)' + (opts.by && opts.by !== target ? ', thanks to ' + opts.by.name : '') + '.', 'heal');
     Act.narrate('hero_revived', { hero: target.name });
     Act.bark(target, 'revive');
     return true;
@@ -833,23 +883,27 @@
     DD.safe(label, fn, self, args);
     if (s && s.rng && r0 !== null && s.rng.getState() !== r0) bump();
   }
-  /** Fire everything that happens when a unit enters a tile. cause 'move'|'push'|'teleport'|'spawn'. */
+  /**
+   * Fire everything that happens when a unit enters a tile. cause 'move'|'push'|'teleport'|'spawn'. Flyers (v2) feel
+   * nothing of the floor: no terrain onEnter, no ground objects / traps / plates, only airborne surfaces (clouds).
+   * onEnterTile hooks still fire (content that implements a floor effect there checks DD.Grid.feelsFloor).
+   */
   function enterTile(unit, tile, cause) {
     if (!tile || !active(unit)) return;
-    const fly = G().isFlying(unit);
+    const floor = G().feelsFloor(unit);
     if (cause !== 'spawn') {
-      if (!fly) {
+      if (floor) {
         const td = G().terrain(tile);
         if (typeof td.onEnter === 'function') tileCall('terrain ' + td.id + ' onEnter', td.onEnter, td, [unit, tile, cause]);
         if (!active(unit)) return;
       }
       if (tile.surface) {
         const sd = DD.getSurface(tile.surface.id);
-        if (sd && typeof sd.onEnter === 'function' && (!fly || sd.airborne)) tileCall('surface ' + sd.id + ' onEnter', sd.onEnter, sd, [unit, tile]);
+        if (sd && typeof sd.onEnter === 'function' && G().feelsSurface(unit, sd)) tileCall('surface ' + sd.id + ' onEnter', sd.onEnter, sd, [unit, tile]);
         if (!active(unit)) return;
       }
       const o = tile.obj;
-      if (o && !fly && !G().objBlocksMove(o)) {
+      if (o && floor && !G().objBlocksMove(o)) {
         const od = DD.getObject(o.id);
         const fn = typeof o.onEnter === 'function' ? o.onEnter : od && od.onEnter;
         if (typeof fn === 'function') tileCall('object ' + o.id + ' onEnter', fn, o, [unit, o, tile]);
@@ -1069,21 +1123,226 @@
     return true;
   };
 
+  // ---- attacks of opportunity (v2, DESIGN §4.2, ARCHITECTURE §6.2) -----------------------------------------
+  // A MOVE action (DD.Combat.move, an AI walk) that leaves a tile next to an opposing unit with a melee basic attack
+  // lets that unit make one free basic attack on the mover (once per round per attacker). Pushes, pulls, teleports,
+  // swaps, jumps and skill dashes (moveAlong without opts.provoke) never provoke.
+  const OPP_UNIT_FILTERS = { enemy: 1, any: 1, notSelf: 1 };
+  const OPP_TILE_FILTERS = { any: 1, enemy: 1, emptyOrUnit: 1, notSelf: 1 };
+
+  /**
+   * A melee damaging skill def for this slot (target 'unit' / 'tile' / 'dir' at range 1 that hits foes), or null. Never
+   * a 'ranged'-tagged one (a slingshot, an eye beam), and an area attack (a cone breath, a beam) only if tagged 'melee'
+   * ('dir' skills always read as range 1, so a dragon's breath would otherwise be its free "basic attack").
+   */
+  function meleeDef(u, sl) {
+    const def = sl && DD.getSkill(sl.id);
+    if (!def || typeof def.execute !== 'function') return null;
+    const L = DD.skillLevel(def, sl.level || 1);
+    if (!L || !(L.dmg > 0)) return null;
+    const tags = def.tags || [];
+    if (tags.indexOf('ranged') >= 0) return null;
+    if (def.area && def.area.shape && def.area.shape !== 'single' && tags.indexOf('melee') < 0) return null;
+    const tg = def.target || {};
+    const type = tg.type || 'unit';
+    if (type === 'unit' ? !OPP_UNIT_FILTERS[tg.filter || 'enemy'] : type === 'tile' ? !OPP_TILE_FILTERS[tg.filter || 'any'] : type !== 'dir') return null;
+    const rg = DD.Targeting.range(u, def, sl.level || 1);
+    return rg[1] === 1 && rg[0] <= 1 ? def : null;
+  }
+  /** The slot is usable for a free attack now: off cooldown, charges left, no silenced spell, its canUse agrees. */
+  function slotReady(u, sl, def) {
+    if ((sl.cd || 0) > 0) return false;
+    if (def.charges > 0 && (sl.uses || 0) >= def.charges) return false;
+    if (def.kind === 'spell' && has(u, 'silenced')) return false;
+    if (typeof def.canUse === 'function') {
+      const ok = DD.Targeting.pure(function () { return DD.safe('canUse of ' + def.id, def.canUse, def, [DD.Targeting.buildCtx(u, sl, null)]); });
+      if (ok === false || typeof ok === 'string') return false;
+    }
+    return true;
+  }
+  /**
+   * The skill slot a unit makes attacks of opportunity with, or null: a hero's basic attack if it is melee (max range
+   * 1); summons and enemies: their first ready melee damaging skill. The attack is free (no AP, HP, cooldown or charge).
+   */
+  function opportunitySlot(u) {
+    if (!u) return null;
+    if (u.kind === 'hero') { const d = u.basic && meleeDef(u, u.basic); return d && slotReady(u, u.basic, d) ? u.basic : null; }
+    const slots = slotsOf(u);
+    for (let i = 0; i < slots.length; i++) {
+      const def = meleeDef(u, slots[i]);
+      if (def && slotReady(u, slots[i], def)) return slots[i];
+    }
+    return null;
+  }
+  Act.opportunitySlot = opportunitySlot;
+
+  /**
+   * Run fn with the unit virtually standing on p (queries about a path it has not walked yet; always restored), on top
+   * of a friend it would pass there (Grid.onTop: canTarget / hooks see the mover, not the friend).
+   */
+  function standing(u, p, fn) {
+    if (!p || (u.x === p.x && u.y === p.y)) return G().onTop(u, fn);
+    const ox = u.x, oy = u.y;
+    u.x = p.x; u.y = p.y;
+    try { return G().onTop(u, fn); } finally { u.x = ox; u.y = oy; }
+  }
+
+  /**
+   * Would `attacker` make an attack of opportunity on `mover` leaving tile `from` (default: where it stands) toward
+   * `to`? → o = { attacker, mover, from, to, slot, skill, level, flat, mult, cancel } or null. Pure (a query: the HUD
+   * and the AI call it for paths not walked yet). Rules: both active, the attacker hostile to the mover and next to
+   * `from`, not stunned / asleep / frozen (any stun-like) / sheep, not Dazzled / Confused (AI units), not taunted by
+   * someone else (AI units), its attack of opportunity of this round unused, a ready melee skill (opportunitySlot) that
+   * can target the mover there; the mover not stealthed / untargetable; flags.noOpportunity (attacker) /
+   * flags.noProvoke (mover) opt out; then modifyOpportunity(o) on the attacker's sources and the mover's (cancel, flat,
+   * mult — keep those hooks pure; the fight's rules count once, with the attacker's). A charmed enemy fighting for the
+   * heroes is on their side (no heroes strike it).
+   */
+  function opportunityOf(attacker, mover, from, to) {
+    const s = S();
+    if (!s || s.result || !s.order || s.phase === 'deploy' || !active(attacker) || !active(mover) || attacker === mover) return null;
+    const p = from ? { x: from.x, y: from.y } : { x: mover.x, y: mover.y };
+    if (Math.abs(attacker.x - p.x) + Math.abs(attacker.y - p.y) !== 1) return null;
+    if (attacker.oppRound === s.round) return null;
+    const af = attacker.flags || {}, mf = mover.flags || {};
+    if (af.noOpportunity || mf.noProvoke || mf.untargetable) return null;
+    if (!G().hostile(attacker, mover) || has(mover, 'stealth')) return null;
+    // an enemy charmed to fight for the heroes is on their side: they don't stab their new friend in the back
+    if (G().effectiveSide(attacker) === G().effectiveSide(mover)) return null;
+    if (stunnedNow(attacker) || has(attacker, 'sheep')) return null;
+    const charm = getStatus(attacker, 'charmed');
+    if (charm && charm.source === mover.id && attacker.side === 'hero') return null;   // it can't hurt its charmer anyway
+    if (!(DD.Combat.isPlayerControlled && DD.Combat.isPlayerControlled(attacker))) {
+      if (has(attacker, 'dazzled') || has(attacker, 'confused')) return null;
+      const t = DD.AI && DD.AI.taunter ? DD.AI.taunter(attacker) : null;
+      if (t && t !== mover && G().hostile(attacker, t)) return null;
+    }
+    const sl = opportunitySlot(attacker);
+    if (!sl) return null;
+    const def = DD.getSkill(sl.id);
+    const tg = def.target || {};
+    if (typeof tg.canTarget === 'function') {
+      const ok = standing(mover, p, function () {
+        return DD.Targeting.pure(function () { return DD.safe('canTarget of ' + def.id, tg.canTarget, def, [DD.Targeting.buildCtx(attacker, sl, p)]); });
+      });
+      if (ok !== true) return null;
+    }
+    const o = { attacker: attacker, mover: mover, from: p, to: to ? { x: to.x, y: to.y } : null, slot: sl, skill: def, level: sl.level || 1,
+      flat: 0, mult: 1, cancel: false };
+    // the attacker's sources (with the fight's rules), then the mover's own (a rule must not count twice)
+    standing(mover, p, function () {
+      DD.Hooks.fire('modifyOpportunity', attacker, o);
+      if (!o.cancel) DD.Hooks.fireOwn('modifyOpportunity', mover, o);
+    });
+    return o.cancel ? null : o;
+  }
+  Act.opportunityOf = opportunityOf;
+
+  /**
+   * The units that would make an attack of opportunity on `mover` walking `path` (excluding the start; from: the start,
+   * default its tile): each attacker once, in the order they would strike. Pure.
+   */
+  Act.provokers = function (mover, path, from) {
+    const out = [];
+    const s = S();
+    if (!s || !active(mover) || !path || !path.length) return out;
+    let p = from ? { x: from.x, y: from.y } : { x: mover.x, y: mover.y };
+    const seen = {};
+    for (let i = 0; i < path.length; i++) {
+      for (let k = 0; k < s.units.length; k++) {
+        const a = s.units[k];
+        if (seen[a.id] || a.dead || Math.abs(a.x - p.x) + Math.abs(a.y - p.y) !== 1) continue;
+        if (opportunityOf(a, mover, p, path[i])) { seen[a.id] = 1; out.push(a); }
+      }
+      p = path[i];
+    }
+    return out;
+  };
+
+  /**
+   * The attack of opportunity itself (mover still on the tile it leaves): re-checks opportunityOf, marks the attacker's
+   * reaction used for this round, then resolves its opportunity skill on the mover's tile only (ctx.opportunity = o, no
+   * cost, no cooldown; its damage carries d.opportunity and o.flat / o.mult; Empowered is neither used nor consumed).
+   * Log, FX, event 'opportunity:attack', then onOpportunityAttack(o) on the attacker's and the mover's sources
+   * (rules once; o.dealt = HP + Block the mover lost). It is aimed at the mover even while it shares a friend's tile
+   * (Grid.onTop). Returns o or null.
+   */
+  function opportunityAttack(attacker, mover, to) {
+    const o = opportunityOf(attacker, mover, null, to);
+    if (!o) return null;
+    const s = S();
+    attacker.oppRound = s.round;
+    bump();
+    const tile = { x: mover.x, y: mover.y };
+    const before = mover.hp + (mover.block || 0);
+    FX().text(attacker, '⚔️ Attack of opportunity!', { color: '#ffd27a', size: 15 });
+    Act.log(attacker.name + ' gets an attack of opportunity on ' + mover.name + ' (' + o.skill.name + ')!', attacker.side === 'hero' ? 'hero' : 'enemy');
+    emit('opportunity:attack', { attacker: attacker, attackerId: attacker.id, mover: mover, moverId: mover.id, skillId: o.skill.id, from: o.from, to: o.to });
+    // the mover may be passing through a friend: on its tile it is the one on top (the strike is aimed at the mover)
+    G().onTop(mover, function () {
+      DD.Combat.resolveSkill(attacker, o.slot, tile, { quiet: true, extra: { opportunity: o, tiles: [tile] } });
+    });
+    o.dealt = Math.max(0, before - ((mover.dead ? 0 : mover.hp) + (mover.dead ? 0 : mover.block || 0)));
+    DD.Hooks.fire('onOpportunityAttack', attacker, o);
+    DD.Hooks.fireOwn('onOpportunityAttack', mover, o);
+    return o;
+  }
+  Act.opportunityAttack = opportunityAttack;
+
+  /**
+   * Every attack of opportunity provoked by the mover leaving its tile toward `to` (each adjacent attacker in unit
+   * order; stops once the mover is down, stunned-like, held / rooted, moved or told to stop). Returns how many struck.
+   */
+  function provokeLeaving(unit, to) {
+    const s = S();
+    const x0 = unit.x, y0 = unit.y;
+    let n = 0;
+    const list = s.units.slice();
+    for (let k = 0; k < list.length; k++) {
+      const a = list[k];
+      if (a.dead || a === unit || Math.abs(a.x - x0) + Math.abs(a.y - y0) !== 1) continue;
+      if (opportunityAttack(a, unit, to)) n++;
+      if (s.result || !active(unit) || unit.x !== x0 || unit.y !== y0 || stunnedNow(unit) || cantMove(unit) || stopping.has(unit)) break;
+    }
+    return n;
+  }
+
   /**
    * Walk along a path (excluding start) one tile at a time, firing tile effects. Stops if the unit dies, is
    * rooted, or the way is blocked; never ends sharing a tile. opts: action (default true: counts as a move
-   * action for Bleed), cause ('move'). Returns the tiles actually walked.
+   * action for Bleed), cause ('move'), provoke (a MOVE action: leaving a tile next to opposing units triggers their
+   * attacks of opportunity; an attack that downs, stuns, roots, moves or stops the walker ends the walk there).
+   * Returns the tiles actually walked (array; .provoked = attacks of opportunity made, .interrupted = one ended it).
    */
   Act.moveAlong = function (unit, path, opts) {
     opts = opts || {};
     const walked = [];
+    walked.provoked = 0;
+    walked.interrupted = false;
     if (!active(unit) || !path || !path.length) return walked;
     stopping.delete(unit);
     for (let i = 0; i < path.length; i++) {
       const p = path[i];
       if (!G().isWalkable(p.x, p.y, unit)) break;
-      const occ = G().unitAt(p.x, p.y);
+      let occ = G().unitAt(p.x, p.y);
       if (occ && occ !== unit && (G().hostile(unit, occ) || i === path.length - 1)) break;
+      if (opts.provoke) {
+        const x0 = unit.x, y0 = unit.y;
+        const n = provokeLeaving(unit, p);
+        if (n) {
+          walked.provoked += n;
+          const s = S();
+          if (s.result || !active(unit) || unit.x !== x0 || unit.y !== y0 || stunnedNow(unit) || cantMove(unit) || stopping.has(unit)) {
+            walked.interrupted = true;
+            if (active(unit) && !s.result) FX().text(unit, 'Stopped!', { color: '#ffb36b', size: 14 });
+            break;
+          }
+          // the attack may have changed the way ahead
+          if (!G().isWalkable(p.x, p.y, unit)) break;
+          occ = G().unitAt(p.x, p.y);
+          if (occ && occ !== unit && (G().hostile(unit, occ) || i === path.length - 1)) break;
+        }
+      }
       face(unit, p);
       const from = { x: unit.x, y: unit.y };
       unit.x = p.x; unit.y = p.y;
@@ -1099,8 +1358,9 @@
       }
     }
     stopping.delete(unit);
-    // never end inside another unit (e.g. rooted while passing through a friend)
-    if (active(unit) && unitsOn(unit.x, unit.y) > 1) {
+    // never end inside another unit (e.g. rooted while passing through a friend, or downed there by an attack of
+    // opportunity: the body is moved off the friend's tile too)
+    if (!unit.dead && unitsOn(unit.x, unit.y) > 1) {
       const spot = G().nearestFree(unit.x, unit.y, unit);
       if (spot) { const from = { x: unit.x, y: unit.y }; unit.x = spot.x; unit.y = spot.y; FX().slide(unit, from, spot); }
     }
@@ -1131,7 +1391,7 @@
     const sd = DD.getSurface(id);
     if (!sd) { DD.warn('setSurface: unknown surface "' + id + '"'); return false; }
     const td = G().terrain(t);
-    const cloud = id === 'steam' || id === 'smoke';
+    const cloud = !!sd.airborne;   // [v2 review] clouds drift over pits / lava
     if (td.pit && !cloud) return false;
     if (td.walkable === false && !td.pit && !td.liquid) return false;
     if (td.liquid === 'lava' && !cloud) return false;
@@ -1210,7 +1470,8 @@
     }
     FX().sound('fire');
     Act.log(tiles.length > 1 ? 'The ' + fromId + ' goes up in a line of flames!' : 'It ignites!', 'dmg');
-    for (let i = 0; i < tiles.length; i++) Act.applyElement(tiles[i].x, tiles[i].y, 'fire', src);
+    // the floor burns: walkers on the slick catch fire, flyers above it don't (v2)
+    for (let i = 0; i < tiles.length; i++) Act.applyElement(tiles[i].x, tiles[i].y, 'fire', src, { floor: true });
   }
 
   function surfaceReaction(t, sd, r, element, src) {
@@ -1259,7 +1520,8 @@
    * Apply an element to a tile: objects react (barrels explode), the surface reacts (oil ignites and spreads,
    * water boils to steam / freezes / conducts), a fresh surface is created for liquid-like elements, terrain
    * reacts (lava → obsidian, water → ice, ice → water) and the unit there reacts (Burn / Frozen / Wet).
-   * opts.noUnits skips the unit reaction.
+   * opts.noUnits skips the unit reaction; opts.floor: the element comes from the floor (a slick going up, a spilled
+   * brazier), not aimed at the tile, so a flyer there does not react (v2).
    */
   Act.applyElement = function (x, y, element, src, opts) {
     opts = opts || {};
@@ -1282,7 +1544,10 @@
     const td = G().terrain(t);
     const tr = td.react && td.react[element];
     if (tr) terrainReaction(t, td, tr, element, src);
-    if (!opts.noUnits) unitReaction(G().unitAt(x, y), element, src);
+    if (!opts.noUnits) {
+      const u = G().unitAt(x, y);
+      if (!opts.floor || G().feelsFloor(u)) unitReaction(u, element, src);
+    }
     return true;
   };
 
@@ -1293,6 +1558,8 @@
     const dmg = o.dmg === undefined ? 8 : o.dmg;
     const element = o.element === undefined ? 'fire' : o.element;
     const tiles = G().shape('circle', { x: x, y: y }, null, radius);
+    // a preview dry run records the blasts it set off (Targeting.preview's `blast` tiles: the HUD shows the area)
+    if (Act.simulating && Act._sim) Array.prototype.push.apply(Act._sim.blasts || (Act._sim.blasts = []), tiles);
     FX().explosion({ x: x, y: y }, { radius: radius, color: ELEMENT_COLOR[element] || '#ff8a1a' });
     FX().sound('explosion');
     FX().shake(8, 350);
@@ -1323,7 +1590,7 @@
         const u = G().unitAt(tx, ty);
         if (t && t.surface && t.surface.id === id && active(u)) {
           const sd = DD.getSurface(id);
-          if (sd && typeof sd.onEnter === 'function' && (!G().isFlying(u) || sd.airborne)) DD.safe('surface ' + id + ' onEnter', sd.onEnter, sd, [u, t]);
+          if (sd && typeof sd.onEnter === 'function' && G().feelsSurface(u, sd)) DD.safe('surface ' + id + ' onEnter', sd.onEnter, sd, [u, t]);
         }
       }
     });
@@ -1341,8 +1608,10 @@
     bump();
     FX().tile(x, y, def.pit ? 'crack' : def.liquid ? 'splash' : 'pulse');
     const wall = def.walkable === false && !def.pit && !def.liquid;
-    if (def.pit || wall) { t.surface = null; if (def.pit && t.obj) t.obj = null; }
-    if (def.liquid === 'lava' && t.surface && t.surface.id !== 'steam' && t.surface.id !== 'smoke') t.surface = null;
+    const cloudy = !!(t.surface && (DD.getSurface(t.surface.id) || {}).airborne);   // [v2 review] clouds stay
+    if (wall || (def.pit && !cloudy)) t.surface = null;
+    if (def.pit && t.obj) t.obj = null;
+    if (def.liquid === 'lava' && !cloudy) t.surface = null;
     const u = G().unitAt(x, y);
     if (u && active(u)) {
       const fly = G().isFlying(u);
@@ -1438,6 +1707,42 @@
     return true;
   };
 
+  /** A volatile object: it explodes when destroyed (def or instance flag `volatile`), so attacks can set it off. */
+  Act.isVolatile = function (o) {
+    if (!o) return false;
+    if (o.volatile !== undefined) return !!o.volatile;
+    const d = DD.getObject(o.id);
+    return !!(d && d.volatile);
+  };
+
+  const DETONATE_QUIPS = ['Safety third!', 'Somebody had to.', 'The DM sighs audibly.', 'OSHA has left the chat.', 'Worth it.'];
+  /**
+   * v2 (user request): a single-target attack aimed at a volatile object (DD.Targeting: target.objects) sets it off
+   * outright — destroyed, its onDestroyed blast credited to the attacker (kills, Hype, stats, gold hooks), the skill's
+   * own riders skipped. FX: a projectile for a ranged attack, a lunge for a melee one. Returns true when it went off.
+   * Called by DD.Combat.resolveSkill inside the skill's resolution (beginSkill / endSkill).
+   */
+  Act.detonate = function (src, x, y, skill) {
+    const t = G().tile(x, y);
+    const o = t && t.obj;
+    if (!o) return false;
+    const def = DD.getObject(o.id);
+    const name = String(o.label || (def ? def.name : o.id)).toLowerCase();
+    const tags = (skill && skill.tags) || [];
+    const ranged = !!src && (G().dist(src, t) > 1 || tags.indexOf('ranged') >= 0);
+    if (src) {
+      face(src, t);
+      if (ranged) FX().projectile(src, { x: x, y: y }, { kind: 'bolt', color: '#ffd27a' });
+      else FX().lunge(src, { x: x, y: y });
+      if (!Act.simulating) {
+        Act.log(src.name + (ranged ? ' takes a shot at the ' : ' gives the ') + name + (ranged ? '' : ' a good whack') + '. ' +
+          U.line(DETONATE_QUIPS, cosmeticRng()), src.side === 'hero' ? 'hero' : 'enemy');
+      }
+    }
+    bump();
+    return Act.destroyObject(x, y, src || null);
+  };
+
   /** Interaction offered by an object for this unit: { ap, label } or null. */
   Act.interactionOf = function (o, unit) {
     if (!o) return null;
@@ -1483,7 +1788,7 @@
       statuses: [], dmgBonus: 0, healBonus: 0, rangeBonus: 0,
       runHero: null, basic: null, signature: null, skills: [], items: [], scars: [],
       skillSlots: [], intents: [], order: 0, tier: null, isBoss: false, ownerId: null,
-      init: Math.round(Number(def.init) || 0), apBank: 0,
+      init: Math.round(Number(def.init) || 0), apBank: 0, oppRound: 0,
       facing: side === 'hero' ? 1 : -1, lastDir: side === 'hero' ? { x: 1, y: 0 } : { x: -1, y: 0 },
       data: {}, dead: false, downed: false, vis: null,
     };

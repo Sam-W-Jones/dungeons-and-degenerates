@@ -16,13 +16,14 @@
     'The DM is fine. The DM has had four energy drinks.',
     'Based on a true campaign. Names unchanged to embarrass the guilty.',
     'Featuring a bard who will flirt with the final boss. Probably.',
-    'Every enemy telegraphs its attacks. You will still stand in them.',
+    // v2 (integrator): no telegraphs any more, only boss wind-ups; fallback tips follow the v2 rules (narrator tips)
+    'Nobody telegraphs anything. Except the bosses. You will still stand in it.',
   ];
 
   const TIP_FALLBACK = [
-    'Enemies show exactly what they will do next turn. Standing in the red tiles is a choice.',
-    'Push an enemy and its melee attack moves with it. Push it into a pit and it stops being a problem.',
-    'Unused AP turns into Block at the end of your turn. Doing nothing is sometimes a strategy.',
+    'Every fight opens with a roll for initiative: d20 plus each unit\'s modifier. The order holds for the whole fight.',
+    'Walking away from a melee foe gives it a free attack of opportunity. Pushes, leaps and teleports never provoke.',
+    'Unused AP is lost when a turn ends. Spend it or lose it.',
     'Environmental kills give +20 Hype. Gravity is the best party member.',
     'A hero downed three times in one run is written out of the campaign. Permanently. The DM is not kidding.',
   ];

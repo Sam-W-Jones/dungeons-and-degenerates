@@ -1,10 +1,11 @@
 /* Dungeons and Degenerates — tests/content/hero_josiah.js
- * Suites 'hero_josiah: …' for js/data/heroes/josiah.js (v2: initiative turns, no telegraphs, no Guard, one-verb skills):
- * registration (the v2 hero def and a simple kit), the passive (his raven, contagious Poison, the extra pocket), every
- * skill at every level in DD.Combat.sandbox fights (numbers == desc, statuses lasting exactly their owners' turns), the
- * raven, the items, the signature, combos with other heroes (fixture knight / mage), HUD previews == reality, v2 edge
- * cases and AutoPlay battles with ['josiah', 'test_knight', 'test_cleric', 'test_mage'] against the fixture encounters
- * of acts 1-3 at L1/3/5.
+ * Suites 'hero_josiah: …' for js/data/heroes/josiah.js (v2: initiative turns, no telegraphs, no Guard, one-verb skills,
+ * attacks of opportunity): registration (the v2 hero def and a simple kit), the passive (his raven, contagious Poison,
+ * the extra pocket), every skill at every level in DD.Combat.sandbox fights (numbers == desc, statuses lasting exactly
+ * their owners' turns), the raven, the items, the signature, combos with other heroes (fixture knight / mage), HUD
+ * previews == reality, v2 edge cases, attacks of opportunity (his reach-2 cane never makes them, the raven's Peck does,
+ * dives and blasts never provoke) and AutoPlay battles with ['josiah', 'test_knight', 'test_cleric', 'test_mage']
+ * against the fixture encounters of acts 1-3 at L1/3/5.
  */
 (function () {
   'use strict';
@@ -17,7 +18,7 @@
   const ALL_SKILLS = POOL.concat(['jos_cane', 'jos_pandemic', 'jos_peck', 'jos_omen']);
   const ITEMS = ['jos_beak_mask', 'jos_raven_treats', 'jos_alembic', 'jos_plague_bell'];
   const BARK_KEYS = ['select', 'start', 'move', 'kill', 'hurt', 'lowhp', 'downed', 'revive', 'ally_down', 'levelup', 'victory', 'idle', 'signature'];
-  const OTHERS = /Zarathor|Syllamin|Marbles|Marwyn|Ellaria|corgi|Sparrow|Corelos|Slate|Buga|Kiri|Betty|Basanos/;
+  const OTHERS = /Zarathor|Syllamin|Marbles|Marwyn|Ellaria|corgi|Sparrow|Corelos|Slate|Buga|Kiri|Betty|Basanos|Valdris|Hjalmar|Pebbles/;
   /** Words of the v1 rules (telegraphs, intents, Guard, XP) that no Josiah text may use any more. */
   const V1_WORDS = /telegraph|intent|\bguard\b|\bXP\b|planning|this round only/i;
   const CLOUD = [[4, 4], [3, 4], [5, 4], [4, 3], [4, 5]];
@@ -115,6 +116,7 @@
     t.ok(/^#[0-9a-f]{6}$/i.test(h.color), 'UI colour');
     t.eq(h.unlock, null, 'v2: available from the start (unlock: null)');
     t.eq(h.stats.init, 0, 'v2: initiative modifier 0 (stats.init)');
+    t.eq(JSON.stringify(h.flags), '{"noOpportunity":true}', 'v2: he never makes attacks of opportunity (flags.noOpportunity)');
     t.ok(h.stats.hp >= 20 && h.stats.hp <= 36 && h.stats.ap === 3 && h.stats.mov >= 3 && h.stats.mov <= 5 && !h.stats.block, 'L1 stats in the DESIGN range, no starting Block');
     t.ok(h.growth.hp >= 3 && h.growth.hp <= 5, 'growth +3-5 HP');
     t.eq(h.consumableSlots, 1, 'consumableSlots: 1 (read by DD.Run)');
@@ -122,6 +124,8 @@
     t.eq(h.signature, 'jos_pandemic', 'signature');
     const basic = DD.getSkill('jos_cane'), sig = DD.getSkill('jos_pandemic');
     t.ok(basic.ap === 1 && basic.levels[0].dmg >= 4 && basic.levels[0].dmg <= 6, 'basic: 1 AP, 4-6 damage');
+    // tooltips list the tags ("Basic attack · Melee" would promise a line-holder): his reach-2 cane is tagged 'reach'
+    t.ok(basic.tags.indexOf('melee') < 0 && basic.tags.indexOf('reach') >= 0, 'v2: House Call is tagged reach, not melee (' + basic.tags.join(',') + ')');
     t.eq(sig.hype, 100, 'signature costs 100 Hype');
     t.ok(sig.levels[0].dmg + sig.levels[0].poison * (sig.levels[0].poison + 1) / 2 >= 15, 'signature: 15+ damage with its Poison');
     t.eq(JSON.stringify(h.startingSkills), JSON.stringify(['jos_plague_flask', 'jos_draught']), 'two starting skills');
@@ -184,7 +188,17 @@
         if (OTHERS.test(b)) cameo++;
       });
     });
-    t.ok(cameo >= 6, 'barks name other heroes now and then (' + cameo + ')');
+    t.ok(cameo >= 10, 'barks name other heroes now and then (' + cameo + ')');
+    ['Valdris', 'Hjalmar', 'Pebbles'].forEach(function (n) {
+      t.ok(Object.keys(h.barks).some(function (k) { return h.barks[k].some(function (b) { return b.indexOf(n) >= 0; }); }), 'a cameo for the new recruit ' + n);
+    });
+    // pronouns (the user's list: she/her for Ellaria, Sparrow and Kiri, he/him for everyone else): no line pairs a
+    // name with the other set
+    const HE = /Zarathor|Syllamin|Marbles|Marwyn|Josiah|Corelos|Slate|Buga|Betty|Basanos|Valdris|Hjalmar|Pebbles/, SHE = /Ellaria|Sparrow|Kiri/;
+    allTexts(h).forEach(function (s) {
+      if (HE.test(s) && !SHE.test(s) && /\b(she|her|hers|herself)\b/i.test(s)) t.fail('pronouns: ' + JSON.stringify(s));
+      if (SHE.test(s) && !HE.test(s) && /\b(he|him|his|himself)\b/i.test(s)) t.fail('pronouns: ' + JSON.stringify(s));
+    });
     t.ok(Array.isArray(h.barks.raven_down) && h.barks.raven_down.length >= 3, 'raven_down barks');
 
     // the raven
@@ -192,7 +206,9 @@
     t.ok(rv && rv.flags.flying && rv.sprite.base === 'flyer' && rv.sprite.shape.body === 'bird' && rv.ap === 2 && rv.hp === 10, 'raven: a 10 HP, 2 AP flying bird');
     t.eq(JSON.stringify(rv.skills), JSON.stringify(['jos_peck', 'jos_omen']), 'raven skills Peck + Ill Omen');
     t.ok(DD.getSkill('jos_peck').owner === 'summon' && DD.getSkill('jos_omen').owner === 'summon', 'raven skills owned by summon');
-    t.ok(Array.isArray(rv.names) && rv.names.length >= 4, 'raven names');
+    // user request (Nov 3): Josiah's raven is always Onyx; one name keeps the summon's one RNG draw (seeded fights unchanged)
+    t.eq(JSON.stringify(rv.names), '["Onyx"]', 'the raven is always called Onyx');
+    t.eq(rv.name, 'Raven', 'its title stays Raven (the HUD shows "Onyx (Raven)")');
     t.eq(Object.keys(rv.hooks || {}).join(','), 'onDeath', 'raven hooks: only its owner\'s grief');
 
     // items, status, surface
@@ -248,7 +264,7 @@
       t.ok(r.flags.flying, 'flying');
       t.eq(r.skills.map(function (s) { return s.level; }).join(','), c[1] + ',' + c[1], 'L' + c[0] + ': raven skills at level ' + c[1]);
       t.eq(r.maxHp, c[2], 'L' + c[0] + ': raven max HP ' + c[2]);
-      t.ok(DD.getSummon('jos_raven').names.indexOf(r.name) >= 0, 'raven has a name (' + r.name + ')');
+      t.eq(r.name, 'Onyx', 'L' + c[0] + ': the raven is Onyx');
       t.ok(!DD.Combat.order().some(function (e) { return e.unitId === r.id; }), 'L' + c[0] + ': no initiative entry of its own');
       t.ok(DD.Combat.isTurnOf(r) && r.ap === 2, 'L' + c[0] + ': on Josiah\'s turn the raven has its 2 AP');
       t.eq(S().rules.filter(function (x) { return x.id === 'jos_contagion'; }).length, 1, 'Contagion rule active');
@@ -392,6 +408,7 @@
       brewedDown += runD.consumables.length;
     }
     t.eq(brewedFull, 0, 'no brewing into a full bag');
+    t.ok(/50% chance .*\(if the bag has room\)\.$/.test(DD.getItem('jos_alembic').desc), 'the Alembic desc says 50% and "if the bag has room"');
     t.eq(brewedLoss, 0, 'no brewing after a defeat');
     t.ok(brewedDown > 0, 'the Alembic brews after a won fight even while Josiah is down (' + brewedDown + '/8)');
     t.eq((won(seedOf(t, 'norun'), null, ['jos_alembic']).consumables || []).length, 0, 'sandbox fight without a run: nothing brewed');
@@ -503,6 +520,16 @@
     cast(t, j, 'jos_cane', 1, 3, 4);
     t.eq(f[0].hp, 14 - 4 - 3, 'Marked +3 on the next hit');
     t.eq(stacks(f[0], 'marked'), 0, 'mark consumed');
+    // ...or on the next damage of any kind: a Poison tick takes the Mark too (so the desc says "damage", not "hit")
+    t.ok(/the next damage it takes is \+3/.test(DD.skillDesc(DD.getSkill('jos_omen'), 1, null)), 'Ill Omen desc: "the next damage it takes is +3"');
+    t.ok(/Marked 3\.$/.test(DD.skillDesc(DD.getSkill('jos_murder'), 3, null)), 'Murder of Crows III desc: "Marked 3"');
+    j = fight({ enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
+    r = raven(j);
+    f = foes();
+    A().addStatus(f[0], 'poison', { stacks: 2 }, j);
+    t.ok(DD.Combat.useSkill(r, give(r, 'jos_omen', 1), 3, 4), 'omen on a Poisoned grunt');
+    DD.Combat.endTurn();
+    t.eq((14 - f[0].hp) + ' ' + stacks(f[0], 'marked'), '5 0', 'its Poison tick at its turn start takes the Mark: 2 + 3');
 
     // Raven Dive: lands next to the foe, 4 / 5 / 6 damage; III: Dazzled for exactly its next turn
     [4, 5, 6].forEach(function (dmg, i) {
@@ -522,12 +549,14 @@
       try { DD.Combat.endTurn(); } finally { off(); }
       t.ok(during === true && !has(f[0], 'dazzled'), 'L3: Dazzled through its next turn, gone at that turn\'s end');
     });
-    // no raven: a new one answers the call (next to the target), and it still pecks
+    // no raven: Onyx comes back to answer the call (next to the target), and it still pecks
+    t.ok(/^Onyx \(called back if gone\) swoops/.test(DD.skillDesc(DD.getSkill('jos_raven_dive'), 1, null)), 'the desc says Onyx comes back');
     j = fight({ enemies: [{ id: 'test_grunt', x: 6, y: 4 }], ravenAt: null });
     t.eq(ravens().length, 0, 'raven gone');
     f = foes();
     cast(t, j, 'jos_raven_dive', 1, 6, 4, 'dive without a raven');
     t.eq(ravens().length, 1, 'a new raven was summoned');
+    t.eq(raven(j).name, 'Onyx', 'the re-summoned raven is still Onyx (ravens are like that)');
     t.eq(DD.Grid.dist(raven(j), f[0]), 1, 'right next to the target');
     t.eq(f[0].hp, 10, 'and it still pecks for 4');
     t.eq(raven(j).ap, 0, 'a fresh raven arrives with 0 AP');
@@ -546,8 +575,8 @@
     ['stun', 'sheep'].forEach(function (st) {
       j = fight({ enemies: [{ id: 'test_grunt', x: 6, y: 4 }] });
       A().addStatus(raven(j), st, { turns: 1 }, null);
-      t.eq(DD.Combat.canUse(j, give(j, 'jos_raven_dive', 1)), 'Your raven is indisposed.', st + ' raven: Raven Dive refused');
-      t.eq(DD.Combat.canUse(j, give(j, 'jos_murder', 1)), 'Your raven is indisposed.', st + ' raven: Murder of Crows refused');
+      t.eq(DD.Combat.canUse(j, give(j, 'jos_raven_dive', 1)), 'Onyx is indisposed.', st + ' raven: Raven Dive refused');
+      t.eq(DD.Combat.canUse(j, give(j, 'jos_murder', 1)), 'Onyx is indisposed.', st + ' raven: Murder of Crows refused');
     });
     // the raven dies: Josiah is upset (and nothing breaks)
     j = fight({ enemies: [{ id: 'test_grunt', x: 6, y: 4 }] });
@@ -584,6 +613,15 @@
     t.eq(surf(4, 4), 'jos_miasma', 'still there in round 2');
     DD.Combat.endTurn();
     t.eq(surf(4, 4), null, 'L1 cloud gone after 2 rounds');
+    // every Miasma tile a foe enters doses it again (the desc says so): shoved 2 tiles through the cloud = Poisoned 2 + 2
+    t.ok(/Poisoned 2, and again on each Miasma tile they enter/.test(DD.skillDesc(DD.getSkill('jos_miasma'), 1, null)), 'the desc says each tile entered doses again');
+    j = fight({ enemies: [{ id: 'test_grunt', x: 6, y: 4 }, { id: 'test_grunt', x: 8, y: 8 }], ravenAt: null });
+    f = foes();
+    cast(t, j, 'jos_miasma', 1, 4, 4);
+    A().push(j, f[0], { x: -1, y: 0 }, 2);
+    t.eq(f[0].x + ',' + stacks(f[0], 'poison'), '4,4', 'pushed through 2 Miasma tiles: Poisoned 4');
+    A().push(j, f[0], { x: 0, y: 1 }, 1);
+    t.eq(f[0].y + ',' + stacks(f[0], 'poison'), '5,6', 'moved to another Miasma tile inside the cloud: 2 more');
     // a hazard for its brewer's foes only (AI paths avoid it; heroes and the raven walk through)
     j = fight({ allies: [{ id: 'test_knight', x: 3, y: 4 }], enemies: [{ id: 'test_grunt', x: 5, y: 4 }] });
     cast(t, j, 'jos_miasma', 1, 4, 4);
@@ -723,22 +761,39 @@
       t.eq(f[0].x + ',' + f[0].y, (4 + c[1]) + ',4', 'L' + lv + ': the one in the middle is blown away from Josiah');
       t.eq(j.skills[0].cd, 2, 'cooldown 2');
     });
-    // ignites oil (the whole slick), Miasma (the whole cloud) and explosive barrels
+    // v2: one rider (the push). The blast no longer ignites the ground: oil, his own cloud and barrels are left alone
     let j = fight({ enemies: [{ id: 'test_grunt', x: 8, y: 8 }], ravenAt: null,
-      surfaces: [{ x: 4, y: 3, id: 'oil', turns: 5 }, { x: 4, y: 2, id: 'oil', turns: 5 }, { x: 4, y: 1, id: 'oil', turns: 5 }],
+      surfaces: [{ x: 4, y: 3, id: 'oil', turns: 5 }, { x: 4, y: 2, id: 'oil', turns: 5 }],
       objects: [{ x: 5, y: 4, id: 'barrel_explosive' }] });
     cast(t, j, 'jos_volatile', 1, 4, 4, 'brew on oil + barrel');
-    t.eq([surf(4, 3), surf(4, 2), surf(4, 1)].join(','), 'fire,fire,fire', 'the oil slick goes up end to end');
-    t.ok(!DD.Grid.tile(5, 4).obj, 'the explosive barrel went off');
+    t.eq([surf(4, 3), surf(4, 2)].join(','), 'oil,oil', 'v2: the oil does not catch');
+    t.ok(!!DD.Grid.tile(5, 4).obj, 'v2: the explosive barrel stays put (it is not a unit)');
+    t.ok(!/ignit/i.test(DD.skillDesc(DD.getSkill('jos_volatile'), 3, null)), 'the desc promises no ignition');
     j = fight({ enemies: [{ id: 'test_grunt', x: 6, y: 4 }, { id: 'test_grunt', x: 8, y: 8 }], ravenAt: null });
     cast(t, j, 'jos_miasma', 1, 5, 4, 'a cloud first');
     cast(t, j, 'jos_volatile', 1, 3, 4, 'then a bomb at its edge');
-    t.eq([[5, 4], [4, 4], [6, 4], [5, 3], [5, 5]].filter(function (p) { return surf(p[0], p[1]) === 'fire'; }).length, 5, 'the whole cloud ignites');
-    t.ok(has(foes()[0], 'burn') && foes()[0].hp === 14, 'and the foe at its far side (outside the blast) burns');
+    t.eq(CLOUD.map(function (p) { return surf(p[0] + 1, p[1]); }).join(','), 'jos_miasma,jos_miasma,jos_miasma,jos_miasma,jos_miasma', 'v2: his cloud does not ignite either');
+    // self-combo: the blast throws a foe INTO his cloud, and entering it doses it
+    j = fight({ enemies: [{ id: 'test_grunt', x: 3, y: 4 }, { id: 'test_grunt', x: 8, y: 8 }], ravenAt: null });
+    let f = foes();
+    cast(t, j, 'jos_miasma', 1, 5, 4, 'a cloud beyond the foe');
+    t.eq(stacks(f[0], 'poison'), 0, 'the foe stands outside the cloud');
+    cast(t, j, 'jos_volatile', 1, 3, 4, 'the bomb blows it into the cloud');
+    t.eq(f[0].x + ',' + f[0].y + ' ' + (14 - f[0].hp) + ' ' + stacks(f[0], 'poison'), '4,4 5 2', 'blown 1 tile into the cloud: 5 damage + Poisoned 2');
+    // III blasts it 2 tiles: through two Miasma tiles, and the preview says so
+    j = fight({ enemies: [{ id: 'test_grunt', x: 3, y: 4, hpMult: 2 }, { id: 'test_grunt', x: 8, y: 8 }], ravenAt: null });
+    f = foes();
+    cast(t, j, 'jos_miasma', 1, 5, 4, 'a cloud beyond the foe');
+    j.x = 1; j.y = 2; // out of the blast, the bomb lands west of the foe (test setup)
+    const vol = give(j, 'jos_volatile', 3);
+    const pv = DD.Combat.preview(j, vol, 2, 4).perUnit[f[0].id] || {};
+    cast(t, j, 'jos_volatile', 3, 2, 4, 'Volatile Brew III blows it through the cloud');
+    t.eq(f[0].x + ',' + f[0].y + ' ' + (28 - f[0].hp) + ' ' + stacks(f[0], 'poison'), '5,4 7 4', 'blown 2 tiles through the cloud: 7 damage + Poisoned 2 + 2');
+    t.ok(/Poisoned 4/.test(pv.text || ''), 'the preview shows Poisoned 4 (' + pv.text + ')');
     // pushes: a pit (YEET), lava, water, the map edge
     j = fight({ enemies: [{ id: 'test_grunt', x: 5, y: 4 }, { id: 'test_grunt', x: 4, y: 5 }, { id: 'test_grunt', x: 4, y: 3 }], ravenAt: null,
       terrain: function (tl) { if (tl.x === 6 && tl.y === 4) tl.t = 'pit'; if (tl.x === 4 && tl.y === 6) tl.t = 'lava'; if (tl.x === 4 && tl.y === 2) tl.t = 'water'; } });
-    let f = foes();
+    f = foes();
     cast(t, j, 'jos_volatile', 1, 4, 4, 'brew next to a pit, lava and water');
     t.ok(f[0].dead, 'blown into the pit: YEET');
     t.ok(S().hype >= 20, 'environmental kill: +20 Hype (' + S().hype + ')');
@@ -751,7 +806,7 @@
     t.eq(f[0].x + ',' + (14 - f[0].hp), '8,8', 'pushed into the map edge: 5 + 3 bump');
 
     // Murder of Crows: foes within 2 of the raven (+ Marked at III); 3 AP; needs the raven
-    [[5, 0], [6, 0], [7, 3]].forEach(function (c, i) {
+    [[7, 0], [9, 0], [10, 3]].forEach(function (c, i) {
       const lv = i + 1;
       j = fight({ enemies: [{ id: 'test_grunt', x: 6, y: 5 }, { id: 'test_grunt', x: 8, y: 4 }, { id: 'test_grunt', x: 6, y: 7 }], ravenAt: { x: 6, y: 4 } });
       f = foes();
@@ -764,10 +819,16 @@
       t.eq(j.skills[0].cd, 3, 'cooldown 3');
     });
     j = fight({ enemies: [{ id: 'test_grunt', x: 3, y: 4 }], ravenAt: null });
-    t.eq(DD.Combat.canUse(j, give(j, 'jos_murder', 1)), 'Needs your raven.', 'no raven: no flock');
+    t.eq(DD.Combat.canUse(j, give(j, 'jos_murder', 1)), 'Needs Onyx.', 'no raven: no flock');
     cast(t, j, 'jos_raven_dive', 1, 3, 4, 'Raven Dive calls a new one');
     j.skills = [];
     t.eq(DD.Combat.canUse(j, give(j, 'jos_murder', 1)), true, 'and the flock can gather again');
+    // AutoPlay calls the flock when its raven sits in a crowd (the whole turn for 3 × 7)
+    j = fight({ enemies: [{ id: 'test_grunt', x: 6, y: 3 }, { id: 'test_grunt', x: 6, y: 5 }, { id: 'test_grunt', x: 7, y: 4 }], ravenAt: { x: 6, y: 4 } });
+    give(j, 'jos_murder', 1);
+    j.ap = 3;
+    DD.AutoPlay.takeTurn();
+    t.ok(j.skills[0].cd === 3 && foes().every(function (x) { return x.hp <= 14 - 7; }), 'AutoPlay casts Murder of Crows on the crowd (' + foes().map(function (x) { return x.hp; }).join(',') + ')');
 
     // Smelling Salts: revive at range at 30 / 40 / 50%, once per combat; v2: the ally then acts on its own turn
     [30, 40, 50].forEach(function (pct, i) {
@@ -825,7 +886,7 @@
   });
 
   // ---- combos ---------------------------------------------------------------------------------------------
-  T.suite('hero_josiah: combos with other heroes (fire on his cloud, his bomb on their oil, Vulnerable, Marked, contagion)', function (t) {
+  T.suite('hero_josiah: combos with other heroes (fire on his cloud, shoves into it, Vulnerable, Marked, contagion, Dazzle vs attacks of opportunity)', function (t) {
     if (!loaded(t)) return;
     const party = [{ id: 'test_knight', x: 3, y: 4 }, { id: 'test_mage', x: 1, y: 6 }];
     // 1. setup: Plague Miasma → payoff: the mage's Fire Fixture on one edge ignites the whole cloud
@@ -839,17 +900,15 @@
     t.ok(DD.Combat.useSkill(m, give(m, 'test_fireball', 1), 4, 4), 'the mage drops a Fire Fixture on the cloud\'s edge');
     t.eq([[5, 4], [4, 4], [6, 4], [5, 3], [5, 5]].filter(function (p) { return surf(p[0], p[1]) === 'fire'; }).length, 5, 'the whole cloud goes up');
     t.ok(has(f[1], 'burn') && stacks(f[1], 'poison') === 2, 'the grunt at the far side (outside the fireball) is Poisoned AND Burning');
-    // 2. setup: the mage's Oil Slick → payoff: Volatile Brew ignites all of it
-    j = fight({ heroes: [{ id: 'test_mage', x: 3, y: 6 }, { id: 'josiah', x: 1, y: 4 }], enemies: [{ id: 'test_grunt', x: 6, y: 4 }] });
-    t.ok(DD.Combat.useSkill(mage(), give(mage(), 'test_oil_slick', 1), 5, 4), 'the mage oils a 3×3 square');
+    // 2. setup: Plague Miasma → payoff: the knight's Shield Bash shoves a foe into the cloud (entering it doses it)
+    j = fight({ allies: [{ id: 'test_knight', x: 2, y: 3 }, { id: 'test_mage', x: 1, y: 6 }], enemies: [{ id: 'test_grunt', x: 3, y: 3 }], ravenAt: null });
+    f = foes();
+    cast(t, j, 'jos_miasma', 1, 5, 4, 'Josiah: Plague Miasma');
+    t.eq(stacks(f[0], 'poison'), 0, 'the grunt is outside the cloud');
     DD.Combat.endTurn();
-    j = jos();
-    t.ok(DD.Combat.current() === j, 'Josiah\'s turn');
-    cast(t, j, 'jos_volatile', 1, 5, 4, 'Josiah: Volatile Brew on the oil');
-    let lit = 0;
-    for (let x = 4; x <= 6; x++) for (let y = 3; y <= 5; y++) if (surf(x, y) === 'fire') lit++;
-    t.eq(lit, 9, 'the whole slick ignites');
-    t.ok(has(foes()[0], 'burn'), 'the grunt standing in it burns');
+    t.ok(DD.Combat.current() === knight(), 'the knight\'s turn');
+    t.ok(DD.Combat.useSkill(knight(), give(knight(), 'test_shield_bash', 1), 3, 3), 'the knight bashes the grunt east');
+    t.eq(f[0].x + ',' + f[0].y + ' ' + stacks(f[0], 'poison'), '5,3 2', 'shoved 2 tiles into the cloud: Poisoned 2');
     // 3. setup: Quarantine (Vulnerable) → payoff: the knight's slash +25%
     j = fight({ allies: party, enemies: [{ id: 'test_grunt', x: 4, y: 4 }], ravenAt: null });
     f = foes();
@@ -870,7 +929,7 @@
     cast(t, j, 'jos_murder', 3, j.x, j.y, 'Josiah: Murder of Crows III');
     DD.Combat.endTurn();
     t.ok(DD.Combat.useSkill(knight(), knight().basic, 4, 4), 'the knight slashes the marked grunt');
-    t.eq(28 - f[0].hp, 7 + 5 + 3, 'Murder 7, then slash 5 + Marked 3');
+    t.eq(28 - f[0].hp, 10 + 5 + 3, 'Murder III 10, then slash 5 + Marked 3');
     // 6. Contagion pays off for anyone: Plague Flask → the knight's kill spreads it
     j = fight({ allies: party, enemies: [{ id: 'test_grunt', x: 4, y: 4 }, { id: 'test_grunt', x: 5, y: 4 }], ravenAt: null });
     f = foes();
@@ -879,6 +938,18 @@
     DD.Combat.endTurn();
     t.ok(DD.Combat.useSkill(knight(), knight().basic, 4, 4), 'the knight finishes the poisoned grunt');
     t.ok(f[0].dead && stacks(f[1], 'poison') === 6, 'its neighbour catches its Poison 3 on top of its own 3 (' + stacks(f[1], 'poison') + ')');
+    // 7. v2 attacks of opportunity: Raven Dive III Dazzles the grunt pinning the mage → she walks away unpunished
+    [false, true].forEach(function (dazzle) {
+      j = fight({ allies: [{ id: 'test_mage', x: 4, y: 5 }], enemies: [{ id: 'test_grunt', x: 4, y: 4 }] });
+      f = foes();
+      cast(t, j, 'jos_raven_dive', dazzle ? 3 : 2, 4, 4, 'Josiah: Raven Dive ' + (dazzle ? 'III' : 'II'));
+      DD.Combat.endTurn();
+      const m = mage();
+      t.ok(DD.Combat.current() === m, 'the mage\'s turn');
+      const hp = m.hp, said = DD.Combat.provokes(m, 4, 7).length;
+      t.ok(DD.Combat.move(m, 4, 7), 'the mage steps away from the grunt');
+      t.eq(said + ' ' + (hp - m.hp), dazzle ? '0 0' : '1 4', dazzle ? 'Dazzled: no attack of opportunity (preview and reality)' : 'control: the grunt stabs her as she leaves (4)');
+    });
   });
 
   // ---- previews -----------------------------------------------------------------------------------------
@@ -1076,6 +1147,112 @@
     if (T.contentHelpers && T.contentHelpers.sanity) T.contentHelpers.sanity(t, 'edge cases');
   });
 
+  // ---- attacks of opportunity ----------------------------------------------------------------------------
+  T.suite('hero_josiah: attacks of opportunity (walking off a foe provokes, his cane never strikes, the raven does, dives and blasts never provoke)', function (t) {
+    if (!loaded(t)) return;
+    let aoo = 0;
+    const off = DD.Events.on('opportunity:attack', function () { aoo++; });
+    try {
+      // 1. Josiah walks away from an adjacent grunt: the move preview warns him, the grunt stabs once (4), he walks on
+      let j = fight({ enemies: [{ id: 'test_grunt', x: 2, y: 4 }], ravenAt: { x: 7, y: 7 } });
+      let g = foes()[0];
+      t.eq(DD.Combat.provokes(j, 1, 7).map(function (p) { return p.unitId + ':' + p.dmg; }).join(','), g.id + ':4', 'move preview: the grunt would stab for 4');
+      aoo = 0;
+      t.ok(DD.Combat.move(j, 1, 7), 'Josiah walks off');
+      t.eq(j.x + ',' + j.y + ' ' + (j.maxHp - j.hp) + ' ' + aoo, '1,7 4 1', 'stabbed once (4) as he leaves, then he walks on');
+      t.eq(g.oppRound, S().round, 'the grunt spent its attack of opportunity for the round');
+      t.ok(!DD.Combat.canUndo(), 'a move that provoked can\'t be undone');
+
+      // 2. his cane reaches 2 tiles, so it is not a melee basic: foes walk away from him for free
+      j = fight({ enemies: [{ id: 'test_grunt', x: 2, y: 4 }], ravenAt: null });
+      g = foes()[0];
+      t.eq(DD.Act.opportunitySlot(j), null, 'House Call (reach 2) makes no attacks of opportunity');
+      aoo = 0;
+      t.ok(DD.AI.moveTo(g, 5, 4), 'the grunt walks away from Josiah');
+      t.eq(g.hp + ' ' + aoo, '14 0', 'unpunished');
+      // ...even when Dazzle shrinks the cane to reach 1 (a melee basic by the rule): flags.noOpportunity
+      j = fight({ enemies: [{ id: 'test_grunt', x: 2, y: 4 }], ravenAt: null });
+      g = foes()[0];
+      A().addStatus(j, 'dazzled', { turns: 2 }, g);
+      t.eq(DD.Targeting.range(j, DD.getSkill('jos_cane'), 1).join('-'), '1-1', 'Dazzled: the cane reaches 1 tile');
+      t.eq(DD.Act.opportunityOf(j, g), null, 'Dazzled Josiah still makes no attacks of opportunity');
+      aoo = 0;
+      t.ok(DD.AI.moveTo(g, 5, 4), 'the grunt walks away from the Dazzled Josiah');
+      t.eq(g.hp + ' ' + aoo, '14 0', 'unpunished');
+
+      // 3. the raven's Peck is melee: a foe walking away from it is pecked (raven skill level 2 from Josiah L4: 3)
+      [[1, 2], [4, 3]].forEach(function (c) {
+        j = fight({ level: c[0], enemies: [{ id: 'test_grunt', x: 5, y: 4 }, { id: 'test_grunt', x: 5, y: 6 }], ravenAt: { x: 5, y: 5 } });
+        const r = raven(j), f = foes();
+        const sl = DD.Act.opportunitySlot(r);
+        t.eq(sl && sl.id, 'jos_peck', 'L' + c[0] + ': the raven strikes with Peck');
+        t.ok(DD.AI.moveTo(f[0], 8, 4), 'L' + c[0] + ': a grunt walks away from the raven');
+        t.eq(14 - f[0].hp, c[1], 'L' + c[0] + ': pecked for ' + c[1] + ' on its way out');
+        t.ok(DD.AI.moveTo(f[1], 8, 6), 'L' + c[0] + ': the second grunt leaves too');
+        t.eq(f[1].hp, 14, 'L' + c[0] + ': at most one attack of opportunity per round');
+        DD.Combat.endTurn();
+        t.ok(S().round === 2 && DD.Combat.current() === j, 'L' + c[0] + ': round 2');
+        A().teleport(f[1], 5, 6, { fx: false, noEnter: true });
+        t.ok(DD.AI.moveTo(f[1], 8, 6), 'L' + c[0] + ': it tries again in round 2');
+        t.eq(14 - f[1].hp, c[1], 'L' + c[0] + ': a new round, a new peck');
+      });
+      // ...not while it is stunned, asleep, frozen or a sheep
+      ['stun', 'sleep', 'frozen', 'sheep'].forEach(function (st) {
+        j = fight({ enemies: [{ id: 'test_grunt', x: 5, y: 4 }], ravenAt: { x: 5, y: 5 } });
+        A().addStatus(raven(j), st, { turns: 1 }, null);
+        t.ok(DD.AI.moveTo(foes()[0], 8, 4), st + ' raven: the grunt walks away');
+        t.eq(foes()[0].hp, 14, st + ' raven: no peck');
+      });
+
+      // 4. Raven Dive moves the raven by teleport: leaving a foe's side that way never provokes...
+      j = fight({ enemies: [{ id: 'test_grunt', x: 2, y: 3 }, { id: 'test_grunt', x: 6, y: 4 }] });
+      let r = raven(j);
+      let f = foes();
+      t.eq(r.x + ',' + r.y + ' ' + DD.Grid.dist(r, f[0]), '1,3 1', 'the raven starts next to a grunt');
+      aoo = 0;
+      cast(t, j, 'jos_raven_dive', 1, 6, 4, 'dive at the far grunt');
+      t.eq(DD.Grid.dist(r, f[1]) + ' ' + r.hp + '/' + r.maxHp + ' ' + aoo, '1 10/10 0', 'the raven swooped away untouched');
+      // ...while walking (flying) off a foe is a move action like any other
+      j = fight({ enemies: [{ id: 'test_grunt', x: 2, y: 3 }] });
+      r = raven(j);
+      aoo = 0;
+      t.ok(DD.Combat.move(r, 1, 0), 'the raven flies off on its own wings');
+      t.eq((r.maxHp - r.hp) + ' ' + aoo, '4 1', 'stabbed as it leaves (4)');
+
+      // 5. Volatile Brew's pushes never provoke: the knight and the raven are blown off the grunt (and it off them)
+      j = fight({ allies: [{ id: 'test_knight', x: 4, y: 5 }], enemies: [{ id: 'test_grunt', x: 4, y: 4 }], ravenAt: { x: 4, y: 3 } });
+      g = foes()[0];
+      aoo = 0;
+      cast(t, j, 'jos_volatile', 1, 4, 4, 'bomb the scrum');
+      t.eq(knight().x + ',' + knight().y + ' ' + raven(j).x + ',' + raven(j).y + ' ' + g.x + ',' + g.y, '4,6 4,2 5,4', 'everyone blown apart');
+      t.eq(aoo + ' ' + (knight().oppRound || 0) + ' ' + (raven(j).oppRound || 0) + ' ' + (g.oppRound || 0), '0 0 0 0', 'no attack of opportunity on anyone');
+
+      // 6. Raven Dive III Dazzles: a Dazzled foe strikes nobody as they leave, through its next turn
+      j = fight({ enemies: [{ id: 'test_grunt', x: 2, y: 4 }, { id: 'test_grunt', x: 8, y: 8 }], ravenAt: { x: 7, y: 1 } });
+      g = foes()[0];
+      cast(t, j, 'jos_raven_dive', 3, 2, 4, 'Raven Dive III on the grunt next to him');
+      t.ok(has(g, 'dazzled'), 'Dazzled');
+      aoo = 0;
+      t.eq(DD.Combat.provokes(j, 1, 7).length, 0, 'move preview: nothing provoked');
+      t.ok(DD.Combat.move(j, 1, 7), 'Josiah strolls off');
+      t.eq((j.maxHp - j.hp) + ' ' + aoo, '0 0', 'Dazzled: no stab');
+      DD.Combat.endTurn();
+      t.ok(S().round === 2 && !has(g, 'dazzled'), 'round 2: the Dazzle wore off at the end of the grunt\'s turn');
+      A().teleport(j, 1, 4, { fx: false, noEnter: true });
+      t.ok(DD.Combat.move(j, 1, 7), 'he tries the same stroll in round 2');
+      t.eq(j.maxHp - j.hp, 4, 'and gets stabbed');
+
+      // 7. Quarantine's Root keeps a foe from walking off, not from striking (Root is not a stun)
+      j = fight({ enemies: [{ id: 'test_grunt', x: 2, y: 4 }], ravenAt: { x: 2, y: 5 } });
+      g = foes()[0];
+      cast(t, j, 'jos_quarantine', 1, 2, 4, 'Quarantine the grunt next to him');
+      t.ok(!DD.AI.moveTo(g, 5, 4) && g.x === 2 && g.hp === 14, 'Rooted: it can\'t walk away from the raven (no peck either)');
+      t.ok(DD.Combat.move(j, 1, 7), 'Josiah walks off');
+      t.eq(j.maxHp - j.hp, 4, 'a Rooted grunt still stabs him as he leaves');
+    } finally { off(); }
+    if (T.contentHelpers && T.contentHelpers.sanity) T.contentHelpers.sanity(t, 'attacks of opportunity');
+  });
+
   // ---- AutoPlay ------------------------------------------------------------------------------------------
   T.suite('hero_josiah: AutoPlay battles with the fixture party, acts 1-3 at L1/3/5 (and his kit gets used)', function (t) {
     if (!loaded(t)) return;
@@ -1123,5 +1300,108 @@
     ['jos_cane', 'jos_plague_flask', 'jos_draught', 'jos_peck'].forEach(function (id) { t.ok(counts[id] > 0, id + ' used by AutoPlay (' + (counts[id] || 0) + ')'); });
     const used = ALL_SKILLS.filter(function (id) { return counts[id] > 0; });
     t.ok(used.length >= 10, 'most of the kit gets used (' + used.length + '/' + ALL_SKILLS.length + ': ' + used.join(' ') + ')');
+  });
+
+  // ---- v2 requests (user, Nov 3) -------------------------------------------------------------------------
+  /** How many draws `fn` takes from the fight's RNG (the stream is put back where fn left it). */
+  function draws(fn) {
+    const r = S().rng, s0 = r.getState();
+    fn();
+    const s1 = r.getState();
+    r.setState(s0);
+    let n = 0;
+    while (r.getState() !== s1 && n < 20) { r.next(); n++; }
+    r.setState(s1);
+    return n;
+  }
+  T.suite('hero_josiah: v2 requests — Onyx, a cloud still reaches flyers, poison-proof foes, barrels, Mostly Medicine gets the downed up', function (t) {
+    if (!loaded(t)) return;
+    // 1. the raven is always Onyx: at combat start, re-summoned, for every Josiah; one RNG draw for the name, as before
+    let j = fight({ heroes: [{ id: 'josiah', x: 1, y: 2 }, { id: 'josiah', x: 1, y: 6 }], enemies: [{ id: 'test_grunt', x: 7, y: 4 }] });
+    t.eq(ravens().map(function (r) { return r.name; }).join(','), 'Onyx,Onyx', 'two Josiahs, two Onyxes (ravens are like that)');
+    const rdef = DD.getSummon('jos_raven');
+    t.eq(draws(function () { A().newSummonUnit(rdef, j, 0, 0, {}); }) - draws(function () { A().newSummonUnit(rdef, j, 0, 0, { name: 'X' }); }), 1,
+      'naming Onyx still takes exactly one draw (seeded fights are unchanged)');
+    const h = DD.getHero('josiah');
+    t.ok(/Onyx/.test(h.passive.desc) && /Onyx/.test(rdef.desc) && /Onyx/.test(DD.getItem('jos_raven_treats').desc) &&
+      /Onyx/.test(DD.skillDesc(DD.getSkill('jos_murder'), 1, null)), 'the passive, the raven, the Treats and Murder of Crows name Onyx');
+    t.ok(h.barks.downed.indexOf('Tell Onyx... he was right...') >= 0 && h.barks.start.indexOf('Onyx, take notes. Mostly on their weak spots.') >= 0,
+      'his barks call the raven Onyx');
+    t.ok(!allTexts(h).some(function (s) { return /\b(my|the) raven\b/i.test(s) && !/Onyx/.test(s); }), 'no text says "my raven" / "the raven" without his name');
+
+    // 2. Plague Miasma is a cloud (airborne): it doses flyers too, and poison-proof foes see no hazard in it
+    j = fight({ enemies: [{ id: 'test_grunt', x: 4, y: 4 }, { id: 'test_grunt', x: 6, y: 2 }, { id: 'test_grunt', x: 7, y: 7 }], ravenAt: { x: 8, y: 0 } });
+    let f = foes();
+    f[0].flags = Object.assign({}, f[0].flags, { flying: true });   // test setup: two flying foes and a poison-proof one
+    f[1].flags = Object.assign({}, f[1].flags, { flying: true });
+    f[2].resist = Object.assign({}, f[2].resist, { poison: 0 });
+    t.ok(DD.Grid.isFlying(f[0]) && !DD.Grid.feelsFloor(f[0]), 'setup: a flyer');
+    cast(t, j, 'jos_miasma', 1, 4, 4);
+    t.eq(stacks(f[0], 'poison'), 2, 'a flyer caught in the cloud is Poisoned 2 (a gas, not a floor)');
+    t.ok(!!DD.Grid.hazardAt(3, 4, f[1]), 'a flying foe still sees the cloud as a hazard');
+    A().moveAlong(f[1], [{ x: 5, y: 2 }, { x: 4, y: 2 }, { x: 4, y: 3 }]);
+    t.eq(f[1].x + ',' + f[1].y + ' ' + stacks(f[1], 'poison'), '4,3 2', 'a flyer flying into the cloud is dosed on entry');
+    t.eq(DD.getSurface('jos_miasma').hazardStatus, 'poison', 'the cloud declares what it does (hazardStatus: poison)');
+    t.eq(DD.Grid.hazardAt(3, 4, f[2]), null, 'a poison-proof foe sees no hazard in it (it would path straight through)');
+    t.ok(!!DD.Grid.hazardAt(3, 4, null) && !!DD.Grid.hazardAt(5, 4, f[1]), 'everyone else still does');
+    // the raven flies over floor puddles and fire (engine: flyers ignore the floor) but not over his own side's cloud rules
+    j = fight({ enemies: [{ id: 'test_grunt', x: 8, y: 8 }], surfaces: [{ x: 5, y: 4, id: 'fire', turns: 3 }, { x: 5, y: 5, id: 'poison', turns: 3 }],
+      ravenAt: { x: 4, y: 4 } });
+    let r = raven(j);
+    A().moveAlong(r, [{ x: 5, y: 4 }, { x: 5, y: 5 }]);
+    t.eq(r.hp + '/' + has(r, 'burn') + '/' + has(r, 'poison'), r.maxHp + '/false/false', 'Onyx flies over fire and poison puddles untouched');
+    DD.Combat.endTurn();
+    t.eq(r.hp + '/' + has(r, 'poison'), r.maxHp + '/false', 'and hovering over the puddle at turn end does nothing either');
+
+    // 3. barrels: House Call (reach 2) sets one off; the raven's Peck too; Raven Dive at a barrel spends its AP and cooldown
+    j = fight({ enemies: [{ id: 'test_grunt', x: 4, y: 4 }, { id: 'test_grunt', x: 8, y: 8 }], objects: [{ x: 3, y: 4, id: 'barrel_explosive' }], ravenAt: { x: 8, y: 0 } });
+    f = foes();
+    let sl = give(j, 'jos_cane', 1);
+    t.ok(DD.Targeting.validTargets(j, sl).some(function (q) { return q.obj && q.x === 3 && q.y === 4; }), 'House Call can be aimed at the barrel 2 tiles away');
+    let pv = DD.Targeting.preview(j, sl, { x: 3, y: 4 });
+    t.ok(pv.detonates === 'barrel_explosive' && pv.perUnit[f[0].id] && pv.perUnit[f[0].id].dmg === 8 && !pv.perUnit[j.id],
+      'preview: it detonates, 8 to the grunt next to it, Josiah 2 tiles away is safe');
+    t.eq(cast(t, j, 'jos_cane', 1, 3, 4, 'House Call at the barrel'), 1, 'it costs the poke\'s 1 AP');
+    t.ok(!DD.Grid.tile(3, 4).obj && f[0].hp === 6 && f[1].hp === 14 && j.hp === j.maxHp, 'KABOOM: the barrel is gone, the grunt next to it took 8');
+    j = fight({ enemies: [{ id: 'test_grunt', x: 8, y: 8 }], objects: [{ x: 5, y: 2, id: 'barrel_explosive' }], ravenAt: { x: 5, y: 3 } });
+    r = raven(j);
+    sl = give(r, 'jos_peck', 1);
+    t.ok(DD.Combat.useSkill(r, sl, 5, 2), 'Onyx pecks the barrel');
+    t.ok(!DD.Grid.tile(5, 2).obj && r.hp === r.maxHp - 8, 'it goes off in his face: Onyx eats the 8 fire himself (' + r.hp + '/' + r.maxHp + ')');
+    j = fight({ enemies: [{ id: 'test_grunt', x: 8, y: 8 }], objects: [{ x: 4, y: 6, id: 'barrel_explosive' }], ravenAt: { x: 8, y: 0 } });
+    sl = give(j, 'jos_raven_dive', 1);
+    t.ok(DD.Targeting.validTargets(j, sl).some(function (q) { return q.obj && q.x === 4 && q.y === 6; }), 'Raven Dive can be aimed at a barrel');
+    t.eq(cast(t, j, 'jos_raven_dive', 1, 4, 6, 'Raven Dive at the barrel'), 1, 'it costs 1 AP');
+    t.ok(!DD.Grid.tile(4, 6).obj && j.skills[0].cd === 1, 'the barrel is gone and Raven Dive is on cooldown');
+    // Prescribe Leeches at a barrel: the blast, but no drain (there was nothing to drink)
+    j = fight({ enemies: [{ id: 'test_grunt', x: 8, y: 8 }], objects: [{ x: 3, y: 5, id: 'barrel_explosive' }], ravenAt: { x: 8, y: 0 } });
+    j.hp = j.maxHp - 5;
+    t.eq(cast(t, j, 'jos_leeches', 1, 3, 5, 'Leeches at the barrel'), 2, 'Leeches costs 2 AP');
+    t.ok(!DD.Grid.tile(3, 5).obj && j.hp === j.maxHp - 5, 'the barrel blows, Josiah drains nothing from it');
+
+    // 4. Mostly Medicine aimed at a downed ally gets it up with the healed HP (preview "UP! N HP"); it acts on its own slot
+    [7, 9, 11].forEach(function (heal, i) {
+      const lv = i + 1;
+      j = fight({ allies: [{ id: 'test_knight', x: 3, y: 4 }], enemies: [{ id: 'test_grunt', x: 8, y: 8 }], ravenAt: null });
+      const k = knight();
+      A().kill(k, null);
+      t.ok(k.downed, 'L' + lv + ': knight down');
+      sl = give(j, 'jos_draught', lv);
+      const at = DD.Targeting.validTargets(j, sl).filter(function (q) { return q.x === 3 && q.y === 4; })[0];
+      t.ok(!!at && at.revive === true, 'L' + lv + ': the downed knight is a target for the potion (revive)');
+      pv = DD.Targeting.preview(j, sl, { x: 3, y: 4 });
+      const e = pv.perUnit[k.id];
+      t.ok(!!e && e.revived && e.heal === heal && e.text.indexOf('UP! ' + heal + ' HP') >= 0, 'L' + lv + ': preview "UP! ' + heal + ' HP" (' + (e && e.text) + ')');
+      t.eq(cast(t, j, 'jos_draught', lv, 3, 4), 1, 'L' + lv + ': 1 AP');
+      t.ok(!k.downed && k.hp === heal && k.ap === 0, 'L' + lv + ': back up at ' + heal + ' HP with 0 AP (' + k.hp + ')');
+      t.ok(S().log.some(function (l) { return /back up \(\d+ HP\), thanks to Josiah/.test(l.text); }), 'L' + lv + ': the normal revive line');
+      DD.Combat.endTurn();
+      t.ok(DD.Combat.current() === k && k.ap === 3, 'L' + lv + ': its own turn comes with full AP');
+    });
+    // Leeches' self-heal (lifesteal) never gets anybody up; a dead raven is not "downed"
+    j = fight({ allies: [{ id: 'test_knight', x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }], ravenAt: null });
+    A().kill(knight(), null);
+    cast(t, j, 'jos_leeches', 1, 3, 4);
+    t.ok(knight().downed, 'Prescribe Leeches heals Josiah only: the downed knight stays down');
   });
 })();

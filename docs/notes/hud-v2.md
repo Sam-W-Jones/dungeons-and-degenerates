@@ -137,3 +137,125 @@ roll, total, rank, from, landed }] } | null`, `skipMoment()`, `forceMoments(on)`
 3. The dice moment needs the renderer's FX playback; in a hidden tab (rAF paused) it waits like every other animation.
 4. Turn ribbons and the tracker's pop-in are CSS animations: under `.static-ui` (headless screenshots) they end
    instantly, so ribbons do not appear in `tools/shot.sh` captures.
+
+## Rotation
+
+Role: UI for the map rotation (rotation plan `.tmp/wf7/rotation-design.md` §3.5, checkpoint C5). Files: the rotation
+additions in `js/ui/combat_hud.js` (view cluster, compass, `render:view` handler, edge names, in-combat controls list)
+and `js/ui/screens/settings.js` (CONTROLS, the rotSnap toggle), with suites in `tests/hud_tests.js` and
+`tests/ui_tests.js`. Purely visual: nothing here touches game logic, AI, AutoPlay or RNG.
+
+### What it does
+
+- **View cluster** (top-right, between the speed button and Menu): three small ghost buttons joined like a segmented
+  control. ⟲ calls `DD.Render.turn(-1)` (tooltip "⟲ Turn the map (Q)"), the **compass** calls `DD.Render.resetView()`
+  ("🧭 Reset view (Home)"), ⟳ calls `DD.Render.turn(1)` ("⟳ Turn the map (R)"). The tooltips mention middle-drag, Home,
+  and the current angle ("Classic view." / "Turned 30° clockwise." / "Turned 90° counter-clockwise."). The buttons
+  have no `hotkey`: Q, R and Home live in `DD.Input`. Every `DD.Render` call is guarded with `typeof`. The cluster is
+  hidden when `DD.Render.turn` is missing.
+- **Compass**: an SVG needle (red north half, cream south half) in a dark ring. CSS rotation =
+  `atan2(2·n.y, n.x) + 90°` with `n` = the screen offset of the ground vector (0, −1) at the live yaw, i.e. `yaw + 45°`:
+  up-right at yaw 0, turning clockwise with the board. The angle is kept unwrapped, so its 0.1 s transition never
+  spins the long way round (350° → 10° moves 20°). The ring lights up gold while the map is turned.
+- **`render:view` handler**: every event updates the compass; `moving: false` (the settle) re-runs `placeInspect` when
+  the inspect panel is open. `updateCompass()` also runs at mount, so `rot=` or a remembered angle shows at once.
+- **Edge names**: `edgeName(edge, yaw?)` names a board edge (N / E / S / W, by outward normal) by where it is on screen
+  at the view: one of 8 words + " edge" ('zone' = "enemy side"). At yaw 0 the names are the old table. The
+  reinforcement chip's tooltip is a function now, so it uses the angle at hover time.
+- **Help**: the in-combat menu lists "Middle drag: Rotate the map to any angle", "Q / R: Turn the map 90°",
+  "Shift + wheel: Rotate the map (or swipe · twist)", "Home: Reset the view" and "F: Recenter the board". Settings
+  CONTROLS lists "Right / left drag: Pan the camera", "Middle drag", "Q / R", "Shift + wheel: Rotate the map (or a
+  sideways swipe)", "Two-finger twist: Rotate the map (touch)", "Home: Reset the view" and "F: Recenter the camera" (F
+  and Home were one row).
+- **Settings → Game → "Snap rotation to the classic views"** (`settings.rotSnap`, absent = on; `DD.Render.endRotate`
+  reads it): "A middle-drag let go within 4° of a classic view lands on it. Hold Shift while letting go to leave it
+  exactly where it is."
+- `DD.HUD.edgeName(edge, yaw?)` and `DD.HUD.compass()` (the needle's CSS rotation, [0, 360)) for tests and the console.
+
+### Rotation build log (C5, UI)
+
+- **Done.** Everything in plan §3.5 (buttons, compass, `render:view`, `EDGE_NAME` from the view, the in-combat
+  controls list, the Settings CONTROLS and the rotSnap toggle) and test T14:
+  - `hud: map rotation — view buttons, the compass, edge names and the help rows follow the view` (42 assertions):
+    cluster placement and order, no hotkeys, tooltips, the buttons call `turn(±1)` / `resetView()` (spies that pass
+    through), the needle at 0 / 90 / 180 / 270 and across 350 → 10, the lit state, `edgeName` at 0 / 180 / 45 and the
+    reinforcement chip at 0 and 180, an inspect panel pinned through a turn, a drag with `rotSnap` on and off, and the
+    menu rows. It restores yaw 0, `settings.viewYaw` / `rotSnap`, `R.turn` / `R.resetView` and the scene.
+  - `hud: map rotation — no view buttons when the renderer cannot turn; the help rows stay`.
+  - `ui: map rotation — Settings lists the rotation keys and the "Snap rotation to the classic views" toggle`.
+  - `ui: map rotation — the HUD view buttons fit the top-right cluster at 1024×640, 1280×720 and 1920×1080; rot=30
+    turns the compass (real page)`: an iframe of `index.html?debug=1&screen=combat&encounter=boss_lichtenstein&seed=7
+    &rot=30`. It checks that the yaw is 30, the needle reads 75°, the compass is lit and N is the "right edge", and that
+    each button is at least 28 px, on screen, inside `.hud-tr`, and overlaps none of the round box, tracker, objective,
+    log, party, speed or Menu.
+  - Visual QA (`tools/shot.sh`, `debug=1`, boss_lichtenstein seed 7): rot 0 and 30 at 1280×720 and 1920×1080, and
+    rot 200 at 1024×640. The cluster fits beside the tracker at every size, nothing overlaps, and the needle points
+    up-right at 0, right (a little up) at 30 and left (a little down) at 200. The in-combat menu and the Settings
+    controls were also checked (`.tmp/rotui/`).
+- **Next (C6 / C7).** If C4 ships horizontal-wheel / Shift+wheel rotation or the touch twist, add a row to both help
+  lists (`combat_hud.js` `openMenu` controls, `settings.js` CONTROLS). README.md is the lead's (requested below).
+- **Deviations.**
+  - Edge words use the map-like angle (the 2:1 squash undone, the same angle as the needle), not the raw screen angle
+    of `local(n)`. Each word then covers exactly ±22.5° of yaw, with the quarter views in the middle of their sectors.
+    The raw angle would flip N to "right edge" by yaw 6°.
+  - The compass and edge names read `DD.Iso.makeView(DD.Render.getYaw())`, the same matrix as `DD.Iso.local` inside a
+    frame. It also holds between frames, and in headless tests, where `UI.show('combat')` never sets the combat scene,
+    so `DD.Iso.view()` stays at yaw 0. Without `DD.Iso.makeView`, they fall back to yaw-0 axes.
+  - The in-combat controls list is two pairs per row, like the Settings screen. With the 3 new rows, the menu modal
+    scrolled by 71 px at 1280×720; now it fits.
+  - Small additions beyond §3.5: the gold-lit compass when turned, the angle in the tooltips, `DD.HUD.edgeName` /
+    `DD.HUD.compass`, and the cluster hidden without `DD.Render.turn`.
+- **Gotchas.**
+  - Headless `UI.show('combat')` does not call `Render.setScene`, so `beginRotate()` returns false in a HUD suite unless
+    the suite sets the scene itself (the rotation suite does, then restores it).
+  - Without the live loop, `turn` / `setYaw` / `resetView` are instant and each fires one `render:view {moving:false}`,
+    so the compass can be asserted right after a click.
+  - Tooltips shown programmatically do not appear in `tools/shot.sh` captures, though the DOM says shown. Their text
+    is checked in the suites (`tipOf`) and in the console log of `.tmp/rotui/scene.js`.
+  - The Settings text promises "Hold Shift while letting go": that is C4's `endRotate({ snap: !e.shiftKey })` in
+    `input.js` (plan §3.3).
+
+### Review (Nov 5, rotation review: geometry and visuals)
+
+- **Fixed:** the help lists had no row for the two shipped extra ways to turn the map (sideways wheel / Shift+wheel and
+  the two-finger twist; C6 asked for them). Added one pair to the in-combat menu (16 pairs = 8 full rows; the menu
+  still fits at 1280×720 with no scroll, `.tmp/rot/rv/shots/menu_1280.png`) and two to Settings (short keys, so no chip
+  wraps). The hud / ui rotation suites assert the new rows.
+- **Checked, fine:** the view cluster in every real-game shot (`.tmp/rot/rv/shots/`, rot 0 … 300) sits clear of the
+  tracker and Menu; compass crops at 60 / 135 / 300 (`crop_*.png`) show the red tip at yaw + 45° (right-and-down,
+  straight down, up-and-a-bit-left) and the lit ring; `edgeName` follows the needle's unsquashed angle (N = "right
+  edge" at 45°, where that border really is).
+- **Not fixed (layout, HUD-owned, low):** at the diagonal views a fitted board's top-right corner sits under the combat
+  log (2-9 tiles, sometimes a unit's head). See RENDER-WORLD's request (`docs/notes/render-world.md`, review): the HUD
+  would need to report the log's box for `fitMap` to avoid it.
+
+### Review 2 (Nov 5, rotation review: input / camera / UI / state)
+
+Run in the real game (`.tmp/rot/rv2/`, see RENDER-WORLD's "Review 2"):
+
+- **Fixed:** the three icon-only view buttons had no accessible name; they carry `aria-label`s now ("Turn the map
+  counter-clockwise (Q)", "Reset the view (Home)", "Turn the map clockwise (R)"); the hud rotation suite checks them.
+- **Fixed (in `js/render/input.js`, found from here):** the rewards / level-up screens keep the battlefield drawn behind
+  them, and Q / R / Home turned it (and remembered the angle). Rotation is now for the combat screen only.
+- **Checked, fine:** clicking ⟳ / ⟲ / the compass leaves the focus on `<body>` (`DD.UI.button` blurs), so Space still
+  ends the turn; the buttons are real targets (`elementFromPoint` hits them; `.hud-view` is `pointer-events: none`,
+  the buttons `auto`); the compass follows every `render:view` (drag steps, animation steps, the settle) and reads
+  `yaw + 45°` at mount for `rot=` / a remembered angle; the debug result modal's R is Restart Fight only (`DD.UI`'s
+  capture listener consumes it before `DD.Input`: new suite); Q / R under the menu modal do nothing; edge names at 0 /
+  90 / 180 / 270 match the needle; the help rows, Settings CONTROLS and README match the bindings in `input.js`.
+- **New suites (`tests/hud_tests.js`, end of file):** the result-modal R guard, and `no suite so far left the view
+  turned, turning or remembered` (a leak check after the render / sprite / run / ui / hud suites).
+- Unchanged, low: the diagonal-view fit under the combat log (Review 1's request stands).
+
+### Rotation requests
+
+- **LEAD (docs)**:
+  - README.md controls: Middle drag = rotate the map to any angle, Q / R = turn 90°, Home = reset the view, F =
+    recenter; "Right / middle drag pans" → "Right / left drag".
+  - ARCHITECTURE §8.3: the top-right cluster has ⟲ (Q) · a compass (reset, Home; it turns with the board on
+    `render:view`) · ⟳ (R), and reinforcement edges are named for the current view.
+  - §4.7: `settings.rotSnap` is the Settings toggle "Snap rotation to the classic views".
+- **RENDER-WORLD (C4)**:
+  - Keep emitting `render:view` for every applied change: the animation steps (≤ 66 ms apart) and exactly one
+    `moving: false` at the end. The compass and the inspect re-placement depend on it.
+  - Shift on release must skip the snap (the Settings text says so).

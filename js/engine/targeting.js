@@ -99,6 +99,56 @@
     }
   };
 
+  // ---- v2 (user requests): attacks aimed at barrels, heals aimed at downed allies ---------------------------------
+  /** Heroes and hero-side summons: only the player aims at barrels and downed allies (the AI never does). */
+  function playerSide(u) {
+    return !!u && !u.dead && (u.kind === 'hero' || (u.kind === 'summon' && u.side === 'hero'));
+  }
+  function isConsumable(def) { return !!def && DD.getConsumable(def.id) === def; }
+  /**
+   * This skill / consumable can be aimed at a VOLATILE object (an explosive barrel, DD.Act.isVolatile) to set it off:
+   * a player-controlled user; a 'unit' target with the 'enemy' filter; and target.objects true, or (unless
+   * target.objects is false) kind 'attack', a consumable without a kind, or the user's basic attack. Its normal range
+   * and line of sight apply; canTarget is not asked (it is about a unit and the skill's riders, which don't happen).
+   */
+  T.aimsAtObjects = function (user, skillOrSlot) {
+    if (!playerSide(user)) return false;
+    const r = T.resolve(skillOrSlot);
+    if (!r) return false;
+    const def = r.def, tg = def.target || {};
+    if ((tg.type || 'unit') !== 'unit' || (tg.filter || 'enemy') !== 'enemy' || tg.objects === false) return false;
+    if (tg.objects === true || def.kind === 'attack') return true;
+    if (isConsumable(def) && !def.kind) return true;
+    return !!(user.basic && user.basic.id === def.id);
+  };
+  /**
+   * This skill / consumable is a single-target heal that can be aimed at a DOWNED ally to get it back up (the heal's
+   * amount becomes its HP: DD.Act.heal): a player-controlled user; kind 'heal' or tag 'heal'; a 'unit' target with the
+   * 'ally' / 'allyOrSelf' / 'any' filter; no area. target.revive: false opts out, true opts in (any area).
+   */
+  T.revivesWith = function (user, skillOrSlot) {
+    if (!playerSide(user)) return false;
+    const r = T.resolve(skillOrSlot);
+    if (!r) return false;
+    const def = r.def, tg = def.target || {};
+    const f = tg.filter || 'enemy';
+    if ((tg.type || 'unit') !== 'unit' || tg.revive === false || (f !== 'ally' && f !== 'allyOrSelf' && f !== 'any')) return false;
+    if (tg.revive === true) return true;
+    if (def.area && def.area.shape && def.area.shape !== 'single') return false;
+    return def.kind === 'heal' || (def.tags || []).indexOf('heal') >= 0;
+  };
+  /** A downed hero of the user's side (a heal aimed at it revives it). */
+  function downedAlly(user, u) {
+    return !!u && !u.dead && !!u.downed && u.kind === 'hero' && u !== user && !DD.Grid.hostile(user, u);
+  }
+  /** The volatile object on an otherwise empty tile, or null. */
+  function volatileAt(x, y) {
+    const t = DD.Grid.tile(x, y);
+    if (!t || !t.obj || !DD.Act.isVolatile(t.obj) || DD.Grid.unitAt(x, y)) return null;
+    return t.obj;
+  }
+  T.volatileAt = volatileAt;
+
   T.tileMatches = function (user, x, y, filter) {
     const G = DD.Grid;
     const t = G.tile(x, y);
@@ -153,12 +203,29 @@
     }
     if (tg.type === 'unit') {
       const filter = tg.filter || 'enemy';
+      const revive = T.revivesWith(user, skillOrSlot);
       for (let i = 0; i < s.units.length; i++) {
         const u = s.units[i];
-        if (!T.unitMatches(user, u, filter, true)) continue;
+        const down = revive && downedAlly(user, u);
+        if (!down && !T.unitMatches(user, u, filter, true)) continue;
         if (!okTile(u.x, u.y)) continue;
         const p = { x: u.x, y: u.y };
+        if (down) p.revive = true;   // a heal aimed at a downed ally: it gets back up (HUD: highlight it)
         if (canTargetOk(user, r, p)) out.push(p);
+      }
+      // a volatile object in range and sight (an explosive barrel): the attack sets it off
+      if (T.aimsAtObjects(user, skillOrSlot)) {
+        // [v2 review] the object test first (cheap), the range / sight test (a LOS ray) only on a volatile object
+        const max = rg[1];
+        for (let dy = -max; dy <= max; dy++) {
+          const rem = max - Math.abs(dy);
+          for (let dx = -rem; dx <= rem; dx++) {
+            const x = user.x + dx, y = user.y + dy;
+            if (!G.inBounds(x, y)) continue;
+            const o = volatileAt(x, y);
+            if (o && okTile(x, y)) out.push({ x: x, y: y, obj: o.id });
+          }
+        }
       }
       return out;
     }
@@ -219,9 +286,18 @@
       else {
         const u = DD.Grid.unitAt(tgt.x, tgt.y);
         if (u && (active(u) || (u.downed && tg.filter === 'downedAlly'))) ctx.targetUnit = u;
+        else if (u && downedAlly(user, u) && T.revivesWith(user, skillOrSlot)) {
+          // v2: a heal aimed at a downed ally — DD.Act.heal on it (while this skill resolves) gets it back up
+          ctx.targetUnit = u;
+          ctx.reviveTarget = u;
+        } else if (!u && tg.type === 'unit' && volatileAt(tgt.x, tgt.y) && T.aimsAtObjects(user, skillOrSlot)) {
+          // v2: an attack aimed at a volatile object — DD.Combat.resolveSkill detonates it instead of running execute
+          ctx.targetObj = DD.Grid.tile(tgt.x, tgt.y).obj;
+        }
       }
     }
-    ctx.tiles = extra.tiles ? extra.tiles.filter(function (p) { return DD.Grid.inBounds(p.x, p.y); }) : (tgt ? T.area(user, def, r.level, tgt, dir, ctx) : []);
+    ctx.tiles = extra.tiles ? extra.tiles.filter(function (p) { return DD.Grid.inBounds(p.x, p.y); })
+      : ctx.targetObj ? [{ x: tgt.x, y: tgt.y }] : (tgt ? T.area(user, def, r.level, tgt, dir, ctx) : []);
     const seen = {};
     for (let i = 0; i < ctx.tiles.length; i++) {
       const u = DD.Grid.unitAt(ctx.tiles[i].x, ctx.tiles[i].y);
@@ -318,6 +394,7 @@
       const dHp = ru.hp - su.hp;
       const dBlock = (ru.block || 0) - (su.block || 0);
       const lethal = (!!su.dead && !ru.dead) || (!!su.downed && !ru.downed);
+      const revived = !!ru.downed && !su.downed && !su.dead;   // v2: back on its feet ("UP! N HP")
       const added = [], removed = [];
       const before = {};
       for (let k = 0; k < ru.statuses.length; k++) before[ru.statuses[k].id] = ru.statuses[k].stacks;
@@ -329,15 +406,16 @@
       }
       for (const id in before) if (after[id] === undefined && !lethal) removed.push(id);
       const moved = su.x !== ru.x || su.y !== ru.y ? { x: su.x, y: su.y } : null;
-      if (!dHp && !dBlock && !lethal && !added.length && !removed.length && !moved) continue;
+      if (!dHp && !dBlock && !lethal && !revived && !added.length && !removed.length && !moved) continue;
       const e = {
         dmg: Math.max(0, dHp), heal: Math.max(0, -dHp), blocked: Math.max(0, dBlock), block: Math.max(0, -dBlock),
-        lethal: lethal, statuses: added, removed: removed, moved: moved, uncertain: !!uncertain, text: '',
+        lethal: lethal, revived: revived, statuses: added, removed: removed, moved: moved, uncertain: !!uncertain, text: '',
       };
       const parts = [];
       if (e.dmg) parts.push('−' + e.dmg);
       if (e.blocked) parts.push(e.blocked + ' blocked');
-      if (e.heal) parts.push('+' + e.heal);
+      if (revived) parts.push('UP! ' + su.hp + ' HP');
+      else if (e.heal) parts.push('+' + e.heal);
       if (e.block) parts.push('+' + e.block + ' Block');
       for (let k = 0; k < added.length; k++) parts.push(statusLabel(added[k], after[added[k]]));
       for (let k = 0; k < removed.length; k++) parts.push('no ' + statusLabel(removed[k], 1));
@@ -371,7 +449,7 @@
     return JSON.stringify([
       Object.keys(per).sort().map(function (id) {
         const e = per[id];
-        return [id, e.dmg, e.heal, e.blocked, e.block, !!e.lethal, (e.statuses || []).slice().sort(), (e.removed || []).slice().sort(), e.moved ? [e.moved.x, e.moved.y] : 0];
+        return [id, e.dmg, e.heal, e.blocked, e.block, !!e.lethal, !!e.revived, (e.statuses || []).slice().sort(), (e.removed || []).slice().sort(), e.moved ? [e.moved.x, e.moved.y] : 0];
       }),
       (res.spawned || []).map(function (p) { return [p.defId, p.x, p.y, p.side]; }),
       (res.objects || []).map(function (o) { return [o.x, o.y, o.id, o.dmg, !!o.destroyed]; }),
@@ -405,6 +483,9 @@
       const kos = es.filter(function (x) { return x && x.lethal; }).length;
       e.lethalChance = kos / n;
       e.lethal = kos * 2 >= n && kos > 0;
+      const ups = es.filter(function (x) { return x && x.revived; }).length;
+      e.revivedChance = ups / n;
+      e.revived = ups * 2 >= n && ups > 0;
       ['statuses', 'removed'].forEach(function (k) {
         const cnt = {}, ids = [];
         es.forEach(function (x) { (x ? x[k] || [] : []).forEach(function (sid) { if (!cnt[sid]) ids.push(sid); cnt[sid] = (cnt[sid] || 0) + 1; }); });
@@ -423,7 +504,8 @@
       const parts = [];
       if (e.dmgMax > 0) parts.push('−' + span(e.dmgMin, e.dmgMax));
       if (e.blockedMax > 0) parts.push(span(e.blockedMin, e.blockedMax) + ' blocked');
-      if (e.healMax > 0) parts.push('+' + span(e.healMin, e.healMax));
+      if (ups > 0) parts.push('UP! ' + span(e.healMin, e.healMax) + ' HP' + (ups < n ? ' ' + pct(ups / n) : ''));
+      else if (e.healMax > 0) parts.push('+' + span(e.healMin, e.healMax));
       if (e.blockMax > 0) parts.push('+' + span(e.blockMin, e.blockMax) + ' Block');
       Object.keys(e.statusChance).forEach(function (sid) {
         const d = DD.getStatus(sid);
@@ -489,16 +571,17 @@
     return T.pure(function () { return preview(user, slotOrSkill, target); });
   };
   function preview(user, slotOrSkill, target) {
-    const out = { tiles: [], units: [], perUnit: {}, uncertain: false, samples: 1, spawned: [], objects: [], hype: 0 };
+    const out = { tiles: [], units: [], perUnit: {}, uncertain: false, samples: 1, spawned: [], objects: [], hype: 0, blast: [] };
     const r = T.resolve(slotOrSkill);
     const real = S();
     if (!r || !user || !target || !real) return out;
     const ctx0 = T.buildCtx(user, slotOrSkill, target);
     out.tiles = ctx0.tiles;
     out.units = ctx0.units;
-    const tagged = (r.def.tags || []).indexOf('random') >= 0;
+    const tagged = (r.def.tags || []).indexOf('random') >= 0 && !ctx0.targetObj;   // a detonation rolls nothing of the skill
     out.uncertain = tagged;
-    if (typeof r.def.preview === 'function') {
+    // a def's own preview describes its execute: a detonation or a revive does not run it (the dry run shows them)
+    if (typeof r.def.preview === 'function' && !ctx0.targetObj && !ctx0.reviveTarget) {
       const p = DD.safe('preview of ' + r.def.id, r.def.preview, r.def, [ctx0]);
       if (p && typeof p === 'object') {
         for (const id in p) {
@@ -523,13 +606,16 @@
         }
         const ctx = DD.Combat.resolveSkill(su, slot || r.def, target, { pay: !!slot, consumable: !!DD.getConsumable(r.def.id) && !DD.getSkill(r.def.id) });
         if (ctx && ctx.uncertain) rec.uncertain = true;
-        return T.diff(real, sim, false);
+        const d = T.diff(real, sim, false);
+        d.blast = (rec.blasts || []).slice();   // tiles of the explosions it set off (Act.explode)
+        return d;
       }, { seed: seed, record: true });
     }
     const p0 = DD.problems.length;
     const first = run();
     if (!first || !first.result) return out;
     let res = first.result;
+    let blasts = first.result.blast || [];
     // no dice rolled: the outcome is fixed and shown exactly ('random' / marked skills still say "?")
     let uncertain = tagged || first.uncertain;
     if (first.draws > 0) {
@@ -541,12 +627,13 @@
       const seen = {};
       const key = function (m) { return String(m).split('\n')[0]; };   // label + message (stacks differ by call site)
       DD.problems.slice(p0).forEach(function (m) { seen[key(m)] = 1; });
+      blasts = [];   // never the real roll's blasts either
       for (let i = 0; i < SAMPLES; i++) {
         const pa = DD.problems.length;
         const a = run((U.hash(base + ':luck:' + i) >>> 0) || 1);
         // a replay that hits the same content error is reported once, not SAMPLES more times
         for (let k = DD.problems.length - 1; k >= pa; k--) { const kk = key(DD.problems[k]); if (seen[kk]) DD.problems.splice(k, 1); else seen[kk] = 1; }
-        if (a && a.result) alts.push(a.result);
+        if (a && a.result) { alts.push(a.result); blasts = blasts.concat(a.result.blast || []); }
       }
       if (alts.length) {
         const sig = signature(alts[0]);
@@ -558,6 +645,18 @@
     if (uncertain && out.samples === 1) markResult(res);
     out.uncertain = uncertain;
     out.perUnit = res.perUnit; out.spawned = res.spawned; out.objects = res.objects; out.hype = res.hype;
+    out.blast = uniqTiles(blasts);
+    // aimed at a barrel: the area to show is the blast (its tile first)
+    if (ctx0.targetObj) { out.tiles = uniqTiles([{ x: target.x, y: target.y }].concat(out.blast)); out.detonates = ctx0.targetObj.id; }
+    if (ctx0.reviveTarget) out.revives = ctx0.reviveTarget.id;
+    return out;
+  }
+  function uniqTiles(list) {
+    const seen = {}, out = [];
+    for (let i = 0; i < list.length; i++) {
+      const k = list[i].x + ',' + list[i].y;
+      if (!seen[k]) { seen[k] = 1; out.push({ x: list[i].x, y: list[i].y }); }
+    }
     return out;
   }
 })();

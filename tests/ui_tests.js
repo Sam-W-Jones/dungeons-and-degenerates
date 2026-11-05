@@ -628,6 +628,126 @@
     t.tryRun('back to title', function () { UI.show('title'); });
   });
 
+  // ---- map rotation (rotation plan §3.5, T14) ---------------------------------------------------------------------------
+  T.suite('ui: map rotation — Settings lists the rotation keys and the "Snap rotation to the classic views" toggle', function (t) {
+    const UI = DD.UI;
+    if (!DD.Meta || !DD.Meta.data || !UI.screens.settings) { t.skip('meta or the settings screen missing'); return; }
+    UI.init();
+    reset();
+    const s = UI.settings();
+    const had = Object.prototype.hasOwnProperty.call(s, 'rotSnap'), old = s.rotSnap;
+    const snapRow = function () { return qa('.set-row').filter(function (r) { const l = r.querySelector('.set-label'); return l && /Snap rotation to the classic views/.test(l.textContent); })[0] || null; };
+    try {
+      delete s.rotSnap;
+      t.tryRun('show settings', function () { UI.show('settings', {}); });
+      const rows = qa('.controls .ctrl').map(function (c) { return c.querySelector('.ctrl-key').textContent + ' = ' + c.querySelector('.ctrl-desc').textContent; });
+      ['Middle drag = Rotate the map to any angle', 'Q / R = Turn the map 90°', 'Home = Reset the view', 'F = Recenter the camera', 'Right / left drag = Pan the camera',
+        'Shift + wheel = Rotate the map (or a sideways swipe)', 'Two-finger twist = Rotate the map (touch)'].forEach(function (r) {
+        t.ok(rows.indexOf(r) >= 0, 'controls list: ' + r);
+      });
+      t.ok(!rows.some(function (r) { return /middle/i.test(r) && /Pan/.test(r); }), 'middle drag no longer pans');
+      t.ok(!rows.some(function (r) { return /^F \/ Home/.test(r); }), 'F and Home are separate rows (Home resets the view)');
+      const row = snapRow();
+      t.ok(row, 'a "Snap rotation to the classic views" row');
+      const tg = row ? row.querySelector('.toggle') : null;
+      t.ok(tg && tg.classList.contains('on'), 'on by default (settings.rotSnap absent)');
+      t.ok(row && /4°/.test(row.textContent) && /Shift/.test(row.textContent), 'its description gives the 4° window and Shift');
+      if (tg) {
+        tg.click();
+        t.eq(s.rotSnap, false, 'switching it off writes settings.rotSnap = false (what DD.Render.endRotate reads)');
+        tg.click();
+        t.eq(s.rotSnap, true, '...and back on');
+      }
+      s.rotSnap = false;
+      t.tryRun('re-open settings', function () { UI.show('title'); UI.show('settings', {}); });
+      const tg2 = snapRow() && snapRow().querySelector('.toggle');
+      t.ok(tg2 && !tg2.classList.contains('on'), 'a remembered "off" shows as off');
+    } finally {
+      if (had) s.rotSnap = old; else delete s.rotSnap;
+      if (DD.Meta.save) DD.Meta.save();
+      reset();
+      UI.show('title');
+    }
+  });
+
+  T.suite('ui: map rotation — the HUD view buttons fit the top-right cluster at 1024×640, 1280×720 and 1920×1080; rot=30 turns the compass (real page)', async function (t) {
+    if (!DD.getEncounter || !DD.getEncounter('boss_lichtenstein')) { t.skip('real encounters not loaded'); return; }
+    const sizes = [[1024, 640], [1280, 720], [1920, 1080]];
+    for (let i = 0; i < sizes.length; i++) {
+      const w = sizes[i][0], h = sizes[i][1], tag = w + '×' + h + ': ';
+      const f = await gameFrame('debug=1&screen=combat&encounter=boss_lichtenstein&seed=7&rot=30', w, h);
+      try {
+        const W = f.contentWindow;
+        const ok = await frameUntil(function () { return W.DD && W.DD.HUD && W.DD.HUD.mounted() && W.document.querySelector('.hud-tr .hud-view'); }, 15000);
+        t.ok(ok, tag + 'the combat HUD is up');
+        if (!ok) continue;
+        await tick(80);
+        const doc = W.document;
+        if (typeof W.DD.Render.getYaw !== 'function') { t.skip('the renderer has no map rotation'); return; }
+        t.near(W.DD.Render.getYaw(), 30, 1e-9, tag + 'rot=30 turned the map');
+        t.near(W.DD.HUD.compass(), 75, 1e-6, tag + 'the compass needle reads 75° (right, a little up)');
+        t.ok(doc.querySelector('.hud-vbtn.hv-compass').classList.contains('turned'), tag + 'the compass is lit (the map is turned)');
+        t.eq(W.DD.HUD.edgeName('N'), 'right edge', tag + 'the classic top-right edge is on the right now');
+        const box = function (n) { return n.getBoundingClientRect(); };
+        const hit = function (a, b) { return a.left < b.right - 1 && b.left < a.right - 1 && a.top < b.bottom - 1 && b.top < a.bottom - 1; };
+        const btns = Array.prototype.slice.call(doc.querySelectorAll('.hud-tr .hud-view .hud-vbtn'));
+        t.eq(btns.length, 3, tag + 'three view buttons');
+        const tr = box(doc.querySelector('.hud-tr'));
+        const others = ['.hud-round', '.hud-init', '.hud-obj', '.hud-log', '.hud-party', '.hud-tr .hud-speed', '.hud-tr > .btn:last-child'].map(function (sel) { return { sel: sel, n: doc.querySelector(sel) }; })
+          .filter(function (o) { return o.n && W.getComputedStyle(o.n).display !== 'none'; });
+        btns.forEach(function (b, k) {
+          const r = box(b);
+          t.ok(r.width >= 28 && r.height >= 28, tag + 'button ' + k + ' is a decent target (' + Math.round(r.width) + '×' + Math.round(r.height) + ')');
+          t.ok(r.left >= 0 && r.top >= 0 && r.right <= w && r.bottom <= h, tag + 'button ' + k + ' is on screen');
+          t.ok(r.left >= tr.left - 1 && r.right <= tr.right + 1 && r.top >= tr.top - 1 && r.bottom <= tr.bottom + 1, tag + 'button ' + k + ' sits inside the top-right cluster');
+          const bad = others.filter(function (o) { return hit(r, box(o.n)); }).map(function (o) { return o.sel; });
+          t.eq(bad.length, 0, tag + 'button ' + k + ' overlaps nothing' + (bad.length ? ' (' + bad.join(', ') + ')' : ''));
+        });
+      } finally { f.remove(); }
+    }
+  });
+
+  // review: a won run fight hands off to the rewards screen with the board still drawn behind it (scene 'combat'); the
+  // rotation keys there used to turn that board and remember the angle
+  T.suite('ui: map rotation — Q / R / Home on the rewards screen leave the board behind it alone (real page)', async function (t) {
+    if (!DD.getEncounter || !DD.getEncounter('boss_lichtenstein')) { t.skip('real encounters not loaded'); return; }
+    const f = await gameFrame('debug=1&seed=5', 1280, 720);
+    try {
+      const W = f.contentWindow;
+      const booted = await frameUntil(function () { return W.DDdbg && W.DD.UI.current === 'title'; }, 15000);
+      t.ok(booted, 'the title is up');
+      if (!booted) return;
+      if (typeof W.DD.Render.turn !== 'function') { t.skip('the renderer has no map rotation'); return; }
+      const press = function (k) {
+        W.document.body.dispatchEvent(new W.KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }));
+        W.document.body.dispatchEvent(new W.KeyboardEvent('keyup', { key: k, bubbles: true, cancelable: true }));
+      };
+      W.DDdbg.newRun();
+      W.DDdbg.fight('normal');
+      t.ok(await frameUntil(function () { return W.DD.UI.current === 'combat' && W.DD.HUD.mounted(); }, 10000), 'a run fight is up');
+      W.DD.Render.setYaw(30, { keepFocus: false });
+      W.DDdbg.win();
+      const rewards = await frameUntil(function () { return W.DD.UI.current === 'rewards'; }, 30000);
+      t.ok(rewards, 'the win hands off to the rewards screen');
+      if (!rewards) return;
+      t.eq(W.DD.Render.getScene(), 'combat', 'the board is still drawn behind it');
+      press('r'); await tick(350);
+      press('q'); await tick(350);
+      press('Home'); await tick(350);
+      t.eq(W.DD.Render.getYaw(), 30, 'Q / R / Home there do not turn it');
+      await tick(700);
+      t.ok(W.DD.Meta.data.settings.viewYaw === undefined, '...and no angle is remembered');
+      W.DDdbg.fight('normal');
+      t.ok(await frameUntil(function () { return W.DD.UI.current === 'combat' && W.DD.HUD.mounted(); }, 10000), 'the next fight is up');
+      press('r');
+      t.ok(await frameUntil(function () { return W.DD.Render.getYaw() === 90; }, 3000), 'on the battlefield R turns it again (30 → 90)');
+    } finally {
+      // that last turn is a remembered gesture: keep it out of the file:// localStorage the later real-page suites share
+      try { const D = f.contentWindow.DD; if (D && D.Meta && D.Meta.data) { delete D.Meta.data.settings.viewYaw; D.Meta.save(); } } catch (e) { /* frame gone */ }
+      f.remove();
+    }
+  });
+
   T.suite('ui: Enter never confirms a destructive dialog', async function (t) {
     const UI = DD.UI;
     UI.init();
@@ -1277,5 +1397,231 @@
       t.ok(q('.rw-level') && q('.rw-level').style.display === 'none', 'no level-up block for a screen without level-up records');
       t.eq(qa('.reward-card').length, 3, 'the loot is still there');
     });
+  });
+
+  // ---- v2: sixteen heroes, all available; the real game page in a frame of an exact size ------------------------------
+  const NEW_HEROES = ['kiri', 'betty', 'basanos', 'valdris', 'hjalmar', 'pebbles'];
+  const SIZES = [[1024, 640], [1280, 720], [1600, 900], [1920, 1080]];
+
+  /** The real game (index.html — js/main.js boots there, debug URL params work) in an iframe of exactly w × h px. */
+  function gameFrame(query, w, h) {
+    return new Promise(function (resolve) {
+      const f = document.createElement('iframe');
+      f.style.cssText = 'position:fixed;left:0;top:0;border:0;opacity:0;pointer-events:none;width:' + w + 'px;height:' + h + 'px';
+      let done = false;
+      const finish = function () { if (!done) { done = true; resolve(f); } };
+      f.onload = finish;
+      setTimeout(finish, 20000);
+      f.src = '../index.html?' + query;
+      document.body.appendChild(f);
+    });
+  }
+  async function frameUntil(fn, ms) {
+    const end = Date.now() + (ms || 10000);
+    while (Date.now() < end) { let ok = false; try { ok = !!fn(); } catch (e) { ok = false; } if (ok) return true; await tick(50); }
+    return false;
+  }
+  /** Layout problems of `cards` (elements) inside a frame: descendants outside their card, cut text. → [string] */
+  function cardProblems(W, cards, textSel) {
+    const bad = [];
+    cards.forEach(function (c) {
+      const b = c.getBoundingClientRect();
+      c.querySelectorAll('*').forEach(function (n) {
+        const cs = W.getComputedStyle(n);
+        if (cs.display === 'none' || cs.visibility === 'hidden') return;
+        const r = n.getBoundingClientRect();
+        if (!r.width || !r.height) return;
+        if (r.top < b.top - 1 || r.bottom > b.bottom + 1 || r.left < b.left - 1 || r.right > b.right + 1) bad.push((n.className || n.tagName) + ' sticks out of ' + (c.dataset.id || c.textContent.slice(0, 16)));
+      });
+      c.querySelectorAll(textSel).forEach(function (n) {
+        const cs = W.getComputedStyle(n);
+        const label = '"' + n.textContent.trim().slice(0, 30) + '"';
+        // a clipping box (ellipsis, line clamp): its content must fit; a visible one: its text must stay in the card
+        if (/hidden|clip/.test(cs.overflowX + cs.overflowY)) {
+          if (n.scrollWidth > n.clientWidth + 1 || n.scrollHeight > n.clientHeight + 1) bad.push('cut text ' + label);
+        } else {
+          const rg = n.ownerDocument.createRange();
+          rg.selectNodeContents(n);
+          const r = rg.getBoundingClientRect();
+          if (r.width && (r.left < b.left - 1 || r.right > b.right + 1 || r.top < b.top - 1 || r.bottom > b.bottom + 1)) bad.push('text out of its card ' + label);
+        }
+      });
+      if (b.bottom > W.innerHeight + 1 || b.right > W.innerWidth + 1) bad.push('off screen: ' + c.textContent.trim().slice(0, 16));
+    });
+    return bad;
+  }
+
+  T.suite('ui: v2 — 16 heroes in UI.HERO_ORDER, all available: party select and the hall roster list everyone, no lock UI', function (t) {
+    const UI = DD.UI;
+    UI.init();
+    reset();
+    t.eq(UI.HERO_ORDER.length, 16, 'sixteen heroes in the display order');
+    t.ok(NEW_HEROES.every(function (id) { return UI.HERO_ORDER.indexOf(id) >= 10; }), 'Kiri, Betty, Basanos, Valdris, Hjalmar and Pebbles join after the original ten');
+    const real = UI.HERO_ORDER.filter(function (id) { return !!DD.getHero(id); });
+    if (real.length < 16) { t.skip('real hero content not loaded (' + real.length + ' of 16)'); return; }
+    t.eq(UI.heroIds().slice(0, 16).join(','), UI.HERO_ORDER.join(','), 'UI.heroIds() follows the order');
+    t.ok(real.every(function (id) { return UI.isUnlocked(id) && !DD.getHero(id).unlock; }), 'every hero is available (unlock: null)');
+    t.tryRun('party select', function () { UI.show('partySelect', {}); });
+    const cards = qa('.ps-roster .hero-card');
+    t.eq(cards.length, 16, 'sixteen hero cards');
+    t.eq(cards.map(function (c) { return c.dataset.id; }).join(','), UI.HERO_ORDER.join(','), 'in the display order');
+    t.ok(!qa('.hero-card.locked').length && !/\?\?\?|🔒|to unlock/i.test(q('.ps-roster').textContent), 'no locked cards, "???" or unlock hints');
+    t.ok(cards.every(function (c) { const d = DD.getHero(c.dataset.id); return c.querySelector('.hc-name').textContent === d.name && c.querySelector('.hc-role').textContent.length > 3; }), 'each card shows the name and the role');
+    t.tryRun('hall roster', function () { UI.show('hall', { tab: 'heroes' }); });
+    const hh = qa('.hall-heroes .hh-card');
+    t.eq(hh.length, 16, 'the hall roster lists all sixteen');
+    t.ok(!qa('.hh-card.locked').length && !/\?\?\?|unlock/i.test(q('.hall-body').textContent), 'no lock grid, no unlock hints');
+    t.ok(hh.every(function (c) { return /Never played|campaign/.test(c.querySelector('.hh-rec').textContent); }), 'each card has a campaign record line');
+    t.tryRun('records', function () { UI.show('hall', { tab: 'records' }); });
+    t.ok(!/unlocked/i.test(q('.hall-body').textContent) && /Heroes who braved a campaign/.test(q('.hall-body').textContent), 'Records count heroes who played, not unlocks');
+    // long pick lists (the tavern's twelve recruits) get the compact four-column layout; short ones keep theirs
+    const opts = function (n) { const o = []; for (let i = 0; i < n; i++) o.push({ label: 'Hero ' + i, onPick: function () {} }); return o; };
+    UI.choice({ title: 'Twelve', options: opts(12) });
+    t.ok(modalEl().querySelector('.choice-list.many') && modalEl().querySelectorAll('.choice-option').length === 12, 'a 12-option choice uses the compact long-list layout');
+    reset();
+    UI.choice({ title: 'Three', options: opts(3) });
+    t.ok(!modalEl().querySelector('.choice-list.many'), 'a 3-option choice does not');
+    reset();
+    UI.show('title');
+  });
+
+  T.suite('ui: v2 — the hall roster shows each hero\'s record from the run history', function (t) {
+    const UI = DD.UI;
+    if (!DD.Meta || !DD.Meta.data || !DD.getHero('kiri')) { t.skip('meta or real heroes missing'); return; }
+    UI.init();
+    reset();
+    const hist = DD.Meta.data.history;
+    try {
+      DD.Meta.data.history = [
+        { result: 'victory', act: 3, party: [{ id: 'kiri', level: 6, kills: 30 }, { id: 'betty', level: 6, kills: 41, dead: false }] },
+        { result: 'defeat', act: 1, party: [{ id: 'kiri', level: 2, kills: 4 }, { id: 'pebbles', level: 2, kills: 7, dead: true }] },
+        // review: Hjalmar was written out and replaced by a recruit — only the summary's `fallen` still names him
+        { result: 'victory', act: 3, party: [{ id: 'betty', level: 7, kills: 2 }], fallen: ['hjalmar'] },
+      ];
+      UI.show('hall', { tab: 'heroes' });
+      const card = function (id) { return qa('.hh-card').filter(function (c) { return c.querySelector('.hh-name').textContent === DD.getHero(id).name; })[0]; };
+      const rec = function (id) { const c = card(id); return c ? c.querySelector('.hh-rec').textContent : ''; };
+      t.ok(/^2 campaigns · 👑 1 · 💀 34 · best Lv 6$/.test(rec('kiri')), 'Kiri: two campaigns, one win, 34 kills, best level 6: ' + rec('kiri'));
+      t.ok(/1 campaign · 💀 7 · best Lv 2 · ⚰️ 1/.test(rec('pebbles')), 'Pebbles: written out once: ' + rec('pebbles'));
+      t.ok(/Never played/.test(rec('valdris')) && card('valdris').classList.contains('fresh'), 'Valdris: never played');
+      t.eq(rec('hjalmar'), '1 campaign · ⚰️ 1', 'Hjalmar (fallen, replaced by a recruit) still has his campaign, no crown');
+      t.ok(/4 of 16 heroes have braved a campaign/.test(q('.hall-roster .narration').textContent), 'the DM counts who has played');
+      DD.Meta.data.history = [{ result: 'defeat', act: 1, party: UI.HERO_ORDER.map(function (id) { return { id: id, level: 1 }; }) }];
+      UI.show('hall', { tab: 'heroes' });
+      t.ok(/All 16 heroes have braved a campaign/.test(q('.hall-roster .narration').textContent) && !/The rest/.test(q('.hall-roster .narration').textContent), 'everyone played: no "the rest" line');
+    } finally {
+      DD.Meta.data.history = hist;
+      reset();
+      UI.show('title');
+    }
+  });
+
+  T.suite('ui: review — the Enter that skips the Blessing roll (or a quick second one) never also keeps the Blessing', async function (t) {
+    const UI = DD.UI;
+    UI.init();
+    reset();
+    const run = makeRun(t);
+    if (!run) return;
+    if (typeof DD.Run.grantRoll !== 'function') { t.skip('run layer without grantRoll'); endRun(t); return; }
+    UI.realInput(true);
+    try {
+      DD.Run.grantRoll(0, 'event');
+      let done = null;
+      const m = UI.passiveRoll(0, { animate: true, onDone: function (r) { done = r || 'none'; } });
+      t.ok(!!m && !m.el.classList.contains('landed'), 'the d100 is rolling');
+      t.ok(key('Enter').defaultPrevented && !m.el.classList.contains('landed'), 'an Enter right as the modal opens is swallowed');
+      await tick(340);
+      t.ok(key('Enter').defaultPrevented && m.el.classList.contains('landed') && !m.closed, 'Enter skips the roll: the Blessing is shown');
+      t.ok(key('Enter').defaultPrevented && !m.closed && done === null, 'a quick second Enter does not keep a Blessing nobody has read yet');
+      await tick(340);
+      key('Enter');
+      t.ok(m.closed && done && done.ok, 'a deliberate Enter after reading it keeps it (' + (done && done.action) + ')');
+    } finally {
+      UI.realInput(false);
+      endRun(t);
+    }
+  });
+
+  T.suite('ui: v2 — party select and the hall roster fit all 16 heroes at 1024×640, 1280×720, 1600×900 and 1920×1080 (real page)', async function (t) {
+    if (!DD.getHero('kiri')) { t.skip('real hero content not loaded'); return; }
+    for (let i = 0; i < SIZES.length; i++) {
+      const w = SIZES[i][0], h = SIZES[i][1];
+      const f = await gameFrame('debug=1&screen=partySelect', w, h);
+      try {
+        const W = f.contentWindow;
+        const ok = await frameUntil(function () { return W.DD && W.DD.UI && W.DD.UI.current === 'partySelect' && W.document.querySelectorAll('.hero-card').length >= 16; }, 15000);
+        t.ok(ok, w + '×' + h + ': the party select is up');
+        if (!ok) continue;
+        await tick(80);
+        const doc = W.document;
+        const cards = Array.prototype.slice.call(doc.querySelectorAll('.ps-roster .hero-card'));
+        const bad = cardProblems(W, cards, '.hc-name, .hc-role');
+        t.eq(bad.length, 0, w + '×' + h + ': 16 hero cards, nothing clipped or off screen' + (bad.length ? ' — ' + bad.slice(0, 4).join(' | ') : ''));
+        const roster = doc.querySelector('.ps-roster');
+        t.ok(roster.scrollHeight <= roster.clientHeight + 1, w + '×' + h + ': the roster needs no scrolling');
+        const start = doc.querySelector('.ps-actions .btn.primary').getBoundingClientRect();
+        t.ok(start.bottom <= h && start.right <= w, w + '×' + h + ': Start Campaign is on screen');
+        W.DD.UI.show('hall', { tab: 'heroes' });
+        await tick(80);
+        const hh = Array.prototype.slice.call(doc.querySelectorAll('.hall-heroes .hh-card'));
+        const body = doc.querySelector('.hall-body');
+        t.eq(hh.length, 16, w + '×' + h + ': the hall roster has 16 cards');
+        const bad2 = cardProblems(W, hh, '.hh-name, .hh-sub, .hh-role, .hh-rec');
+        t.eq(bad2.length, 0, w + '×' + h + ': hall cards: nothing clipped or off screen' + (bad2.length ? ' — ' + bad2.slice(0, 4).join(' | ') : ''));
+        t.ok(body && body.scrollHeight <= body.clientHeight + 2, w + '×' + h + ': all sixteen fit without scrolling (' + (body && body.scrollHeight) + ' / ' + (body && body.clientHeight) + ')');
+        // the tavern's "who joins?" pick: the twelve heroes outside the party (UI.choice, compact columns)
+        if (W.DD.Main && typeof W.DD.Main.debugRun === 'function' && W.DD.Main.debugRun()) {
+          W.DD.UI.show('tavern', { debug: true });
+          await tick(60);
+          const rb = doc.querySelector('.tav-option.k-recruit .to-actions .btn');
+          if (rb) rb.click();
+          const leave = doc.querySelector('.modal .choice-option');
+          if (leave) leave.click();
+          await tick(60);
+          const opts = Array.prototype.slice.call(doc.querySelectorAll('.modal .choice-list.many .choice-option'));
+          const mb = doc.querySelector('.modal .modal-body');
+          t.eq(opts.length, 12, w + '×' + h + ': the recruit pick lists the 12 heroes outside the party');
+          const bad3 = cardProblems(W, opts, '.ro-name, .ro-role');
+          t.eq(bad3.length, 0, w + '×' + h + ': recruit cards: nothing clipped' + (bad3.length ? ' — ' + bad3.slice(0, 4).join(' | ') : ''));
+          t.ok(mb && mb.scrollHeight <= mb.clientHeight + 2, w + '×' + h + ': the pick needs no scrolling (' + (mb && mb.scrollHeight) + ' / ' + (mb && mb.clientHeight) + ')');
+        }
+      } finally { f.remove(); }
+    }
+  });
+
+  T.suite('ui: v2 — debug screen=rewards (js/main.js) shows the level-up block; screen=levelup levels one hero; DDdbg.levelUp', async function (t) {
+    if (!DD.getHero('kiri') || !DD.Run || typeof DD.Run.grantLevelUps !== 'function') { t.skip('real heroes or the v2 run layer missing'); return; }
+    let f = await gameFrame('debug=1&screen=rewards&seed=12&party=kiri,betty,valdris,pebbles', 1280, 720);
+    try {
+      const W = f.contentWindow;
+      const ok = await frameUntil(function () { return W.DD && W.DD.UI && W.DD.UI.current === 'rewards' && W.document.querySelector('.rw-level'); }, 15000);
+      t.ok(ok, 'the debug rewards screen is up');
+      if (ok) {
+        const data = W.DD.Run.state.pending && W.DD.Run.state.pending.data;
+        t.ok(data && Array.isArray(data.levelUps) && data.levelUps.length === 1 && data.xp === undefined && data.xpByHero === undefined, 'its data has one LevelUp record and no XP fields');
+        const lv = data && data.levelUps[0];
+        const party = W.DD.Run.state.party;
+        t.ok(lv && party[lv.heroIdx].level === 2 && party.filter(function (h) { return h.level === 1; }).length === 3, 'exactly one hero leveled (the rotation)');
+        t.ok(data && data.leveled.indexOf(lv.heroIdx) >= 0, 'and the level-up flow queue has that hero');
+        const block = W.document.querySelector('.rw-level');
+        t.ok(block.style.display !== 'none' && block.textContent.indexOf(lv.name + ' levels up') >= 0, 'the level-up block names the hero: ' + block.textContent.slice(0, 90));
+        t.ok(!/\bXP\b/.test(W.document.querySelector('.screen').textContent), 'no XP anywhere');
+        t.ok(typeof W.DDdbg.levelUp === 'function' && !/xp\(n\)/.test(W.DDdbg.help.toString()), 'DDdbg.levelUp replaces the XP helper');
+        const before = party.map(function (h) { return h.level; }).join(',');
+        const p3 = party[3].level;
+        const r = W.DDdbg.levelUp(3);
+        t.ok(r && r.heroIdx === 3 && party[3].level === p3 + 1 && W.DD.UI.current === 'levelup', 'DDdbg.levelUp(3) levels Pebbles (named) and opens the flow (' + before + ' → ' + party.map(function (h) { return h.level; }).join(',') + ')');
+      }
+    } finally { f.remove(); }
+    f = await gameFrame('debug=1&screen=levelup&seed=12&party=kiri,betty,valdris,pebbles', 1280, 720);
+    try {
+      const W = f.contentWindow;
+      const ok = await frameUntil(function () { return W.DD && W.DD.UI && W.DD.UI.current === 'levelup'; }, 15000);
+      t.ok(ok, 'screen=levelup shows the level-up flow');
+      if (ok) {
+        const lv = W.DD.Run.state.party.map(function (h) { return h.level; });
+        t.eq(lv.filter(function (x) { return x === 2; }).length, 1, 'after one rotation level-up (' + lv.join(',') + ')');
+      }
+    } finally { f.remove(); }
   });
 })();

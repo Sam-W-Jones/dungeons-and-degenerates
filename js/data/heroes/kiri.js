@@ -2,8 +2,11 @@
  * Hero: KIRI, THE HALF-THERE — half-elven ranger (she/her) whose arrows, and occasionally Kiri herself, take a shortcut
  * through the ethereal plane. v2-native (initiative, no telegraphs), DESIGN §6 "Kiri" + "Simplicity".
  * Passive "Between Worlds": her skills ignore line of sight (every Kiri skill has target.los === false).
- * Arrow from Beyond puts the status kir_incoming (stacks = damage) on a foe; Kiri's passive hooks land those arrows at
- * the start of her next turn (onTurnStart) and fizzle them if she goes down first (onDowned).
+ * Arrow from Beyond puts the status kir_incoming "Foreshadowed" (stacks = damage) on a foe; Kiri's passive hooks land
+ * those arrows at the start of her next turn (onTurnStart) and fizzle them if she goes down first (onDowned).
+ * Attacks of opportunity (DESIGN §4.2): her bow is ranged, so she never makes one; walking off a melee foe provokes one
+ * like for anybody, but Ethereal Step is a teleport and Fade Out a Stealth, so both slip away (her escape tools), and
+ * Banishing Shot's push never provokes. A cosmetic passive hook barks ('provoked') when she gets hit by one.
  * Registers: hero kiri, 11 skills, status kir_incoming, surface kir_ghost_mist, 3 items (all ids kir_*).
  */
 (function () {
@@ -25,11 +28,15 @@
     DD.FX.particles(to, { kind: 'runes', color: GHOST, count: opts.count || 6, parallel: true });
   }
 
-  /** Phase Shot's line: the `len` tiles straight ahead of the user (in bounds), walls and units notwithstanding. */
+  /**
+   * Phase Shot's line: every in-bounds tile straight ahead of the user out to the skill's range (L.len, so the Longbow's
+   * +1 range or Dazzle's −1 lengthen / shorten the line and it always reaches the aimed tile), walls and units notwithstanding.
+   */
   function phaseLine(ctx) {
     const u = ctx && ctx.user, d = ctx && ctx.dir;
     if (!u || !d || (!d.x && !d.y)) return [];
-    const len = Math.max(1, Math.round(+(ctx.L && ctx.L.len) || 5));
+    const base = Math.round(+(ctx.L && ctx.L.len) || 5);
+    const len = Math.max(1, ctx.skill ? DD.Targeting.range(u, ctx.skill, ctx.level || 1)[1] : base);
     const out = [];
     for (let i = 1; i <= len; i++) {
       const x = u.x + d.x * i, y = u.y + d.y * i;
@@ -84,8 +91,9 @@
   }
 
   // ---- status & surface ------------------------------------------------------------------------------
+  // the status name reads as a state, like every status ("Goblin Grunt is Foreshadowed (22).", "+Foreshadowed 22")
   DD.registerStatus({
-    id: 'kir_incoming', name: 'Arrow from Beyond', icon: '☄️', color: GHOST, type: 'debuff', stacking: 'stack', maxStacks: 99,
+    id: 'kir_incoming', name: 'Foreshadowed', icon: '☄️', color: GHOST, type: 'debuff', stacking: 'stack', maxStacks: 99,
     decay: 'never', defaultTurns: -1,
     desc: function (st) {
       return 'An arrow is on its way from the ethereal plane: it deals ' + st.stacks + ' damage at the start of ' + shooterName(st) +
@@ -112,8 +120,9 @@
       c.beginPath(); c.arc(x, y, r, 0, 6.283); c.fill();
     }
   }
+  // a cloud, not a floor surface (airborne: it hangs over pits and lava too; flyers are inside it like everyone else)
   DD.registerSurface({
-    id: 'kir_ghost_mist', name: 'Ghost Mist', color: 'rgba(170,155,255,0.38)', turns: 2, blocksLos: true,
+    id: 'kir_ghost_mist', name: 'Ghost Mist', color: 'rgba(170,155,255,0.38)', turns: 2, blocksLos: true, airborne: true,
     desc: 'Mist from the other side: blocks line of sight. Kiri\'s skills ignore it (she has seen through worse).',
     drawVolume: mistVolume,
   });
@@ -126,11 +135,66 @@
     wood: '#7a5838', grip: '#3b281d',
   };
   /**
-   * In front: half-elf ear tips poking out through the hood (the painter hides 'pointy' ears under a hood) and a quiver
-   * of ghost-lit arrows slung over the cloak, fletchings out behind her back shoulder.
+   * Dark hair the painter leaves out under a hood: side-swept bangs inside the hood's face opening (the ellipse drawn by
+   * sprites.js drawHat 'hood': centre head + (0.16 r, 0.2 r), radii 0.8 r × 0.86 r) and two long locks spilling out of it.
+   */
+  function kirHair(g, H, t, part) {
+    const c = g.ctx, r = H.r, col = g.pal.hair, ink = Math.max(0.6, r * 0.07);
+    const P = function (dx, dy) { return [H.x + dx * r, H.y + dy * r]; };
+    const ox = H.x + r * 0.16, oy = H.y + r * 0.2;
+    if (part === 'locks') {
+      const sway = Math.sin(t * 1.4) * r * 0.03;
+      [[-0.5, -0.62, 1.62], [0.86, 0.98, 1.55]].forEach(function (L) {
+        const top = P(L[0], 0.35), tip = P(L[1], L[2]), w = r * 0.13, my = (top[1] + tip[1]) / 2;
+        g.path(function (p) {
+          p.moveTo(top[0] - w, top[1]);
+          p.quadraticCurveTo(top[0] - w * 1.2 + sway, my, tip[0] + sway, tip[1]);
+          p.quadraticCurveTo(top[0] + w * 1.1 + sway, my, top[0] + w, top[1]);
+          p.closePath();
+        }, col, g.outline, ink);
+      });
+      return;
+    }
+    c.save();
+    c.beginPath(); c.ellipse(ox, oy, r * 0.8, r * 0.86, 0, 0, Math.PI * 2); c.clip();
+    g.path(function (p) {
+      const pts = [P(-1.1, -1.1), P(1.2, -1.1), P(1.2, 0.75), P(0.86, 0.75)];
+      p.moveTo(pts[0][0], pts[0][1]);
+      for (let i = 1; i < pts.length; i++) p.lineTo(pts[i][0], pts[i][1]);
+      const a = P(0.8, 0.1), b = P(0.74, -0.16);
+      p.quadraticCurveTo(a[0], a[1], b[0], b[1]);
+      [P(0.52, -0.08), P(0.36, -0.3), P(0.18, -0.06), P(-0.02, -0.34), P(-0.2, -0.13), P(-0.36, -0.3)].forEach(function (q) { p.lineTo(q[0], q[1]); });
+      const d = P(-0.47, 0.1), e = P(-0.44, 0.75), f = P(-1.1, 0.75);
+      p.quadraticCurveTo(d[0], d[1], e[0], e[1]);
+      p.lineTo(f[0], f[1]);
+      p.closePath();
+    }, col, g.outline, ink);
+    g.arc(H.x + r * 0.12, H.y + r * 0.05, r * 0.55, Math.PI * 1.22, Math.PI * 1.5, g.rgba(g.shade(col, 0.7), 0.75), ink);
+    c.beginPath(); c.ellipse(ox, oy, r * 0.8, r * 0.86, 0, Math.PI * 1.08, Math.PI * 1.92);
+    c.strokeStyle = 'rgba(0,0,0,0.3)'; c.lineWidth = r * 0.2; c.stroke();
+    c.restore();
+  }
+  /**
+   * In front: her hair (above), a deadpan mouth, a thin quiver strap and belt (the painter's belt / bandolier are mostly
+   * outline on a slim torso), half-elf ear tips poking out through the hood (the painter hides 'pointy' ears under a hood)
+   * and a quiver of ghost-lit arrows slung over the cloak, fletchings out behind her back shoulder.
    */
   function kirOverlay(g, t, o) {
-    if (!g || (o && o.lying >= 0.5)) return;
+    if (!g) return;
+    const lying = !!(o && o.lying >= 0.5);
+    if (g.head) kirHair(g, g.head, t, 'bangs');
+    if (lying) return;
+    if (g.head && g.pose !== 'hurt') {
+      const H = g.head, mx = H.x + H.r * 0.29, my = H.y + H.r * 0.5;
+      g.line(mx - H.r * 0.13, my + H.r * 0.01, mx + H.r * 0.1, my - H.r * 0.035, g.outline, Math.max(0.7, H.r * 0.085));
+    }
+    // slim build (sprites.js BUILDS.slim): shoulders 0.8 r below the head centre, hips 12 below the shoulders
+    const shY = g.head ? g.head.y + g.head.r * 0.8 : -19.5, hipY = shY + 12;
+    g.line(-4.9, hipY - 1.5, 4.9, hipY - 1.5, g.outline, 2.1);
+    g.line(-4.9, hipY - 1.5, 4.9, hipY - 1.5, g.pal.belt, 1.1);
+    g.poly([[0.7, hipY - 2.5], [2.6, hipY - 2.5], [2.6, hipY - 0.5], [0.7, hipY - 0.5]], g.pal.metal, g.outline, 0.5);
+    g.line(-4.6, shY + 3.7, 4.9, hipY - 1.9, g.outline, 2.4);
+    g.line(-4.6, shY + 3.7, 4.9, hipY - 1.9, '#6b4a30', 1.3);
     const flick = 0.5 + 0.15 * Math.sin(t * 3.1);
     g.glow(-17, -25.5, 7, GHOST, flick);
     g.limb(-8.5, -8, -13.2, -20.5, 3.6, '#6b4a30');
@@ -150,6 +214,7 @@
       g.poly([b0, tip, b1], skin, g.outline, 1.1);
       g.line(H.x + s * r * 1.16, H.y - r * 0.02, H.x + s * r * 1.45, H.y - r * 0.38, g.shade(skin, -0.22), 0.9);
     }
+    kirHair(g, H, t, 'locks');
   }
   /** Ectoplasm at her heels: she is never entirely in one plane. */
   function kirUnderlay(g, t) {
@@ -165,7 +230,7 @@
     base: 'humanoid', scale: 1, palette: KIR_PAL, build: 'slim', outfit: 'tunic',
     head: { size: 1, ears: 'pointy', horns: 'none', hair: 'long', beard: 'none', hat: 'hood', face: 'none', eyes: 'normal', mouth: 'none', blush: false },
     wings: 'none', tail: 'none', mainhand: 'bow', offhand: 'none',
-    bling: [], extras: ['cape', 'belt', 'bandolier'],
+    bling: [], extras: ['cape'],
     aura: { kind: 'glow', color: GHOST },
     overlay: kirOverlay,
     underlay: kirUnderlay,
@@ -190,11 +255,12 @@
     },
   });
 
-  // Phase Shot (starter): every foe in a straight line, walls and units don't stop it
+  // Phase Shot (starter): every foe in a straight line, walls and units don't stop it. 1 AP and a point under Ghost
+  // Arrow: worse on one foe, the pick once two line up (at 2 AP it only beat two plain arrows at three foes)
   skill({
     id: 'kir_phase', name: 'Phase Shot', icon: '👻', kind: 'attack', tags: ['ranged', 'arrow', 'aoe', 'pierce'],
-    ap: 2, cooldown: 1,
-    levels: [{ dmg: 5, len: 5 }, { dmg: 6, len: 5 }, { dmg: 8, len: 5 }],
+    ap: 1, cooldown: 1,
+    levels: [{ dmg: 4, len: 5 }, { dmg: 5, len: 5 }, { dmg: 6, len: 5 }],
     target: { type: 'tile', range: function (L) { return [1, L.len]; }, los: false, filter: 'any', straight: true },
     area: { shape: 'custom', fn: phaseLine },
     desc: function (L) { return 'Deal ' + L.dmg + ' damage to every foe in a straight line of ' + L.len + ' tiles, through walls and units.'; },
@@ -222,7 +288,7 @@
     desc: function (L) {
       return 'Teleport to an empty tile up to ' + L.len + ' tiles away in a straight line, through walls and units.';
     },
-    flavor: 'Excuse me. Pardon me. Coming through. Through the wall. Through you. Sorry.',
+    flavor: 'Excuse me. Coming through. Through the wall. Through you. No, you don\'t get a free swing.',
     execute: function (ctx) {
       const u = ctx.user, p = ctx.target;
       if (!active(u) || !p) return;
@@ -310,18 +376,20 @@
     },
   });
 
-  // Arrow from Beyond: the big one; it lands at the start of her next turn, wherever the target is
+  // Arrow from Beyond: the big one; it lands at the start of her next turn, wherever the target is. Its number is
+  // L.arrow, not L.dmg: AutoPlay / AI estimates read L.dmg as damage dealt now, and nothing lands now (aiScore values it).
   skill({
     id: 'kir_beyond', name: 'Arrow from Beyond', icon: '☄️', kind: 'attack', tags: ['ranged', 'arrow', 'delayed'],
     ap: 3, cooldown: 2,
-    levels: [{ dmg: 18 }, { dmg: 22 }, { dmg: 26 }],
-    target: { type: 'unit', range: [1, 7], los: false, filter: 'enemy' },
-    desc: function (L) { return 'Pick a foe within 7: at the start of Kiri\'s next turn it takes ' + L.dmg + ' damage, wherever it is.'; },
+    levels: [{ arrow: 18 }, { arrow: 22 }, { arrow: 26 }],
+    // objects: false — its arrow lands on her next turn; a barrel is a job for Ghost Arrow
+    target: { type: 'unit', range: [1, 7], los: false, filter: 'enemy', objects: false },
+    desc: function (L) { return 'A foe within 7 takes ' + L.arrow + ' damage at the start of Kiri\'s next turn, wherever it is.'; },
     flavor: 'She fired it yesterday, spiritually. It has been on its way the whole time.',
     aiScore: function (ctx) {
       const t = ctx.targetUnit, L = ctx.L || {};
       if (!active(t) || has(t, 'kir_incoming')) return 0;
-      return Math.min(L.dmg || 0, (t.hp || 0) + (t.block || 0)) * 0.9;
+      return Math.min(L.arrow || 0, (t.hp || 0) + (t.block || 0)) * 0.9;
     },
     execute: function (ctx) {
       const u = ctx.user, t = ctx.targetUnit;
@@ -329,7 +397,7 @@
       DD.FX.projectile(u, { x: u.x - 1, y: u.y - 1, h: 9 }, { kind: 'arrow', color: GHOST, trail: true, arc: 0 });
       DD.FX.particles(u, { kind: 'runes', color: GHOST, count: 10, parallel: true });
       DD.FX.text(t, '☄️ Something is coming…', { color: GHOST, size: 14 });
-      DD.Act.addStatus(t, 'kir_incoming', { stacks: ctx.L.dmg }, u);
+      DD.Act.addStatus(t, 'kir_incoming', { stacks: ctx.L.arrow }, u);
     },
   });
 
@@ -359,9 +427,10 @@
     levels: [{ r: 1, turns: 2 }, { r: 1, turns: 3 }, { r: 2, turns: 3 }],
     target: { type: 'tile', range: [0, 5], los: false, filter: 'any' },
     area: { shape: 'circle', size: function (L) { return L.r; } },
+    // one breath: the surface skip is said, Kiri seeing through it is her passive (and the flavor)
     desc: function (L) {
-      return 'Ghost mist fills radius ' + L.r + ' around a tile within 5 for ' + L.turns + ' rounds (not over other surfaces). ' +
-        'It blocks line of sight, except Kiri\'s.';
+      return 'Ghost mist blocks line of sight around a tile within 5 (radius ' + L.r + ', for ' + L.turns +
+        ' rounds, not over other surfaces).';
     },
     flavor: 'Enemies cannot see through it. Kiri never needed to.',
     execute: function (ctx) {
@@ -443,18 +512,23 @@
     signature: 'kir_signature',
     passive: {
       name: 'Between Worlds',
-      desc: 'Kiri\'s skills ignore line of sight: walls, pillars, trees and smoke don\'t stop her. She aims through the ethereal plane.',
-      // the rule itself is data (every Kiri skill has target.los === false); these hooks deliver Arrow from Beyond
+      desc: 'Kiri\'s own skills ignore line of sight: walls, pillars, trees and smoke don\'t stop her. She aims through the ethereal plane.',
+      // the rule itself is data (every Kiri skill has target.los === false; a generic skill from a tome keeps its own
+      // rule, hence "own"); these hooks deliver Arrow from Beyond (+ one cosmetic bark)
       hooks: {
         onTurnStart: function (unit) { landArrows(unit); },
         onDowned: function (unit) { fizzleArrows(unit); },
+        // cosmetic: she walked off a foe like a mortal and paid for it (fired on the mover's own sources)
+        onOpportunityAttack: function (o) {
+          if (o && o.mover && o.mover.defId === HERO && o.dealt > 0 && active(o.mover)) DD.Act.maybeBark(o.mover, 'provoked', 0.5);
+        },
       },
     },
     startingSkills: ['kir_phase', 'kir_step'],
     skillPool: ['kir_phase', 'kir_step', 'kir_mark', 'kir_pin', 'kir_banish', 'kir_volley', 'kir_beyond', 'kir_fade', 'kir_mist'],
     summons: [],
     barks: {
-      select: ['Kiri. Half-elf. Yes, both halves came.', 'I\'m the elf one. And the human one. Moving on.', 'Point me at it. Walls optional.',
+      select: ['Kiri. Half-elf. Yes, both halves came.', 'I\'m the elf one. And the human one. Moving on.', 'Name a target. Walls optional.',
         'I\'ll be over there. Or through there.', 'Ranger reporting. Don\'t ask which half.'],
       start: ['They brought cover. Adorable.', 'Nobody move. I\'m aiming through the wall.', 'Stay out of my line. Or don\'t. It goes through you.',
         'Roll for initiative. I already know mine.', 'Someone explain the plan to Marwyn. Slowly.'],
@@ -468,9 +542,9 @@
         'See you on the other side. I mean that literally.'],
       revive: ['Back. The other side was boring.', 'Apparently I looked very peaceful.', 'Both halves present. Let\'s go.',
         'Thanks. Don\'t make it weird.'],
-      ally_down: ['Hero down! Elf, human or toast: get up!', 'Hold on. I\'ll cover you through the wall.', 'Someone get them up. I\'ll make room.',
-        'They\'ll pay for that. From very far away.'],
-      levelup: ['Better aim. Same attitude.', 'Leveled up. Still not answering the elf question.', 'New trick: being even harder to find.',
+      ally_down: ['Hero down! Elf, human or toast: get up!', 'Hold on. I\'ll cover you through the wall.',
+        'Stay out of the light. I know the people there.', 'They\'ll pay for that. From very far away.'],
+      levelup: ['Better aim. Same attitude.', 'Stronger now. Still not answering the elf question.', 'New trick: being even harder to find.',
         'Growth. Gross. Fine.'],
       victory: ['Done. Who\'s buying?', 'Clean. Quiet. Professional. Unlike Marwyn.', 'Collect your arrows. Oh right, mine are in another plane.',
         'Nobody even saw me. As intended.', 'Walls: 0. Me: all of it.'],
@@ -479,6 +553,9 @@
         'I can hear the ghosts. They\'re bored too.'],
       signature: ['Rain from the Other Side!', 'Duck. Not that it\'ll help.', 'The other side sends its regards!',
         'Every arrow I ever lost. Returning now.', 'Look up. Then look nowhere.'],
+      // extra key (passive hook): an attack of opportunity hit her as she walked off a foe
+      provoked: ['Walked off like a mortal. Never again.', 'Should have stepped through. Noted.', 'That is what I get for using legs.',
+        'Next time I leave through the wall.', 'Free swing, huh? Enjoy it. It was your last.'],
     },
   });
 

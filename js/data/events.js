@@ -1,21 +1,27 @@
 /* Dungeons and Degenerates — js/data/events.js
- * Narrative events (ARCHITECTURE §3.9 / §9.5, DESIGN §11). Ids: 'ev_*'.
- *  - one event per hero, two for Slate and Mayor Buga (offered only while that hero is alive in the party; they
- *    reward that hero)
+ * Narrative events (ARCHITECTURE §3.9 / §9.5, DESIGN §3 / §11). Ids: 'ev_*'.
+ *  - hero events: one per hero, two for Slate and Mayor Buga (offered only while that hero is alive in the party;
+ *    they reward that hero)
  *  - generic events spread over the three acts
- * Every choice resolves through the run's event API. Hints are the exact mechanics; outcome text is built from
- * what actually happened (item / skill / scar names, gold amounts). Helpers degrade gracefully when a registry
- * is empty (no items / consumables / Blessings yet) or a hero event is opened without its hero (debug).
+ * v2: there is no XP. "Experience" is a level-up through the event API: one hero drawn by the DM's rotation (random
+ * among the lowest-level heroes, api.levelUp()) or, rarely and only in that hero's own event, a named hero
+ * (api.levelUp(idx)). Hints are the exact mechanics; outcome text is built from what actually happened (level-ups,
+ * item / skill / scar names, gold amounts). Generic outcomes name heroes instead of using pronouns; hero events use
+ * the hero's own (DESIGN §6). Helpers degrade gracefully when a registry is empty, a hero has nothing left to gain or a
+ * hero event is opened without its hero (debug).
  */
 (function () {
   'use strict';
   const DD = window.DD;
 
-  const POCKET_GOLD = 15;   // a consumable that does not fit in the party's pockets is sold for this much
-  const CONSOLATION_XP = 15; // when a hero has nothing left to learn / upgrade / roll
-  const HERO_WEIGHT = 2;     // hero events turn up a little more often while their hero is around
+  const POCKET_GOLD = 15;       // a consumable that does not fit in the party's pockets is sold for this much
+  const CONSOLATION_GOLD = 30;  // nothing left to learn / upgrade / roll, or nobody left to level up
+  const HERO_WEIGHT = 2;        // hero events turn up a little more often while their hero is around
   const DEBT_SCAR = 'scar_owes_the_dm';   // Corelos' fine print (a random scar if he already owes)
+  const EGO_SCAR = 'scar_bruised_ego';    // Valdris' haircut (a random scar if he already has it)
+  const SLOTS = ['weapon', 'armor', 'trinket'];
   const POCKETS = ' (' + POCKET_GOLD + ' gold each if your pockets are full)';
+  const ROTATION = 'One hero levels up (the DM rolls among the lowest-level heroes).';
 
   // ---- helpers (runtime only) ------------------------------------------------------------------------------
   function values(o) { return Object.keys(o || {}).map(function (k) { return o[k]; }); }
@@ -66,9 +72,21 @@
     return out;
   }
 
-  /** XP for one hero (the event API's xp() is party-wide). */
-  function heroXp(api, idx, n) {
-    if (idx >= 0 && DD.Run && typeof DD.Run.grantHeroXp === 'function') DD.Run.grantHeroXp(idx, n);
+  /** The DM's die for a rotation level-up ("The DM rolls a d3 for it: 2! "); '' for a named one or a lone candidate. */
+  function dmDie(lv) {
+    if (!lv || !lv.rotation || !(lv.die > 1)) return '';
+    if (lv.die === 2) return 'The DM flips a coin for it: ' + (lv.face === 1 ? 'heads' : 'tails') + '! ';
+    return 'The DM rolls a d' + lv.die + ' for it: ' + lv.face + '! ';
+  }
+  /** One level-up: hero idx (a named level-up) or, idx omitted, the DM's rotation (random among the lowest-level
+   *  living heroes). Nobody to level (that hero, or everyone, at the max level): CONSOLATION_GOLD. Returns a phrase. */
+  function levelUp(api, idx) {
+    const named = idx !== undefined;
+    const lv = named ? (idx >= 0 ? api.levelUp(idx) : null) : api.levelUp();
+    if (lv) return dmDie(lv) + lv.name + ' levels up to level ' + lv.to + '.';
+    const g = api.gold(CONSOLATION_GOLD);
+    return (named && idx >= 0 ? api.heroName(idx) + ' is' : 'Everyone is') + ' already at the max level, so the DM slides over ' +
+      g + ' gold instead.';
   }
 
   /** A random item of `rarity` for the party (api.giveItem: auto-equipped on a free slot, cursed ones go to the
@@ -80,8 +98,9 @@
     return 'a trinket you sell on the spot for ' + (api.gold() - before) + ' gold';
   }
 
-  /** A `rarity` item for hero idx: one of their own (hero-specific) items the party does not own yet, else any
-   *  item of that rarity they can use; equipped on them when that slot is free. Returns a phrase. */
+  /** A `rarity` item for hero idx: one of the hero's own (hero-specific) items the party does not own yet, else any
+   *  item of that rarity the hero can use; equipped on the hero when that slot is free (api.giveItem heroIdx).
+   *  Returns a phrase that says who ended up wearing it. */
   function heroItem(api, idx, rarity) {
     const rh = api.hero(idx);
     const run = DD.Run && DD.Run.state;
@@ -93,8 +112,12 @@
       });
       id = own.length ? api.rng.pick(own).id : DD.Rewards.randomItem({ rarity: rarity, hero: rh.id, act: api.act, run: run }, api.rng);
     }
-    if (!id || !DD.Run.addItem(id)) return partyItem(api, rarity);
-    const eq = DD.Run.autoEquip(id, idx);
+    if (!id) return partyItem(api, rarity);
+    const before = (api.party || []).map(function (h) { return h && h.items ? Object.assign({}, h.items) : {}; });
+    api.giveItem({ id: id, heroIdx: idx });
+    const eq = (api.party || []).findIndex(function (h, i) {
+      return !!h && !!h.items && SLOTS.some(function (sl) { return h.items[sl] === id && before[i][sl] !== id; });
+    });
     return itemName(id) + (eq === idx ? '' : eq >= 0 ? ' (' + api.heroName(eq) + ' wears it)' : ' (into the bag)');
   }
 
@@ -119,17 +142,17 @@
     return s ? s.level : 1;
   }
 
-  /** Hero idx upgrades a random socketed skill; with everything maxed, CONSOLATION_XP. Returns a phrase. */
+  /** Hero idx upgrades a random socketed skill; with everything maxed, CONSOLATION_GOLD. Returns a phrase. */
   function upgradeFor(api, idx) {
     const name = api.heroName(idx);
     const id = api.upgradeSkill(idx);
     if (id) return name + '\'s ' + skillName(id) + ' is now ' + DD.util.roman(skillLevel(api, idx, id)) + '.';
-    heroXp(api, idx, CONSOLATION_XP);
-    return name + ' has nothing left to upgrade, so they take ' + CONSOLATION_XP + ' XP instead.';
+    const g = api.gold(CONSOLATION_GOLD);
+    return name + ' has nothing left to upgrade, so the DM pays ' + g + ' gold instead.';
   }
 
   /** Hero idx learns a new skill (own pool first; with 4 socketed it waits for the forget-or-skip prompt). With
-   *  nothing left to learn they upgrade one instead. Returns a phrase. */
+   *  nothing left to learn, an upgrade instead. Returns a phrase. */
   function learnFor(api, idx) {
     const name = api.heroName(idx);
     const pool = DD.Run && typeof DD.Run.learnableSkills === 'function' ? DD.Run.learnableSkills(idx) : [];
@@ -140,8 +163,8 @@
     return name + ' can learn ' + skillName(id) + ' (forget a skill for it, or skip it, after this).';
   }
 
-  /** A roll on the Table of Questionable Blessings for hero idx (opts.noCursed). CONSOLATION_XP when the table
-   *  has nothing for them. Returns a phrase. */
+  /** A roll on the Table of Questionable Blessings for hero idx (opts.noCursed). CONSOLATION_GOLD when the table
+   *  has nothing for the hero. Returns a phrase. */
   function bless(api, idx, opts) {
     const name = api.heroName(idx);
     const r = api.rollPassive(idx, opts);
@@ -149,14 +172,14 @@
       const done = (r.results || []).map(function (x) { return x && x.text; }).filter(Boolean);
       return done.length ? done.join(' ') : name + ' rolls on the Table of Questionable Blessings next.';
     }
-    heroXp(api, idx, CONSOLATION_XP);
-    return 'The Table of Questionable Blessings has nothing for ' + name + ' today, so they take ' + CONSOLATION_XP + ' XP instead.';
+    const g = api.gold(CONSOLATION_GOLD);
+    return 'The Table of Questionable Blessings has nothing for ' + name + ' today, so the DM tosses over ' + g + ' gold instead.';
   }
 
-  /** A scar for hero idx: scarId when given (the public DD.Run.addScar; api.addScar only rolls a random one), else
-   *  or when they already have it a random one. Returns a phrase. */
+  /** A scar for hero idx: scarId when given (a random one if the hero already has it), else a random one. Returns a
+   *  phrase. */
   function scarFor(api, idx, scarId) {
-    let id = scarId && idx >= 0 && DD.getScar(scarId) && DD.Run && typeof DD.Run.addScar === 'function' ? DD.Run.addScar(idx, scarId) : null;
+    let id = scarId && idx >= 0 && DD.getScar(scarId) ? api.addScar(idx, scarId) : null;
     if (!id) id = api.addScar(idx);
     return id ? stop(api.heroName(idx) + ' gains ' + scarName(id)) : api.heroName(idx) + ' already has every scar in the book. Impressive.';
   }
@@ -189,8 +212,8 @@
           }
           if (d === 1) {
             api.damage(5);
-            return 'Natural 1. The die bounces off the goblin, the ceiling and every member of the party, in that order. Everyone ' +
-              'loses 5 HP, and the goblin keeps your 25 gold.';
+            return 'Natural 1. The die bounces off the goblin, the ceiling and every member of the party, in that order. It ' +
+              'stings, and the goblin keeps your 25 gold.';
           }
           return 'You roll a ' + d + '. The goblin rolls a 19 without looking. He keeps your 25 gold and hands you a pamphlet ' +
             'about problem gambling.';
@@ -211,10 +234,11 @@
       },
       {
         label: 'Decline. Gambling is for nerds.',
-        hint: 'Every hero gains 6 XP.',
+        hint: 'Every hero heals 15% of their max HP.',
         resolve: function (api) {
-          api.xp(6);
-          return 'You walk away. The goblin calls you nerds, which is fair. Everyone gains 6 XP from the free lesson in probability.';
+          api.heal(0.15);
+          return 'You walk away and spend the time you saved on a snack and a good stretch. The goblin calls you nerds, which is ' +
+            'fair. Everyone feels slightly better about their life choices.';
         },
       },
     ],
@@ -229,18 +253,18 @@
     choices: [
       {
         label: 'Take a very long rest.',
-        hint: 'Every hero heals 40% of their max HP.',
+        hint: 'Every hero heals 50% of their max HP.',
         resolve: function (api) {
-          api.heal(0.4);
+          api.heal(0.5);
           return 'The party sleeps for six days straight. Nobody can tell where the drool ends and the dungeon begins. ' +
             'Everyone feels much better.';
         },
       },
       {
         label: 'Get a part-time job.',
-        hint: 'Gain 45 gold. Every hero loses 10% of their max HP (bar fights).',
+        hint: 'Gain 50 gold. Every hero loses 10% of their max HP (bar fights).',
         resolve: function (api) {
-          const g = api.gold(45);
+          const g = api.gold(50);
           api.damage(0.1);
           return 'You pick up shifts at a goblin tavern. The tips are good and the bar fights are better. The party comes back ' +
             g + ' gold richer and slightly concussed.';
@@ -248,11 +272,10 @@
       },
       {
         label: 'Homebrew a side quest.',
-        hint: 'Every hero gains 12 XP. 30%: it gets out of hand: fight a normal battle.',
+        hint: ROTATION + ' 30%: it gets out of hand: fight a normal battle.',
         resolve: function (api, run) {
-          api.xp(12);
-          const base = 'You write your own adventure while the DM is away. It is ambitious, moving and full of plot holes. ' +
-            'Everyone gains 12 XP.';
+          const base = 'You write your own adventure while the DM is away. It is ambitious, moving and full of plot holes, and ' +
+            'somebody grows as a person. ' + levelUp(api);
           if (api.rng.chance(0.3)) {
             return { text: base + ' Unfortunately, it also includes a homebrewed monster, and you homebrewed it to be ' +
               'extremely angry.', combat: fight(api, run, 'normal') };
@@ -312,10 +335,9 @@
     choices: [
       {
         label: 'I check for traps.',
-        hint: 'Every hero gains 8 XP. Gain 15 gold.',
+        hint: 'Gain 25 gold.',
         resolve: function (api) {
-          api.xp(8);
-          const g = api.gold(15);
+          const g = api.gold(25);
           return 'You check for traps. You check again. You check the coin, the sign and each other. Forty minutes later you ' +
             'have disarmed eleven traps and collected ' + g + ' gold. The DM looks betrayed.';
         },
@@ -342,8 +364,8 @@
           aliveIdx(api).forEach(function (i) { if (best < 0 || api.party[i].hp > api.party[best].hp) best = i; });
           if (best >= 0) api.damage(0.25, best);
           const g = api.gold(35);
-          return (best >= 0 ? api.heroName(best) : 'Somebody') + ' volunteers, mostly because everyone else took a step back. ' +
-            'They set off every single trap, personally, then hand over ' + g + ' gold. Nobody makes eye contact.';
+          return (best >= 0 ? api.heroName(best) : 'Somebody') + ' volunteers, mostly because everyone else took a step back, ' +
+            'then sets off every single trap in the hallway, personally, and hands over ' + g + ' gold. Nobody makes eye contact.';
         },
       },
     ],
@@ -358,11 +380,12 @@
     choices: [
       {
         label: 'Share your feelings.',
-        hint: 'Every hero gains 12 XP.',
+        hint: ROTATION + ' The group hug costs every hero 10% of their max HP.',
         resolve: function (api) {
-          api.xp(12);
+          api.damage(0.1);
+          const lv = levelUp(api);   // last: the HP loss is 10% of the max HP shown when you chose
           return 'The party opens up about childhoods, trust issues and that time the bard flirted with a dragon. Two mimics ' +
-            'cry. Kevin hugs a chair. Everyone grows a little, and gains 12 XP.';
+            'cry. ' + lv + ' Then everyone hugs it out, and mimics hug with their teeth.';
         },
       },
       {
@@ -417,7 +440,7 @@
           if (api.rng.chance(0.4)) {
             const h = anyone(api);
             const g = api.gold(110);
-            return h.name + ' sells eleven bottles to a skeleton, who sells them to his entire graveyard. You cash out at the ' +
+            return h.name + ' sells eleven bottles to a skeleton, who sells them to the entire graveyard. You cash out at the ' +
               'top with ' + g + ' gold and never speak of it again.';
           }
           return 'Your upline vanishes overnight with everybody\'s money. The goblin is very sorry. He would like to tell you ' +
@@ -426,10 +449,9 @@
       },
       {
         label: 'Recruit HIM into YOUR scheme.',
-        hint: 'Gain 20 gold. Every hero gains 5 XP.',
+        hint: 'Gain 30 gold.',
         resolve: function (api) {
-          const g = api.gold(20);
-          api.xp(5);
+          const g = api.gold(30);
           return 'You pitch him your own business: Adventuring. Terrible hours, no benefits, frequent stabbing. He buys in for ' +
             g + ' gold and quits immediately. Everyone learns something about sales.';
         },
@@ -472,15 +494,15 @@
       },
       {
         label: 'Help Dale move on.',
-        hint: 'Every hero gains 10 XP. A random scarred hero loses their latest scar.',
+        hint: 'A random scarred hero loses their latest scar. If nobody has a scar, gain 25 gold instead.',
         resolve: function (api) {
-          api.xp(10);
           const idx = aliveIdx(api).filter(function (i) { return api.party[i].scars.length > 0; });
           const who = idx.length ? api.rng.pick(idx) : -1;
           const gone = who >= 0 ? api.removeScar(who) : null;
-          return 'You listen to Dale\'s unfinished business, a very long story about a library fine. He thanks you, glows and ' +
-            'passes on. ' + (gone ? 'As he fades, he takes ' + api.heroName(who) + '\'s ' + scarName(gone) + ' with him as a souvenir.'
-              : 'Nobody had a scar for him to take, so he leaves a polite note instead.');
+          const story = 'You listen to Dale\'s unfinished business, a very long story about a library fine. He thanks you, glows ' +
+            'and passes on. ';
+          if (gone) return story + 'As Dale fades, he takes ' + api.heroName(who) + '\'s ' + scarName(gone) + ' along as a souvenir.';
+          return story + 'Nobody had a scar for him to take, so he leaves a polite note and ' + api.gold(25) + ' gold of ghost money instead.';
         },
       },
     ],
@@ -578,12 +600,12 @@
     choices: [
       {
         label: 'Take the unpaid internship.',
-        hint: 'Every hero gains 20 XP and loses 15% of their max HP.',
+        hint: ROTATION + ' Every hero loses 15% of their max HP.',
         resolve: function (api) {
-          api.xp(20);
           api.damage(0.15);
+          const lv = levelUp(api);
           return 'You spend a week fetching coffee, coffins and coffee for the coffins. Your supervisor is a lich who never ' +
-            'learns your names. You learn so much (20 XP each). You hurt everywhere.';
+            'learns your names. ' + lv + ' Everybody hurts everywhere.';
         },
       },
       {
@@ -624,19 +646,19 @@
         hint: 'A random hero learns a new skill (or upgrades one if there is nothing to learn).',
         resolve: function (api) {
           const h = anyone(api);
-          return h.name + ' reads it cover to cover. Chapter 9 is mostly doodles, but Chapter 10 changes their life. ' + learnFor(api, h.idx);
+          return h.name + ' reads it cover to cover. Chapter 9 is mostly doodles, but Chapter 10 is life-changing. ' + learnFor(api, h.idx);
         },
       },
       {
         label: 'Return it and pay the fine.',
-        hint: 'Pay 40 gold. Every hero gains 15 XP and heals 20% of their max HP.',
+        hint: 'Pay 40 gold. ' + ROTATION + ' Every hero heals 20% of their max HP.',
         requires: canPay(40),
         resolve: function (api) {
           api.gold(-40);
-          api.xp(15);
           api.heal(0.2);
+          const lv = levelUp(api);   // last: the level-up's Blessing roll can't scale this choice's own heal
           return 'You drop it into a return slot shaped like a screaming mouth. A receipt prints: FINE PAID. KARMA RESTORED. ' +
-            'You feel lighter. Mostly in the purse.';
+            lv + ' Everyone feels lighter. Mostly in the purse.';
         },
       },
       {
@@ -685,11 +707,11 @@
       },
       {
         label: 'Teach the cubs to hunt.',
-        hint: 'Every hero gains 10 XP. Fight a normal battle.',
+        hint: 'Gain 30 gold. Fight a normal battle.',
         resolve: function (api, run) {
-          api.xp(10);
+          const g = api.gold(30);
           return { text: 'Field trip! The cubs watch from a safe distance while you demonstrate proper hunting technique on ' +
-            'the nearest monsters. Moss takes notes. Everyone gains 10 XP for the teaching certificate.', combat: fight(api, run, 'normal') };
+            'the nearest monsters. Moss pays ' + g + ' gold for the lesson, up front, in case it goes badly.', combat: fight(api, run, 'normal') };
         },
       },
     ],
@@ -794,12 +816,12 @@
     choices: [
       {
         label: 'Wait in line.',
-        hint: 'Every hero gains 25 XP and loses 20% of their max HP.',
+        hint: ROTATION + ' Every hero loses 20% of their max HP.',
         resolve: function (api) {
-          api.xp(25);
           api.damage(0.2);
-          return 'You wait. And wait. You age. You grow as people. When your number is finally called, the demon tells you ' +
-            'that you are in the wrong line.';
+          const lv = levelUp(api);
+          return 'You wait. And wait. You age. Somebody grows as a person. ' + lv + ' When your number is finally called, ' +
+            'the demon tells you that you are in the wrong line.';
         },
       },
       {
@@ -875,15 +897,15 @@
     choices: [
       {
         label: 'Read his notes.',
-        hint: 'Every hero gains 20 XP. 50%: he catches you: fight an elite battle.',
+        hint: ROTATION + ' 50%: he catches you: fight an elite battle.',
         resolve: function (api, run) {
-          api.xp(20);
+          const lv = levelUp(api);
           if (api.rng.chance(0.5)) {
-            return { text: 'You are halfway through a boss stat block when the DM comes back. He looks at you. He looks at the ' +
-              'notes. He quietly adds an encounter.', combat: fight(api, run, 'elite') };
+            return { text: 'You learn a lot from the boss stat block before the DM comes back. ' + lv + ' Then he looks at you, ' +
+              'looks at his notes and quietly adds an encounter.', combat: fight(api, run, 'elite') };
           }
           return 'You read everything: the boss\'s weak points, three secret doors and a fan-fic he is writing about your party. ' +
-            'You put it all back exactly where it was.';
+            lv + ' You put it all back exactly where it was.';
         },
       },
       {
@@ -910,7 +932,8 @@
   });
 
   // ======================================================================================================
-  // Hero events (requires that hero alive in the party; they reward that hero)
+  // Hero events (requires that hero alive in the party; they reward that hero). Pronouns: Ellaria, Sparrow and Kiri
+  // are she/her, every other hero he/him (DESIGN §6).
   // ======================================================================================================
 
   DD.registerEvent({
@@ -949,12 +972,12 @@
       },
       {
         label: 'Just window-shop.',
-        hint: 'Zarathor gains 15 XP.',
+        hint: 'Gain 25 gold.',
         resolve: function (api) {
           const s = star(api, 'zarathor');
-          heroXp(api, s.idx, 15);
-          return standIn(s) + s.name + ' spends an hour gazing at a ring he cannot afford. He grows as a person (15 XP). Mostly ' +
-            'he grows a plan.';
+          const g = api.gold(25);
+          return standIn(s) + s.name + ' spends an hour pressed against the display case, gazing at a ring he cannot afford. ' +
+            'Glimmerjaw pays him ' + g + ' gold to stop fogging up the glass. ' + s.name + ' counts it twice. It is never enough.';
         },
       },
     ],
@@ -986,12 +1009,13 @@
       },
       {
         label: 'Turn it into a duet.',
-        hint: 'Every hero gains 12 XP.',
+        hint: ROTATION + ' The mosh pit costs every hero 10% of their max HP.',
         resolve: function (api) {
           const s = star(api, 'syllamin');
-          api.xp(12);
-          return standIn(s) + s.name + ' and MC Gristle freestyle a duet about friendship and stabbing. It is honestly a banger. ' +
-            'The whole party learns something about rhythm, and violence.';
+          api.damage(0.1);
+          const lv = levelUp(api);
+          return standIn(s) + s.name + ' and MC Gristle freestyle a duet about friendship and stabbing. It is honestly a banger, ' +
+            'and the crowd moshes so hard the cave shakes. ' + lv + ' Everyone learns something about rhythm, and violence.';
         },
       },
       {
@@ -1038,13 +1062,13 @@
       },
       {
         label: 'Let him forget about it.',
-        hint: 'Professor Marbles heals to full HP and gains 10 XP.',
+        hint: 'Professor Marbles heals to full HP and rolls on the Table of Questionable Blessings (no curses).',
         resolve: function (api) {
           const s = star(api, 'marbles');
           if (s.idx >= 0) api.heal(1, s.idx);
-          heroXp(api, s.idx, 10);
           return standIn(s) + 'You point out a butterfly. By the time it lands, ' + s.name + ' has forgotten the marbles, the ' +
-            'tunnel and, briefly, his own name. He takes a nap and wakes up refreshed and slightly wiser.';
+            'tunnel and, briefly, his own name. He naps and wakes up refreshed, convinced he was once a famous juggler. ' +
+            bless(api, s.idx, { noCursed: true });
         },
       },
     ],
@@ -1082,13 +1106,13 @@
       },
       {
         label: 'Bring it along.',
-        hint: 'Marwyn gains 25 XP. Every other hero loses 10% of their max HP.',
+        hint: 'Marwyn levels up. Every other hero loses 20% of their max HP.',
         resolve: function (api) {
           const s = star(api, 'marwyn');
-          heroXp(api, s.idx, 25);
-          aliveIdx(api).forEach(function (i) { if (i !== s.idx) api.damage(0.1, i); });
-          return standIn(s) + s.name + ' straps the mirror to his back and gains 25 XP worth of self-esteem. Progress slows to a ' +
-            'crawl as he stops to admire himself at every torch, and the rest of the party gets ambushed by mosquitoes. Twice.';
+          aliveIdx(api).forEach(function (i) { if (i !== s.idx) api.damage(0.2, i); });
+          const lv = levelUp(api, s.idx);
+          return standIn(s) + s.name + ' straps the mirror to his back and stops to admire himself at every torch. Self-esteem ' +
+            'is a powerful thing: ' + lv + ' Progress slows to a crawl, and the rest of the party gets ambushed by mosquitoes. Twice.';
         },
       },
     ],
@@ -1104,11 +1128,10 @@
     choices: [
       {
         label: 'Return him to his owner.',
-        hint: 'Gain 45 gold. Every hero gains 8 XP.',
+        hint: 'Gain 60 gold.',
         resolve: function (api) {
           const s = star(api, 'ellaria');
-          const g = api.gold(45);
-          api.xp(8);
+          const g = api.gold(60);
           return standIn(s) + 'The Tower of Everlasting Night belongs to a lonely and extremely polite lich. He weeps, pays a ' + g +
             '-gold reward and shows everyone forty paintings of the dog.';
         },
@@ -1144,7 +1167,7 @@
     requires: withHero('josiah'),
     text: 'Forty plague rats in tiny hard hats block the tunnel, waving signs: FAIR CHEESE NOW and DENTAL FOR ALL. Their shop ' +
       'steward, a rat named Brenda, informs Josiah that his last experiment violated eleven safety regulations. "Also," ' +
-      'she adds, "you never paid us for the Plague of \'97."',
+      'she adds, "you never paid us for the Plague of \'97." Onyx, Josiah\'s raven, eyes the picket line like a buffet.',
     choices: [
       {
         label: 'Negotiate a fair contract.',
@@ -1169,12 +1192,11 @@
       },
       {
         label: 'Bust the union.',
-        hint: 'Josiah gains 15 XP. Fight a normal battle.',
+        hint: 'Josiah levels up. Fight a normal battle.',
         resolve: function (api, run) {
           const s = star(api, 'josiah');
-          heroXp(api, s.idx, 15);
-          return { text: standIn(s) + s.name + ' informs the rats that they are all fired, and gains 15 XP in management ' +
-            'experience. Brenda calls a strike. The strike involves teeth.', combat: fight(api, run, 'normal') };
+          return { text: standIn(s) + s.name + ' informs the rats that they are all fired, which counts as management ' +
+            'experience. ' + levelUp(api, s.idx) + ' Brenda calls a strike. The strike involves teeth.', combat: fight(api, run, 'normal') };
         },
       },
     ],
@@ -1244,13 +1266,13 @@
       },
       {
         label: 'Read every clause.',
-        hint: 'Every hero gains 12 XP. Corelos loses 25% of his max HP.',
+        hint: ROTATION + ' Corelos loses 25% of his max HP.',
         resolve: function (api) {
           const s = star(api, 'corelos');
-          api.xp(12);
           if (s.idx >= 0) api.damage(0.25, s.idx);
-          return standIn(s) + s.name + ' reads every word aloud while the party takes notes. It takes all night. Clause 1,207 is ' +
-            'genuinely educational; clauses 1 through 1,206 give him paper cuts in places paper should not reach.';
+          const lv = levelUp(api);
+          return standIn(s) + s.name + ' reads every word aloud while the party takes notes, and clause 1,207 turns out to be ' +
+            'genuinely educational. ' + lv + ' Clauses 1 through 1,206 give ' + s.name + ' paper cuts in places paper should not reach.';
         },
       },
       {
@@ -1285,13 +1307,13 @@
       },
       {
         label: 'Endure it in silence.',
-        hint: 'Slate heals to full HP and gains 20 XP.',
+        hint: 'Slate heals to full HP and upgrades a skill.',
         resolve: function (api) {
           const s = star(api, 'slate');
           if (s.idx >= 0) api.heal(1, s.idx);
-          heroXp(api, s.idx, 20);
           return standIn(s) + s.name + ' stands perfectly still for three hours while the children use him as a jungle gym. Nine ' +
-            'hundred years of library duty pays off. Eventually they get bored and leave. He says nothing. His runes say plenty.';
+            'hundred years of library duty pays off. Eventually they get bored and leave. He says nothing. His runes say ' +
+            'plenty. ' + upgradeFor(api, s.idx);
         },
       },
       {
@@ -1326,19 +1348,21 @@
           const s = star(api, 'slate');
           if (s.idx >= 0) api.damage(0.25, s.idx);
           const up = upgradeFor(api, s.idx);
-          return standIn(s) + s.name + ' sits very still while she chips away. It takes three hours, a sledgehammer and most of ' +
+          return standIn(s) + s.name + ' sits very still while the student chips away. It takes three hours, a sledgehammer and most of ' +
             'her vocabulary. The new nose is... different. He hates it, and now he hits harder out of spite. ' + up + ' She ' +
             'sells the chips as authentic golem gravel, and you never see a coin of it.';
         },
       },
       {
         label: 'Hmph. No.',
-        hint: 'Slate gains 15 XP.',
+        hint: 'Slate heals to full HP. Gain 20 gold.',
         resolve: function (api) {
           const s = star(api, 'slate');
-          heroXp(api, s.idx, 15);
+          if (s.idx >= 0) api.heal(1, s.idx);
+          const g = api.gold(20);
           return standIn(s) + s.name + ' takes the chisel, bites it in half and hands it back. The student writes NO in her ' +
-            'sketchbook, underlines it twice and leaves. ' + s.name + ' feels a rare and pure joy (15 XP).';
+            'sketchbook, underlines it twice and leaves ' + g + ' gold "for the inspiration." ' + s.name + ' feels a rare and pure ' +
+            'joy, and it does wonders for his cracks.';
         },
       },
       {
@@ -1426,14 +1450,14 @@
       },
       {
         label: 'Kiss babies, shake hands.',
-        hint: 'Pay 30 gold. Mayor Buga upgrades a skill. Every hero gains 10 XP.',
+        hint: 'Pay 30 gold. Mayor Buga upgrades a skill. Every hero heals 20% of their max HP.',
         requires: canPay(30),
         resolve: function (api) {
           const s = star(api, 'buga');
           api.gold(-30);
-          api.xp(10);
+          api.heal(0.2);
           return standIn(s) + s.name + ' kisses eleven babies, three of them goblins and one of them a mimic, and shakes every ' +
-            'hand in the dungeon. The whole party learns how politics works, and hates it. ' + upgradeFor(api, s.idx);
+            'hand in the dungeon. The whole party gets a pat on the back and a free lollipop. ' + upgradeFor(api, s.idx);
         },
       },
       {
@@ -1447,6 +1471,277 @@
           }
           return { text: standIn(s) + s.name + '\'s closing statement ("What\'s the worst that could happen?") is answered ' +
             'immediately by an angry mob of sourdough loyalists.', combat: fight(api, run, 'normal') };
+        },
+      },
+    ],
+  });
+
+  DD.registerEvent({
+    id: 'ev_kir_lost_and_found', acts: [1, 2, 3], weight: HERO_WEIGHT, icon: '👻', hero: 'kiri',
+    title: 'The Ethereal Lost and Found',
+    requires: withHero('kiri'),
+    text: 'A ghost in a cardigan drifts out of the wall, dragging a sack of glowing arrows. "Ethereal Lost and Found," he ' +
+      'sighs. "Every single one of these came through my ceiling." Then he squints at Kiri and asks whether she is the elf ' +
+      'one or the human one.',
+    choices: [
+      {
+        label: 'Pay for the ceiling.',
+        hint: 'Pay 30 gold. Kiri upgrades a skill.',
+        requires: canPay(30),
+        resolve: function (api) {
+          const s = star(api, 'kiri');
+          api.gold(-30);
+          return standIn(s) + s.name + ' pays for the damages without a word. The ghost, touched, re-fletches her arrows with ' +
+            'feathers from the other side. ' + upgradeFor(api, s.idx);
+        },
+      },
+      {
+        label: 'Ask for everything back.',
+        hint: '60%: Kiri gains a rare item. 40%: the rest of the lost and found wants a word: fight a normal battle.',
+        resolve: function (api, run) {
+          const s = star(api, 'kiri');
+          if (api.rng.chance(0.6)) {
+            return standIn(s) + 'At the bottom of the sack, under four hundred of her arrows, is ' + heroItem(api, s.idx, 'rare') +
+              '. The ghost insists it has been there since before she was born. ' + s.name + ' decides not to think about it.';
+          }
+          return { text: standIn(s) + s.name + ' reaches for the sack. So does everything else in the lost and found: forty years ' +
+            'of lost luggage, three umbrellas and something that used to be somebody\'s pet.', combat: fight(api, run, 'normal') };
+        },
+      },
+      {
+        label: '"Both."',
+        hint: 'Kiri rolls on the Table of Questionable Blessings (no curses).',
+        resolve: function (api) {
+          const s = star(api, 'kiri');
+          return standIn(s) + s.name + ' says "Both." The ghost thinks about it for a full minute, hands her a lucky charm out of ' +
+            'sheer confusion and floats back into the ceiling. ' + bless(api, s.idx, { noCursed: true });
+        },
+      },
+    ],
+  });
+
+  DD.registerEvent({
+    id: 'ev_bet_family_reunion', acts: [1, 2, 3], weight: HERO_WEIGHT, icon: '🐐', hero: 'betty',
+    title: 'The Betty Family Reunion',
+    requires: withHero('betty'),
+    text: 'A banner over the cavern reads BETTY FAMILY REUNION. Forty goatfolk turn to stare, and every single one of them is ' +
+      'named Betty. "It\'s a family name," Betty explains, for the hundredth time this campaign. Great-Grandma Betty is ' +
+      'already headbutting the buffet table.',
+    choices: [
+      {
+        label: 'Enter the headbutting contest.',
+        hint: '60%: Betty wins: he gains a rare item. 40%: he loses: Betty loses 30% of his max HP.',
+        resolve: function (api) {
+          const s = star(api, 'betty');
+          if (api.rng.chance(0.6)) {
+            return standIn(s) + s.name + ' lowers his horns and charges. Uncle Betty folds. Cousin Betty folds. Great-Grandma Betty ' +
+              'falls over laughing and hands him the family heirloom: ' + heroItem(api, s.idx, 'rare') + '. "Ya earned it, kid."';
+          }
+          if (s.idx >= 0) api.damage(0.3, s.idx);
+          return standIn(s) + s.name + ' charges Great-Grandma Betty, who has been doing this for ninety years. ' + s.name +
+            ' wakes up face-down in the potato salad, and the whole family pretends not to have seen it.';
+        },
+      },
+      {
+        label: 'Raid the buffet.',
+        hint: 'Every hero heals 35% of their max HP.',
+        resolve: function (api) {
+          const s = star(api, 'betty');
+          api.heal(0.35);
+          return standIn(s) + 'The party eats like it has never seen food. ' + s.name + ' eats the potato salad, the paper plates, ' +
+            'the tablecloth and a small decorative fern. Nobody judges him. They are all Bettys here.';
+        },
+      },
+      {
+        label: 'Ask Great-Grandma Betty for advice.',
+        hint: 'Betty learns a new skill (or upgrades one if there is nothing to learn).',
+        resolve: function (api) {
+          const s = star(api, 'betty');
+          return standIn(s) + 'Great-Grandma Betty looks him up and down. "Hit it until it stops moving, kid," she says, and ' +
+            'demonstrates on a stalagmite. ' + s.name + ' takes notes. ' + learnFor(api, s.idx);
+        },
+      },
+    ],
+  });
+
+  DD.registerEvent({
+    id: 'ev_bas_somebody_ate_dolly', acts: [1, 2, 3], weight: HERO_WEIGHT, icon: '🐑', hero: 'basanos',
+    title: 'Somebody Ate Dolly',
+    requires: withHero('basanos'),
+    text: 'A farmer in muddy boots blocks the tunnel, waving a WANTED poster. The drawing shows a very large wolf wearing ' +
+      'Basanos\'s exact coat. "Somebody ate Dolly," the farmer growls, staring very hard at the party. Basanos looks at his ' +
+      'shoes and mumbles that he is sorry about the sheep.',
+    choices: [
+      {
+        label: 'Pay for the sheep.',
+        hint: 'Pay 40 gold. Basanos gains a rare item.',
+        requires: canPay(40),
+        resolve: function (api) {
+          const s = star(api, 'basanos');
+          api.gold(-40);
+          return standIn(s) + s.name + ' pays for Dolly, plus interest, plus a little extra for the emotional damage. The farmer ' +
+            'counts it twice and hands over ' + heroItem(api, s.idx, 'rare') + ', "for the next time you get peckish."';
+        },
+      },
+      {
+        label: 'Watch the flock tonight.',
+        hint: 'Basanos levels up. Fight a normal battle: something else is hungry.',
+        resolve: function (api, run) {
+          const s = star(api, 'basanos');
+          return { text: standIn(s) + s.name + ' spends the night guarding what is left of the flock, which is mostly an exercise ' +
+            'in not eating it. ' + levelUp(api, s.idx) + ' Around midnight, something else comes for the sheep.', combat: fight(api, run, 'normal') };
+        },
+      },
+      {
+        label: 'Blame a different wolf.',
+        hint: '50%: the farmer buys it and pays a 45-gold bounty. 50%: he does not: Basanos loses 25% of his max HP (pitchfork).',
+        resolve: function (api) {
+          const s = star(api, 'basanos');
+          if (api.rng.chance(0.5)) {
+            const g = api.gold(45);
+            return standIn(s) + s.name + ' describes the "real" culprit in loving detail: grey fur, big teeth, terrible manners. ' +
+              'The farmer pays a ' + g + '-gold bounty for the tip and storms off to hunt it. ' + s.name + ' feels awful about it ' +
+              'all the way to the next room.';
+          }
+          if (s.idx >= 0) api.damage(0.25, s.idx);
+          return standIn(s) + 'The farmer looks at the poster, then at ' + s.name + ', then at the poster again. Out comes the ' +
+            'pitchfork. ' + s.name + ' does not dodge, because he feels he deserves it.';
+        },
+      },
+    ],
+  });
+
+  DD.registerEvent({
+    id: 'ev_val_forge_god', acts: [1, 2, 3], weight: HERO_WEIGHT, icon: '⚒️', hero: 'valdris',
+    title: 'The Forge God Would Like a Trim',
+    requires: withHero('valdris'),
+    text: 'Deep in the rock you find an ancient forge, still warm, beneath an altar to the forge god. The inscription promises ' +
+      'a weapon of legend in exchange for "that which the smith holds most dear." Valdris slowly raises a hand to his long, ' +
+      'golden, somehow soot-free hair. "No," he says. "Absolutely not."',
+    choices: [
+      {
+        label: 'Offer the hair.',
+        hint: 'Valdris gains a legendary item and the scar Bruised Ego.',
+        resolve: function (api) {
+          const s = star(api, 'valdris');
+          const item = heroItem(api, s.idx, 'legendary');
+          return standIn(s) + s.name + ' kneels, shuts his eyes and lets the altar take the hair. One golden lock drifts into the ' +
+            'forge, which roars with approval and spits out ' + item + '. ' + scarFor(api, s.idx, EGO_SCAR) + ' He insists it ' +
+            'will grow back.';
+        },
+      },
+      {
+        label: 'Forge all night instead.',
+        hint: 'Gain a rare item. Valdris loses 25% of his max HP.',
+        resolve: function (api) {
+          const s = star(api, 'valdris');
+          if (s.idx >= 0) api.damage(0.25, s.idx);
+          return standIn(s) + s.name + ' works the ancient forge until dawn, singing hymns over the anvil and singeing everything ' +
+            'except his hair. By sunrise he has made ' + partyItem(api, 'rare') + ', and he has burns in places he refuses to discuss.';
+        },
+      },
+      {
+        label: 'Pray. Mind the hair.',
+        hint: 'Valdris rolls on the Table of Questionable Blessings (no curses).',
+        resolve: function (api) {
+          const s = star(api, 'valdris');
+          return standIn(s) + s.name + ' prays at the altar for an hour, mostly about conditioner. The forge god, moved by such ' +
+            'devotion, sends a blessing instead of a barber. ' + bless(api, s.idx, { noCursed: true });
+        },
+      },
+    ],
+  });
+
+  DD.registerEvent({
+    id: 'ev_hja_prank_king', acts: [1, 2, 3], weight: HERO_WEIGHT, icon: '🍌', hero: 'hjalmar',
+    title: 'The Prank King of the Underdark',
+    requires: withHero('hjalmar'),
+    text: 'Somebody has rigged this corridor with whoopee cushions, a bucket over the door and a banana peel on every step. A ' +
+      'goblin in a jester hat pops out of a barrel: "GOTCHA!" He calls himself Snickerdoodle, Prank King of the Underdark, ' +
+      'and he has just challenged Hjalmar to a prank-off. Hjalmar\'s grin gets so wide it is visible from orbit.',
+    choices: [
+      {
+        label: 'Accept the prank-off.',
+        hint: '60%: Hjalmar wins: he gains a rare item. 40%: Snickerdoodle wins: every hero loses 15% of their max HP.',
+        resolve: function (api) {
+          const s = star(api, 'hjalmar');
+          if (api.rng.chance(0.6)) {
+            return standIn(s) + s.name + ' swaps the bells on Snickerdoodle\'s hat for very small, very angry bees. The goblin ' +
+              'abdicates on the spot and hands over his royal prop: ' + heroItem(api, s.idx, 'rare') + '.';
+          }
+          api.damage(0.15);
+          return standIn(s) + s.name + ' sets up the perfect prank, and Snickerdoodle pranks the prank. The party spends the next ' +
+            'hour pulling custard pies out of places custard pies should never go.';
+        },
+      },
+      {
+        label: 'Steal his prop bag.',
+        hint: 'Hjalmar learns a new skill (or upgrades one if there is nothing to learn). Fight a normal battle: the goblin wants it back.',
+        resolve: function (api, run) {
+          const s = star(api, 'hjalmar');
+          return { text: standIn(s) + s.name + ' swipes the prop bag while Snickerdoodle is taking a bow. Inside: a rubber chicken, ' +
+            'a joy buzzer and a book of terrible ideas. ' + learnFor(api, s.idx) + ' Snickerdoodle whistles, and his whole ' +
+            'troupe comes running.', combat: fight(api, run, 'normal') };
+        },
+      },
+      {
+        label: 'Prank the party instead.',
+        hint: 'Hjalmar rolls on the Table of Questionable Blessings (no curses). Every other hero loses 10% of their max HP.',
+        resolve: function (api) {
+          const s = star(api, 'hjalmar');
+          aliveIdx(api).forEach(function (i) { if (i !== s.idx) api.damage(0.1, i); });
+          return standIn(s) + s.name + ' decides his friends are a softer target: whoopee cushions, a bucket of glitter and a ' +
+            'banana peel in a very bad spot. Snickerdoodle weeps with pride, and the universe rewards true artistry. ' +
+            bless(api, s.idx, { noCursed: true });
+        },
+      },
+    ],
+  });
+
+  DD.registerEvent({
+    id: 'ev_peb_best_in_show', acts: [1, 2, 3], weight: HERO_WEIGHT, icon: '🏆', hero: 'pebbles',
+    title: 'Best in Show',
+    requires: withHero('pebbles'),
+    text: 'A velvet rope, three very serious judges and a sign: UNDERDARK KENNEL CLUB, BEST IN SHOW. Pebbles is already sitting ' +
+      'perfectly, tail wagging, quietly setting the red carpet on fire. The judges have never seen a dog made of fire. One of ' +
+      'them is sweating, and not from nerves.',
+    choices: [
+      {
+        label: 'Enter Best in Show.',
+        hint: '60%: Pebbles wins: he gains a rare item. 40%: disqualified for arson: lose up to 30 gold for the damages.',
+        resolve: function (api) {
+          const s = star(api, 'pebbles');
+          if (api.rng.chance(0.6)) {
+            return standIn(s) + s.name + ' sits. ' + s.name + ' stays. ' + s.name + ' rolls over and only singes one judge. Best in ' +
+              'Show, unanimously, and the prize is ' + heroItem(api, s.idx, 'rare') + '.';
+          }
+          const lost = -api.gold(-30);
+          return standIn(s) + s.name + ' is doing beautifully until a judge says "good boy" and he wags so hard the podium catches ' +
+            'fire. Disqualified for arson. ' + (lost ? 'The damages come to ' + lost + ' gold.'
+            : 'You cannot pay for the damages, so the judges accept an IOU and a very sad look.');
+        },
+      },
+      {
+        label: 'Try the agility course.',
+        hint: 'Pebbles learns a new skill (or upgrades one if there is nothing to learn). 40%: the hellhound contestants take it personally: fight a normal battle.',
+        resolve: function (api, run) {
+          const s = star(api, 'pebbles');
+          const base = standIn(s) + s.name + ' flies through the hoops, the tunnel and the seesaw, setting each one on fire on the ' +
+            'way out, and learns a lot about himself. ' + learnFor(api, s.idx);
+          if (api.rng.chance(0.4)) {
+            return { text: base + ' The hellhounds in the next lane lose, badly, and they take it personally.', combat: fight(api, run, 'normal') };
+          }
+          return base;
+        },
+      },
+      {
+        label: 'Pet the good boy.',
+        hint: 'Every hero heals 30% of their max HP.',
+        resolve: function (api) {
+          const s = star(api, 'pebbles');
+          api.heal(0.3);
+          return standIn(s) + 'Everyone takes a turn telling ' + s.name + ' he is a good boy. He IS a good boy. He is also very ' +
+            'warm, and the warmth soaks into every bruise in the party. Nobody wants to stop.';
         },
       },
     ],

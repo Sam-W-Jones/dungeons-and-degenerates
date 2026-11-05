@@ -1,121 +1,146 @@
 # ENEMIES — ACT 3 notes
 
-Files: `js/data/enemies/act3.js` (content), `tests/content/enemies_act3.js` (16 suites `enemies_act3: …` + 2 opt-in
+Files: `js/data/enemies/act3.js` (content), `tests/content/enemies_act3.js` (20 suites `enemies_act3: …` + 2 opt-in
 diagnostics). Run: `bash tools/test.sh "suite=enemies_act3&isolate=enemies/act3,enemies_act3"` (add `&verbose=1&sims=24`
-for bigger sims). Screenshots: `.tmp/enemies-act3/` (`gallery_act3.png`, `c_trial.png`, `c_tax.png`, `c_lair.png`,
-`c_dk.png`, `c_snack.png`, `c_walkies.png`, `d_*.png` detail pages) and, after the review, `.tmp/enemies-act3-review/`
-(`gallery.png`, `d_dragon2.png`, `c_lair2.png`, `c_a3_*.png`).
+for bigger sims; `&a3real=1&verbose=1&sims=N` without `isolate` = random real-hero parties; `&a3debug=<encounter>&bseed=N
+&blevel=5[&bparty=a,b,c,d]&verbose=1` = one battle's map + condensed log). Scratch probes of the v2 / AoO pass:
+`.tmp/enemies-act3-aoo/` (`trial.sh <name> "<overrides>" [sims]` = the sim table for both parties with damage sources and
+attacks of opportunity, `trial1.sh` for chosen encounters, `ovr.js` runtime overrides used for the tuning trials,
+`look.sh` + `look.html` = a screenshot with an enemy's inspect panel open, `look_lawyer.png`, `look_dk.png`).
 
-## Summary
+## v2 — initiative, no telegraphs, attacks of opportunity, reach-aware targeting (this pass)
 
-Act 3 "Behind the DM Screen": 9 regular enemies, 3 elite mini-bosses, 27 enemy skills, 4 statuses, 2 objects and
-11 encounters (8 normal, 3 elite) over the three act-3 themes. Every id is prefixed `a3_`. Every gimmick is in the
-enemy's codex `desc` (first sentence) and in its telegraphs (skill name + exact desc).
+Act 3 "Behind the DM Screen": 9 regular enemies, 3 elites, 27 enemy skills, 4 statuses, 2 objects, 11 encounters
+(8 normal, 3 elite). Every id is `a3_`. An earlier, interrupted v2 attempt had already converted the turn model (all its
+suites were green when this pass started); this pass adopted the attacks-of-opportunity engine and the new targeting,
+put every enemy's behaviour into its inspect panel, simplified two skills and did the light balance.
 
-| Enemy | Tier / HP | Gimmick (skills) |
+**Turn model** (unchanged from the earlier v2 attempt, verified): every enemy decides and acts at once on its initiative
+turn (move first, then act). No telegraphs and no delayed intents for normal enemies; each elite has exactly one
+announced wind-up for its signature move (dragon: Hoard Breath, Death Knight: Villain Monologue, Pit Fiend: Hostile
+Audit), landing at the start of its next turn, interrupted by stun-likes (and the monologue also by silence or 20+
+damage). The Eyeball's Unpaid Overtime Beam fires at once and the eyeball then passes out for its next turn. Durations
+count the owner's own turns (`turns: 1` debuffs from an enemy's turn cover the hero's next turn); no combat-start Block
+(the dragon basks at the end of its own turns; Shield Wall is a skill); waves / survive / destroy / protect objectives
+run per round under initiative (suite "objectives and waves").
+
+**Targeting and attacks of opportunity** (DESIGN §8 "Targeting", rules.md "v2 — attacks of opportunity"):
+
+| Enemy | init | style (who it picks) | its attack of opportunity | inspect-panel line (`def.passive`) |
+|---|---|---|---|---|
+| `a3_imp_influencer` minion 18 | +3 | **assassin** (the act's diver: weakest hero it can reach); blinks ≈3 tiles from the heroes, `flags.noProvoke` | none | Blink |
+| `a3_hell_hound` 34 | +2 | melee (sticks to the hero next to it) | Chew Toy (9) | Off the Leash |
+| `a3_mind_flayer` 36 | +1 | ranged, keeps 2 | none | Life Coaching |
+| `a3_eyeball_intern` 30 | +2 | ranged, keeps 3 | none | Unpaid Overtime |
+| `a3_rules_lawyer` 34 | 0 | melee | Motion to Dismiss (8 + push 2: the walk ends there) | Rules As Written |
+| `a3_nat1_golem` 40 | −2 | melee (custom planner) | Roll to Hit (d20: 9, 20 → 18, 1 → hits itself + Stunned) | Rolls for Everything |
+| `a3_kobold_shield` minion 16 | +1 | melee | Pointy Stick (7) | Shield Wall |
+| `a3_succubus_coach` 32 | 0 | ranged, keeps 2 | none | Dating Coach |
+| `a3_backup_dancer` minion 14 | +2 | melee | none (the shimmy-kick reaches 2) | Jazz Hands |
+| `a3_red_dragon` elite 145 | +1 | melee (custom; guards its hoard; Thieves hunted anywhere) | none (flies, swoops) | Hoarder |
+| `a3_death_knight` elite 135 | −1 | melee (custom) | Overly Dramatic Swing (14) | Very Dramatic |
+| `a3_pit_fiend` elite 150 | +1 | melee (custom; immovable) | Fiscal Smackdown (15 + 1 Debt) | Infernal Debt |
+
+Each passive line says what it does on its turn, how it picks its target ("sticks to", "keeps N tiles from the heroes",
+"the weakest") and whether walking away from it provokes ("(attack of opportunity)"); the codex `desc` sums it up for the
+hover tooltip. Passive descs read the skills' numbers (`lvl(id)`), so they can't drift. The suite "targeting styles,
+attacks of opportunity and what the inspect panel says" checks all of it per enemy.
+
+**Planners** (custom: imp, golem, dragon, Death Knight, fiend; shared helpers `plan` / `approach` / `bestWithin`):
+every walk prices the attacks of opportunity it would provoke (`api.aooCost`; a lethal one rules the tile out) — the
+custom `approach`, `bestWithin` (the dragon's leash), `goHome` (the dragon settling on its gold) and `monologueSpot`;
+`plan` uses `api.bestAttack` (the engine's reach-aware scoring) and re-aims with `noMove` when a reaction cut its walk
+short. `bestWithin` scores a virtually placed unit, which makes the engine measure "engaged" from that spot:
+`engagedFix` re-bases the focus bonus on the tile the turn began on (`DD.AI.targetValue(…, 0, style, origin)`), so the
+hoard-bound dragon still sticks to the hero next to it. Leaps (Pounce, Greedy Bite's swoop, Kick Ball Change), blinks
+and the chain's pull never provoke (rule). Mutation-checked: without `engagedFix`, without the AoO cost in
+`monologueSpot` or in `approach`, the targeting suite fails.
+
+**Simplified (DESIGN §6 "Simplicity")**
+- `a3_golem_roll` Roll to Hit: one roll, three outcomes — 9 to each foe in the 3 tiles in front, a 20 deals 18, a 1 hits
+  itself for 10 and Stuns it (was 1 / 2-9 = 6 / 10-19 = 11 / 20 = 22: the same 9 a swing on average; `L.dmg` is now the
+  real number the HUD, reach shading and attacks of opportunity show).
+- `a3_dk_cleave` Overly Dramatic Swing: "a sweeping arc at the 3 tiles in front of him: 14 to each foe" ('dir' + row,
+  tagged melee) instead of "a target up to 2 tiles away and its sides" — he now holds the line (it is his attack of
+  opportunity), and the yank-and-swing swings when the chain lands the hero next to him (the chain's `aiScore` prefers a
+  hero its 3-tile pull can bring adjacent).
+- Every other skill already reads as one verb + at most one rider (damage + Mark / Charm / Confused / Silence / push /
+  pull / Debt / a burning floor); the elites keep their one mini-system each (hoard + Thief, monologue interrupt, Debt).
+
+**Light balance** (the v2 balance pass comes next; "nothing absurd"): imps are the act's most common enemy and, as
+divers, focus the weakest hero — Go Live! 6 fire + Mark 3 (was 7 + 4), Hot Take 7 (was 8); Piercing Stare 9 (was 10);
+Itemized Invoice cooldown 2 (was 1); Spirit Fingers −1 per hit (was −2); Influencer Collab 2 imps (was 3); Intern
+Orientation's wave 1 imp (was 2); Trial by Combat without its imp (round-1 downs); Tax Season = the fiend + 2 imps, + 1
+imp at round 4 (the Rules Lawyer and the second late imp are gone). Trials behind those picks (24-36 seeds each,
+`.tmp/enemies-act3-aoo/ovr.js`): for Tax Season the invoice at 11 damage, Debt 1 instead of 2, the fiend at 140 HP or the
+smack at 14 moved its win rate less than the cooldown and the roster; elite HP at the band's low end (dragon 130, Death
+Knight 125) or hoard Block 2 per pile (max 10) shortened the long elite fights by only ~1 round, so they are left to the
+balance pass (Requests).
+
+### Balance (AutoPlay sims, this pass)
+
+24 seeds per encounter and party, levels 4 / 5 / 6 (v2: one level-up per won fight, about level 5 at the DM). Fixture =
+`test_knight, test_cleric, test_mage, test_rogue` with 2 pool skills, (level − 3) skills at II (the suite's party; it
+hits small, so it suffers most from Block and armor). Real = 4 random real heroes from the 15 registered at the time
+(Valdris and Pebbles mid-flight, Hjalmar's file not landed yet), same skill rule, full content. HP = share of the
+party's HP lost; downs counted per fight (a hero can go down twice).
+
+| Encounter | Fixture: won · rounds · HP lost · downs | Real: won · rounds · HP lost · downs |
 |---|---|---|
-| `a3_imp_influencer` Imp Influencer | minion 18, flying | Blinks up to 5 tiles instead of walking (custom planner). `a3_imp_golive` Go Live! (7 fire + Mark 4, tracked, range 1-30 = anywhere, no LOS needed, spell) · `a3_imp_hottake` Hot Take (8 fire, tracked, range 5) |
-| `a3_hell_hound` Hell Hound | normal 34 | Fire-immune, weak to frost. `a3_hound_breath` Hot Dog Breath (cone 2, 9 fire to everyone and every object, the floor burns through your next turn) · `a3_hound_pounce` Pounce (tracked, leaps up to 4, 11) · `a3_hound_bite` Chew Toy (adjacent tile, 9, also chews objects) |
-| `a3_mind_flayer` Mind Flayer Life Coach | normal 36 | `a3_flayer_blast` Mind Blast: Hustle Culture (cone 3 = 9 tiles, 9 psychic + Confused) · `a3_flayer_advice` Unsolicited Life Advice (8 psychic + Charmed, tracked, no LOS) |
-| `a3_eyeball_intern` Floating Eyeball Intern | normal 30, flying | `a3_eye_stare` Piercing Stare: a 5-tile ray that follows its tracked target and pierces everyone on it, coworkers included (10) · `a3_eye_overtime` Unpaid Overtime Beam (ground, delayed 1, 8-tile line, 14; only for lines with 2+ heroes; the eye holds still while charging) |
-| `a3_rules_lawyer` Rules Lawyer (Devil, Esq.) | normal 34, armor 1 | `a3_lawyer_objection` OBJECTION! (spell, tracked anywhere: strips ALL buffs first — even Invulnerable — then 9 + Silence 1) · `a3_lawyer_motion` Motion to Dismiss (adjacent, 8 + push 2; AI values pits/lava/bumps) |
-| `a3_nat1_golem` Natural 1 Golem | normal 40, armor 1 | `a3_golem_roll` Roll to Hit: d20 then the 3 tiles in front: 1 = hits itself for 10 + Stunned, 2-9 = 6, 10-19 = 11, 20 = 22 · `a3_golem_toss` Throw the Bones (tracked lob, radius 1 around the target, 8 or 16 on doubles, friends too). Custom painter (d20 torso showing a 1, d6 head whose pip is the eye) |
-| `a3_kobold_shield` Kobold Dragonshield | minion 16, armor 1 | `a3_kobold_wall` Shield Wall (itself + adjacent allies +6 Block, lasts through your turn; AI loves shielding elites) · `a3_kobold_spear` Pointy Stick (first unit within 2, 7) |
-| `a3_succubus_coach` Succubus Dating Coach | normal 32 | `a3_succubus_line` Terrible Pickup Line (8 psychic + Charmed, tracked; barks a PG-13 pickup line) · `a3_succubus_pep` You Deserve Better! (other allies within 3 Inspired 2 turns) |
-| `a3_backup_dancer` Skeletal Backup Dancer | minion 14, undead | `a3_dancer_kick` Kick Ball Change (tracked, shimmies up to 2 tiles next to the target, 7; not while Rooted). Arrives with the Death Knight's intermission. |
-| `a3_red_dragon` Young Red Dragon (Hoarder) | elite 145, flying | Hoarder: +3 Block per `a3_hoard_pile` within 3 tiles, every round (max 15). Guards: while piles remain and no Thief is loose it only moves to tiles within 3 of a pile, strikes from the spot with the most gold around it, and settles back on the richest reachable spot of its hoard when nobody is in reach. Walking over a pile pockets its gold and brands the hero `a3_thief` (+4 damage from dragons — the bite telegraph shows it — and hunted). `a3_dragon_breath` Hoard Breath (ground cone 3, delayed 1, 16 fire to everyone and every object, the floor burns through your next turn; it holds still while inhaling) · `a3_dragon_bite` Greedy Bite (tracked, swoops up to 4 tiles, 15; if the bite lands it steals up to 5 gold into a new pile (+3) next to it) · `a3_dragon_tail` Tail Sweep (adjacent foes 12 + push 1; added as a 2nd attack when foes are adjacent) |
-| `a3_death_knight` Death Knight (Very Dramatic) | elite 135, armor 2 | `a3_dk_monologue` Villain Monologue (delayed 1, 16 to foes within 2; `a3_monologue` status counts damage: 30+ interrupts → cancelled, Vulnerable, +10 Hype; stun/silence also cancel) · `a3_dk_cleave` Overly Dramatic Swing (tracked reach 2, the target + both sides, 14) · `a3_dk_grip` Come Hither, Darling (spell, a spectral chain: tracked 2-6, no LOS, 9 frost + pull 3). Yank and swing: with nobody in reach he chains a hero and adds a swing tracking the same hero (it lands once the pull brings them within 2). At ≤50% HP: INTERMISSION banner + 2 Skeletal Backup Dancers (once). |
-| `a3_pit_fiend` Pit Fiend Accountant | elite 150, immovable | `a3_debt` Infernal Debt: at the hero's turn start lose Debt HP (through Block), then Debt +1 (max 5); every skill hit on him pays off 2 (DoT ticks don't); forgiven on his death. `a3_fiend_invoice` Itemized Invoice (tracked cross, range 1-8 no LOS, 13 fire + 2 Debt) · `a3_fiend_audit` Hostile Audit (delayed 1, a whole line across the arena perpendicular to his facing, 16 + 1 Debt) · `a3_fiend_smack` Fiscal Smackdown (adjacent 15 + 1 Debt) |
+| hellhound_walkies | 22/24 · 7.0 · 83% · 1.9 | 22/24 · 6.5 · 48% · 0.9 |
+| influencer_collab | 22/24 · 7.1 · 89% · 2.1 | 23/24 · 6.5 · 64% · 1.7 |
+| self_help_seminar (survive 5) | 24/24 · 5.0 · 63% · 1.5 | 24/24 · 5.0 · 59% · 1.5 |
+| trial_by_combat | 22/24 · 8.3 · 102% · 2.1 | 20/24 · 8.0 · 81% · 2.8 |
+| cursed_dice_night | 22/24 · 10.3 · 107% · 2.3 | 23/24 · 9.5 · 73% · 1.8 |
+| kobold_pep_rally (destroy 3) | 18/24 · 12.5 · 99% · 2.8 | 23/24 · 8.7 · 56% · 1.5 |
+| snack_heist (protect, bowl −30 / −18 of 48) | 19/24 · 6.7 · 52% · 0.8 | 24/24 · 6.2 · 32% · 0.5 |
+| intern_orientation | 15/24 · 10.2 · 106% · 2.8 | 19/24 · 9.3 · 80% · 2.5 |
+| **hoarders_lair** (elite) | 22/24 · 16.4 · 112% · 3.2 (1 timeout) | 21/24 · 13.5 · 68% · 2.3 |
+| **very_dramatic_entrance** (elite) | 22/24 · 13.3 · 100% · 3.0 | 23/24 · 10.6 · 64% · 2.2 |
+| **tax_season** (elite) | 18/24 · 11.9 · 141% · 5.6 | 15/24 · 10.4 · 99% · 4.6 |
+| **total** | 226/264 (normal 85%, elite 86%) | 237/264 (normal 93%, elite 82%) |
 
-All three elites use **tenacity**: when a stun / sleep / freeze lands they become `a3_unshakeable` (buff, 2 turns) and
-shrug off the next stun-likes, so they can't be stun-locked (a stun still cancels that round's telegraphs; dispelling
-the buff re-opens the window).
+Before this pass (same harness, 12 seeds): fixture 83/132 (Tax Season 1/12, Intern Orientation 3/12, Influencer Collab
+5/12), real 94/132 (Tax Season 2/12, Intern Orientation 3/12). Biggest damage sources now (real, per fight): the
+eyeballs' Stare + Overtime (Intern Orientation 109), the fiend (invoice 48, smack 36 + 5 as reactions, Debt 26), the
+dragon (bite 50, tail 36), the Death Knight's swing (54 + 4 as reactions), the golems' dice (52). Attacks of opportunity
+in 264 real fights: by enemies 99 (hound 37, lawyer 22, kobold 16, golem 10, fiend 8, Death Knight 6), by heroes 130
+(the raven, corgis, Marwyn, Marbles, Sparrow, Valdris…). Round-1 downs (focus fire before the party acts; no single
+enemy can one-shot, see the suite): at most 1 fight in 24 per encounter at levels 4-6; at level 4 alone, real heroes:
+Tax Season 3/24, Cursed Dice Night 2/24 — and Trial by Combat 4/24 before its imp went (0/24 after: the imp acted first,
+Marked the weakest hero and the bench's high ground did the rest). The suites' own sims (3 seeds) add soft bands on the
+totals: normal fights ≥ 60% won, elites ≥ a third, and the party loses ≥ 25% of its HP (fights must hurt).
 
-**Encounters** (`reward.itemRarity: 'rare'` on elites, elites `minDepth: 2`):
+### Public API (for other authors)
 
-| Encounter | Kind / map | Enemies | Objective / extras |
-|---|---|---|---|
-| `a3_hellhound_walkies` Walkies in the Nine Hells | normal · hellscape 11×11 lava, oil, barrels | 3 hounds, 2 imps | killAll |
-| `a3_influencer_collab` Influencer Collab Stream | normal · hellscape 10×9 fire vents, hills, chokepoint · minDepth 1 | 3 imps, succubus, hound, eyeball | killAll |
-| `a3_self_help_seminar` Mandatory Self-Help Seminar | normal · dm_table 11×11 cheeto, water · minDepth 1 | flayer, 2 succubi, eyeball, kobold | **survive 5**; round 3: 2 imps (N) |
-| `a3_trial_by_combat` Trial by Combat (Rules As Written) | normal · **layout** dm_table 11×11 (raised paper bench, the Honorable Judge d20, jury rails, a pit "bar" with 2 gaps, Exhibit B barrel) · minDepth 2 | 2 lawyers, eyeball, golem, imp | killAll; round 3: hound (N) |
-| `a3_cursed_dice_night` Cursed Dice Night | normal · dm_table 12×11 pits, cheeto · minDepth 2 | 2 golems, 2 imps, lawyer, kobold | killAll |
-| `a3_kobold_pep_rally` Kobold Pep Rally | normal · hoard 11×11 pits, chest · minDepth 1 | 2 kobolds, 2 hounds, imp | **destroy 3 totems**; rule `a3_spirit_fingers` (enemies take 2 less per hit while a totem stands); round 4: succubus + imp (N); leftover totems topple at round end once no enemy/wave is left |
-| `a3_snack_heist` The Great Snack Heist | normal · dm_table 12×10 cheeto, cover · minDepth 1 | 3 hounds, imp, kobold | **protect `a3_snack_bowl`** (48 HP; the hounds' breath/bite chew objects) |
-| `a3_intern_orientation` Intern Orientation Day | normal · hoard 12×12 pillars, open · minDepth 3 | 3 eyeballs, lawyer, kobold | killAll; round 3: 2 imps (E) |
-| `a3_hoarders_lair` The Hoarder's Lair | **elite** · **layout** hoard 12×11 (gold mound with the dragon's perch, 5 hoard piles ringed within 3 of it, pit, lava pool, chest) | dragon, 2 kobolds (mark K), hound (mark D) | killAll |
-| `a3_very_dramatic_entrance` A Very Dramatic Entrance | **elite** · hellscape 12×11 lava, braziers | death knight, 2 backup dancers, succubus | killAll |
-| `a3_tax_season` Tax Season in the Nine Hells | **elite** · **layout** hellscape 12×11 "Infernal Revenue Office" (raised corner office, desks, filing cabinets, water cooler fountain, shredder barrels, lava vents) | pit fiend, 2 imps, lawyer | killAll; round 4: 2 imps (N) |
-
-Sprites: distinct silhouettes per enemy (scale minion 0.78-0.82, normal 0.92-1.08, elite 1.42-1.55), overlays for
-the props (imp selfie stick + ring light, eyeball propeller beanie + lanyard, flayer face tentacles + headset, kobold
-tower shield, lawyer tie, succubus headset + floating heart, hound lava cracks + nostril smoke, dragon back spines (with
-swept-back horns, crown and chain), Death Knight floor spotlight + rose, fiend tie + calculator), a full custom painter for the Natural 1 Golem and
-custom object painters for the hoard pile and the snack bowl.
-
-## Balance (AutoPlay sims)
-
-Re-measured after the review (2026-10-31), 24 seeds per encounter and party. Fixture party = `test_knight,
-test_cleric, test_mage, test_rogue`, levels 7-10, all 4 skills at III. Real = random 4 of the 10 heroes, levels 7-10,
-starting skills at III + 2 pool skills at II (full content loaded; depends on the hero authors' current kits; the
-opt-in `?a3real=1&verbose=1&sims=N` suite prints the same kind of table). "Taken" = all HP the heroes lost; "by
-enemies" = damage credited to enemy units; "self" = damage the heroes took in their own phase from terrain, surfaces
-and burns with no enemy source (AutoPlay walking through lava/fire, see Requests).
-
-| Encounter | Fixture: won · rounds · taken · by enemies · self · downs | Real: won · rounds · taken · by enemies · self · downs |
-|---|---|---|
-| hellhound_walkies | 24/24 · 5.5 · 65 (30%) · 22 · 42 · 0.4 | 24/24 · 4.2 · 60 (27%) · 24 · 46 · 0.4 |
-| influencer_collab | 24/24 · 6.0 · 97 (45%) · 40 · 58 · 0.7 | 24/24 · 4.4 · 49 (22%) · 39 · 18 · 0.1 |
-| self_help_seminar | 24/24 · 5.0 · 44 (21%) · 45 · 2 · 0.1 | 24/24 · 4.9 · 23 (10%) · 31 · 2 · 0.0 |
-| trial_by_combat | 24/24 · 6.0 · 67 (31%) · 72 · 0 · 0.0 | 24/24 · 4.6 · 35 (16%) · 46 · 0 · 0.0 |
-| cursed_dice_night | 24/24 · 6.6 · 39 (18%) · 37 · 1 · 0.0 | 24/24 · 5.1 · 34 (15%) · 41 · 0 · 0.0 |
-| kobold_pep_rally | 24/24 · 10.6 · 50 (23%) · 30 · 20 · 0.2 | 24/24 · 7.4 · 34 (15%) · 34 · 7 · 0.0 |
-| snack_heist (12×10) | 23/24 · 5.4 · 15 (7%) · 10 · 2 · 0.0 (bowl −15 of 48 on average) | 24/24 · 4.2 · 11 (5%) · 15 · 1 · 0.0 |
-| intern_orientation | 24/24 · 7.3 · 53 (25%) · 48 · 11 · 0.2 | 24/24 · 5.6 · 32 (14%) · 38 · 8 · 0.0 |
-| **hoarders_lair** (elite) | 24/24 · 13.3 · 100 (46%) · 86 · 15 · 0.2 | 24/24 · 7.4 · 23 (11%) · 35 · 4 · 0.0 |
-| **very_dramatic_entrance** (elite) | 24/24 · 8.4 · 103 (48%) · 35 · 69 · 0.5 | 24/24 · 7.0 · 62 (27%) · 24 · 55 · 0.2 |
-| **tax_season** (elite) | 24/24 · 9.5 · 128 (60%) · 96 · 32 · 0.2 | 24/24 · 7.4 · 83 (37%) · 88 · 16 · 0.3 |
-
-Before the review the real-hero Lair cost 6% party HP (13 damage in 7.4 rounds: the elite was the easiest fight of
-the act) and the fixture Snack Heist lost 4 of 40 bowls on a 10×10 table.
-
-The generic `content: encounters build and auto-battle` suite (random real parties, level 8) wins all 11 in 3-6 rounds
-(normal; Pep Rally ~10) and 7-8 rounds (elite).
-
-Tuning history worth knowing: AutoPlay (and players) sidestep every self-anchored telegraph, and step out of range or
-sight of short tracked ones, so early versions dealt almost no damage (Cursed Dice Night: 3 damage in 6 rounds). The
-fix was a mix of (a) a few deliberate **must-answer** threats with long, sight-free reach (Go Live!, OBJECTION!, the
-golem's lob, the invoice — all telegraphed, all answerable by killing / stunning / silencing / stealth), (b) gap-closers
-(Pounce, Swoop, Come Hither) and a tracking ray for the eyeball, (c) 5-6 enemies per normal fight, (d) elite tenacity
-against stun-locks and (e) a positional hoard (piles only count within 3 tiles), which also removed a kiting stalemate.
-
-## Public API (for other authors)
-
-- Statuses: `a3_thief` (debuff, permanent; dragons deal +4 to it), `a3_monologue` (Death Knight helper; self-cleaning
-  if its intent is gone), `a3_debt` (stacking debuff, max 5; ticks at the owner's turn start, grows; reduced by hitting
-  `a3_pit_fiend`), `a3_unshakeable` (buff; meaning is enforced by the elite defs' hooks, see below).
-- Objects: `a3_hoard_pile` (non-blocking; `data.gold` = gold inside, default 4-8; AutoPlay hint 10 near a living
-  dragon, 3 otherwise; pocketing brands the walker a Thief), `a3_snack_bowl` (48 HP, blocks movement; a protect target).
-- Enemies are safe to `DD.Act.spawn` anywhere (no encounter wiring needed): the dragon counts piles on any map, the
-  Death Knight's intermission and the fiend's debt work in any fight. The DM boss can cameo any of them.
+- Statuses: `a3_thief` (debuff, permanent; dragons deal +4 to it), `a3_monologue` (Death Knight helper; self-cleaning if
+  its wind-up is gone), `a3_debt` (stacking debuff, max 5; ticks at the owner's turn start, then grows; reduced by skill
+  hits on `a3_pit_fiend`), `a3_unshakeable` (buff; meaning enforced by the elite defs' hooks, below).
+- Objects: `a3_hoard_pile` (non-blocking; `data.gold`, default 4-8; AutoPlay hint 10 near a living dragon, 3
+  otherwise; pocketing brands the walker a Thief), `a3_snack_bowl` (48 HP, blocks movement; a protect target).
+- Every act-3 enemy is safe to `DD.Act.spawn` anywhere (DM cameos): the dragon counts piles on any map, the Death
+  Knight's intermission and the fiend's Debt work in any fight; spawned units roll initiative on arrival.
 - Tenacity pattern (copyable): defs whose hooks cancel stun-likes in `modifyStatus` while `a3_unshakeable` is present
-  and add it in `onStatusApplied` when a stun-like lands.
+  and add it (2 turns) in `onStatusApplied` when a stun-like lands; a stun still interrupts that elite's wind-up.
+- `engagedFix(unit, b, spot, origin, style)` (local helper) is the pattern for any custom planner that scores spots by
+  placing the unit virtually and calling `DD.AI.bestAttack(…, { noMove: true })`.
 
 ## Deviations
 
-- Delayed intents are created by `plan()` / `api.addIntent` and then get `delay`/`pending` set (the default planner
-  takes no delay option); identical to `makeIntent(..., { delay })`.
-- Movement inside skills: Pounce, Greedy Bite and Kick Ball Change leap the attacker next to its tracked target during
-  execution (tile effects apply on landing; not while Rooted); the imp blinks (teleports) during planning instead of
-  walking.
-- Some elites declare two intents in a round (dragon: main attack + tail sweep / breath; Death Knight: swing + grip,
-  grip + a swing at the same hero, or monologue + swing; fiend: audit + attack). Normal enemies declare one (plus a
-  pending delayed one at most). The Death Knight's follow-up swing is planned while its target is still out of reach
-  (it tracks the hero the chain reels in, and fizzles honestly if the pull fails).
-- `a3_kobold_pep_rally` auto-destroys the remaining totems at round end once no enemy and no wave is left (anti-stall:
-  AutoPlay once failed to path to the last totem), so that destroy objective can also complete by routing the rally.
-- The encounter rule `a3_spirit_fingers` is a rule object on the encounter (not a registry def).
-- Snack bowl object is named "DM's Snack Bowl" (the engine prefixes "the" in the protect objective text).
+- The Death Knight's swing lost its 2-tile reach (now the 3 tiles in front of him) so that he makes attacks of
+  opportunity like the other brutes; the chain + swing combo needs the pull to land the hero next to him.
+- The dragon and the backup dancers make no attacks of opportunity (their attacks are a swoop / a shimmy, not melee by
+  the engine's rule); the passive lines say so (the dancers "too busy dancing").
+- `flags.noProvoke` on the imp: it never walks (blinks are teleports), so only a sheep'd imp's stroll is affected —
+  declared for the HUD / AutoPlay like the act-2 wisp.
+- Tax Season's roster changed (no Rules Lawyer; 1 late imp instead of 2), Influencer Collab has 2 imps (was 3) and
+  Trial by Combat none (its court reporter is now the eyeball); the intros and wave texts say so.
+- The custom planners' hoard leash, monologue spot and approach keep their own scoring (the engine has no destination
+  filter); they add the engine's prices (walk 0.2 per point, hazards, `aooCost`) so they choose like the default turn.
+- From the earlier v2 attempt (kept): delayed intents only through `api.windUp` (the three signatures); several elites
+  act twice in a turn (dragon: breath wind-up + tail sweep; Death Knight: monologue wind-up + swing, or chain + swing;
+  fiend: audit wind-up + one attack); `a3_kobold_pep_rally` topples its remaining totems at round end once no enemy and
+  no wave is left (anti-stall); the encounter rule `a3_spirit_fingers` is a rule object on the encounter.
 
 ## Core fixes
 
@@ -123,106 +148,134 @@ None. No core file was edited.
 
 ## Requests
 
-- **RULES (AutoPlay)**: `approachMove` heads for objective tiles by Manhattan distance, so a hero can stall behind a
-  pit or wall (seen as a 31-round timeout in the Pep Rally before my fallback). A walking-distance field (like the AI's
-  `fieldTo`) would fix it for every destroy/hint objective.
-- **RULES (AI api)**: let `api.defaultPlan(u, style)` / the engine `approach` take a style override; custom planners
-  that mix melee and ranged skills (golem, eyeball, Death Knight) had to re-implement approach.
-- **RULES (AI)**: `AI.recharm` re-plans a charmed enemy with all of its skills and no delay (harmless here, but a
-  planner-aware recharm would keep delayed skills delayed).
-- **RENDER-SPRITES**: an `underlay(g, t)` hook drawn before the base sprite would allow ground effects behind a unit
-  (the Death Knight's spotlight had to shrink to a floor pool because overlays paint over the body).
-- **MAPGEN (minor)**: layout enemy placement fills `E` marks by tier (normal before minion), so placing minions on
-  specific marks needs explicit `mark` hints (used in the lair). Documenting this would help other layout authors.
-- **RULES (AutoPlay, review)** **[Resolved at integration — see docs/notes/content-digest.md.]** heroes walk onto and across lava. `dangerAt` adds a flat 6 for a hazard on the end tile
-  and nothing for hazards crossed on the way (the `hazard` of `reachable()` entries is unused), so a hero takes 8 +
-  Burn 2 per lava tile to save a step. In act-3 hellscape fights that is most of the damage the party takes:
-  `very_dramatic_entrance` 55-69 self-inflicted vs 24-35 from enemies per fight, `hellhound_walkies` 42-46 vs 22-24
-  (table above). Players won't do this, so hellscape balance numbers overstate the danger. Pricing each crossed hazard
-  at its real damage (like `AI.pathRisk`) would fix it for every act.
-- **RULES (AI.describe, review)**: tracked telegraphs always say "fizzles if out of range or sight", also for skills
-  with `target.los: false` (Go Live!, OBJECTION!, Unsolicited Life Advice, Throw the Bones, Itemized Invoice, Come
-  Hither, Darling), whose desc says no line of sight is needed. "fizzles if out of range" when `los === false` (and
-  nothing when the range covers the board) would keep the HUD honest.
-- **MAPGEN (review)**: a `protect` object is placed 2-4 tiles from the hero zone with no minimum distance from the enemy
-  zone, so on small maps it can spawn next to the enemies (Snack Heist on 10×10: bowl 1-2 tiles from the hounds in a
-  third of the seeds; the lost bowls all spawned 1-3 tiles from them). I widened that map to 12×10; a minimum
-  distance from the enemy zone would fix it for every protect encounter.
+- **BALANCE (v2 balance pass)**: act-3 HP pools were set for level 7-10 parties; at v2's levels 4-6 the elite fights
+  run long — real heroes 10.4-13.5 rounds, the fixture party 11.9-16.4 (Hoarder's Lair longest: 211 enemy HP and up to
+  15 hoard Block a round; 1 fixture timeout in 24 = a cleric Help-Up loop the dragon can't finish). Tried here: elite HP
+  to 130 / 125 and hoard Block 2 per pile, each ~1 round shorter at similar win rates. Normal fights are 5-10 rounds.
+  The hardest fights today: Tax Season (real 15/24), Intern Orientation (19/24, fixture 15/24), Pep Rally (fixture
+  18/24).
+- **AUTOPLAY**: Infernal Debt is invisible to the danger model (a custom status that deals its stacks at the owner's
+  turn start, ignoring Block) and so is its payoff (each skill hit on the fiend pays 2): AutoPlay neither hurries to
+  pay it nor kills the fiend to have it forgiven, which overstates Tax Season's difficulty a little. A generic way for
+  status defs to declare "damage at the owner's turn start" would help (Poison-like content statuses).
+- **MAPGEN (carried over, still applies as far as I know)**: a `protect` object is placed 2-4 tiles from the hero zone
+  with no minimum distance from the enemy zone (Snack Heist was widened to 12×10 for it).
+- **Lead (DESIGN §8 act-3 list, optional)**: the Imp Influencer is the act's diver (assassin targeting); the Rules
+  Lawyer, Golem, Kobold, hounds, Death Knight and Pit Fiend hold the line (attacks of opportunity).
 
 ## Known issues
 
-- Real heroes still handle the Hoarder's Lair comfortably (11% HP lost in ~7.4 rounds, up from 6%): their kits pile
-  Weak / Roasted / Dazzle / taunts / stuns on the dragon. It is now in line with the normal fights; Death Knight and
-  Tax Season stay the harder elites. The fixture party takes 13 rounds there (it loots every pile first).
-- Self-anchored melee (golem d20 swing, kobold spear, fiend smack, motion to dismiss) and short tracked attacks are
-  sidestepped by AutoPlay almost every time (it steps exactly one tile out of range); most damage comes from
-  sight-free reach, AoEs and the elites' mechanics. That is the readable-telegraph design, but it makes golem-heavy
-  fights lighter than their HP suggests.
-- Imp Influencers are in 9 of the 11 encounters and Go Live! is the top damage source of most normal fights ("kill the
-  imps first" is the common answer). Deliberate (the act's signature minion, the must-answer threat), but it is the
-  first knob to turn if act 3 feels samey: Go Live! cooldown 1 → 2.
-- The golem's d20 swing telegraphs its 10-19 tier (11); the HUD marks `random` intents with "?" and the desc lists
-  every outcome.
-- Snack Heist pressure is on the bowl (hero damage is low; the bowl loses ~15 of 48 HP; 1 bowl in 24-40 fixture sims
-  is eaten).
-- Imp Influencer's blink planner evaluates ~60 tiles × a no-move `bestAttack` each planning; fine in tests, but it is
-  the most expensive act-3 planner.
-- Full `tools/test.sh` on 2026-10-31 after the review: PASS, 505 suites, 0 failures, no swallowed `Error in`
-  warnings (an Act 2 suite that was red mid-run belonged to that area's in-flight review and reproduced without act 3).
+- Real-hero sims depend on other areas' work in progress (new heroes being added, kits changing): the same seeds gave
+  Tax Season 8/16 in one run and 25/36 in another hour; trust the 24-36-seed numbers, not single runs.
+- The Lawyer's attack of opportunity can shove a hero 2 tiles into a pit or lava (intended: "Motion to Dismiss"); the
+  move preview names the Motion but shows only its damage, not the push. A natural 1 on the golem's reaction stuns the
+  golem instead (intended).
+- Imps still deal a lot in total (the act's most common enemy, diving the weak); Go Live! cooldown 1 → 2 is the next
+  knob if act 3 feels samey.
+- The fixture party (4-7 damage hits) finds armor 2 + Block elites slow (Hoarder's Lair 16 rounds); real heroes don't.
 
-## Review (2026-10-31, adversarial pass)
+## Requests (Nov 3) — content sweep for the user's v2 requests (flyers, barrels, aimed heals)
 
-Resumed after an interrupted first review pass that had left two suites red: it had raised the monologue interrupt
-threshold 20 → 30 and cut the monologue 18 → 16 (18 was above the DESIGN §5 elite band of 12-16; one L7-10 hit
-reached 20) without updating the tests. I kept both numbers and fixed the tests. Then, most severe first:
+The engine skips every floor effect for flyers (DD.Grid.feelsFloor / feelsSurface). Act 3 flyers: the Imp Influencer, the
+Floating Eyeball Intern and the Young Red Dragon (hero fire, webs, puddles and traps no longer touch them).
+- **Hoard Pile**: pocketing is a floor effect, so a flying hero floats over the gold (no gold, no Thief). The desc adds
+  "Flyers can't reach down that far"; the AutoPlay hint is 0 for a flyer. Kept to the rule (good and bad floor effects
+  alike); flip `pocketHoard` to a non-floor trigger if the user wants flyers to loot.
+- **Imp blink**: a web only rules out a blink spot when it would snare the imp (`G().feelsSurface`): a flying imp blinks
+  onto webs now.
+- **pushBonus** (Motion to Dismiss and the dragon's Tail Sweep scoring): lava counts only when it can hurt the target
+  (`G().harmlessTo`: a fire-proof hero is no lava target); flyers were already worth 0.
+- **Barrels**: Exhibit B (Trial by Combat), the Industrial Shredder (Tax Season) and the hellhound walk's barrels are the
+  core `barrel_explosive` (volatile): heroes can shoot them now. No act 3 object of its own explodes (hoard piles and the
+  snack bowl don't). **Aimed heals**: no hero-usable skill here.
+- **Tests**: `enemies_act3: v2 requests (Nov 3) — …` (18 assertions: hoard walked vs flown over with gold, Thief and the
+  hint; an imp blinking onto webs everywhere; Motion scores for a fire-proof and a flying target; the exhibits are
+  volatile). The imp and lava fixes are mutation-checked.
 
-1. **Hoarder's Lair, the act's easiest fight although it is an elite** (real heroes: 6% party HP). The dragon left its
-   perch on round 1 to creep to the edge of its leash, basked in 1 pile (3 Block) and its swoops fizzled 2 times in 3.
-   Now it guards: when nobody is in reach it settles back on the richest reachable spot of its hoard (`goHome`), and
-   it prefers to strike from tiles with more gold around it (`bestWithin` bonus = 0.4 × the Block it would get).
-   Greedy Bite swoops 4 tiles (was 3). Real heroes now lose 11%, the fixture party 46%; no timeouts. (Swoop 5 pushed
-   the fixture party to 76% with no change for real heroes, so 4.)
-2. **Greedy Bite stole gold from targets it never hurt** (an Invulnerable hero lost 5 gold and seeded a new pile, i.e.
-   +3 Block): the theft now needs the bite to land (HP or Block lost). Its telegraph now shows the +4 Thief bonus
-   (`telegraphFlat`), so the number on a Thief tells the truth. Desc says "If the bite lands … plus 3".
-3. **Skeletal Backup Dancers never hit anything** (none of 37 planned kicks over two sim batches landed: an
-   adjacent-only, self-anchored kick). Kick Ball Change is now a tracked step-in kick: shimmies up to 2 tiles next to
-   its target, then 7 (minion band); not while Rooted. Desc and codex updated. They still die fast (14 HP): fodder
-   that now has to be answered. Every leap (Pounce, swoop, shimmy) also refuses a landing tile whose hazard would kill
-   the leaper (a 6-HP dancer no longer hops into lava; at full HP it still braves it).
-4. **Death Knight dealt ~20 damage per elite fight** (cleave and chain fizzled 3 times in 4: the 2-5, sight-bound
-   chain was dodged by stepping one tile). Come Hither is now a spectral chain, 2-6 tiles, no LOS (a hero hugging
-   him is still too close), and when nobody is in reach he chains a hero and adds a swing that tracks the same hero
-   ("yank and swing"; only planned if the pull can bring them within 2). Enemy damage in his fight: fixture 22 → 35.
-   The rest of that fight's damage is AutoPlay walking through lava (see Requests).
-5. **Snack Heist was sometimes lost before the party could react**: on 10×10 the bowl spawned 1-2 tiles from the
-   hounds in about a third of the seeds (three breaths = 27 of its 48 HP in round 1), and the lost bowls (4 of 40)
-   all spawned 1-3 tiles from them. Map widened to 12×10: 1 of 40 lost, the bowl still loses ~15 HP per fight.
-6. **Infernal Debt was paid off by damage-over-time ticks** credited to the indebted hero (Poison / Bleed on the
-   fiend): only skill hits pay now, as the desc says ("each hit it lands").
-7. **Mechanics text**: the hoard Block cap (max 15) is in the dragon and pile tooltips; both breaths say they also hit
-   objects and that "the floor there burns through your next turn" (it never lasted two player turns: set in the enemy
-   phase with 2 turns, it ticks at once); Throw the Bones says it never hits the golem itself; the chain states its
-   2-6 range and no-LOS reach. Flavor fixes: the Pep Rally wave called the succubus a "life coach" (that is the Mind
-   Flayer), the Tax Season wave called the imps "interns" (that is the Eyeball).
-8. **Sprite**: the dragon wore ram horns (read as a goat and duplicated the Pit Fiend) and a gold "coin heap" overlay
-   that rendered as a goblet under its chin; now swept-back horns, no plate (crown, chain and spines stay).
-9. **Tests** (16 suites, ~2,300 assertions, ~5 s isolated): the DK suite reads the threshold and Hype from the level
-   table; the hoard cap test no longer depends on where the dragon wanders (a Rooted dragon on 6 piles). New checks:
-   hoard guarding (settles where 3 piles cover it, strikes from inside the leash), swoop range = desc, no theft on an
-   Invulnerable target, Thief telegraph, the dancer's shimmy / fizzle / Root, the chain without LOS and too close, the
-   yank-and-swing order and damage, the golem's lob sparing itself, the real fire-floor lifetime (present on your next
-   turn, gone after), Poison ticks not paying Debt, previews under Spirit Fingers and against an Unshakeable elite,
-   and a new robustness suite: every act-3 skill fired twice and every planner run under 14 conditions (charmed,
-   silenced, dazzled, confused, taunted, rooted, sheep, dead / moved / stealthed / invulnerable targets, map edge,
-   pits) plus every enemy spawned mid-fight (DM cameos), with no swallowed warnings (verified to fail on an injected
-   bug). Stale numbers in assertion labels now come from the level tables.
+## Review (v2) — adversarial review of the v2 / attacks-of-opportunity pass (ADVERSARIAL REVIEWER role)
 
-Checked and fine: registry and load warnings (none), id prefixes, `desc(L, null)` for every skill, hook signatures,
-no `Math.random` in logic (pickup-line barks use the cosmetic `DD.rng`), every intent readable in `AI.describe`,
-previews == reality for Shield Wall, Debt payoff, Thief, Charm, the monologue interrupt Hype, hoard Block and Spirit
-Fingers; silhouettes in the gallery and on the board (Lair, Trial, Tax Season, Pep Rally, Very Dramatic Entrance).
-No encounter is lost by real heroes, won in 1-2 rounds on average, or times out (24 seeds each, both parties).
-No core file was edited. Scratch probes used for the numbers above live in `.tmp/enemies-act3-review/` (`rv4.js` sim
-table, `rv5.js` runtime overrides for tuning trials, `rv7.js` fizzle reasons, `rv9.js` snack-bowl timeline; run them
-with `bash .tmp/enemies-act3-review/probe.sh "probe=rv4.js&suite=rv4&verbose=1&sims=24"`).
+Scope: the pass above (`act3.js`, its suites, these notes). Method: the 20 suites and the 8 generic `content:` suites
+isolated; scratch probes in `.tmp/ea3v2rev/` (`probe.sh "suite=probe: pN&probe=pN.js&verbose=1"`, Chrome-slot aware):
+`p1` = per-enemy turn stats over 66 real-hero AutoPlay fights (idle turns with a reachable foe, engaged → stuck /
+switched, attacks of opportunity made / taken, wind-ups), `p3` = a per-turn log of one enemy type, `p4` = a board dump
+whenever it idles next to a foe, `p5` = every hero's HP at levels 4-6, `p6` = how much Shield Wall Block is wiped
+before any hero acts; screenshots (`look.sh` + `look.js`: the Pit Fiend, Imp and Hell Hound inspect panels; the
+Hoarder's Lair under AutoPlay; `gallery=act3`).
+
+**Verified (held)**: every skill's desc matches its execute (1 level each; the suites fire each one as an action, the
+golem's three d20 outcomes and the dice lob rigged); every enemy's first melee skill is its attack of opportunity
+exactly as the table says (the engine's `meleeDef`: no 'ranged' tag, area skills only when tagged 'melee', 'self'-target
+tails never), the preview names it and hits for the desc number, the six without one let a hero walk off for free; the
+elites have exactly one wind-up each and nobody else ever winds up (also over 66 real fights: 25 breaths with 2.0 foes
+in the cone when announced, 7 monologues with 2.6, 14 audits with 1.7); styles (one diver, three ranged, the rest
+brutes) and init values fit (imps +3 first, golem −2 last); brutes stick (hound 31 of 33 engaged turns hit the engaged
+hero, fiend 14/14, golem 7/7, Death Knight 9/9); objectives and waves under initiative; panels read well and fit
+(screenshots). Real-hero sims after the fixes (12 seeds): normal 91/96, elite 30/36; fixture (12 seeds): normal 81/96,
+elite 33/36 — the same band as the pass's 24-seed table.
+
+**Fixed** (each with a regression assertion in the suites named, mutation-checked: reverting the fix fails it):
+1. **A walk stopped by an attack of opportunity on its first tile counted as "not moved"**, so the custom planners
+   walked a second time in the same turn: `plan()` set `moved` from the position, `approach()` returned the walk's
+   success. Seen: the dragon, stopped leaving the knight, re-planned with walking allowed and swooped across the board.
+   Now a walk that set off is spent (`plan` → `moved: true`, `approach` returns true once it sets off). ("Hoard Breath"
+   suite.)
+2. **The dragon re-aimed its breath wind-up after an interrupted walk at whatever was in front of it** (no
+   `BREATH_MIN` check on the re-aim: a breath at one Invulnerable knight). `plan(opts.minScore)`; it strikes from where
+   it stopped instead. ("Hoard Breath" suite.)
+3. **The Death Knight wound up his monologue wherever a reaction stopped his walk** (one hero in range). He now checks
+   the audience where he ended up, else takes a plain turn without walking again; the walk uses the priced path.
+   ("Death Knight" suite.)
+4. **Spirit Fingers took 1 off Burn / Poison / Bleed ticks and hazards** while its desc said "every hit". Ticks and
+   hazards (cause 'status' / 'surface' / 'terrain') are not hits now, and the desc says so. ("every encounter builds".)
+5. **Shield Wall wasted its Block on allies that act before any hero** (Block is wiped at the ally's own turn start):
+   23% of the allies' Block in 36 real-hero kobold fights. The aiScore counts only allies whose Block meets a hero
+   turn (`blockHolds`: walks the initiative order); 16% left = incidental neighbours of a useful cast. ("statuses from
+   enemy turns".)
+6. **The custom planners' approach field went through hostile bodies**: a downed hero lying in a doorway was a
+   shortcut, so the golem parked next to the body. The field skips hostile-occupied tiles. ("targeting styles".)
+7. Passive wording: the imp blinks "out of melee reach (3+ tiles from the heroes when it can)" (it was "about 3": it
+   only avoids 1-2); the eyeball fires the overtime beam "when it can line up two heroes (or their summons) in a
+   straight line from it" (it was "when two heroes share a straight line"; codex desc too).
+8. Tests: the one-shot bound now uses every registered hero (Syllamin, 29 HP at level 4, is frailer than the fixtures'
+   31; the Death Knight's 23-damage yank-and-swing still leaves him standing); a stale "−2" comment.
+
+**Requests (cross-area, found here)**
+- **ENGINE (`ai.js` `reachOf` / `threatMap`)**: skills a planner only ever winds up count as "on its turn it can reach":
+  the Pit Fiend's panel lists every hero at 16 (Hostile Audit, range 12) and threat shading covers the board; same for
+  Hoard Breath, Villain Monologue and the bosses' wind-ups. Their marked tiles already show them: skip such skills (a
+  def flag, e.g. `windupOnly: true`, that content can set).
+- **ENGINE (`grid.js` `hazardDamage` / `terrain.js`)**: hazard estimates ignore resistances: lava (8 fire + Burn) and
+  fire surfaces read as deadly for fire-immune walkers (Hell Hound, Pit Fiend), who then avoid lava they can't feel.
+- **ENGINE (`ai.js` `bestAttack` / `positionScore`)**: a unit standing on a hazard tile with only hazards around it gets
+  that tile's end-of-turn penalty on every action, so it does nothing even next to a foe (a Hell Hound that pounced
+  into lava sat beside a raven for two turns, `bestAttack` null). Staying put costs the same with or without an
+  attack: compare against doing nothing.
+- **ENGINE (`ai.js` `fieldTo`)**: the default planner's approach field has the doorway issue of fix 6 (a Rules Lawyer
+  stood two turns in Trial by Combat's gap behind a downed hero).
+- **ENGINE (`actions.js` ~1427)**: the element chain log prints the surface id ("The jos_miasma goes up in a line of
+  flames!"); use the surface's name.
+- **BALANCE**: the Succubus Dating Coach idles about half her turns once her allies are Inspired (Pickup Line
+  cooldown 1, pep talk cooldown 3: 83 idle of 168 turns); the Lawyer about half (Objection cooldown 2, the Motion only
+  up close). Fine for "hard but fair", dull to watch; a cheap knob is a small off-turn action.
+
+**Known issues (left)**: the hound-in-lava stall above (engine); the author's open items (Lawyer push not in the move
+preview, Debt invisible to AutoPlay, long elite fights) stand.
+
+## Earlier history (v1 → v2, condensed)
+
+- **v1 + adversarial review (2026-10-31)**: the roster, layouts and sprites above; must-answer threats with long
+  sight-free reach (Go Live!, OBJECTION!, the golem's lob, the invoice), gap-closers (Pounce, Swoop, Come Hither),
+  5-6 enemies per normal fight, elite tenacity against stun-locks and a positional hoard (piles only count within 3
+  tiles, the dragon guards and settles back on its gold). Fixed then: Greedy Bite stole from Invulnerable targets
+  (theft now needs the bite to land; Thief +4 in its wind-up number), dancers never hit (now a 2-tile shimmy-kick; no
+  leap onto a hazard that would kill the leaper), the Death Knight's chain was dodged by one step (spectral, no LOS,
+  2-6), the Snack Heist bowl spawned next to the hounds on 10×10 (map 12×10), Debt was paid by DoT ticks (only skill
+  hits pay), and a dozen mechanics-text fixes. Sprites: distinct silhouettes per enemy (scales minion 0.78-0.82,
+  normal 0.92-1.08, elite 1.42-1.55), a custom painter for the Natural 1 Golem, object painters for the hoard pile and
+  the snack bowl, the Death Knight's spotlight underlay.
+- **v2 turn model (the interrupted earlier attempt, kept)**: actions at once, the three elite wind-ups via
+  `api.windUp`, init modifiers, the eyeball's overtime beam made immediate (+ a nap), Unshakeable per own turn, the
+  Hoarder's Block at the end of the dragon's turns, the monologue threshold 20 (act-3 parties are levels 4-6 now), the
+  fire floors "until the end of next round", suites rewritten for v2 (registry incl. init and no telegraph wording,
+  damage == desc for every skill as an action, statuses per own turn, every enemy's turns under `watchAreas`, previews,
+  odd conditions + mid-fight cameos, encounters under initiative, no round-1 one-shots, fixture sims at levels 4-6).

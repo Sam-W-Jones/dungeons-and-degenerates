@@ -65,6 +65,14 @@
     return DD.Combat._action(function () { return DD.Combat.resolveSkill(u, slotOrDef, target, {}); });
   }
 
+  /** Run fn while recording attacks of opportunity as 'attacker>mover' def ids (event 'opportunity:attack'). */
+  function opps(fn) {
+    const seen = [];
+    const off = DD.Events.on('opportunity:attack', function (e) { seen.push(e.attacker.defId + '>' + e.mover.defId); });
+    try { fn(); } finally { off(); }
+    return seen.join(' ');
+  }
+
   /** Per-unit HP before an action, to compare with a preview afterwards. */
   function hpMap(s) { const m = {}; s.units.forEach(function (u) { m[u.id] = { hp: u.hp, dead: !!u.dead, downed: !!u.downed }; }); return m; }
   function previewProblems(prev, s, before) {
@@ -195,16 +203,22 @@
       t.ok(lines.length >= 4 && lines.length <= 6, 'barks.' + k + ' has 4-6 lines (' + lines.length + ')');
       lines.forEach(function (line) {
         t.ok(typeof line === 'string' && line.length > 0 && line.length <= 70, 'bark ≤ 70 chars: ' + JSON.stringify(line) + ' (' + line.length + ')');
-        if (/Zarathor|Syllamin|Marbles|Marwyn|Ellaria|Josiah|Corelos|Slate|Buga|Kiri|Betty|Basanos/.test(line)) named++;
+        if (/Zarathor|Syllamin|Marbles|Marwyn|Ellaria|Josiah|Corelos|Slate|Buga|Kiri|Betty|Basanos|Valdris|Hjalmar|Pebbles/.test(line)) named++;
       });
     });
     t.ok(named >= 8, 'barks reference other heroes (' + named + ')');
+    ['Valdris', 'Hjalmar', 'Pebbles'].forEach(function (n) {
+      t.ok(BARK_KEYS.some(function (k) { return (h.barks[k] || []).some(function (line) { return line.indexOf(n) >= 0; }); }), 'a bark for the newcomer ' + n);
+    });
+    // her extra key: barks when she makes an attack of opportunity
+    const opp = h.barks.opportunity || [];
+    t.ok(opp.length >= 4 && opp.length <= 6 && opp.every(function (line) { return line.length > 0 && line.length <= 70; }), 'barks.opportunity: 4-6 short lines');
     // nothing left over from v1: no frenzy chip, no telegraph / Guard wording anywhere she shows text
     t.ok(!DD.getStatus('spa_frenzy'), 'the v1 Blood Frenzy chip is gone (the passive is one rule now)');
     const texts = [h.blurb, h.role, h.passive.name, h.passive.desc, DD.getSummon('spa_clone').desc];
     HERO_SKILLS.concat(CLONE_SKILLS).forEach(function (id) { for (let lv = 1; lv <= sk(id).levels.length; lv++) texts.push(DD.skillDesc(sk(id), lv, null)); });
     ITEMS.forEach(function (id) { texts.push(DD.getItem(id).desc); });
-    BARK_KEYS.forEach(function (k) { (h.barks[k] || []).forEach(function (line) { texts.push(line); }); });
+    BARK_KEYS.concat(['opportunity']).forEach(function (k) { (h.barks[k] || []).forEach(function (line) { texts.push(line); }); });
     texts.forEach(function (txt) { t.ok(!V1_WORDS.test(txt), 'no v1 mechanics in ' + JSON.stringify(String(txt).slice(0, 60))); });
     // the passive: one rule, two hooks (waive the cost, the donor pays) + the HUD's exact payer query
     t.eq(h.passive.name, 'Blood Price', 'passive name');
@@ -277,7 +291,7 @@
       }
     });
     t.ok(Object.keys(want).length === HERO_SKILLS.length + CLONE_SKILLS.length, 'every skill of hers is in the verb table');
-    // 3. levels: II = bigger numbers (same keys); III = bigger numbers or one added rider
+    // 3. levels: II = bigger numbers (same keys); III = bigger numbers OR one added rider (not both: DESIGN §6)
     POOL.forEach(function (id) {
       const lv = sk(id).levels;
       for (let i = 1; i < lv.length; i++) {
@@ -286,8 +300,8 @@
         const lost = Object.keys(a).filter(function (k) { return b[k] === undefined || (typeof a[k] === 'number' && !(b[k] >= a[k])); });
         const up = Object.keys(a).some(function (k) { return typeof a[k] === 'number' && b[k] > a[k]; });
         t.eq(lost.length, 0, id + ' level ' + (i + 1) + ' keeps every number of level ' + i);
-        t.ok(i === 1 ? added.length === 0 && up : added.length <= 1 && (up || added.length === 1),
-          id + ' level ' + (i + 1) + (i === 1 ? ': bigger numbers' : ': bigger numbers or one added rider') + ' (added ' + added.join(',') + ')');
+        t.ok(i === 1 ? added.length === 0 && up : (added.length === 0 && up) || (added.length === 1 && !up),
+          id + ' level ' + (i + 1) + (i === 1 ? ': bigger numbers' : ': bigger numbers or one added rider, not both') + ' (added ' + added.join(',') + ', bigger ' + up + ')');
       }
     });
   });
@@ -420,6 +434,12 @@
     t.eq(DD.Combat.costOf(a.spa, foreign, 1).hp, 3, 'a non-Sparrow HP cost is not waived (nobody would pay it)');
     t.eq(passive().hpPayer(a.spa, foreign, 1), null, 'and hpPayer names nobody for it');
     t.eq(DD.Combat.costOf(a.spa, sk('spa_scab'), 1).hp, 0, 'her own still is');
+    // desc == effect with the passive: no desc promises it is her own blood (a donor in reach pays any of her HP costs)
+    HERO_SKILLS.forEach(function (id) {
+      for (let lv = 1; lv <= sk(id).levels.length; lv++) {
+        t.ok(!/\b(your|her) own blood\b/i.test(DD.skillDesc(sk(id), lv, null)), id + ' L' + lv + ': desc does not say it is her own blood');
+      }
+    });
   });
 
   // ---- skills -------------------------------------------------------------------------------------------------
@@ -964,6 +984,124 @@
     t.eq(DD.Combat.costOf(a.spa, sk('spa_hemoglob'), 1).hp, 0, 'the rogue\'s Bleed made it her donor');
     use(t, a.spa, a.slot('spa_hemoglob'), 6, 4, 'free glob');
     t.ok(a.spa.hp === 22 && dn0 - dn.hp === 2, 'the rogue\'s victim paid her 2 HP');
+    // 6. v2 attacks of opportunity: Say It, Don't Spray It Dazzles the grunt pinning the mage, who walks off it for free
+    [false, true].forEach(function (spray) {
+      const b = arena({ skills: [['spa_spray', 1]], heroes: [{ id: 'test_mage', x: 3, y: 5 }], enemies: [E(3, 4, 'test_grunt', 3)] });
+      if (spray) use(t, b.spa, b.slot('spa_spray'), 3, 4, 'spray the grunt next to the mage');
+      DD.Combat.endTurn();
+      const mg2 = at(3, 5), hp0 = mg2.hp;
+      t.eq(DD.Combat.current(), mg2, 'the mage\'s turn');
+      const seen = opps(function () { DD.Combat.move(mg2, 3, 8); });
+      if (spray) t.ok(seen === '' && mg2.hp === hp0 && mg2.y === 8, 'Dazzled: the mage disengages without an attack of opportunity');
+      else t.ok(seen === 'test_grunt>test_mage' && mg2.hp === hp0 - 4, 'control: without the spray the grunt stabs the mage as she leaves');
+    });
+  });
+
+  // ---- attacks of opportunity (v2) -------------------------------------------------------------------------------
+  T.suite('hero_sparrow: attacks of opportunity (her Shiv holds the line; teleports, dashes and drags never provoke)', function (t) {
+    // 1. her own move away from an adjacent grunt provokes its stab: previewed, the walk goes on, no undo
+    let a = arena({ enemies: [E(3, 4, 'test_grunt', 3)] });
+    const g = at(3, 4);
+    const e = DD.Combat.reachable(a.spa).get('0,4');
+    t.ok(e && e.provokes.length === 1 && e.provokes[0] === g.id, 'walking away from it provokes the grunt');
+    const pv = DD.Combat.provokes(a.spa, 0, 4);
+    t.ok(pv.length === 1 && pv[0].skillId === 'test_grunt_stab' && pv[0].dmg === 4, 'the move preview names its stab for 4 (' + JSON.stringify(pv) + ')');
+    let ok = false;
+    t.eq(opps(function () { ok = DD.Combat.move(a.spa, 0, 4); }), 'test_grunt>sparrow', 'the grunt strikes as she leaves');
+    t.ok(ok && a.spa.hp === 18 && a.spa.x === 0 && a.spa.ap === 2, 'stabbed for 4 (as previewed), she walks on, 1 AP');
+    t.ok(!DD.Combat.canUndo(), 'a move that provoked cannot be undone');
+    // 2. Goblin Mode teleports out of the same spot for free; Stealthed, her next walk slips away too
+    a = arena({ skills: [['spa_goblinmode', 1]], enemies: [E(3, 4, 'test_grunt', 3), E(6, 4, 'test_grunt', 3)] });
+    t.eq(opps(function () { use(t, a.spa, a.slot('spa_goblinmode'), 5, 4, 'goblin mode out'); }), '', 'Goblin Mode (a teleport) never provokes');
+    t.ok(a.spa.hp === 22 && a.spa.x === 5 && a.spa.y === 4, 'out without a scratch, next to the other grunt');
+    t.eq(opps(function () { DD.Combat.move(a.spa, 5, 1); }), '', 'Stealthed: walking off the second grunt provokes nothing');
+    t.ok(a.spa.hp === 22 && a.spa.y === 1, 'still unscratched');
+    // 3. Vein Glory darts from one foe to another: a dash never provokes
+    a = arena({ skills: [['spa_veinglory', 1]], enemies: [E(3, 4, 'test_grunt', 3), E(2, 7, 'test_grunt', 3)] });
+    const far = at(2, 7);
+    t.eq(opps(function () { use(t, a.spa, a.slot('spa_veinglory'), 2, 7, 'vein glory away'); }), '', 'Vein Glory (a dash) never provokes');
+    t.ok(a.spa.hp === 18 && a.spa.x === 2 && a.spa.y === 6 && far.hp === 42 - L('spa_veinglory', 1).dmg, 'only the 4 HP price; landed next to the other grunt and gutted it');
+    // 4. dragging her Bleeding neighbour off her (Blood Puppet Show) is a push: no Shiv for her either
+    a = arena({ skills: [['spa_puppet', 1]], enemies: [E(3, 4, 'test_grunt', 3)] });
+    const pg = at(3, 4);
+    DD.Act.addStatus(pg, 'bleed', { stacks: 1 }, a.spa);
+    t.eq(opps(function () { use(t, a.spa, a.slot('spa_puppet'), 3, 4, 'puppet the neighbour away'); }), '', 'a drag is no move action: nobody strikes');
+    t.ok(pg.x === 5 && pg.hp === 42 - 2 - 1 && a.spa.oppRound !== a.s.round, 'it paid her 2 HP price and bled 1 on the drag; her reaction is unused');
+    // 5. a foe walking off her: Shiv Happens for free (4 + Bleed 1), then its walk makes it bleed
+    a = arena({ enemies: [E(3, 4, 'test_grunt', 3)] });
+    const w = at(3, 4);
+    t.eq(DD.Act.opportunitySlot(a.spa), a.spa.basic, 'her attack of opportunity is Shiv Happens (a melee basic attack)');
+    t.eq(DD.AI.opportunityDmg(a.spa, w), L('spa_basic', 1).dmg, 'the AI prices it at her basic damage (4)');
+    const ap0 = a.spa.ap, uses0 = a.spa.basic.uses || 0;
+    t.eq(opps(function () { DD.AI.moveTo(w, 6, 4); }), 'sparrow>test_grunt', 'she strikes as it leaves');
+    t.ok(w.x === 6 && w.hp === 42 - 4 - 1 && stacks(w, 'bleed') === 1 && surf(6, 4) === 'blood', 'shivved (4 + Bleed 1), then the walk made it bleed 1 and leave blood (' + w.hp + ')');
+    t.ok(a.spa.ap === ap0 && (a.spa.basic.uses || 0) === uses0 && !a.spa.basic.usedThisTurn && a.spa.oppRound === a.s.round, 'free: no AP, no use; her reaction is spent for the round');
+    // 6. the Shiv of Sharing: her attack of opportunity Bleeds 2
+    a = arena({ items: ['spa_shiv_of_sharing'], enemies: [E(3, 4, 'test_grunt', 3)] });
+    const sv = at(3, 4);
+    DD.AI.moveTo(sv, 6, 4);
+    t.ok(stacks(sv, 'bleed') === 2 && sv.hp === 42 - 4 - 2, 'with the Shiv of Sharing: Bleed 2 (and the walk bleeds 2)');
+    // 7. at most one per round; a new round refreshes it
+    a = arena({ enemies: [E(3, 4, 'test_grunt', 3), E(2, 5, 'test_grunt', 3)] });
+    const f1 = at(3, 4), f2 = at(2, 5);
+    t.eq(opps(function () { DD.AI.moveTo(f1, 6, 4); DD.AI.moveTo(f2, 2, 8); }), 'sparrow>test_grunt', 'one attack of opportunity per round: only the first grunt is shivved');
+    t.eq(f2.hp, 42, 'the second one walks off untouched');
+    DD.Combat.endTurn();
+    t.ok(a.s.round === 2 && DD.Combat.current() === a.spa, 'round 2, her turn');
+    DD.Act.teleport(f2, 2, 5);
+    t.eq(opps(function () { DD.AI.moveTo(f2, 2, 8); }), 'sparrow>test_grunt', 'a new round: she strikes again');
+    // 8. locked out: stunned / asleep / frozen / sheep / downed make none; silenced still does (the Shiv is no spell)
+    ['stun', 'sleep', 'frozen', 'sheep'].forEach(function (id) {
+      const b = arena({ enemies: [E(3, 4, 'test_grunt', 3)] });
+      DD.Act.addStatus(b.spa, id, { turns: 1 }, null);
+      t.eq(opps(function () { DD.AI.moveTo(at(3, 4), 6, 4); }), '', id + ': no attack of opportunity');
+    });
+    let b = arena({ heroes: [{ id: 'test_cleric', x: 8, y: 8 }], enemies: [E(3, 4, 'test_grunt', 3)] });
+    b.spa.hp = 1;
+    DD.Act.damage(null, b.spa, 5, { cause: 'other' });
+    t.ok(b.spa.downed, 'downed');
+    t.eq(opps(function () { DD.AI.moveTo(at(3, 4), 6, 4); }), '', 'downed: no attack of opportunity');
+    b = arena({ enemies: [E(3, 4, 'test_grunt', 3)] });
+    DD.Act.addStatus(b.spa, 'silenced', { turns: 1 }, null);
+    t.eq(opps(function () { DD.AI.moveTo(at(3, 4), 6, 4); }), 'sparrow>test_grunt', 'silenced: her Shiv is no spell, she still strikes');
+    // 9. charmed: never her charmer, any other foe
+    b = arena({ enemies: [E(3, 4, 'test_grunt', 3), E(2, 5, 'test_grunt', 3)] });
+    const charmer = at(3, 4), other = at(2, 5);
+    DD.Act.addStatus(b.spa, 'charmed', { turns: 1 }, charmer);
+    t.eq(opps(function () { DD.AI.moveTo(charmer, 6, 4); }), '', 'charmed: she never strikes her charmer');
+    t.eq(opps(function () { DD.AI.moveTo(other, 2, 8); }), 'sparrow>test_grunt', 'but another foe walking off her still gets shivved');
+    // 10. Say It, Don't Spray It: a Dazzled foe makes no attack of opportunity, so she walks off for free
+    a = arena({ skills: [['spa_spray', 1]], enemies: [E(3, 4, 'test_grunt', 3)] });
+    use(t, a.spa, a.slot('spa_spray'), 3, 4, 'spray the neighbour');
+    t.eq(opps(function () { DD.Combat.move(a.spa, 0, 4); }), '', 'Dazzled: it can\'t strike as she leaves');
+    t.ok(a.spa.hp === 20 && a.spa.x === 0, 'only the 2 HP spray price');
+    // 11. Evil Twin: a foe Taunted by the clone lets her go; the clone shivs foes that walk off it
+    a = arena({ skills: [['spa_twin', 1]], enemies: [E(3, 4, 'test_grunt', 3)] });
+    const tg = at(3, 4);
+    use(t, a.spa, a.slot('spa_twin'), 3, 5, 'twin next to the grunt');
+    const cl = at(3, 5);
+    t.ok(cl && has(tg, 'taunt'), 'the grunt is Taunted by the clone');
+    t.eq(opps(function () { DD.Combat.move(a.spa, 0, 4); }), '', 'Taunted by her clone, it only strikes the clone: she walks away');
+    t.eq(a.spa.hp, 18, 'she only paid the 4 HP');
+    t.eq(cl && DD.Act.opportunitySlot(cl) && DD.Act.opportunitySlot(cl).id, 'spa_clone_shiv', 'the clone strikes with Copycat Shiv');
+    t.eq(opps(function () { DD.AI.moveTo(tg, 6, 4); }), 'spa_clone>test_grunt', 'the grunt walking off the clone gets shivved');
+    t.ok(tg.hp === 42 - L('spa_clone_shiv', 1).dmg - 1 && stacks(tg, 'bleed') === 1, 'Copycat Shiv 3 + Bleed 1, and the walk bleeds 1 (' + tg.hp + ')');
+    // 12. a lethal attack of opportunity ends her walk on the tile she tried to leave
+    a = arena({ heroes: [{ id: 'test_cleric', x: 8, y: 8 }], enemies: [E(3, 4, 'test_grunt', 3)] });
+    a.spa.hp = 3;
+    DD.Combat.move(a.spa, 0, 4);
+    t.ok(a.spa.downed && a.spa.x === 2 && a.spa.y === 4 && !a.s.result, 'downed by the stab, she stays where she was; the fight goes on');
+    // 13. holding the line: an engaged Bleeding grunt sticks to her on its turn, so it is still her donor next turn
+    a = arena({ ai: true, at: [3, 4], order: ['sparrow', 'test_grunt'], skills: [['spa_hemoglob', 1]], heroes: [{ id: 'test_mage', x: 4, y: 1, hp: 10 }],
+      enemies: [E(4, 4, 'test_grunt', 3)] });
+    const brute = at(4, 4);
+    DD.Act.addStatus(brute, 'bleed', { stacks: 2 }, a.spa);
+    const mage = at(4, 1), m0 = mage.hp, s0 = a.spa.hp;
+    DD.Combat.endTurn();
+    t.ok(brute.x === 4 && brute.y === 4 && a.spa.hp === s0 - 4 && mage.hp === m0, 'on its turn it stabbed her and stayed (' + brute.x + ',' + brute.y + '; mage ' + mage.hp + ')');
+    DD.Combat.endTurn();
+    t.ok(DD.Combat.current() === a.spa && has(brute, 'bleed'), 'her next turn: still next to her, still Bleeding');
+    t.eq(DD.Combat.costOf(a.spa, sk('spa_hemoglob'), 1).hp, 0, 'so it pays for her Hemo-Glob');
   });
 
   // ---- edge cases ------------------------------------------------------------------------------------------------
@@ -1168,5 +1306,51 @@
     const poolUsed = ids.filter(function (k) { return POOL.indexOf(k) >= 0; });
     t.ok(poolUsed.length >= 6, 'at least 6 different pool skills used by AutoPlay (' + poolUsed.join(', ') + ')');
     t.ok(wins >= Math.ceil(fights.length * 0.6), 'the party wins most fixture fights (' + wins + '/' + fights.length + ')');
+  });
+
+  // ---- v2 requests (user, Nov 3): heals on the downed, barrels, flyers --------------------------------------------
+  T.suite('hero_sparrow: v2 requests — Blood Drive gets the downed up, barrels (not for Vein Glory), a flying Sparrow can\'t slurp', function (t) {
+    // 1. Blood Drive aimed at a downed ally: up with its HP (preview "UP! N HP" = reality), then Empowered; she pays 3 HP
+    [1, 2, 3].forEach(function (lv) {
+      const Lv = L('spa_blooddrive', lv);
+      const a = arena({ skills: [['spa_blooddrive', lv]], heroes: [{ id: 'test_knight', x: 5, y: 4 }], enemies: [E(8, 8)] });
+      const k = at(5, 4);
+      DD.Act.kill(k, null);
+      t.ok(k.downed, 'L' + lv + ': knight down');
+      const tg = DD.Targeting.validTargets(a.spa, a.slot('spa_blooddrive')).filter(function (q) { return q.x === 5 && q.y === 4; })[0];
+      t.ok(!!tg && tg.revive === true, 'L' + lv + ': the downed knight is a target (revive)');
+      const pv = previewThenUse(t, a.spa, a.slot('spa_blooddrive'), 5, 4, 'blood drive on the downed L' + lv);
+      const pe = pv.perUnit[k.id];
+      t.ok(!!pe && pe.revived && pe.text.indexOf('UP! ' + Lv.heal + ' HP') >= 0, 'L' + lv + ': preview "UP! ' + Lv.heal + ' HP" (' + (pe && pe.text) + ')');
+      t.ok(!k.downed && k.hp === Lv.heal && k.ap === 0 && has(k, 'empowered'), 'L' + lv + ': up at ' + Lv.heal + ' HP, 0 AP, Empowered');
+      t.eq(a.spa.hp, 19, 'L' + lv + ': she paid 3 HP (a blood transfusion, technically)');
+      DD.Combat.endTurn();
+      t.ok(DD.Combat.current() === k && k.ap === 3, 'L' + lv + ': the knight acts on his own slot with full AP');
+    });
+    // Juice Box (a drain on a foe) and the Bib never revive anybody
+    const j = arena({ skills: [['spa_juicebox', 1]], heroes: [{ id: 'test_knight', x: 2, y: 5 }], enemies: [E(3, 4), E(8, 8)] });
+    DD.Act.kill(at(2, 5), null);
+    j.spa.hp = 10;
+    use(t, j.spa, j.slot('spa_juicebox'), 3, 4, 'juice box next to a downed knight');
+    t.ok(at(2, 5).downed && j.spa.hp === 13, 'Juice Box heals her only: the knight stays down');
+
+    // 2. barrels: Shiv Happens sets an adjacent one off (she is in the blast); Vein Glory is never aimed at one
+    const b = arena({ skills: [['spa_veinglory', 1]], enemies: [E(4, 5), E(8, 8)], objects: [{ x: 3, y: 4, id: 'barrel_explosive' }, { x: 5, y: 2, id: 'barrel_explosive' }] });
+    t.ok(!DD.Targeting.validTargets(b.spa, b.slot('spa_veinglory')).some(function (q) { return q.obj; }), 'Vein Glory never targets a barrel (target.objects: false)');
+    t.ok(DD.Targeting.validTargets(b.spa, b.spa.basic).some(function (q) { return q.obj && q.x === 3 && q.y === 4; }), 'Shiv Happens: the adjacent barrel is a target');
+    const g = at(4, 5);
+    previewThenUse(t, b.spa, b.spa.basic, 3, 4, 'shiv at the barrel');
+    t.ok(!DD.Grid.tile(3, 4).obj && b.spa.hp === 22 - 8 && g.hp === 14 && stacks(g, 'bleed') === 0,
+      'KABOOM: Sparrow eats 8; the diagonal foe is outside radius 1 and nothing Bleeds (no riders on a barrel)');
+
+    // 3. a flying Sparrow (status wings, items or a Blessing) floats over blood: the Bib slurps nothing
+    const f = arena({ items: ['spa_scab_mail'], enemies: [E(8, 8)], surfaces: [{ x: 3, y: 4, id: 'blood', turns: 4 }, { x: 4, y: 4, id: 'blood', turns: 4 }] });
+    f.spa.hp = 10;
+    f.spa.flags = Object.assign({}, f.spa.flags, { flying: true });   // test setup: she flies
+    t.ok(DD.Combat.move(f.spa, 4, 4), 'a flying Sparrow crosses two puddles');
+    t.ok(f.spa.hp === 10 && surf(3, 4) === 'blood' && surf(4, 4) === 'blood', 'no slurp: the blood is on the floor, she is not');
+    f.spa.flags.flying = false;
+    DD.Act.teleport(f.spa, 3, 4);
+    t.eq(f.spa.hp, 13, 'landed (no wings): stepping into the puddle slurps it again');
   });
 })();

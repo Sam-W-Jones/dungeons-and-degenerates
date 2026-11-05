@@ -4,7 +4,8 @@
  * from the palette (DD.util.shade), idle bob + breathing + blinking, poses, facing flip, hit flash, status tints.
  *
  *   DD.Sprites.draw(ctx, spec, sx, sy, zoom, opts)    (sx, sy) = screen position of the feet (tile top centre)
- *   DD.Sprites.drawUnit(ctx, unit, sx, sy, zoom, t)    resolves the def sprite, applies unit.vis + statuses
+ *   DD.Sprites.drawUnit(ctx, unit, sx, sy, zoom, t)    resolves the def sprite, applies unit.vis + statuses; mirrors
+ *                                                     for the view yaw (DD.Iso.screenFacing, per-unit hysteresis)
  *   DD.Sprites.portrait(specOrDefId, size, opts)       cached head-and-shoulders portrait canvas
  *   DD.Sprites.metrics(specOrUnit)                     { height, width, headY, hover } in px at zoom 1
  *
@@ -2935,6 +2936,15 @@
   /** Transient vis fields written by fx_render are honoured only while an FX keeps refreshing them. */
   function visFresh(v) { return v && v._fxAt !== undefined && nowMs() - v._fxAt < 450; }
 
+  // The mirror drawn last per unit: DD.Iso.screenFacing keeps it while the unit's direction points along the view
+  // (its ±3° band), so a sprite never flickers while the map is turned through 90° / 270°.
+  const shownFacing = new WeakMap();
+  /** Display mirror (±1) of a resting unit at the current view yaw (unit.facing is yaw-0 screen space). */
+  function restFacing(unit) {
+    const prev = shownFacing.get(unit);
+    return DD.Iso && DD.Iso.screenFacing ? DD.Iso.screenFacing(unit.facing, unit.lastDir, prev) : (unit.facing === -1 ? -1 : 1);
+  }
+
   /** extra (optional): { underlay: false, statusFx: false } paints the bare body (the renderer's silhouette masks). */
   function drawUnit(ctx, unit, sx, sy, zoom, t, extra) {
     if (!ctx || !unit) return;
@@ -2954,8 +2964,10 @@
       flash = Math.max(flash, 1 - v.deathT * 5);
     }
     const flying = !!((def && def.flags && def.flags.flying) || (unit.flags && unit.flags.flying));
-    // FX steer facing while they play (walk direction, lunge/shot target); otherwise the engine's unit.facing rules
-    const facing = fresh && (v.facing === 1 || v.facing === -1) ? v.facing : (unit.facing === -1 ? -1 : 1);
+    // FX steer facing while they play (walk direction, lunge/shot target, already at the view yaw); otherwise the
+    // engine's unit.facing, mirrored for the view
+    const facing = fresh && (v.facing === 1 || v.facing === -1) ? v.facing : restFacing(unit);
+    if (typeof unit === 'object') shownFacing.set(unit, facing);
     draw(ctx, r.spec, sx, sy, zoom, {
       t: t, id: unit.defId, unit: unit, facing: facing,
       pose: fresh && v.pose ? v.pose : 'idle', poseT: fresh ? v.poseT : undefined,
@@ -3138,6 +3150,8 @@
     metrics: metrics,
     bounds: bounds,
     specFor: function (unit) { return unit ? specFor(unit).spec : PLACEHOLDER_SPEC; },
+    /** The mirror (±1) drawUnit showed for this unit last, undefined before its first draw (rotation hysteresis). */
+    facingOf: function (unit) { return unit && typeof unit === 'object' ? shownFacing.get(unit) : undefined; },
     /** Paint into an arbitrary context with the `g` helper (object painters, UI icons). Origin at (x, y). */
     paint: function (ctx, x, y, scale, fn, palette, t) {
       const pal = Object.assign({}, DEFAULT_PAL, palette || {});

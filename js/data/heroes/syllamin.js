@@ -4,7 +4,9 @@
  * Passive "Heckler": his damaging skills Roast each foe hit (status syl_roasted, 1-3 stacks, no decay); at 3 the foe
  * suffers Emotional Damage — the stacks clear, it is Stunned (elites and bosses: Weakened 2 turns) and the party gains
  * 6 Hype. Combo setups for the party: Mosh Pit (clusters foes for an AoE), Glitter Bomb (slippery ground: pushes slide
- * further), Hype Man (Empowered + AP for the big hitter), Lullaby III (Marked sleepers), Heckle (Charm).
+ * further), Hype Man (Empowered + AP for the big hitter), Lullaby III (Marked sleepers), Heckle (Charm). Attacks of
+ * opportunity: his basic is ranged (he never makes one), but Charm / Sleep / Stun / Dazzle switch a foe's off and Fae
+ * Blink (a teleport) pulls a pinned ally out without provoking.
  * Registers: hero syllamin, basic + signature + 10 pool skills, status syl_roasted, surface syl_glitter, 3 items,
  * narration keys syl_*. Helpers for other content: DD.Syllamin.roast / emotionalDamage / blinkSpot.
  * Swearing is bleeped (#$%&) and stays PG-13 by implication; mechanics text is exact.
@@ -120,7 +122,7 @@
   // ---- Glitter (surface) ---------------------------------------------------------------------------------
   DD.registerSurface({
     id: 'syl_glitter', name: 'Glitter', color: 'rgba(255,110,214,0.42)', turns: 2, slide: true,
-    desc: 'Slippery: a unit pushed onto it slides 1 extra tile. Fire burns it away.',
+    desc: 'Slippery: a grounded unit pushed onto it slides 1 extra tile (flyers just glide over). Fire burns it away.',
     react: { fire: { surface: null } },
     draw: function (g, sf, t) {
       const tl = g.tile || { x: 0, y: 0 };
@@ -339,8 +341,10 @@
         const t = ctx.targetUnit;
         const ready = readyAlly(ctx);
         if (ready !== true) return ready;
-        const busy = DD.Combat.slotsOf(t).some(function (sl) { return sl.cd > 0; });
-        return busy || (ctx.L && ctx.L.gain > 0) ? true : 'Nothing on cooldown to encore.';
+        // only a cooldown still running on its next turn is worth a charge (cd 1 ticks to 0 at that turn's start,
+        // unless it was used since its last turn: a fresh cooldown skips that tick)
+        const busy = DD.Combat.slotsOf(t).some(function (sl) { return sl.cd > (sl.fresh ? 0 : 1); });
+        return busy || (ctx.L && ctx.L.gain > 0) ? true : 'Its skills are ready by its next turn anyway.';
       },
     },
     desc: function (L) {
@@ -398,7 +402,7 @@
     levels: [{ dmg: 2, r: 2, pull: 1 }, { dmg: 3, r: 2, pull: 1 }, { dmg: 3, r: 3, pull: 2 }],
     target: { type: 'tile', range: [1, 5], los: true, filter: 'any' }, area: { shape: 'circle', size: size('r') },
     desc: function (L) {
-      return 'Foes within ' + L.r + ' tiles of the target tile take ' + L.dmg + ' damage and are pulled ' + plural(L.pull, 'tile') + ' toward it.';
+      return 'Foes within ' + L.r + ' tiles of the target tile take ' + L.dmg + ' damage and are pulled up to ' + plural(L.pull, 'tile') + ' toward it.';
     },
     flavor: 'CIRCLE PIT! The goblins did not consent to the circle pit. Zarathor\'s fireball did.',
     execute: function (ctx) {
@@ -437,6 +441,12 @@
     },
   });
 
+  /** Who hears a verse: every foe on the board right now (one that split or showed up mid-track hears the rest). */
+  function verseFoes(ctx) {
+    const c = DD.Targeting.buildCtx(ctx.user, ctx.slot || ctx.skill, ctx.target || { x: ctx.user.x, y: ctx.user.y });
+    return (c ? c.foes : ctx.foes).filter(alive);
+  }
+
   skill({
     id: 'syl_signature', name: 'Diss Track', icon: '💿', kind: 'spell', tags: ['aoe', 'psychic', 'signature'],
     ap: 2, cooldown: 0, hype: 100,
@@ -451,7 +461,7 @@
       DD.FX.banner('DISS TRACK', { sub: 'feat. ' + u.name + ' (Explicit)', color: PINK });
       DD.FX.flash(HOT, 260);
       for (let v = 1; v <= L.verses; v++) {
-        const foes = ctx.foes.filter(alive);
+        const foes = v === 1 ? ctx.foes.filter(alive) : verseFoes(ctx);
         if (!foes.length) break;
         DD.FX.text(u, 'VERSE ' + v + '!', { color: GOLD, size: 18 });
         DD.FX.shake(3 + v * 2, 260);
@@ -606,6 +616,7 @@
         'Four inches of pure talent, reporting for #$%&ing duty.',
         'Ugh, FINE. Who am I roasting?',
         'You picked the tiny one? Bold. Correct, but bold.',
+        'Hjalmar touched my lute again. I\'m in a MOOD.',
       ],
       start: [
         'Alright, losers, let\'s give \'em a show!',
@@ -629,6 +640,7 @@
         'Encore? No? Didn\'t think so.',
         'Killed it. Literally. Also figuratively.',
         'Thank you, thank you, I\'m here all week.',
+        'Pebbles, DROP IT. That\'s not a stick, that\'s a femur.',
       ],
       hurt: [
         'OW! Do you know who I AM?!',
@@ -636,6 +648,7 @@
         'You hit like your mom tells jokes.',
         'That\'s going in my diss track, #$%&face.',
         'Rude! RUDE! I\'m the rude one here!',
+        'Who threw that?! Hjalmar, I swear to the DM...',
       ],
       lowhp: [
         'I\'m too pretty to die in a basement!',
@@ -643,6 +656,7 @@
         'Ellaria, I\'ll pet a corgi, just HEAL ME!',
         'Okay, maybe I\'ll stop talking. ...NOT.',
         'Somebody tell my fans I was fabulous.',
+        'Valdris! Forge me tiny armour! TINY! NOW!',
       ],
       downed: [
         'Tell my mom... she still owes me twenty gold...',
@@ -650,6 +664,7 @@
         'Ugh, #$%&. Somebody pick me up. Gently.',
         'Bury me in glitter. A LOT of glitter.',
         'I blame the acoustics.',
+        'Pebbles... you\'re a good boy... avenge me...',
       ],
       revive: [
         'I\'m BACK, baby! Did you miss me? You did.',
@@ -657,6 +672,7 @@
         'Whose hands were those? Wash them.',
         'Did anyone record that? Delete it.',
         'Second set! Same jokes, twice the spite.',
+        'Pebbles, stop licking me! You\'re ON FIRE!',
       ],
       ally_down: [
         'Get UP! I can\'t carry you, I\'m four inches!',
@@ -672,6 +688,7 @@
         'I\'m basically famous now. Autographs: 5 gold.',
         'Stronger, meaner, still four inches. Perfect.',
         'The talent grows. The height does not.',
+        'Valdris, engrave my name on something. In gold.',
       ],
       victory: [
         'Thank you, goodnight, tip your bartender!',

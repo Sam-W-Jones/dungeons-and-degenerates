@@ -102,6 +102,8 @@ there, write it under **Requests** in your notes file (the lead integrates).
     filter: 'enemy',              // 'enemy'|'ally'|'allyOrSelf'|'any'|'notSelf'|'empty'|'emptyOrUnit'|'downedAlly'|'object'
     straight: false,              // target must share the user's row or column
     canTarget: null,              // optional (ctx) => true | 'reason'
+    objects: undefined,           // v2: false = never aimed at a volatile object; true = may be (see below)
+    revive: undefined,            // v2: false = a heal never aimed at a downed ally; true = may be (any area)
   },
   area: { shape: 'circle', size: 1 },   // §5.2 shapes; size may be (L, user) => n. Default { shape: 'single' }
   anchor: 'self',                 // enemy intents only: 'self' | 'ground' | 'unit' (§6.1)
@@ -120,8 +122,22 @@ there, write it under **Requests** in your notes file (the lead integrates).
   tiles /* [{x,y}] affected (area applied, in-bounds) */, units /* active units on tiles */,
   foes /* units on tiles hostile to user */, friends /* units on tiles friendly to user (incl. user) */,
   isIntent /* true when executed as an enemy intent */, intent /* Intent|null */,
-  state /* DD.Combat.state */, rng /* state.rng */ }
+  state /* DD.Combat.state */, rng /* state.rng */,
+  targetObj /* v2: the volatile object aimed at (execute does not run: it detonates), else absent */,
+  reviveTarget /* v2: the downed ally a heal is aimed at (DD.Act.heal on it revives it), else absent */ }
 ```
+**v2 (user requests) — what single-target skills can be aimed at** (`DD.Targeting.aimsAtObjects` / `revivesWith`; the
+player's units only — heroes and hero-side summons; the AI never does either):
+- **Volatile objects** (barrels): a `'unit'` target with the `'enemy'` filter that is `kind: 'attack'`, the user's basic
+  attack, or a consumable without a `kind` (`target.objects: true` opts any such skill in, `false` opts out) can be aimed
+  at a volatile object (§3.7) within its range and line of sight (`canTarget` is not asked). The use pays its costs
+  (AP, HP, cooldown, charge, Hype) and **detonates** the object (`DD.Act.detonate`: destroyed, its `onDestroyed` blast
+  credited to the user); `execute` does not run (no riders). validTargets entries carry `obj: objectId`.
+- **Downed allies**: a `'unit'` target with the `'ally'` / `'allyOrSelf'` / `'any'` filter, `kind: 'heal'` or tag `'heal'`,
+  no area (`target.revive: true` opts in, `false` out) can be aimed at a downed ally (validTargets entries carry
+  `revive: true`; `ctx.targetUnit` = `ctx.reviveTarget` = the ally). Its `DD.Act.heal` on that ally gets it back up with
+  the healed amount as HP (§6.8). **Content**: an aimed heal must call `DD.Act.heal(user, ctx.targetUnit, n)` even when the
+  target is downed (no `active()` early return) and apply its riders after the heal.
 Hero/summon skills: `execute` should use `ctx.foes`/`ctx.friends`/`ctx.targetUnit` and DD.Act. Damage numbers in
 `desc` must match `execute`. Enemy skills use the same schema with `owner: 'enemy'` and (usually) `ap: 0`.
 **Conventions**: put the primary damage per affected foe in `levels[i].dmg` and primary healing in `levels[i].heal` —
@@ -190,13 +206,26 @@ DD.registerObject({ id: 'crate', name: 'Crate', blocksMove: true, blocksLos: fal
   hp: 6,                 // 0 = indestructible
   height: 0.8,           // render height in tiles
   interact: null,        // { ap: 1, label: 'Pull', fn(unit, obj, tile) {} } — adjacent hero spends AP
-  onEnter(unit, obj, tile) {},            // for non-blocking objects (plates, spikes)
+  onEnter(unit, obj, tile) {},            // for non-blocking objects (plates, spikes) — walkers only (v2: never flyers)
   onDestroyed(obj, tile, src) {},
+  volatile: false,       // v2: it explodes when destroyed (onDestroyed → DD.Act.explode): single-target attacks can be
+                         //   aimed at it to set it off (§3.2). Every exploding object must say so (instances may too)
   desc: '', draw: null /* optional (g, obj, t) custom painter, see §7.3 */ });
 
 DD.registerSurface({ id: 'fire', name: 'Fire', color: 'rgba(255,110,20,0.55)', turns: 3, blocksLos: false,
+  airborne: false,       // v2: true = a CLOUD (steam, smoke, gases): it touches flyers too, and it may hang over pits and
+                         //   lava (setSurface / setTerrain keep it there). Everything else lies on the floor, and flyers
+                         //   ignore the floor (§6.6). Only clouds are airborne.
   onEnter(unit, tile) {}, onTurnEnd(unit, tile) {}, desc: '' });
 ```
+**Flyers and the floor (v2, user request).** A flying unit (`DD.Grid.isFlying`: `flags.flying` from its def, an item or a
+Blessing, or a status def with `flying`) ignores everything on the floor, good and bad: terrain `onEnter` / `onTurnEnd`,
+non-airborne surfaces, ground objects and traps (`onEnter`: plates are never pressed), floor element reactions (a slick
+going up), shocks through water, ice slides, falls; hazards are none for it (§5.1). Attacks and spells aimed at it or its
+area, explosions' blast damage, unit-centred auras and clouds (`airborne`) still hit it. **Content** that implements a
+floor effect itself (an `onEnterTile` / `onTurnStart` / `onRoundEnd` hook that reads the unit's tile, a passive "while
+standing on…") checks `DD.Grid.feelsFloor(unit)` (or `DD.Grid.feelsSurface(unit, surface)`).
+
 Object **instance** on a tile: `{ id, hp, maxHp, data: {}, facing?, label?, interact?, onInteract?, onDestroyed?, onEnter? }`.
 Instance-level callbacks override the definition's (bosses wire puzzles this way via `DD.Act.placeObject(x, y, id, overrides)`).
 Puzzle objects also set `autoplay` (§5.7) so AutoPlay can solve them.
@@ -407,7 +436,11 @@ levels and pending choices kept; the rotation evens out uneven old levels (lowes
 
 ### 4.7 Meta — `DD.Meta.data` (persists across runs)
 `{ unlocked: [heroIds], stats: { runs, wins, bestAct, deaths, kills }, settings: { animSpeed: 1, sfx: true, volume: 0.6,
-shake: true, unlockAll: false, showGrid: true }, seen: { enemies: {}, bosses: {}, events: {} }, history: [] }`
+shake: true, unlockAll: false, showGrid: true, viewYaw: 0, rotSnap: true }, seen: { enemies: {}, bosses: {}, events: {} },
+history: [] }`. Render-owned settings (written by `DD.Render` through `DD.Meta.setSetting`): `viewYaw` = the remembered
+battlefield view angle in degrees (0.1 steps, absent = 0; written 500 ms after a player's turn of the map settles, never
+from `rot=`), `rotSnap` = a released rotate drag snaps to a classic view within 4° (absent = true; the Settings toggle
+"Snap rotation to the classic views").
 
 ---------------------------------------------------------------------------------------------------------------------
 
@@ -423,14 +456,24 @@ isWalkable(x, y, unit?)           // terrain walkable, no blocking object, no pi
 isFree(x, y)                      // walkable and no unit (dead units don't count; downed do)
 canStep(unit, from, to)           // height rule: up ≤1 (hop ≤2, flying any), down any
 los(a, b) → bool                  // §6.3
-path(unit, x, y, opts) → [{x,y}]|null           // excludes start; opts.maxCost
-reachable(unit, maxCost, opts) → Map<key, { x, y, cost, path, hazard, edge }>   // passes through friends, not foes
+path(unit, x, y, opts) → [{x,y}]|null           // excludes start; opts.maxCost, aoo (fewest attacks of opportunity, §6.2)
+reachable(unit, maxCost, opts) → Map<key, { x, y, cost, path, hazard, edge, provokes? }>   // passes through friends, not foes
+                                  // opts.aoo (a MOVE action, §6.2): each path provokes as few attacks of opportunity as
+                                  // possible within maxCost (then the cheapest); entries get provokes: [unitIds] in order
+provokes(unit, path, from?) → [unitIds]         // who would make an attack of opportunity on that walk (DD.Act.provokers)
 line(from, dir, len, opts) → [{x,y}]           // opts.stopAtBlock, stopAtUnit, includeUnitTile
 shape(shape, origin, dir, size, user) → [{x,y}] // §5.2 (in-bounds only)
 emptyTilesNear(x, y, r) → [{x,y}]  randomEmptyTile(rng, filterFn)  nearestFree(x, y)
 hazardAt(x, y, unit?) → id|null                 // damaging hazard for this unit (§5.3 `hazard`, per unit if a function)
 hazardDamage(x, y, unit?) → { id, enter, end }|null   // rough numbers for AI risk (hazardDmg / hazardEnd)
-hostile(a, b) · effectiveSide(u) · isFlying(u) · isDrop(x, y) · isEdge(x, y) · stepCost(unit, from, to)
+                                  // v2: both PER UNIT, the one place hazard checks are made (move previews, paths, the AI,
+                                  //   AutoPlay): a flyer only feels airborne surfaces; a hazard declaring what it does
+                                  //   (hazardElement / hazardStatus, §5.3) is none for a unit that ignores all of it
+surfaceHazard(x, y, unit?) → id|null · harmlessTo(def, inst, unit) → bool       // the same, per layer / per def
+hostile(a, b) · effectiveSide(u) · isFlying(u) · isDrop(x, y) · stepCost(unit, from, to)
+isEdge(x, y, unit?)               // next to a pit / deep water / lava; per unit (v2): never a flyer, lava only if it can hurt it
+feelsFloor(unit) → bool           // v2: not flying — the floor (terrain, surfaces, ground objects) touches it
+feelsSurface(unit, surface) → bool  // surface (def, id, tile.surface instance or tile): clouds touch everyone, the rest walkers
 ```
 
 ### 5.2 `DD.Targeting` (RULES) — skills ↔ tiles
@@ -442,7 +485,15 @@ buildCtx(user, skillOrSlot, target {x,y}|null, extra) → ctx (§3.2)
 preview(user, slot, target) → { tiles, units, perUnit: { [id]: PreviewEntry }, uncertain, samples, spawned, objects, hype }
 simulate(fn(sim, rec), opts) → fn's result   // dry run on a copy (opts.seed: other dice; opts.record → { result, draws, uncertain })
 pure(fn) → fn()                               // a query: combat-RNG draws inside are put back
+// v2 (user requests, §3.2)
+aimsAtObjects(user, skillOrSlot) → bool       // can be aimed at a volatile object (validTargets entries { x, y, obj })
+revivesWith(user, skillOrSlot) → bool         // a single-target heal that can be aimed at a downed ally ({ x, y, revive })
+volatileAt(x, y) → obj|null                   // a volatile object on a tile no unit stands on
 ```
+Previews (v2): aimed at a barrel, `detonates: objectId` and `tiles` = the blast (the object's tile + every tile its
+explosions reached, for the HUD's area); every preview has `blast: [{x,y}]` (the tiles of the explosions it set off, never
+those of the real roll); aimed at a downed ally, `revives: unitId` and that ally's entry has `revived: true` (`heal` = its
+new HP, text `"UP! 7 HP"`; uncertain: `revivedChance`). A def `preview()` override is skipped for both.
 `preview` is a **dry run**: the skill resolves on a deep copy of the state (same code path as a real use: costs,
 hooks, Hype, deaths) with FX / events / log / run gold silenced, then everything is restored. `PreviewEntry = { dmg
 (HP lost), blocked, heal, block (gained), lethal, statuses: [added ids], removed: [ids], moved: {x,y}|null,
@@ -481,6 +532,11 @@ onTurnStart(unit)             onTurnEnd(unit)                  // v2: the unit's
 modifyInitiative(r)           // v2, the unit's sources when it rolls initiative: r = { unit, roll, init, total, k };
                               //   mutate r.total ("+5 initiative", "always first") — rolled fights only
 onMove(unit, path)            onEnterTile(unit, tile, cause)   // cause 'move'|'push'|'teleport'|'spawn'
+modifyOpportunity(o)          // v2 attacks of opportunity (§6.2), the attacker's sources, then the mover's: o = { attacker,
+                              //   mover, from, to, slot, skill, level, flat: 0, mult: 1, cancel: false } — set cancel
+                              //   ("can't be opportunity-attacked"), add flat / mult ("+2 damage on attacks of
+                              //   opportunity"). PURE: the HUD's move preview, paths and the AI query it
+onOpportunityAttack(o)        // after one resolved, the attacker's sources then the mover's: o + dealt (HP + Block lost)
 onSkillUsed(ctx)              // after a skill resolves (user's sources); ctx.paid = what onCostPaid got (or null)
 modifyCost(c)                 // c = { unit, skill, level, ap, hp } mutate to change costs
 onCostPaid(p)                 // after paying a use: p = { unit, skill, level, slot, ap, hp (HP lost), hpCost (asked),
@@ -510,9 +566,10 @@ threatAt(enemy, unit, tile)   // QUERY, enemy def or a status on it: damage `uni
 ```
 v2: `modifyGuard` is gone with Guard (unused AP is simply lost); a content hook of that name is reported as unknown.
 `DamageCtx = { source, target, base, amount, mult: 1, flat: 0, element, skill, tags, cause, ignoreBlock, ignoreArmor,
-dealt, blocked, killed, overkill, highGround, credit, nullified, prevented }` (`cause`: 'skill'|'status'|'surface'|
-'terrain'|'bump'|'fall'|'explosion'|'other'; `nullified`: charm / resist 0 — nothing gets through; `prevented`: the
-death was refused). A hook's own `d.mult = 0; d.flat = n` deals exactly n.
+dealt, blocked, killed, overkill, highGround, credit, nullified, prevented, opportunity }` (`cause`: 'skill'|'status'|
+'surface'|'terrain'|'bump'|'fall'|'explosion'|'other'; `nullified`: charm / resist 0 — nothing gets through;
+`prevented`: the death was refused; `opportunity`: a hit of an attack of opportunity, §6.2). A hook's own
+`d.mult = 0; d.flat = n` deals exactly n.
 **Declarative extras the engine reads** (pure, so AI estimates, wind-up numbers and previews can use them):
 - Status defs: `defaultTurns`; `skipFresh: false` (v2 default true: a status applied during its owner's own turn skips
   the tick at the end of that turn, so `turns: 1` = "through its next turn"; false = that turn's end counts),
@@ -520,14 +577,21 @@ death was refused). A hook's own `d.mult = 0; d.flat = n` deals exactly n.
   `noMove: true | (st, unit) => bool` (can't take move actions, like Root: a grapple, a hold; pushes still work),
   `takenMult: number | (st, unit) => number` (damage-taken multiplier, applied next to Vulnerable and read by
   `DD.AI.estimate`), `telegraphFlat(st, unit) → number` (flat change of the unit's damage numbers: wind-ups and reach
-  estimates, see §5.6). The pre-v2 `enemyDecay: 'afterPlan'` is gone (no planning phase).
+  estimates, see §5.6). The pre-v2 `enemyDecay: 'afterPlan'` is gone (no planning phase). v2: `element` (the element of
+  the damage it deals: burn 'fire', poison 'poison' — a unit with resist 0 to it can't be hurt by it, so hazards that only
+  apply it are none for that unit), `flying: true | (st, unit) => bool` (its unit flies while it has it).
 - Skill defs: `telegraphFlat(unit, intent) → number`; rules in `state.rules`: `telegraphFlat(unit, intent, rule)` (both
   for wind-up numbers). Enemy / summon defs (v2): `init` (initiative modifier; default by tier), `turnsPerRound` (1-4
   initiative entries, e.g. a boss with two turns a round).
 - Terrain / object / surface defs (and object instances): `hazard: true | (unit, tile) => bool` (per-unit: a cloud
   that only hurts its brewer's foes warns only them; `unit` may be null = anyone), `hazardDmg` (on entry, default 4),
-  `hazardEnd` (ending a turn there), surfaces `airborne` (flyers feel it), terrain/surfaces `slide`, `react` (§6.6),
-  objects `init(obj, tile)`, `available(obj, unit)`, `smashable`, `onRoundEnd(obj, tile, state)`, `autoplay` (§5.7).
+  `hazardEnd` (ending a turn there), v2 `hazardElement` (the element of its damage) and `hazardStatus` (a status id or a
+  list it applies) — a unit that shrugs off all of it (resist 0, flags.immune, a status whose element it ignores) gets
+  no warning (Pebbles in fire, slimes in poison): declare them on every hazard; surfaces `airborne` (a cloud: flyers
+  feel it, §3.7), terrain/surfaces `slide`, `react` (§6.6), objects `init(obj, tile)`, `available(obj, unit)`,
+  `smashable`, `volatile` (§3.7), `onRoundEnd(obj, tile, state)`, `autoplay` (§5.7).
+- Unit flags (v2, §6.2): `noProvoke` (its move actions never provoke attacks of opportunity), `noOpportunity` (it never
+  makes them).
 
 ### 5.4 `DD.Act` (RULES) — every gameplay effect goes through here (FX + hooks + log + stats)
 ```
@@ -559,7 +623,21 @@ stopMove(unit)                   // from a tile callback / onEnterTile: the curr
 markUncertain()                  // during a preview dry run: its outcome depends on chance (§5.2); no-op otherwise
 cantMove(u) · isStunned(u) · isStunLike(statusId) · takenMult(u)   // Root/noMove · stun-likes · takenMult product
 touch()                          // count a side effect done without DD.Act (Undo, deploy, previews see it)
+// v2 attacks of opportunity (§6.2)
+opportunitySlot(u) → slot|null   // what it strikes with: a hero's melee basic; summons / enemies: first ready melee skill
+opportunityOf(attacker, mover, from?, to?) → o|null   // would it strike the mover leaving `from` (default its tile)? PURE
+provokers(mover, path, from?) → [Units]               // who would strike on that walk, each once, in order. PURE
+opportunityAttack(attacker, mover, to) → o|null       // resolve one now (moveAlong does it for move actions)
+// v2 user requests (§3.2, §3.7, §6.6, §6.8)
+isVolatile(obj) → bool · detonate(src, x, y, skill) → bool   // set off a volatile object (Combat.resolveSkill does it)
+immuneTo(unit, statusId) → bool  // can't get it (flags.immune, stunImmune for stun-likes / sheep, bosses vs sheep). Pure
+heal(...)                        // a heal AIMED at a downed ally (ctx.reviveTarget of the running skill) revives it with the
+                                 //   healed amount (after healBonus and modifyHeal — h.revive = true — min 1, max HP)
+revive(target, hpFraction, { hp, by })   // opts.hp: exactly that HP · applyElement(..., { noUnits, floor })
 ```
+`moveAlong(unit, path, opts)`: `opts.provoke` = a MOVE action (DD.Combat.move, AI walks): leaving a tile next to opposing
+units triggers their attacks of opportunity (§6.2); without it (skill dashes, scripted walks) nothing provokes. Returns the
+walked tiles with `.provoked` (attacks made) and `.interrupted` (one ended the walk).
 Extras: `damage` opts `noHighGround, silent, reflect`; `addStatus` opts `{ silent }` (a stun-like or `sheep` interrupts
 the target's wind-ups at once, except `data.unstoppable` ones; v2 drops `noRecharm`: charm re-aims nothing, it flips the
 unit's side for its next turn); `kill(...)` → false when `preventDeath` refused it;
@@ -600,8 +678,13 @@ giveTurnTo(u) → bool            // SANDBOX ONLY: abandon the current turn (no 
 setOrder([unit or def ids])     // SANDBOX ONLY: those first, the rest in their old order
 isPlayerTurn()                  // a hero-controlled turn waits for input, or deployment is open · isOver()
 // actions (only for a unit whose turn it is: controllable(u); in deployment the first one rolls initiative)
-reachable(unit) → Map           // needs the AP of a move (moveApCost), not rooted / held (noMove) / stunned
-move(unit, x, y) → bool         // moveApCost AP (1); walks path; onEnterTile per tile
+reachable(unit) → Map           // needs the AP of a move (moveApCost), not rooted / held (noMove) / stunned; v2: AoO-aware
+                                //   paths (fewest attacks of opportunity), entries carry provokes: [unitIds] ("⚔ provokes N")
+provokes(unit, x, y) → [{ unitId, name, skillId, skillName, dmg }]   // that move's attacks of opportunity (dmg: estimate
+                                //   after armor, before Block); [] if none or unreachable. Pure
+move(unit, x, y) → bool         // moveApCost AP (1); walks path; onEnterTile per tile; a MOVE action: provokes attacks of
+                                //   opportunity (§6.2; one that downs / stuns / roots / moves it ends the walk); true once
+                                //   the action happened
 canUse(unit, slot) → true | 'reason'    // 'Roll for initiative first!', "Not X's turn.", 'Stunned!', 'Not enough AP.'...
 targets(unit, slot) → [{x,y}]
 preview(unit, slot, x, y) → (see Targeting.preview)
@@ -613,8 +696,11 @@ interactions(unit) → [{ x, y, label, ap, kind }] · interact(unit, x, y) → b
 slotsOf(u) · costOf(u, def, level) → { unit, skill, level, ap, hp } · consumables() · canUseConsumable(u, i)   // HUD helpers
 moveApCost(u) (modifyMoveCost) · effectiveMov(u) · turnAp(u) · isStunned(u) · cantMove(u) · cooldownOf(u, def, level)
 resolveSkill(u, slotOrDef, target, { pay, consumable, extra, quiet }) → ctx   // shared by heroes, AI actions, previews
+                                // v2: ctx.targetObj (aimed at a volatile object) → it pays, then DD.Act.detonate instead
+                                //   of execute (onSkillUsed still fires)
 deployMove(unit, x, y) → bool   // free swaps inside deploy tiles while deployment is open (no tile entries, no cost)
-canUndo() · undo() → bool       // the current turn's last move action, if nothing else happened since (no side effect)
+canUndo() · undo() → bool       // the current turn's last move action, if nothing else happened since (no side effect;
+                                //   never a move that provoked an attack of opportunity)
 addRule(rule) / removeRule(id)  // Rule = { id, name, icon, desc, hooks, turns /* rounds; -1 = permanent */, telegraphFlat?, onAdd?, onRemove? }
 ```
 Events emitted on `DD.Events`: `combat:start`, `combat:changed` (after every public mutation), `combat:log`,
@@ -622,8 +708,10 @@ Events emitted on `DD.Events`: `combat:start`, `combat:changed` (after every pub
 the dice moment), `initiative:joined` ({ unit, entries }), `round:start` ({round}), `round:end` ({round}),
 `turn:start` / `turn:end` ({ unit, unitId, round, turn, index, entry }), `turn:player` ({ round, unit }: a hero turn
 waits for input), `turn:enemy` ({ round, unit }: once per run of AI turns), `windup:start` / `windup:cancel`
-({ unit, intent | reason }), `unit:died`, `unit:downed`, `hype:changed`. FX markers for playback (no duration of their
-own): `turn` (FX.turn: `DD.FX.shownTurn = { unitId, round }` follows it), `initiative` ({ order }), `windup`.
+({ unit, intent | reason }), `opportunity:attack` ({ attacker, attackerId, mover, moverId, skillId, from, to }: right
+before an attack of opportunity resolves), `unit:died`, `unit:downed`, `hype:changed`. FX markers for playback (no
+duration of their own): `turn` (FX.turn: `DD.FX.shownTurn = { unitId, round }` follows it), `initiative` ({ order }),
+`windup`.
 
 ### 5.6 `DD.AI` (RULES) — AI turns (no telegraphs) and boss wind-ups
 ```
@@ -642,15 +730,25 @@ intentDmg(unit, intent) → number   // the live wind-up number (see below)
 describe(unit, intent) → { label, icon, dmg, text, uncertain, delay, turnsLeft, windup, targetName }
 reachOf(unit) → { tiles: Map 'x,y' → dmg, best, only, unitId }   // where it could strike on its next turn (estimate)
 threatMap(side = 'hero') → Map 'x,y' → { dmg, max, from: [unitIds] }   // every AI unit hostile to that side
-styleOf(u) → { style, keepDistance } · estimate(u, o, dmg, element) → number · defaultPlan(u, style?) (= defaultTurn:
-  decides and acts now) · approach(u, style?) · bestAttack(u, { skills, noMove, style }) → { moveTo, path, skillId, slot,
-  target, score } | null · targetsFor(u) · taunter(u) · pathRisk(u, pos)
+styleOf(u) → { style, keepDistance } · estimate(u, o, dmg, element, noEmpower?) → number · defaultPlan(u, style?)
+  (= defaultTurn: decides and acts now) · approach(u, style?) · bestAttack(u, { skills, noMove, style }) → { moveTo, path,
+  skillId, slot, target, score } | null · targetsFor(u) · taunter(u) · pathRisk(u, pos)
+// v2 attacks of opportunity + reach-aware targeting (below, §6.2)
+reachableTargets(u, { skills, noMove, style }) → [{ unit, skillId, target, moveTo, path, cost, provokes, aoo, engaged,
+  est }]                        // every foe it can hit THIS turn, the cheapest way; engaged first, then fewest provokes
+engaged(u) → [Units]            // opposing units next to u that would strike if it walked away now
+provokes(u, x, y) → [unitIds] | null   // its move action there would provoke these (null: can't get there)
+opportunityDmg(attacker, mover, from?) → number · aooCost(u, pos, style?) → number (Infinity = lethal) · aooDamage(u, pos)
+targetValue(u, o, est, style?, origin?) · targetBonus(style, { kill, hurt, engaged, thr, maxHp, hero }) · threatOf(o)
+  · isDiver(styleOrUnit)        // the targeting formula (AutoPlay models the AI with it)
 clearIntents(u, keepWindups) · cancelIntents(u, reason, { keepUnstoppable }) → n · redirectIntent(u, intent, t)
 api (passed to custom planners): { state, rng, round, unit, entry (its initiative entry), style, heroes(), foes(u),
-  friends(u), reachable(u), moveTo(u, x, y), act(u, skillId, target, opts) → bool (now), windUp(u, skillId, target, opts),
-  addIntent / setIntent(u, skillId, target, opts) (v2: now, or a wind-up when opts.delay / turns / windup),
-  clearIntents(u), bestAttack(u, opts), defaultPlan / defaultTurn(u, style?), approach(u, style?),
-  tilesFor(u, skillId, target), canUse(u, skillId), slot(u, skillId), dist, los, randomEmptyTile(filter) }
+  friends(u), reachable(u) (AoO-aware, entries with provokes), reachableTargets(u, opts), engaged(u), provokes(u, x, y),
+  aooCost(u, pos), moveTo(u, x, y) (a move action: fewest-provoke path, provokes), act(u, skillId, target, opts) → bool
+  (now), windUp(u, skillId, target, opts), addIntent / setIntent(u, skillId, target, opts) (v2: now, or a wind-up when
+  opts.delay / turns / windup), clearIntents(u), bestAttack(u, opts), defaultPlan / defaultTurn(u, style?),
+  approach(u, style?), tilesFor(u, skillId, target), canUse(u, skillId), slot(u, skillId), dist, los,
+  randomEmptyTile(filter) }
 ```
 v2 removed `planAll`, `plan`, `executeAll`, `recharm`, `turnOn`, `retarget`, `cancelSpellIntents` (no planning phase, no
 re-aiming of telegraphs; see `docs/notes/v2-migration.md`).
@@ -678,6 +776,19 @@ Custom planner: `def.ai = function (unit, api) { ... }` runs ON THE UNIT'S TURN 
 - **Style** (`styleOf`): `def.ai` as a style (`'ranged'` or `{ style, keepDistance }`), else `def.aiStyle` (for function
   planners), else by reach of the damage skills: the default planner by its longest (≥ 3: ranged, keepDistance ≤ 3), a
   function planner by its shortest (a bruiser with one long leap stays a bruiser). `style` args take the same forms.
+  Styles: `melee` (default), `ranged`, `support`, `coward`, `summoner`, `kamikaze`, and (v2) the divers `assassin` /
+  `skirmisher` (same behaviour).
+- **Targeting (v2, reach-aware)**: the default planner scores every (tile it can walk to this turn × ready skill ×
+  target) — what it can actually reach now (walk cost ×0.2, LOS and ranges via its candidates) — as
+  `est (damage after armor…) + targetValue + position`, with `targetValue` (= `targetBonus`): most styles +4 for a foe
+  it is **engaged** with (next to its turn-start tile; support 2, ranged / summoner 1, coward 0), + min(3, ¼ × the foe's
+  best damage number) (threat), +5 for a kill (+2 if a hero), + 1.5 × the share of HP the foe is missing (a tiebreak).
+  Divers (`assassin` / `skirmisher`): +14 for a kill (+6 hero), + 8 × HP share missing, up to +4 for a low max HP, no
+  engagement bonus, walk cost ×0.05. The walk's **attacks of opportunity** (its `provokes`) cost `aooCost` = their
+  estimated hits × 1.5 (divers 0.5, kamikaze 0.75) + 2 each, and **Infinity if they would drop it** (it never walks into
+  a lethal one); a taunted unit pays 0.5 each (taunt drags it to its taunter). Paths are the fewest-provoke ones.
+  `approach` (nothing in reach) adds the same cost. Custom planners: `api.reachableTargets(u)` lists what it can hit
+  this turn, engaged foes first — prefer it to "the weakest hero on the map" unless the unit is meant to dive.
 - **Wind-up numbers** (`intentDmg`, honest by contract: it deals what it shows): `round(L.dmg × attacker multipliers
   (Weak, Inspired, Empowered, item dmg, difficulty)) + Σ status telegraphFlat(st, unit)`, then, if > 0,
   `+ skill.telegraphFlat(unit, intent) + Σ rule.telegraphFlat(unit, intent, rule)` (min 0). An explicit `dmg` shows that.
@@ -686,25 +797,42 @@ Custom planner: `def.ai = function (unit, api) { ... }` runs ON THE UNIT'S TURN 
   the walk), valued at that skill's number. Empty for stun-likes, sheep and units with no such skill; `only` = the
   taunter while taunted. Pure.
 - **estimate** reads the attacker multipliers, high ground, Vulnerable, statuses' `takenMult`, resist, Wet lightning,
-  Marked, armor and invulnerability (no hooks: it runs thousands of times per decision).
-- Held (`noMove`) / rooted units decide without moving.
+  Marked, armor and invulnerability (no hooks: it runs thousands of times per decision); `noEmpower` (attacks of
+  opportunity) leaves Empowered out.
+- Held (`noMove`) / rooted units decide without moving. `moveTo` / `api.moveTo` walks are move actions (they provoke);
+  a walk ended early by an attack of opportunity makes the default turn aim again from where it stopped.
 
 ### 5.7 `DD.AutoPlay` (RULES)
 `takeTurn()` — greedy control of the CURRENT turn (v2: the current hero and the hero-side summons acting on it; in
 deployment it rolls initiative first); it does not end the turn.
 `runBattle(maxRounds = 30) → { result, rounds, timeout }` — rolls initiative if needed, then loops takeTurn + endTurn
 (AI turns resolve inside endTurn) until the end; always terminates (used by tests, sims, `?autoplay=1`).
-Danger it reads (v2, no telegraphs): wind-ups (`DD.AI.windups` data), every AI enemy's `DD.AI.reachOf` (its best hit
-shared among the hero-side units it can reach) and `threatAt` auras. Stalemates: the reach term is weighed by a
-caution factor, 1 up to round 6, then −0.1 a round down to 0.3, and 0 after round 6 once three rounds in a row passed
-without any HP change (until something happens again). Unused AP is worth nothing (no Guard). Helpers:
-`incomingAt(unit, x, y) → { dmg, pierce, hits, ride, aura }`, `auraAt(enemy, unit, x, y)`, `distField(unit, goals,
-adjacent)`, `stall() → { quiet, caution }`, `trace` / `log`, `measure` / `samples`.
+Danger it reads (v2, no telegraphs): the initiative order up to the current owner's next turn; for every AI enemy and
+each of its turns in it, where it can strike from its walk (walls, units in the way, line of sight, ranges and areas of
+its ready damaging skills), whom it will likely pick (the AI's own targeting formula, `DD.AI.targetBonus`: engaged foes
+first for most styles, divers go for the weak; minus the attacks of opportunity it would provoke walking away from the
+heroes next to it; taunt; protected objects) and how many hits a turn it has been seen to deal in this fight; boss
+wind-ups; `threatAt` auras. A hit weighs less when its victim acts before the enemy (it can respond) or when allies
+acting first may stop the enemy; per unit, the odds of the HP lost and of going down are exact. v2 attacks of
+opportunity: walks are priced with the hits they provoke (`provokes` of `Combat.reachable`), and so is stepping off a
+tile after acting (hit and run next to a brute is not free), so it doesn't walk away from melee foes carelessly,
+teleports / dashes out instead, and values standing next to an enemy that threatens an ally (body-blocking).
+Stalemates: the reach term is weighed by a caution factor, 1 up to round 6, then −0.1 a round down to 0.3, and 0
+after round 6 once three rounds in a row passed without the party wearing anything down (until something happens
+again). Unused AP is worth nothing (no Guard). Helpers: `incomingAt(unit, x, y) → { dmg, pierce, hits, ride, aura,
+down, loss, list }`, `incomingAsAlly(unit, x, y, actor?)`, `turnPlan()`, `threats(actor?)` (per enemy: victims with
+their odds, `leave` = its disengage cost), `danger(actor?)`, `hitsPerTurn(unit)`, `lossOf(...)`, `auraAt(enemy, unit,
+x, y)`, `distField(unit, goals, adjacent)`, `stall() → { quiet, caution }`, `trace` / `log`, `measure` / `samples`.
 **Puzzle hints**: an object def, instance or its `interact` may set `autoplay: number | (unit, obj, tile, state) =>
 number` — the damage-equivalent value of interacting with it (levers, valves, mirrors, books), stepping on it
 (non-blocking objects such as plates) or destroying it (smashable / damageable panels) *right now*; ≤ 0 = ignore.
 AutoPlay compares it with its best attack, walks over (values ≥ 10 are approached from afar) and acts. Return 0
-once a puzzle step is done. Boss puzzles must set these so balance sims and tests exercise them.
+once a puzzle step is done. Boss puzzles must set these so balance sims and tests exercise them. v2: a flyer never
+walks to an object that only works by being stepped on (a plate: no interaction, not smashable) — it can't press it.
+v2 (user requests): it aims attacks at volatile objects when the blast is worth it (a dry run: foes hurt / killed minus
+allies hurt), and aims heals at downed allies (valued like a revive, with Help Up's safety check: the ally must likely
+live until it acts); Help Up and the walk to a downed ally wait when such a heal can get it up from where it stands.
+Hazards are per unit (flyers, immunities) in its walks, its danger model and the surfaces it lays down.
 
 ### 5.8 `DD.MapGen` / `DD.Encounter` (MAPGEN)
 ```
@@ -727,7 +855,9 @@ Layout legend defaults: `.` floor · `#` wall · `~` water · `^` lava · `_` pi
 
 ### 5.10 Event names (DD.Events)
 Combat: §5.5. Render/input: `input:tileHover {x,y}|null`, `input:tileClick {x,y,button,shift}`, `input:unitClick
-{unitId}`, `input:rightClick`, `input:key {key, code}`. UI: `ui:screen {id}`. Run: `run:changed`, `run:gold`.
+{unitId}`, `input:rightClick`, `input:key {key, code}`, `render:view {yaw, moving}` (the battlefield view angle changed:
+`moving: true` at most every 66 ms while it turns, then exactly one `moving: false` once it has rested 150 ms; the new
+view is already applied when it fires). UI: `ui:screen {id}`. Run: `run:changed`, `run:gold`.
 
 ---------------------------------------------------------------------------------------------------------------------
 
@@ -774,10 +904,37 @@ wind-up at once.
   the owner's turn; outside it the summon has 0 AP until the owner's turn starts). AI units ignore AP.
 - **Block** only comes from skills (and hooks) mid-fight and lasts until the start of its owner's next turn.
 - A walk stops early when a tile on the way roots, holds or stuns the walker, or a tile callback calls
-  `DD.Act.stopMove(unit)` (a slip). A move whose tile callbacks changed nothing can be undone.
+  `DD.Act.stopMove(unit)` (a slip). A move whose tile callbacks changed nothing (and that provoked nothing) can be undone.
 - Path cost: terrain `cost` (1; mud/water/rubble 2), +1 per level stepped up. Up ≤1 level per step (hop ≤2,
   flying ignores height, pits, liquids and terrain cost). Down any. Can pass through friends, not foes; can't end on a unit.
 - High ground: attacker standing higher than its target deals +25% damage.
+- **Attacks of opportunity (v2).** A **move action** — `DD.Combat.move`, an AI walk (`AI.moveTo`, `api.moveTo`, the
+  default turn, a sheep's stroll), i.e. `Act.moveAlong(..., { provoke: true })` — that leaves a tile next to (Manhattan
+  distance 1) an **opposing** unit lets that unit strike the mover once, as it leaves (the mover still stands there):
+  - **Who** (`Act.opportunityOf`): active, `Grid.hostile(attacker, mover)` (charm-aware), not stun-like / sheep,
+    AI-controlled ones also not Dazzled / Confused and, if taunted, only against their taunter; a charmed hero never
+    strikes its charmer; its reaction unused this round (`unit.oppRound !== state.round`: **at most one per attacker
+    per round**, refreshed when a round starts); not `flags.noOpportunity`; and it has an opportunity skill
+    (`Act.opportunitySlot`): a hero's **basic attack if it is melee**, summons / enemies their **first ready melee
+    skill** (melee = a damaging skill targeting 'unit' / 'tile' / 'dir' at max range 1 after `modifyRange` that can hit a
+    foe there; ready = off cooldown, charges left, no silenced spell, its `canUse` and `canTarget` agree). The mover is
+    not stealthed, not `untargetable`, not `flags.noProvoke`. Then `modifyOpportunity(o)` on the attacker's sources and
+    the mover's (cancel / flat / mult; pure). Before initiative (deployment) nothing provokes.
+  - **The attack**: `opportunity:attack` event, FX "⚔️ Attack of opportunity!", a log line, then the skill resolves on the
+    mover's tile only (`resolveSkill`, `ctx.opportunity = o`, `ctx.tiles` = that tile): normal damage rules, its riders
+    too, but free (no AP / HP / Hype, no cooldown or charge, `usedThisTurn` untouched) and it neither uses nor consumes
+    Empowered. Its hits carry `d.opportunity` and o.flat / o.mult. `onOpportunityAttack(o)` (attacker's sources, then
+    the mover's; `o.dealt`). `onSkillUsed` fires as for any resolved skill.
+  - **Interrupts**: several attackers next to the tile strike in unit order; once the mover is downed / dead, stun-like,
+    rooted / held, moved off the tile (a push) or told to stop (`Act.stopMove`), nobody else strikes and **the walk ends
+    there** ("Stopped!"). The move action is spent (`Combat.move` returns true). With 4-way adjacency every step off a
+    tile next to a foe leaves its reach; walking past a foe provokes too; stepping next to one never does.
+  - **Never provoke**: pushes, pulls, knockbacks, falls, slides, teleports, swaps, throws, jumps, skill dashes / charges
+    / leaps (`moveAlong` without `provoke`), deployment swaps, spawns.
+  - **Paths** (`Grid.reachable / path` with `aoo`, used by `Combat.reachable / move` and every AI walk): within the move,
+    the fewest attacks of opportunity + hazard tiles on the way (each tile's zones from `opportunityOf`), then the fewest
+    attacks, then the cheapest; entries carry `provokes: [unitIds]`. `Combat.provokes(unit, x, y)` gives names, skills and estimated
+    damage for the HUD's "⚔ provokes N". A move that provoked can't be undone.
 
 ### 6.3 Line of sight
 Bresenham/supercover between tile centers; blocked by an intermediate tile whose terrain/object/surface blocks LOS,
@@ -818,11 +975,23 @@ next turn and a stun applied in an onTurnStart hook costs that very turn. Summon
   heroes/bosses take 25% max HP and are placed on the nearest free tile. Lava: 8 fire damage + Burn 2 on entry.
   Water removes Burn and applies Wet. `immovable` units ignore pushes. Every entered tile fires onEnterTile/surfaces/traps.
   The distance goes through the pusher's `modifyOutgoingPush`, then the target's `modifyPush` (either may cancel).
-- Hazards (AI and AutoPlay avoid them; paths prefer fewer): defs with `hazard` (§5.3), per unit when it is a function.
+- Hazards (AI and AutoPlay avoid them; paths prefer fewer): defs with `hazard` (§5.3), per unit when it is a function;
+  v2: always per unit (`DD.Grid.hazardAt`): flyers, and units that ignore what the hazard does (hazardElement /
+  hazardStatus vs resist 0 and immunities), get no hazard there.
 - Elements (`applyElement`): fire → ignites oil (fire spreads along oil), evaporates water to **steam** (blocks LOS
   1 round), burns webs, melts ice to water, detonates explosive barrels, applies Burn to the unit there;
   frost → water→ice, removes fire; lightning → electrifies a connected water body (damage + stun to units in it);
   water → extinguishes fire, lava→obsidian (stone); poison → poison surface; blood → blood surface; oil → oil surface.
+  v2: a reaction that comes from the floor (`opts.floor`: a slick going up, a spilled brazier) leaves flyers alone; an
+  element aimed at a tile (a skill) still reaches the flyer there. Water shocks only grounded units.
+- **Flyers (v2, user request)** ignore the floor entirely: terrain onEnter / onTurnEnd, non-airborne surfaces (onEnter,
+  onTurnEnd, splashes), ground objects and traps (plates are never pressed), ice slides, falls, floor reactions, hazards.
+  Clouds (`airborne`: steam, smoke, gases), attacks and spells aimed at them or their area, explosions' blast damage and
+  unit-centred auras still hit them (§3.7). Flight from a status (`flying` on its def) that ends (removed, dispelled,
+  run out) over a pit or deep water drops the unit in (a fall); other floor effects reach it from its next step / turn end.
+- **Volatile objects (v2, user request)**: a player's single-target attack aimed at one detonates it (§3.2): destroyed, its
+  blast credited to the attacker (kills, environmental kills +20 Hype, stats, onKill / gold hooks). The AI never aims at
+  objects; area attacks, fire and explosions set them off as before; the adjacent Smash interaction is unchanged.
 - Environmental kill (death caused by push/fall/hazard/bump/explosion credited to a hero) → +20 Hype and narration.
 
 ### 6.7 Hype & signatures
@@ -832,7 +1001,11 @@ Party Hype 0–100: +8 per kill by the hero side, +20 per environmental kill, +4
 ### 6.8 Downed heroes, revive, defeat
 At 0 HP a hero is **downed** (stays on its tile, can't act, untargetable; it keeps its initiative slot, its turn is
 skipped unless its summons act on it). An adjacent ally can **Help Up** (interact, 2 AP) → revive at 25% max HP with 0 AP;
-it acts again on its own slot. Combat ends in defeat when no hero is active. After combat, downed heroes revive at
+it acts again on its own slot. v2 (user request): a single-target heal (skill or consumable, §3.2) **aimed at** a downed
+ally also gets it up, with the healed amount as HP (after healBonus and modifyHeal; at least 1, at most max HP), 0 AP, on
+its own slot (one already passed: next round); a cancelled heal does not. Area heals, regeneration, lifesteal, passives,
+Blessings and round-end heals never revive. 'downedAlly' revive skills are unchanged. Combat ends in defeat when no hero
+is active. After combat, downed heroes revive at
 1 HP, `downs++` and gain a random Scar; the third down in a run kills the hero permanently (they can be replaced at a
 tavern). Summons die at 0 HP.
 
@@ -853,6 +1026,31 @@ casual: enemy HP ×0.8, damage ×0.8 · normal: ×1 · brutal: HP ×1.25, damage
 Tile diamond 64×32 px at zoom 1, elevation step 16 px. `DD.Iso.toWorld(x, y, h) → { x: (x - y) * 32, y: (x + y) * 16 - h * 16 }`
 (tile **top-face center**). Camera: `DD.Render.camera = { x, y, zoom }` (world point at screen center).
 
+**Map rotation (view yaw).** The ground plane turns by the yaw θ (degrees, [0, 360), positive = the board turns
+clockwise on screen) before the 2:1 projection: `A(θ) = A0·R(θ)`, `A0 = [[32, −32], [16, 16]]`. Elevation stays a pure
+−16 px per level at every yaw. θ = 0 is the classic view and every helper returns exactly the formulas above there; the
+quarter views (90 / 180 / 270) are exact lattice symmetries. Purely visual: game logic never reads the yaw.
+```
+view() → V (the current immutable view) · makeView(deg) → V (memoised per 1e-3°) · normYaw(deg) → [0, 360)
+setYaw(deg | V) (DD.Render only) · withYaw(deg | V, fn) → fn() (push / pop around fn: bakes, isolated paints, tests)
+toWorld(x, y, h) · fromWorld(wx, wy, h) · local(u, v) → {x, y} (a ground offset at the current view) · local0(u, v) (always
+  yaw 0: billboards) · depth(x, y) = (c + s)·x + (c − s)·y (x + y at yaw 0; larger = nearer the viewer)
+quadPath(ctx, cx, cy, hw, hh, V?) (the tile quad scaled like a (hw, hh) diamond; = diamondPath at the quarter views)
+rayHitsColumn(wx, wy, tx, ty, bot, top) (picking) · screenFacing(facing, lastDir, prev) → ±1 (the sprite mirror)
+K = 32·√2 · RISE = 1/√2 · inColumn / inDiamond / diamondPath: unchanged yaw-0 helpers
+V = { yaw, quarter (0..3 | −1), legacy (yaw 0), key, c, s, ax, bx, ay, by, fx, fy (toward the viewer), rx, ry (screen right),
+  corners[4] (NW, NE, SE, SW px), unit[4], order[4], hx, hy (quad half-extents), ea, eb (inscribed ellipse), warp [a, b, c, d]
+  (yaw-0 tile px → this view, canvas order), edges { N, E, S, W } ({ dir, dx, dy, nf, nr, front, back, shade, shadowW, cut,
+  pa, pb, frame, opp, … }), edgeList, faces (visible side faces left → right), backChain, frontChain }
+```
+Painters: `painter(ctx, opts)` is a billboard helper as before; `opts.ground === true` makes `g.diamond` draw the view's
+quad (surfaces); every `g` also has `g.local(u, v) → [x, y]`, `g.yaw`, `g.view`. **Content rule:** anything drawn in a
+painter that points along the grid (arrows, rows of panels, a train's heading) uses `g.local` / `DD.Iso.local`; terrain
+`draw` painters are pure ground art (no text, nothing upright). `g.box` / `g.diamond` are yaw-0 billboards unless the
+object def sets `yawAware: true`: then they stand on the view's ground quad (the block turns with the board; identical at
+yaw 0), and `g.faces(cx, cy, hw, hh)` / `g.on(…)` / `g.quad(…)` place details on its visible sides and top
+(docs/notes/render-world.md, "Content authors: blocks that turn with the board").
+
 ### 7.2 Renderer — `DD.Render`
 ```
 init(canvas) · start() · stop() · resize() · setScene('combat'|'none'|'gallery'|'title')
@@ -860,8 +1058,24 @@ camera · centerOn(x, y, { instant, ignoreHud }) · fitMap() · follow(x, y, { p
 worldToScreen(x, y, h) → {x,y} · screenToTile(sx, sy) → {x,y}|null · unitAtScreen(sx, sy) → Unit|null
 overlay (below) · hudMargins / margins() · renderTo(canvas, opts) → { units, telegraphs, windups, badges, threatTiles,
 reachTiles, widgets, silhouettes, … } · theme background from DD.Themes[state.theme].bg
+map rotation (the battlefield only; title, gallery, drawTileAt / drawObjectAt always draw at yaw 0):
+getYaw() → deg · setYaw(deg, { keepFocus = true, persist = false, animate = false, instant }) → target
+rotateBy(deltaDeg, { animate = true }) · turn(dir) (+1 = R clockwise, −1 = Q: the next classic view, 250 ms ease; a double
+tap turns 180°) · resetView() (to 0 the short way, then fitMap) · beginRotate() · rotateDrag(dxCssPx) (yaw −= 0.35°/px) ·
+endRotate({ snap = true }) (eases onto a classic view within 4° unless settings.rotSnap === false) · isViewMoving()
+renderTo(canvas, { …, yaw, live }) (render that view; the live yaw is untouched; live: true = live-frame level of detail)
 ```
-Each frame: `DD.FX.update(dt)`; if FX idle → `DD.FX.syncAll(units)`; draw back-to-front (by x+y, then h): tile blocks
+The view keeps the ground point under the board-area centre in place while it turns (or, when that point is off the
+board, the board's nearest point where it is on screen, so a turn never swings the board out of view; a pivot per gesture; `follow`
+returns false and `fitMap` waits until the view stops); every change emits `render:view` (§5.10). `rot=<deg>` (§10.1)
+or the remembered `settings.viewYaw` (§4.7) sets the starting angle. Everything follows the view: picking (a ray
+through each column, front group first), depth order, visible side faces (the classic left / right colours sweep with
+the face's angle), contact shadows, overlays, objects, silhouettes, sprites (§7.3), FX (§7.4) and widgets. A tall wall on
+the N or W border sinks toward half a level (with a dark section cap) and a tall border prop fades as that border turns
+toward the camera, render-only and never at yaw 0. While the view turns, silhouettes draw at half resolution and top
+textures come from the nearest cached bake; exact bakes follow once it rests.
+Each frame: `DD.FX.update(dt)`; if FX idle → `DD.FX.syncAll(units)`; draw back-to-front by depth groups (cells of equal
+`DD.Iso.depth`: the x + y diagonals at yaw 0, members by x; per group tiles, then objects, then units by h): tile blocks
 (top + side faces) → surfaces → overlay highlights (deploy, move, threat shading, one enemy's reach, interact, wind-up
 tiles, targets, AoE) → objects → units (turn ring, selection ring, shadow, sprite) → HP bar, block, status icons, AP pips
 (acting turn only), turn chevron, wind-up bubbles + preview badges → wind-up outlines / tracking lines → ⏳ badges → FX
@@ -891,13 +1105,19 @@ DD.Render.overlay = {
   turnUnitId: null,        // whose turn is on screen: a glow ring under it (red for AI units) + a bouncing chevron
   threat: null,            // threat shading { tiles: [{ x, y, dmg, lethal }], ref }: orange by dmg / ref, lethal hatched
   reach: null,             // one inspected enemy's reach { unitId, tiles: [{x,y}] }: red outlined region
+  // v2 requests (Nov 3); empty / absent = nothing drawn (yaw 0 stays pixel-identical)
+  objTargets: [],          // [{x,y}] volatile objects the armed attack can set off: a pulsing 💥 above each (bigger on hover)
+  reviveTargets: [],       // [unitId] downed allies the armed heal gets back up: green DOWNED label + pulsing 💚
 }
+// previews[id] may also be { revive: true, heal: 0, text: 'UP! 7 HP' } (a heal aimed at a downed ally): a green badge
 ```
 
 ### 7.3 Sprites — `DD.Sprites`
 ```
 draw(ctx, spec, sx, sy, zoom, opts) — opts { t, facing: 1|-1, flash 0..1, alpha, bob, pose: 'idle'|'attack'|'hurt'|'downed'|'cast' }
-drawUnit(ctx, unit, sx, sy, zoom, t)  — looks up the def sprite (hero/enemy/summon), applies vis/status tints
+drawUnit(ctx, unit, sx, sy, zoom, t)  — looks up the def sprite (hero/enemy/summon), applies vis/status tints; a resting
+  unit is mirrored for the view: DD.Iso.screenFacing(unit.facing, unit.lastDir, last shown) (unit.facing stays engine
+  data in yaw-0 screen space); facingOf(unit) → the mirror shown last (±1 | undefined)
 portrait(specOrDefId, size = 64, opts) → HTMLCanvasElement   // cached; used by UI
 painter helper `g` for spec.draw/overlay: origin at the feet, +y down, ~40 px = medium creature height before scale.
   g.ctx · g.pal · g.t · g.circle(x,y,r,fill,stroke) · g.ellipse(x,y,rx,ry,fill,stroke,rot) · g.rect(x,y,w,h,fill,stroke,radius)
@@ -917,8 +1137,12 @@ DD.FXRender = {
   drawScreen(view),   // screen-space: floating numbers/text, speech bubbles, banner, flash — after everything
   shakeOffset() → { x, y },   // current screen shake in px (renderer offsets the camera)
 }
-view = { ctx, zoom, t /*s*/, dt /*ms*/, width, height, toScreen(x, y, h) → { x, y } /*screen px of tile top center*/ }
+view = { ctx, zoom, t /*s*/, dt /*ms*/, width, height, toScreen(x, y, h) → { x, y } /*screen px of tile top center*/,
+  yaw, local(u, v) → {x, y} /*ground offset at the view*/, axes { ax, bx, ay, by } }
 ```
+FX grid directions follow the view yaw (§7.1): `DD.FXRender.screenDelta(a, b)` / `facingToward(a, b)` (walk, slide,
+jump, lunge, projectile and beam facings; lunges re-aim if the view turns mid-animation), tile pulses and wind-up glows
+on the view's quad. Content FX painters that point along the grid use `view.local` / `DD.Iso.local`.
 `DD.Meta.data.settings.animSpeed` → `DD.FX.speed` (set by main.js / settings screen).
 **v2 markers** (0 ms from the engine): `turn` (fx_core's applyEnd moves `DD.FX.shownTurn`), `windup` (a red glow on the
 announced tiles + a sound), `initiative`. **Hosted moments**: a screen may register `DD.FXRender.moments.initiative =
@@ -929,8 +1153,17 @@ host may finish it early by setting `evt.elapsed = evt.ms`; the engine's "Roll f
 waits. A throwing host is contained (`DD.safe`).
 
 ### 7.5 Input — `DD.Input`
-`init(canvas)`; emits `input:*` events (§5.10). Camera: drag with right/middle mouse, WASD/arrow keys pan, wheel zoom,
-`F`/Home recenters. Left click → `input:tileClick`. Esc / right-click → `input:rightClick`.
+`init(canvas)`; emits `input:*` events (§5.10). Camera: drag with the right (or left, past 6 px) mouse button,
+WASD/arrow keys pan, wheel zoom, `F` refits the board. Left click → `input:tileClick`. Esc / right-click →
+`input:rightClick`. **Map rotation (on the combat screen only — not the rewards / level-up screens that keep the board
+drawn behind them, where `Home` just refits; it never emits a click or hover):** a middle-button drag (hold the
+wheel) turns the map to any angle (horizontal motion only, 0.35° per px after 3 px; it lasts while the middle button is
+down, so a chorded left / right button never carries it on; released within 4° of a classic view it eases there unless
+Shift is held or `settings.rotSnap === false`; the angle stays where it is left; the middle button never pans); a
+sideways wheel / trackpad swipe / Shift+wheel (even where the browser reports it vertical) turns it (−0.25° per px;
+Ctrl+wheel still zooms); a two-finger twist turns it on touch; `Q` / `R` turn 90° counter-clockwise / clockwise
+(animated, a double tap turns 180°); `Home` resets the view (yaw 0 + fit). The window losing focus ends a turn in
+progress where it is. Hover is frozen while the view moves and re-picked once it settles.
 
 ### 7.6 Audio — `DD.Audio`
 Procedural WebAudio SFX (no files): `play(name, opts)`, `setVolume(v)`, `mute(bool)`. Names: click, hover, hit, crit,
@@ -952,6 +1185,8 @@ toast(text, { cls, ms }) · tooltip(el, contentOrFn) · hideTooltip()
 skillCard(skillId, level, { unit, compact, onClick }) · skillTooltipHtml(skillId, level, unit)
 itemCard(itemId, opts) · itemTooltipHtml(itemId) · statusTooltipHtml(statusInstance)
 portrait(heroOrSpecOrDefId, size) → element · hpBar(cur, max, opts) → element · goldText(n)
+aimNotes(def, unit?) → html   // v2 requests: "💥 Can also be aimed at an explosive barrel…" / "🆘 Aimed at a downed ally…"
+flyLine(who) → text            // v2 requests: "🪽 Flying: ignores floor effects … Clouds and gases still reach <name|it>."
 ```
 
 ### 8.2 Screens & flow
@@ -999,6 +1234,18 @@ this turn · Space roll initiative / end turn / skip animations (and the dice mo
 shading · Esc cancel / unpin / menu. `DD.HUD` exposes the same actions for tests and the console (`select`, `pressSlot`,
 `hover`, `click`, `key`, `endTurn`, `rollInitiative`, `tracker`, `shownTurnUnit`, `upcoming`, `threat`, `holdThreat`,
 `threatData`, `moment`, `skipMoment`, `hoverTracker`, `clickTracker`, …).
+**Map rotation** (top-right cluster, between the speed button and Menu): ⟲ (`DD.Render.turn(-1)`, Q) · a compass that turns
+with the board on `render:view` and resets the view on click (`resetView`, Home; it glows while the map is turned) · ⟳
+(`turn(1)`, R); the keys and the middle drag live in `DD.Input` (§7.5). Reinforcement edges are named for the current
+view (`DD.HUD.edgeName(edge, yaw?)`: at yaw 180 the N edge is "bottom-left"); `DD.HUD.compass()` reads the needle.
+**v2 requests (Nov 3)**: an armed attack that can set a barrel off (`Targeting.aimsAtObjects`) lists volatile objects in
+`targetTiles` and `overlay.objTargets`; hovering one previews the whole blast (`areaTiles` = preview.tiles, a badge per
+unit, "💥 Detonate: Explosive Barrel — 8 fire damage within 1 tile · Hits 2 foes for 14 · ⚠ hits Marwyn!"); the inspect
+panel of a volatile object says how to set it off. An armed heal that revives (`Targeting.revivesWith`) lists downed
+allies (`revive: true` targets, `overlay.reviveTargets`); hovering one shows "UP! N HP" and "🆘 UP! Marwyn gets back up
+with 7 HP (0 AP now; acts next)"; a downed hero's card says "💚 Heal back up (2)" when the acting unit has such a heal
+ready (`DD.HUD.reviveOptions(id)`), and the card / inspect tooltips (`DD.HUD.unitTip(id)`) explain Help Up and aimed
+heals. Flyers get no floor-hazard path warnings (per-unit hazards, §5.1) and a "🪽 Flying: ignores floor effects" line.
 
 ---------------------------------------------------------------------------------------------------------------------
 
@@ -1101,7 +1348,8 @@ api.rollPassive(idx)             // grant a roll on the Table of Questionable Bl
 `index.html?debug=1` plus: `screen=title|partySelect|map|combat|rewards|event|shop|tavern|party|gameover|victory|hall|
 settings|gallery` · `party=zarathor,marwyn,syllamin,ellaria` · `encounter=<id>` or `act=1&kind=normal|elite|boss` ·
 `seed=<n>` · `level=<n>` · `autoplay=1` · `fast=1` (FX speed ×4) · `instant=1` · `event=<id>` · `gallery=heroes|enemies|
-summons|objects|all|<id>` · `unlockall=1` · `sound=1` (debug pages are silent without it) · `isolate=a,b` (loader: only content files and content
+summons|objects|all|<id>` · `unlockall=1` · `sound=1` (debug pages are silent without it) · `rot=<deg>` (the battlefield
+view angle at boot, e.g. `rot=30`; read by `DD.Render.init`, never remembered) · `isolate=a,b` (loader: only content files and content
 tests whose path contains a substring are loaded; core always loads) · `fixtures=1` (the loader also loads `tests/fixtures.js`: test heroes,
 enemies and encounters with `test_` ids — lets the whole game run before real content exists). With `debug=1`,
 `window.DDdbg` exposes helpers in the console. `js/main.js` must do nothing when `window.DD_TEST` is set.

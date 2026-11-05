@@ -621,6 +621,161 @@
     A.setVolume(0.6);
   });
 
+  // ---------------------------------------------------------------------------------------------------------------
+  // Map rotation (rotation plan T11): sprites mirror for the view, FX directions follow DD.Iso.local, tile pulses use
+  // the view's quad. Yaws are only ever set through DD.Iso.withYaw / renderTo({ yaw }): the live view is never moved.
+  function pixelsOf(c) { return c.getContext('2d').getImageData(0, 0, c.width, c.height).data; }
+  function samePixels(a, b) {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+    return true;
+  }
+  function alphaAt(c, x, y) { return c.getContext('2d').getImageData(Math.round(x), Math.round(y), 1, 1).data[3]; }
+
+  T.suite('sprites: facing and lunges follow the view (map rotation)', function (t) {
+    const S = DD.Sprites, Iso = DD.Iso, FXR = DD.FXRender, p0 = DD.problems.length;
+    const live = Iso.view();
+    t.ok(typeof Iso.withYaw === 'function' && typeof Iso.screenFacing === 'function' && typeof Iso.quadPath === 'function', 'DD.Iso view API present');
+    t.ok(typeof S.facingOf === 'function' && typeof FXR.screenDelta === 'function' && typeof FXR.facingToward === 'function', 'DD.Sprites.facingOf + DD.FXRender.screenDelta / facingToward');
+    const def = { id: '__spr_rot', name: 'Rot', __kind: 'heroes', sprite: variant({ mainhand: 'sword', head: { hat: 'wizard' } }) };
+    const realQuad = Iso.quadPath;
+    try {
+      withDefs([{ bag: 'heroes', def: def }], function () {
+        // ---- resting units: DD.Iso.screenFacing with a per-unit memory
+        const c = canvas(160, 160), ctx = c.getContext('2d');
+        const shot = function (u, yaw) {
+          ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, 160, 160);
+          Iso.withYaw(yaw, function () { S.drawUnit(ctx, u, 80, 130, 2, 0.7); });
+          return pixelsOf(c);
+        };
+        // a new unit object per case (the mirror memory is per unit); the same id keeps the same idle phase
+        const mk = function (facing, lastDir) { return fakeUnit('rot1', '__spr_rot', 'hero', { facing: facing, lastDir: lastDir }); };
+        const right0 = shot(mk(1, { x: 1, y: 0 }), 0), left0 = shot(mk(-1, { x: -1, y: 0 }), 0);
+        t.ok(ink(c) > 100 && !samePixels(right0, left0), 'yaw 0: facing 1 and -1 draw mirrored pictures');
+        let same0 = true;
+        [[1, { x: 0, y: 1 }], [-1, { x: 1, y: 0 }], [1, null], [-1, undefined], [0, { x: -1, y: -1 }]].forEach(function (cs) {
+          const u = mk(cs[0], cs[1]);
+          shot(u, 0);
+          if (S.facingOf(u) !== (cs[0] === -1 ? -1 : 1)) same0 = false;
+        });
+        t.ok(same0, 'yaw 0: the mirror is exactly unit.facing, whatever lastDir says');
+        const u180 = mk(1, { x: 1, y: 0 });
+        t.ok(samePixels(shot(u180, 180), left0), 'yaw 180: facing 1 draws mirrored (the picture of facing -1 at yaw 0)');
+        t.eq(S.facingOf(u180), -1, 'facingOf reports the mirror shown');
+        t.ok(samePixels(shot(mk(-1, { x: 0, y: 1 }), 180), right0), 'yaw 180: facing -1 draws facing right');
+        // stepping (+1, -1) points along the view at 90: the ±3° band keeps the mirror shown last (no flicker)
+        const uh = mk(1, { x: 1, y: -1 });
+        shot(uh, 120);
+        t.eq(S.facingOf(uh), -1, 'yaw 120: a unit that stepped +x -y faces screen left');
+        t.ok(samePixels(shot(uh, 91), left0) && S.facingOf(uh) === -1, 'yaw 91 (inside the band): keeps the mirror it showed');
+        t.ok(samePixels(shot(mk(1, { x: 1, y: -1 }), 91), right0), 'yaw 91 without a memory: the engine facing');
+        shot(uh, 80);
+        t.eq(S.facingOf(uh), 1, 'yaw 80 (out of the band): turns back to the right');
+        // a fresh FX facing wins (fx_render computes it at the view already)
+        const uf = mk(1, { x: 1, y: 0 });
+        uf.vis.facing = 1; uf.vis._fxAt = performance.now();
+        shot(uf, 180);
+        t.eq(S.facingOf(uf), 1, 'yaw 180: a playing FX facing is drawn as is');
+
+        // ---- the whole frame: renderTo({ yaw }) mirrors through drawUnit
+        if (DD.Render && typeof DD.Render.renderTo === 'function') {
+          const tiles = [];
+          for (let y = 0; y < 5; y++) for (let x = 0; x < 5; x++) tiles.push({ x: x, y: y, h: 0, t: 'stone', surface: null, obj: null, zone: null, tag: null });
+          const ru = fakeUnit('rot_r', '__spr_rot', 'hero', { x: 2, y: 2, facing: 1, lastDir: { x: 1, y: 0 }, armor: 0, ap: 2, maxAp: 3, mov: 4,
+            intents: [], skillSlots: [], resist: {}, order: 1 });
+          const st = { id: 'sprite_rot', theme: 'cellar', phase: 'player', round: 1, grid: { w: 5, h: 5, tiles: tiles }, units: [ru],
+            rng: DD.RNG(1), hype: 0, log: [], rules: [], result: null, nextOrder: 1 };
+          const C = DD.Combat, prev = C ? C.state : undefined;
+          const cv = canvas(320, 220);
+          if (C) C.state = st;
+          try {
+            DD.Render.renderTo(cv, { state: st, width: 320, height: 220, yaw: 180 });
+            t.eq(S.facingOf(ru), -1, 'renderTo yaw 180: the unit is drawn mirrored');
+            DD.Render.renderTo(cv, { state: st, width: 320, height: 220, yaw: 0 });
+            t.eq(S.facingOf(ru), 1, 'renderTo yaw 0: the engine facing');
+          } finally { if (C) C.state = prev; }
+        }
+      });
+
+      // ---- screen deltas and facing
+      const A = { x: 1, y: 1, h: 0 }, B = { x: 3, y: 2, h: 1 }, Bf = { x: 3, y: 2, h: 0 };
+      const d0 = Iso.withYaw(0, function () { return FXR.screenDelta(A, B); });
+      t.ok(d0.x === (2 - 1) * 32 && d0.y === (2 + 1) * 16 - 16, 'yaw 0: the classic projection (' + d0.x + ', ' + d0.y + ')');
+      const f0 = Iso.withYaw(0, function () { return FXR.screenDelta(A, Bf); });
+      const f180 = Iso.withYaw(180, function () { return FXR.screenDelta(A, Bf); });
+      t.ok(f180.x === -f0.x && f180.y === -f0.y, 'yaw 180: the ground delta is negated');
+      const h180 = Iso.withYaw(180, function () { return FXR.screenDelta(A, B); });
+      t.ok(h180.y - f180.y === -16, 'elevation stays a screen-vertical offset');
+      const L30 = Iso.withYaw(30, function () { return Iso.local(2, 1); });
+      const f30 = Iso.withYaw(30, function () { return FXR.screenDelta(A, Bf); });
+      t.ok(Math.abs(f30.x - L30.x) < 1e-9 && Math.abs(f30.y - L30.y) < 1e-9, 'yaw 30: screenDelta = DD.Iso.local');
+      t.ok(Iso.withYaw(0, function () { return FXR.facingToward(A, Bf); }) === 1 && Iso.withYaw(180, function () { return FXR.facingToward(A, Bf); }) === -1,
+        'facingToward flips at yaw 180');
+
+      // ---- lunges, re-projected per update; flee runs away from the facing shown
+      const a = fakeUnit('rl', '__none', 'hero', { x: 2, y: 2 }), b = fakeUnit('rl2', '__none', 'hero', { x: 2, y: 2 });
+      const fl = fakeUnit('rf', '__none', 'enemy', { x: 2, y: 2, facing: 1, lastDir: { x: 1, y: 0 } });
+      const fl0 = fakeUnit('rf0', '__none', 'enemy', { x: 2, y: 2, facing: 1, lastDir: { x: 1, y: 0 } });
+      a.vis.h = 0; b.vis.h = 0; // flat ground, whatever fight state an earlier suite left behind
+      withFx([a, b, fl, fl0], function (FX) {
+        const H = FX.handlers;
+        const par = function (v, L) {
+          const cross = v.offX * L.y - v.offY * L.x, dot = v.offX * L.x + v.offY * L.y;
+          return Math.abs(cross) < 1e-6 * Math.hypot(L.x, L.y) && dot > 0;
+        };
+        const L90 = Iso.withYaw(90, function () { return Iso.local(1, 0); });
+        const e1 = { type: 'lunge', unit: a, unitId: a.id, to: { x: 3, y: 2, h: 0 }, ms: 170 };
+        Iso.withYaw(90, function () { H.lunge.start(e1); H.lunge.update(e1, 0.38, 16); });
+        t.ok(par(a.vis, L90) && Math.hypot(a.vis.offX, a.vis.offY) > 4, 'yaw 90: the lunge offset is parallel to Iso.local(to - from)');
+        t.eq(a.vis.facing, -1, 'yaw 90: the lunger faces its target (screen left)');
+        H.lunge.end(e1);
+        const e2 = { type: 'lunge', unit: b, unitId: b.id, to: { x: 3, y: 2, h: 0 }, ms: 170 };
+        Iso.withYaw(0, function () { H.lunge.start(e2); H.lunge.update(e2, 0.2, 16); });
+        const L0 = Iso.withYaw(0, function () { return Iso.local(1, 0); });
+        t.ok(par(b.vis, L0) && b.vis.facing === 1, 'yaw 0: along the classic delta, facing right');
+        Iso.withYaw(90, function () { H.lunge.update(e2, 0.38, 16); });
+        t.ok(par(b.vis, L90) && b.vis.facing === -1, 'the map turns to 90 mid-lunge: re-projected and re-aimed');
+        H.lunge.end(e2);
+        const e3 = { type: 'death', unit: fl, unitId: fl.id, cause: 'flee', ms: 400 };
+        Iso.withYaw(180, function () { H.death.start(e3); H.death.update(e3, 0.5, 16); });
+        const e4 = { type: 'death', unit: fl0, unitId: fl0.id, cause: 'flee', ms: 400 };
+        Iso.withYaw(0, function () { H.death.start(e4); H.death.update(e4, 0.5, 16); });
+        t.ok(fl0.vis.offX < 0 && fl.vis.offX > 0, 'fleeing runs away from the facing shown (left at yaw 0, right at yaw 180)');
+
+        // ---- tile pulses and wind-up glows on the view's quad
+        let calls = 0;
+        Iso.quadPath = function () { calls++; return realQuad.apply(Iso, arguments); };
+        const cp = canvas(400, 300), cx = 200, cy = 216; // fakeView: tile (2, 2) at (200, 216), zoom 1.5
+        let tt = 10;
+        const pulse = function (yaw) {
+          DD.FXRender.clear();
+          cp.getContext('2d').clearRect(0, 0, 400, 300);
+          H.tile.start({ type: 'tile', at: { x: 2, y: 2, h: 0 }, kind: 'pulse', ms: 0 });
+          tt += 0.016;
+          Iso.withYaw(yaw, function () { DD.FXRender.drawWorld(fakeView(cp, tt, 16)); });
+        };
+        pulse(0);
+        const top0 = alphaAt(cp, cx, cy - 20), side0 = alphaAt(cp, cx + 27, cy - 12);
+        pulse(45);
+        const top45 = alphaAt(cp, cx, cy - 20), side45 = alphaAt(cp, cx + 27, cy - 12);
+        t.ok(calls >= 2, 'tile pulses are drawn with DD.Iso.quadPath (' + calls + ' calls)');
+        t.ok(top0 > 0 && side0 === 0, 'yaw 0: the classic diamond (top corner lit, beyond the right edge dark)');
+        t.ok(top45 === 0 && side45 > 0, 'yaw 45: the turned quad (' + top45 + ', ' + side45 + ')');
+        calls = 0;
+        DD.FXRender.clear();
+        H.windup.start({ type: 'windup', tiles: [{ x: 2, y: 2 }, { x: 3, y: 2 }], ms: 0 });
+        Iso.withYaw(30, function () { tt += 0.1; DD.FXRender.drawWorld(fakeView(cp, tt, 100)); });
+        t.ok(calls >= 2, 'wind-up glows are drawn on the quad (' + calls + ' calls)');
+        Iso.quadPath = realQuad;
+      });
+    } finally {
+      Iso.quadPath = realQuad;
+      DD.FXRender.clear();
+    }
+    t.ok(Iso.view() === live, 'the live view is untouched (yaw ' + Iso.view().yaw + ')');
+    t.eq(errorsSince(p0).length, 0, 'no swallowed errors');
+  });
+
   T.suite('sprites: gallery screen', function (t) {
     const G = DD.Gallery, p0 = DD.problems.length;
     t.ok(G && typeof G.mount === 'function' && typeof G.draw === 'function', 'DD.Gallery API');

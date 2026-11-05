@@ -9,6 +9,10 @@
  * Sounds queued right after a visual event (the engine's FX.damage(); FX.sound('hit') pattern) are played when
  * that visual starts, so audio lines up with the animation instead of trailing it.
  *
+ * Map rotation: every grid direction goes through DD.Iso (screenDelta = DD.Iso.local, tile pulses = DD.Iso.quadPath),
+ * so facing, walks, slides, jumps, lunges, shots, beams and pulses follow the view yaw; FX that aimed a facing at their
+ * start re-aim it if the view turns mid-animation. At yaw 0 every number is the classic one.
+ *
  * v2 markers: 'turn' (fx_core moves DD.FX.shownTurn), 'windup' (a red glow on the announced tiles) and 'initiative'.
  * A screen can host the initiative dice moment: DD.FXRender.moments.initiative = { wants(evt) → bool,
  * start(evt) → ms } (the HUD's dice tray). While a host wants it, the marker blocks playback for those ms (the host
@@ -63,14 +67,30 @@
     if (v && isFinite(v.x) && isFinite(v.y)) return { x: v.x, y: v.y, h: num(v.h, 0) };
     return u ? { x: u.x, y: u.y, h: DD.FX ? DD.FX.tileH(u.x, u.y) : 0 } : null;
   }
-  /** Screen-space delta (zoom 1 px) between two grid positions (ARCHITECTURE §7.1 projection). */
+  /**
+   * Screen-space delta (zoom 1 px) between two grid positions at the current view yaw (ARCHITECTURE §7.1; DD.Iso.local
+   * is today's (dx - dy)·32, (dx + dy)·16 at yaw 0). Facing, walks, slides, jumps, shots, beams and embers follow it.
+   */
   function screenDelta(a, b) {
-    const dx = b.x - a.x, dy = b.y - a.y;
-    return { x: (dx - dy) * 32, y: (dx + dy) * 16 - (num(b.h, 0) - num(a.h, 0)) * 16 };
+    const L = DD.Iso.local(b.x - a.x, b.y - a.y);
+    return { x: L.x, y: L.y - (num(b.h, 0) - num(a.h, 0)) * 16 };
   }
   function facingToward(a, b) {
     const d = screenDelta(a, b);
     return Math.abs(d.x) < 0.5 ? 0 : d.x > 0 ? 1 : -1;
+  }
+  /** The mirror DD.Sprites showed for a unit last (±1, or undefined): the hysteresis memory of DD.Iso.screenFacing. */
+  function shownFacing(u) { return DD.Sprites && DD.Sprites.facingOf ? DD.Sprites.facingOf(u) : undefined; }
+  function viewKey() { const V = DD.Iso.view && DD.Iso.view(); return V ? V.key : 'q0'; }
+  /** Remember the view an FX aimed a facing in (start), so update can re-aim it if the map turns mid-animation. */
+  function aimed(evt) { evt._vk = viewKey(); }
+  function reaim(evt, v, a, b) {
+    if (evt._vk === undefined || !v || !a || !b) return;
+    const key = viewKey();
+    if (evt._vk === key) return;
+    evt._vk = key;
+    const fc = facingToward(a, b);
+    if (fc) v.facing = fc;
   }
   /** Sprite height in zoom-1 px (for placing text/bubbles over heads). */
   function unitHeight(u) {
@@ -640,7 +660,8 @@
 
   // ---- tile pulses -------------------------------------------------------------------------------------------------
   const TILE_COLORS = { pulse: '#ffd76a', glow: '#ffe9a0', crack: '#2a1d16', splash: '#7fc8ff' };
-  function diamond(c, x, y, hw, hh) { c.beginPath(); c.moveTo(x, y - hh); c.lineTo(x + hw, y); c.lineTo(x, y + hh); c.lineTo(x - hw, y); c.closePath(); }
+  /** The tile's top quad at the current view, scaled like a (hw, hh) diamond (= the classic diamond at yaw 0). */
+  function quad(c, x, y, hw, hh) { c.beginPath(); DD.Iso.quadPath(c, x, y, hw, hh); }
   function addTilePulse(evt) {
     const at = posOf(evt.at);
     if (!at) return null;
@@ -657,13 +678,13 @@
         c.save();
         if (e.kind === 'pulse') {
           const s = 0.85 + 0.35 * easeOut(k);
-          diamond(c, o.x, o.y, hw * s, hh * s);
+          quad(c, o.x, o.y, hw * s, hh * s);
           c.strokeStyle = rgba(e.color, 0.9 * (1 - k)); c.lineWidth = Math.max(1, 3 * z * (1 - k * 0.6)); c.stroke();
-          diamond(c, o.x, o.y, hw * 0.9, hh * 0.9);
+          quad(c, o.x, o.y, hw * 0.9, hh * 0.9);
           c.fillStyle = rgba(e.color, 0.25 * (1 - k)); c.fill();
         } else if (e.kind === 'glow') {
           const a = k < 0.2 ? k / 0.2 : 1 - (k - 0.2) / 0.8;
-          diamond(c, o.x, o.y, hw * 0.96, hh * 0.96);
+          quad(c, o.x, o.y, hw * 0.96, hh * 0.96);
           c.globalCompositeOperation = 'lighter';
           c.fillStyle = rgba(e.color, 0.5 * a); c.fill();
           c.strokeStyle = rgba('#ffffff', 0.5 * a); c.lineWidth = Math.max(1, 1.5 * z); c.stroke();
@@ -1133,6 +1154,7 @@
         evt._spin = spinTurns(evt, justThrown(evt, evt._from));
         evt._dir = fc || 1;
         if (fc && !evt._spin) v.facing = fc;
+        if (!evt._spin) aimed(evt);
         burst(evt._from, 'dust', 4, null, 0, 1);
         sfx(evt, 'push', { vol: 0.5 });
       },
@@ -1145,6 +1167,7 @@
         v.squash = t < 0.12 ? 0.5 * (1 - t / 0.12) : t > 0.88 ? 0.6 * (t - 0.88) / 0.12 : -0.22;
         v.spin = evt._spin ? easeOut(t) * evt._spin * TAU * evt._dir : 0;
         if (evt._spin && !v.downed) v.pose = 'hurt';
+        reaim(evt, v, a, b);
         stamp(v);
       },
       end: function (evt) {
@@ -1195,16 +1218,24 @@
         if (!v) return;
         const from = visPos(u), to = posOf(evt.to) || from;
         lastLunge = { unitId: evt.unitId, to: to, at: nowMs() };
+        // the ground endpoints are kept: update re-projects them, so a lunge stays aimed if the map turns mid-swing
+        evt._a = from; evt._b = to;
         const d = screenDelta(from, to), len = Math.hypot(d.x, d.y);
         evt._dx = len ? d.x / len : 0; evt._dy = len ? d.y / len : 0;
         evt._dist = clamp(num(evt.dist, len * 0.35), 5, 14);
         const fc = facingToward(from, to);
         if (fc) v.facing = fc;
+        aimed(evt);
         sfx(evt, 'slash', { vol: 0.65 });
       },
       update: function (evt, t) {
         const v = visOf(unitOf(evt));
         if (!v) return;
+        if (evt._a) {
+          const d = screenDelta(evt._a, evt._b), len = Math.hypot(d.x, d.y);
+          evt._dx = len ? d.x / len : 0; evt._dy = len ? d.y / len : 0;
+          reaim(evt, v, evt._a, evt._b);
+        }
         const p = t < 0.38 ? easeOut(t / 0.38) : 1 - easeIn((t - 0.38) / 0.62);
         v.offX = evt._dx * evt._dist * p;
         v.offY = evt._dy * evt._dist * p;
@@ -1226,6 +1257,7 @@
         if (shooter && evt.from && evt.to) {
           const fc = facingToward(posOf(evt.from), posOf(evt.to));
           if (fc && shooter.vis) shooter.vis.facing = fc;
+          aimed(evt);
         }
         evt._magic = evt.kind === 'bolt' || evt.kind === 'orb' || evt.kind === 'fireball' || evt.kind === 'note' || evt.kind === 'custom' || !PROJ[evt.kind];
         sfx(evt, spec.sound, { vol: 0.8 });
@@ -1235,6 +1267,7 @@
         if (!v || t > 0.55) return;
         v.pose = evt._magic ? 'cast' : 'attack';
         v.poseT = evt._magic ? undefined : clamp(0.3 + t * 0.6, 0, 1);
+        reaim(evt, v, posOf(evt.from), posOf(evt.to));
         stamp(v);
       },
       end: function (evt) {
@@ -1258,6 +1291,7 @@
         if (evt._shooter && evt._shooter.vis && evt.from && evt.to) {
           const fc = facingToward(posOf(evt.from), posOf(evt.to));
           if (fc) evt._shooter.vis.facing = fc;
+          aimed(evt);
         }
         if (evt.to) burst(posOf(evt.to), 'sparks', 10, evt.color, -12, 1);
         sfx(evt, 'zap', { vol: 0.75 });
@@ -1265,7 +1299,9 @@
       update: function (evt) {
         const v = evt._shooter && visOf(evt._shooter);
         if (!v) return;
-        v.pose = 'cast'; stamp(v);
+        v.pose = 'cast';
+        reaim(evt, v, posOf(evt.from), posOf(evt.to));
+        stamp(v);
       },
       end: function (evt) {
         if (evt._fx) evt._fx.life = Math.min(evt._fx.life, evt._fx.age + 60);
@@ -1408,7 +1444,8 @@
         const u = unitOf(evt), v = visOf(u);
         if (!v) return;
         if (evt._cause === 'flee') {
-          if (!evt._fleeDir) { evt._fleeDir = (u && u.facing === -1) ? 1 : -1; v.facing = evt._fleeDir; }
+          // runs away from where it was looking: the facing shown at this view (u.facing is yaw-0 screen space)
+          if (!evt._fleeDir) { evt._fleeDir = u ? -DD.Iso.screenFacing(u.facing, u.lastDir, shownFacing(u)) : -1; v.facing = evt._fleeDir; }
           v.offX = evt._fleeDir * 46 * easeIn(t);
           v.lift = Math.abs(Math.sin(t * Math.PI * 4)) * 3;
           v.walk = t * 3;
@@ -1629,6 +1666,9 @@
     bark: function (unit, text, dur) { return unit && text ? addBark(unit, text, dur) : null; },
     /** v2 hosted moments by marker type (see the header): { initiative: { start(evt) → ms, wants?(evt) → bool } }. */
     moments: moments,
+    /** Zoom-1 screen delta { x, y } between grid positions { x, y, h } at the current view; facingToward → -1 | 0 | 1. */
+    screenDelta: function (a, b) { const p = posOf(a), q = posOf(b); return p && q ? screenDelta(p, q) : { x: 0, y: 0 }; },
+    facingToward: function (a, b) { const p = posOf(a), q = posOf(b); return p && q ? facingToward(p, q) : 0; },
     PARTICLE_KINDS: Object.keys(PK),
     PROJECTILE_KINDS: Object.keys(PROJ),
     ELEMENT_COLORS: ELEMENT_COLORS,

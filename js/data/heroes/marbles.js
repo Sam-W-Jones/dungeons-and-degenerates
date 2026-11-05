@@ -2,8 +2,9 @@
  * Professor Marbles, the Forgetful Fist: an ancient rabbitfolk monk. Mobile melee skirmisher / control. v2 kit (DESIGN
  * §6 Simplicity): one verb per skill, the combos carry the power — Vulnerable marbles, a Stun, a Taunt, a sleepy
  * Lecture, a push, a pull and an Empowered ally. Passive "Absent-Minded Mastery": at the start of each of his turns he
- * remembers one random ready socketed skill, whose first use that turn costs 0 AP. Registers the hero, a basic attack,
- * a signature, a 10-skill pool, the Loose Marbles surface (mar_marbles: enemies who slip are Vulnerable), the
+ * remembers one random ready socketed skill, whose first use that turn costs 0 AP. His melee Jab is his attack of
+ * opportunity (DESIGN §4.2); his Leap, shoves and hooks never provoke one. Registers the hero, a basic attack, a
+ * signature, a 10-skill pool, the Loose Marbles surface (mar_marbles: enemies who slip are Vulnerable), the
  * mar_remembered status and three hero items. Public helpers: DD.Marbles.slip / DD.Marbles.scatter.
  */
 (function () {
@@ -103,7 +104,7 @@
 
   DD.registerSurface({
     id: 'mar_marbles', name: 'Loose Marbles', color: 'rgba(150,205,255,0.35)', turns: 3,
-    desc: 'Grounded enemies that walk or are pushed onto it slip: Vulnerable for their next turn. Heroes never slip ' +
+    desc: 'Grounded enemies that walk or are moved onto it slip: Vulnerable for their next turn. Heroes never slip ' +
       '(they know where he dropped them. Mostly).',
     onEnter: function (unit, tile) { slip(unit, tile); },
     draw: function (g, sf, t) {
@@ -132,11 +133,13 @@
   });
 
   // ---- Absent-Minded Mastery (status + roll) --------------------------------------------------------------
-  /** Will this socketed skill be usable this turn (cooldown after this turn's tick, charges left)? */
-  function readyThisTurn(sl) {
+  /** Will this socketed skill be usable this turn (cooldown after this turn's tick, charges left, not a silenced spell)? */
+  function readyThisTurn(unit, sl) {
     const def = DD.getSkill(sl.id);
     if (!def) return false;
     if (def.charges > 0 && (sl.uses || 0) >= def.charges) return false;
+    // Silenced at his turn start lasts through the turn (it ticks at turn end): a remembered Lecture would be wasted
+    if (def.kind === 'spell' && has(unit, 'silenced')) return false;
     // onTurnStart runs before the turn's cooldown tick: count the tick that is about to happen
     const cd = sl.cd > 0 ? (sl.fresh ? sl.cd : sl.cd - 1) : 0;
     return cd <= 0;
@@ -178,7 +181,7 @@
     if (DD.Combat.isTurnOf && !DD.Combat.isTurnOf(unit)) return;
     A().removeStatus(unit, 'mar_remembered', { silent: true });
     if (DD.Combat.isStunned(unit) || has(unit, 'sheep')) return;
-    const ready = (unit.skills || []).filter(readyThisTurn);
+    const ready = (unit.skills || []).filter(function (sl) { return readyThisTurn(unit, sl); });
     if (!ready.length) return;
     const picks = s.rng.sample(ready, Math.min(hasItem(unit, 'mar_pills') ? 2 : 1, ready.length));
     const ids = picks.map(function (sl) { return sl.id; });
@@ -228,6 +231,7 @@
       const u = ctx.targetUnit;
       if (!active(u)) return;
       melee(ctx);
+      if (ctx.opportunity) A().maybeBark(ctx.user, 'opportunity', 0.5);   // cosmetic: someone walked out of his lecture
       A().damage(ctx.user, u, ctx.L.dmg);
     } });
 
@@ -295,7 +299,7 @@
     } },
     desc: function (L) {
       return 'Scatter marbles on ' + (L.shape === 'square' ? 'a 3x3 square' : 'a 5-tile plus') + ' for ' + L.turns +
-        ' rounds (other surfaces stay). Foes there or moving in slip: Vulnerable for their next turn.';
+        ' rounds (other surfaces stay). Grounded foes there or moving in slip: Vulnerable for their next turn.';
     },
     flavor: 'He has not lost his marbles. He has deployed them.',
     aiScore: function (ctx) { return ctx.foes.length * 2; },
@@ -385,7 +389,8 @@
     flavor: 'Good for the eyes. Also the ribs, the morale and, once, a dragon.',
     execute: function (ctx) {
       const user = ctx.user, u = ctx.targetUnit;
-      if (!active(u)) return;
+      // a downed ally is a fine target too: the engine's aimed heal gets it back up with the carrot's HP
+      if (!u || u.dead) return;
       if (u !== user) DD.FX.projectile(user, u, { kind: 'custom', arc: true, draw: drawCarrot, sound: 'arrow' });
       else DD.FX.text(user, '*munch*', { color: '#ffb36b', size: 14 });
       A().heal(user, u, ctx.L.heal);
@@ -495,7 +500,7 @@
     id: 'marbles', name: 'Professor Marbles', epithet: 'the Forgetful Fist', race: 'Rabbitfolk', cls: 'Monk',
     role: 'Mobile melee skirmisher / control', complexity: 2,
     blurb: 'An ancient rabbitfolk grandmaster who forgets names, birthdays and where he left his marbles, but never how to drop a goblin. ' +
-      'Every turn he suddenly remembers one technique and does it for free. Hops up 2-level ledges, naps through briefings, hits like a falling piano.',
+      'Every turn he suddenly remembers one technique and does it for free. Hops up 2-level ledges, naps through briefings and thwacks anyone who walks off mid-lecture.',
     color: '#e8a33d',
     unlock: null,
     stats: { hp: 28, ap: 3, mov: 4, armor: 0, init: 2 },
@@ -531,42 +536,50 @@
         'Stand behind me, children. And mind the marbles.', 'Let\'s be quick. It\'s nearly nap o\'clock.',
         'Nobody touch my cane. Or my carrots.', 'Betty, dear, please don\'t eat the dungeon. We need it.'],
       move: ['Hop, hop. Mind the hip.', 'My knees say no. My paws say yes.', 'I used to do this faster. In the Bronze Age.',
-        'Where was I going? Ah. Forward.', 'Coming, coming! Don\'t rush an old rabbit.'],
+        'Where was I going? Ah. Forward.', 'Coming, coming! Don\'t rush an old rabbit.', 'Pebbles, heel! Not on the rug! ...Too late.'],
       kill: ['Respect your elders.', 'Rest now. I certainly intend to.', 'I\'ve forgotten more kung fu than you\'ll ever learn.',
-        'And THAT is why we stretch.', 'Didn\'t even spill my tea.'],
+        'And THAT is why we stretch.', 'Didn\'t even spill my tea.', 'Never turn your back on your elders.'],
       hurt: ['Ow! My good ear!', 'Hey! I bruise like a ripe pear!', 'That\'s going in my memoirs. Unflatteringly.',
-        'My spectacles! Who touched my spectacles?', 'Rude! I am four hundred years old!'],
+        'My spectacles! Who touched my spectacles?', 'Rude! I am four hundred years old!', 'Hjalmar! Was that YOUR banana peel?'],
       lowhp: ['I may need a little lie-down. A long one.', 'Josiah, dear, is that potion carrot-flavoured?',
         'Someone fetch my pills. The blue ones. No, the OTHER blue ones.', 'I see a bright light. Oh. It\'s Zarathor\'s jewellery.',
-        'Kiri, dear, if I go ethereal, leave out a carrot.'],
+        'Kiri, dear, if I go ethereal, leave out a carrot.', 'Valdris, dear, forge me a new hip. Quickly.'],
       downed: ['Just... resting my eyes...', 'Wake me when it\'s lunch.', 'Tell my marbles... I loved them...',
-        'Zzz... five more minutes, Master...'],
+        'Zzz... five more minutes, Master...', 'Pebbles... fetch Valdris... good boy...'],
       revive: ['I\'m up! I was never down. I was meditating.', 'Who moved the floor?', 'Ah, a second wind. Or my ninth.',
         'Right! Where was I? Oh yes. Violence.'],
       ally_down: ['Up you get! Youth is wasted on the horizontal.', 'No napping on the job! That\'s MY thing.',
         'Ellaria, dear, send a corgi to lick their face!', 'Bah! In my day we got knocked down and LIKED it.',
-        'Basanos, help them up! ...Good boy. Sorry. Habit.'],
+        'Basanos, help them up! ...Good boy. Sorry. Habit.', 'Valdris, dear, weld them back together!'],
       levelup: ['I learned something new! Now to forget something old.', 'Wisdom! Or possibly indigestion.',
         'A level up? At my age? Delightful!', 'My memory improves! Wait, what were we talking about?'],
       victory: ['Splendid! Now, who\'s carrying me home?', 'Another one for the memoirs. Where did I put the memoirs?',
-        'Ha! Still got it. Whatever "it" is.', 'Good show, children. Nap time.', 'Marwyn, stop flexing. We all saw it.',
-        'Mayor Buga, put that down. Those are MY marbles.'],
-      idle: ['Have I told you about the War of the Carrot? I have? Well...', 'Zzz... hm? I\'m awake. I was praying.',
+        'Ha! Still got it. Whatever "it" is.', 'Good boy, Pebbles! No licking. You are literally on fire.',
+        'Marwyn, stop flexing. We all saw it.', 'Mayor Buga, put that down. Those are MY marbles.'],
+      idle: ['Have I told you about the War of the Carrot? I have? Well...', 'Hjalmar, give back my spectacles. I can hear you giggling.',
         'Has anyone seen my marbles? Sparrow, check your pockets.', 'Syllamin, dear, must you swear at the furniture?',
         'In my day we had one dimension. Flat. Loved it.', 'Slate, dear, smile for once! ...Oh. That IS the smile.'],
       signature: ['I forgot I was RETIRED!', 'HI-YAAAH! ...oof, my back.', 'Fifty years of kung fu, children! Watch closely!',
         'I remember EVERYTHING! For about six seconds!'],
+      // his Jab on a foe that walked away from him (an attack of opportunity)
+      opportunity: ['Class is NOT dismissed!', 'Sit DOWN. I haven\'t finished the lecture.', 'I didn\'t say you could leave!',
+        'No running in the dungeon!', 'Back in my day, we waited to be excused!'],
     },
   });
 
   // ---- hero items ----------------------------------------------------------------------------------------
   DD.registerItem({ id: 'mar_cane', name: 'Cane of Unsolicited Advice', slot: 'weapon', rarity: 'rare', icon: '🏒', hero: 'marbles',
     stats: { dmg: 0.1 },
-    desc: '+10% damage. His pushes and pulls move units 1 tile further.',
+    desc: '+10% damage. His pushes move units 1 tile further.',
     flavor: 'Carved from the tree he planted as a boy. He tells you about it. Every. Single. Swing.',
     hooks: {
-      // his own forced movement only (the hook fires on the pusher's sources); a pull still stops next to him
-      modifyOutgoingPush: function (p) { if (p && p.dist > 0) p.dist += 1; },
+      // his own forced movement only (the hook fires on the pusher's sources), and only away from him: his Hook already
+      // yanks a foe all the way to him, so "pulls +1" was dead text there (and a hidden extra tile on a pull Blessing)
+      modifyOutgoingPush: function (p) {
+        if (!p || !(p.dist > 0) || !p.unit || !p.src || !p.dir) return;
+        const step = { x: p.unit.x + p.dir.x, y: p.unit.y + p.dir.y };
+        if (G().dist(step, p.src) > G().dist(p.unit, p.src)) p.dist += 1;
+      },
     } });
 
   DD.registerItem({ id: 'mar_robes', name: 'Robes of Many Pockets', slot: 'armor', rarity: 'rare', icon: '🥋', hero: 'marbles',

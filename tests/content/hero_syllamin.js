@@ -1,9 +1,10 @@
 /* Dungeons and Degenerates — tests/content/hero_syllamin.js
  * Suites "hero_syllamin: …" for js/data/heroes/syllamin.js (v2: initiative turns, no telegraphs, no Guard, simple
  * skills): the hero def and kit shape, the Heckler passive (Roasted / Emotional Damage / Hype), the basic, every pool
- * skill at every level (desc == effect, durations counted in the owner's own turns), the combos with other heroes,
- * the Diss Track signature, the three items, edge cases (silenced / stunned / asleep / sheep / charmed user, too
- * little AP, targets dying mid-skill, pits, lava, water, map edges, flying), exact previews and AutoPlay v2 battles.
+ * skill at every level (desc == effect, durations counted in the owner's own turns), cast ranges and line of sight,
+ * the combos with other heroes, the Diss Track signature, the three items, edge cases (silenced / stunned / asleep /
+ * sheep / charmed user, too little AP, targets dying mid-skill, pits, lava, water, map edges, flying), attacks of
+ * opportunity, exact previews and AutoPlay v2 battles.
  * Uses the test_ fixtures (tests/fixtures.js). Deterministic: fixed sandbox seeds.
  */
 (function () {
@@ -17,7 +18,10 @@
     'syl_fae_blink', 'syl_mosh_pit', 'syl_mic_drop'];
   const SPELLS = ['syl_heckle', 'syl_power_ballad', 'syl_shriek', 'syl_lullaby', 'syl_signature'];
   const BARK_KEYS = ['select', 'start', 'move', 'kill', 'hurt', 'lowhp', 'downed', 'revive', 'ally_down', 'levelup', 'victory', 'idle', 'signature'];
-  const OTHER_HEROES = ['Zarathor', 'Marbles', 'Marwyn', 'Ellaria', 'Josiah', 'Sparrow', 'Corelos', 'Slate', 'Buga', 'Kiri', 'Betty', 'Basanos'];
+  const OTHER_HEROES = ['Zarathor', 'Marbles', 'Marwyn', 'Ellaria', 'Josiah', 'Sparrow', 'Corelos', 'Slate', 'Buga', 'Kiri', 'Betty', 'Basanos',
+    'Valdris', 'Hjalmar', 'Pebbles'];
+  const NEW_HEROES = ['Kiri', 'Betty', 'Basanos', 'Valdris', 'Hjalmar', 'Pebbles'];
+  const SHE_HER = ['Ellaria', 'Sparrow', 'Kiri'];   // every other hero is he/him (user-confirmed)
 
   // ---- helpers ---------------------------------------------------------------------------------------------
   function ready() { return !!DD.getHero(HERO) && !!DD.getHero('test_knight'); }
@@ -133,7 +137,16 @@
     });
     const named = OTHER_HEROES.filter(function (n) { return lines.some(function (l) { return l.indexOf(n) >= 0; }); });
     t.ok(named.length >= 8, 'barks reference other heroes by name (' + named.join(', ') + ')');
-    t.ok(['Kiri', 'Betty', 'Basanos'].every(function (n) { return named.indexOf(n) >= 0; }), 'the new heroes get roasted too');
+    NEW_HEROES.forEach(function (n) { t.ok(named.indexOf(n) >= 0, 'the new heroes get roasted too: ' + n); });
+    // pronouns: a line that names a hero never misgenders them (she/her: Ellaria, Sparrow, Kiri; he/him: everyone else)
+    lines.forEach(function (l) {
+      OTHER_HEROES.forEach(function (n) {
+        if (l.indexOf(n) < 0) return;
+        const wrong = SHE_HER.indexOf(n) >= 0 ? /\b(he|him|his|himself)\b/i : /\b(she|her|hers|herself)\b/i;
+        t.ok(!wrong.test(l), 'pronouns for ' + n + ': ' + l);
+      });
+    });
+    t.ok(!h.flags.noProvoke && !h.flags.noOpportunity, 'no hidden attack-of-opportunity flags (the rule applies to him as written)');
     t.ok(lines.some(function (l) { return /#\$%&|@#\$%/.test(l); }), 'swears are bleeped');
     t.ok(!lines.some(function (l) { return v1Words.test(l); }), 'no bark talks about telegraphs or Guard');
     // passive, status, surface, items
@@ -219,6 +232,8 @@
     // allies are never Roasted; only skill damage roasts (a bump into the map edge is not his words)
     DD.Act.damage(me, cleric, 3, { skill: DD.getSkill('syl_basic') });
     t.ok(!has(cleric, 'syl_roasted'), 'allies are never Roasted');
+    t.eq(DD.Syllamin.roast(me, cleric, 3), null, 'the public roast helper refuses his own ally too');
+    t.ok(!has(cleric, 'syl_roasted') && !has(cleric, 'stun'), 'no stacks, no meltdown on a friend');
     t.ok(sane(t, 'passive'), 'state sane');
     sb({ heroes: [S(1, 4)], enemies: [E('test_grunt', 8, 4)] });
     const g3 = at(8, 4), hp3 = g3.hp;
@@ -456,6 +471,13 @@
     use(me, socket(me, 'syl_shriek', 1), 8, 4);
     t.ok(f.x === 8 && f.hp === 14 - 4 - 3, 'map edge: bump for 3 (' + f.hp + ')');
     t.eq(stacks(f), 1, 'the bump does not Roast');
+    // two foes in a row: the far one moves first, so both are pushed as the desc says (no bump between them)
+    sb({ heroes: [S(2, 4)], enemies: [E('test_grunt', 3, 4), E('test_grunt', 4, 4)] });
+    me = syl();
+    const front = at(3, 4), back = at(4, 4);
+    t.ok(use(me, socket(me, 'syl_shriek', 1), 3, 4), 'shriek down a row of two');
+    t.ok(key(front) === '4,4' && key(back) === '5,4', 'both pushed 1 tile (' + key(front) + ' ' + key(back) + ')');
+    t.ok(front.hp === 14 - 4 && back.hp === 14 - 4, 'only the shriek\'s 4 each: the front one never bumps into the back one');
     // glitter is slippery: the push slides one extra tile (and Glitter does nothing else)
     sb({ heroes: [S(2, 4)], enemies: [E('test_grunt', 3, 4)] });
     me = syl(); f = at(3, 4);
@@ -595,6 +617,55 @@
         t.eq(DD.Combat.canUse(me, slot), 'No charges left.', 'L2: 2 uses per combat');
       }
     });
+    // a cooldown that runs out by the ally's next turn anyway is nothing to encore (no wasted charge); III still is (+1 AP)
+    sb({ heroes: [H('test_knight', 4, 4, { skills: [{ id: 'test_shield_bash', level: 1 }] }), S(2, 4)], enemies: [E('test_grunt', 5, 4, 3)] });
+    const me = syl(), knight = hero('test_knight'), bash = slotOf(knight, 'test_shield_bash');
+    const enc = socket(me, 'syl_encore', 1);
+    t.ok(DD.Combat.useSkill(knight, bash, 5, 4), 'round 1: the knight bashes (cooldown 1)');
+    DD.Combat.endTurn();
+    t.eq(DD.Combat.targets(me, enc).map(key).join(' '), '4,4', 'round 1: the bash would still be cooling down on his next turn: a target');
+    DD.Combat.endRound();
+    t.ok(cur() === knight && DD.Combat.canUse(knight, bash) !== true, 'round 2: the knight\'s bash is still cooling down');
+    DD.Combat.endTurn();
+    t.ok(cur() === me && bash.cd === 1, 'round 2, Syllamin\'s turn: 1 turn of cooldown left');
+    t.eq(DD.Combat.targets(me, enc).length, 0, 'it ends when the knight\'s next turn starts anyway: not a target');
+    t.eq(DD.Combat.targets(me, socket(me, 'syl_encore', 3)).length, 1, 'III: still a target (+1 AP)');
+    toTurn(knight);
+    t.ok(round() === 3 && DD.Combat.canUse(knight, bash) === true, 'round 3: the knight bashes again without any encore');
+  });
+
+  // ---- targeting (the tooltip shows these; the descs give the ally ranges) ---------------------------------------
+  T.suite('hero_syllamin: targeting — cast ranges and line of sight at every level', function (t) {
+    if (!guard(t)) return;
+    // id: [[min, max] per level], needs line of sight
+    const TABLE = {
+      syl_basic: [[[1, 4]], true],
+      syl_heckle: [[[1, 4], [1, 4], [1, 5]], true],
+      syl_hype_man: [[[1, 5], [1, 5], [1, 5]], false],
+      syl_glitter_bomb: [[[1, 5], [1, 5], [1, 5]], true],
+      syl_lullaby: [[[1, 4], [1, 4], [1, 4]], true],
+      syl_encore: [[[1, 5], [1, 5], [1, 5]], false],
+      syl_fae_blink: [[[2, 6], [2, 7], [2, 8]], false],
+      syl_mosh_pit: [[[1, 5], [1, 5], [1, 5]], true],
+      syl_mic_drop: [[[1, 4], [1, 4], [1, 4]], false],
+    };
+    sb({ heroes: [S(1, 1)], enemies: [E('test_grunt', 8, 8)] });
+    const me = syl();
+    Object.keys(TABLE).forEach(function (id) {
+      const def = DD.getSkill(id);
+      TABLE[id][0].forEach(function (r, i) {
+        t.eq(JSON.stringify(DD.Targeting.range(me, def, i + 1)), JSON.stringify(r), id + ' L' + (i + 1) + ': range ' + r.join('-'));
+      });
+      t.eq(!!def.target.los, TABLE[id][1], id + ': ' + (TABLE[id][1] ? 'needs' : 'ignores') + ' line of sight');
+    });
+    ['syl_power_ballad', 'syl_signature'].forEach(function (id) { t.eq(DD.getSkill(id).target.type, 'self', id + ': centred on himself'); });
+    t.eq(DD.getSkill('syl_shriek').target.type, 'dir', 'syl_shriek: a direction');
+    // "an ally up to 5 tiles away" at the edge: 5 is in, 6 is out (Hype Man, Encore III)
+    sb({ heroes: [S(1, 1), H('test_knight', 6, 1), H('test_cleric', 1, 7)], enemies: [E('test_grunt', 8, 8)] });
+    ['syl_hype_man', 'syl_encore'].forEach(function (id) {
+      const tg = DD.Combat.targets(syl(), socket(syl(), id, 3)).map(key);
+      t.ok(tg.indexOf('6,1') >= 0 && tg.indexOf('1,7') < 0, id + ': the ally 5 tiles away is in reach, the one 6 away is not (' + tg.join(' ') + ')');
+    });
   });
 
   // ---- Fae Blink -----------------------------------------------------------------------------------------------
@@ -625,10 +696,13 @@
       t.eq(during, BLOCK[lv - 1], 'L' + lv + ': the Block is still there on the grunt\'s turn');
       t.ok(cur() === mage && mage.block === 0, 'L' + lv + ': gone at the start of the mage\'s own turn');
     });
-    // hazards are avoided; no room → no target
-    sb({ heroes: [S(1, 1), H('test_knight', 4, 4)], enemies: [E('test_grunt', 8, 8)], surfaces: [{ x: 1, y: 2, id: 'fire', turns: 3 }] });
+    // hazards are avoided, even when the burning tile is the one nearest to the ally; no room → no target
+    sb({ heroes: [S(1, 1), H('test_knight', 1, 5)], enemies: [E('test_grunt', 8, 8)], surfaces: [{ x: 1, y: 2, id: 'fire', turns: 3 }] });
     let me = syl(), knight = hero('test_knight');
-    t.eq(key(DD.Syllamin.blinkSpot(me, knight)), '2,1', 'prefers a tile without fire');
+    t.ok(!!DD.Grid.hazardAt(1, 2, knight), '(the nearest tile next to him is on fire)');
+    t.ok(use(me, socket(me, 'syl_fae_blink', 1), 1, 5), 'blink the knight over');
+    t.ok(key(knight) !== '1,2' && DD.Grid.dist(knight, me) === 1 && !has(knight, 'burn') && knight.hp === knight.maxHp,
+      'it lands on a safe tile next to him, not in the fire (' + key(knight) + ')');
     sb({ heroes: [S(0, 0), H('test_knight', 4, 4)], enemies: [E('test_grunt', 8, 8)], objects: [{ x: 1, y: 0, id: 'crate' }, { x: 0, y: 1, id: 'crate' }] });
     me = syl(); knight = hero('test_knight');
     t.eq(DD.Combat.targets(me, socket(me, 'syl_fae_blink', 3)).length, 0, 'boxed in: no valid target');
@@ -638,6 +712,10 @@
     me = syl(); knight = hero('test_knight');
     t.ok(use(me, socket(me, 'syl_fae_blink', 1), 8, 4), 'blink past pits');
     t.ok(!DD.Grid.isPit(knight.x, knight.y) && !knight.downed && knight.hp === knight.maxHp, 'landed on solid ground (' + key(knight) + ')');
+    // hovering in a ring of pits (and deep water): nowhere for a ground ally to land, so no target
+    sb({ heroes: [S(4, 4), H('test_knight', 8, 4)], enemies: [E('test_grunt', 0, 8)],
+      terrain: function (tl) { if (Math.abs(tl.x - 4) + Math.abs(tl.y - 4) === 1) tl.t = tl.x === 4 && tl.y === 3 ? 'deep_water' : 'pit'; } });
+    t.eq(DD.Combat.targets(syl(), socket(syl(), 'syl_fae_blink', 1)).length, 0, 'ringed by pits: no ground ally can be blinked into one');
   });
 
   // ---- Mosh Pit ------------------------------------------------------------------------------------------------
@@ -649,7 +727,7 @@
       const me = syl();
       const a = at(4, 6), b = at(6, 4), c = at(2, 4), d = at(4, 7);
       const slot = socket(me, 'syl_mosh_pit', lv);
-      t.eq(desc('syl_mosh_pit', lv), 'Foes within ' + (lv === 3 ? 3 : 2) + ' tiles of the target tile take ' + DMG[lv - 1] + ' damage and are pulled ' + (lv === 3 ? 2 : 1) + ' tile' + (lv === 3 ? 's' : '') + ' toward it.', 'L' + lv + ': desc');
+      t.eq(desc('syl_mosh_pit', lv), 'Foes within ' + (lv === 3 ? 3 : 2) + ' tiles of the target tile take ' + DMG[lv - 1] + ' damage and are pulled up to ' + (lv === 3 ? 2 : 1) + ' tile' + (lv === 3 ? 's' : '') + ' toward it.', 'L' + lv + ': desc');
       t.ok(use(me, slot, 4, 4), 'L' + lv + ': used');
       t.eq(me.ap, 2, 'L' + lv + ': 1 AP');
       t.eq(slot.cd, 2, 'L' + lv + ': cooldown 2');
@@ -668,6 +746,25 @@
     use(me, socket(me, 'syl_mosh_pit', 1), 4, 4);
     t.ok(key(centre) === '4,4' && centre.hp === 12, 'centre foe: hit, not moved');
     t.ok(weak.dead && key(weak) === '4,6', 'a foe killed by the mosh is not dragged around');
+    // hazards on the way in: a foe dragged across a pit falls in (YEET), one dragged onto lava burns
+    const sp = sb({ heroes: [S(1, 3)], enemies: [E('test_grunt', 6, 4), E('test_grunt', 4, 6, 2), E('test_grunt', 8, 8)],
+      terrain: function (tl) { if (tl.x === 5 && tl.y === 4) tl.t = 'pit'; if (tl.x === 4 && tl.y === 5) tl.t = 'lava'; } });
+    const faller = at(6, 4), roast = at(4, 6);
+    t.ok(use(syl(), socket(syl(), 'syl_mosh_pit', 1), 4, 4), 'a mosh pit between a pit and a lava pool');
+    t.ok(faller.dead && sp.stats.envKills === 1, 'the foe pulled across the pit falls in: YEET');
+    t.ok(key(roast) === '4,5' && roast.hp < 28 - 2 && has(roast, 'burn'), 'the foe pulled onto the lava burns (' + roast.hp + ' HP)');
+    // "up to": nobody is pulled onto the target tile itself, so around a real pit the crowd gathers at its edge
+    sb({ heroes: [S(1, 3)], enemies: [E('test_grunt', 5, 4), E('test_grunt', 4, 6), E('test_grunt', 8, 8)],
+      terrain: function (tl) { if (tl.x === 4 && tl.y === 4) tl.t = 'pit'; } });
+    const edge = at(5, 4), back = at(4, 6);
+    t.ok(use(syl(), socket(syl(), 'syl_mosh_pit', 1), 4, 4), 'a mosh pit centred on a pit');
+    t.ok(key(edge) === '5,4' && edge.hp === 12 && !edge.dead, 'the foe at the edge is as close as it gets: it stays (' + key(edge) + ')');
+    t.ok(key(back) === '4,5' && back.hp === 12 && !back.dead, 'the foe 2 away is pulled to the edge (' + key(back) + ')');
+    // ...where a push finishes the job (Discordant Shriek: YEET)
+    syl().ap = 3;
+    syl().skills.push(DD.Act.makeSlot('syl_shriek', 1));
+    t.ok(DD.Act.teleport(syl(), 6, 4), '(he hops over to the far side)');
+    t.ok(use(syl(), syl().skills[1], 5, 4) && edge.dead, 'Shriek shoves the gathered foe into the pit');
     // combo: the mage's radius-1 Fire Fixture on the pit's centre catches the whole crowd afterwards
     sb({ heroes: [S(1, 3), H('test_mage', 2, 7, { skills: [{ id: 'test_fireball', level: 1 }] })],
       enemies: [E('test_grunt', 4, 6, 2), E('test_grunt', 6, 4, 2), E('test_grunt', 2, 4, 2)] });
@@ -755,6 +852,16 @@
     const me2 = syl(), weakling = at(5, 5), other = at(6, 6);
     t.ok(use(me2, me2.signature, 1, 1), 'used again');
     t.ok(weakling.dead && other.hp === 2, 'kills mid-track, the rest still hears all 3 verses');
+    // "every foe" means every foe at each verse: one that shows up mid-track (a split slime, a reinforcement) hears the rest
+    const s4 = sb({ heroes: [S(1, 1)], enemies: [E('test_grunt', 5, 5, 0.3), E('test_grunt', 6, 6)] });
+    s4.hype = 100;
+    const doomed = at(5, 5);
+    let late = null;
+    DD.Act.addRule({ id: 'syl_test_split', name: 'Split', hooks: { onAnyDeath: function (u, dead) {
+      if (dead === doomed && !late) late = DD.Act.spawn('test_grunt', 8, 1);
+    } } });
+    t.ok(use(syl(), syl().signature, 1, 1) && doomed.dead && !!late, 'verse 1 kills the weakling, and a new grunt shows up');
+    t.ok(late && late.hp === 14 - 8 && stacks(late) === 2, 'the newcomer hears verses 2 and 3: 8 damage, Roasted 2 (' + (late && late.hp) + ')');
     const s3 = sb({ heroes: [S(1, 1)], enemies: [E('test_grunt', 5, 5)] });
     s3.hype = 100;
     DD.Act.addStatus(syl(), 'silenced', { turns: 1 });
@@ -911,6 +1018,111 @@
     t.ok(sane(t, 'edge cases'), 'state sane');
   });
 
+  // ---- attacks of opportunity (DESIGN §4.2) ---------------------------------------------------------------------
+  T.suite('hero_syllamin: attacks of opportunity — walking off provokes; his control, pushes and Fae Blink unpin the party', function (t) {
+    if (!guard(t)) return;
+    const seen = [];
+    const off = DD.Events.on('opportunity:attack', function (e) { seen.push(e.attacker.defId + '>' + e.mover.defId); });
+    const fresh = function () { seen.length = 0; };
+    /** Would `foe` strike `mover` stepping off its tile (south)? (a pure query, any turn) */
+    const pinned = function (mover, foe) { return DD.Act.provokers(mover, [{ x: mover.x, y: mover.y + 1 }]).indexOf(foe) >= 0; };
+    try {
+      // he flies off from the grunt next to him: one free stab as he leaves; he never makes one (his basic is ranged)
+      sb({ heroes: [S(3, 4)], enemies: [E('test_grunt', 4, 4)] });
+      let me = syl(), g = at(4, 4);
+      t.eq(DD.Act.opportunitySlot(me), null, 'a ranged basic: he never makes attacks of opportunity');
+      const pv = DD.Combat.provokes(me, 0, 4);
+      t.ok(pv.length === 1 && pv[0].unitId === g.id && pv[0].dmg === 4, 'the move preview: provokes the grunt (4) (' + JSON.stringify(pv) + ')');
+      let hp = me.hp;
+      fresh();
+      t.ok(DD.Combat.move(me, 0, 4), 'he flies off');
+      t.ok(me.hp === hp - 4 && key(me) === '0,4', 'stabbed for 4 on the way out, and he kept going (' + key(me) + ', ' + me.hp + ' HP)');
+      t.eq(seen.join(' '), 'test_grunt>syllamin', 'exactly one attack of opportunity');
+      t.eq(DD.Combat.canUndo(), false, 'a move that provoked can\'t be undone');
+      // flying up next to a foe never provokes
+      sb({ heroes: [S(1, 4)], enemies: [E('test_grunt', 4, 4)] });
+      fresh();
+      t.ok(DD.Combat.move(syl(), 3, 4) && seen.length === 0, 'moving next to a foe: no attack');
+      // Studded Jacket: that stab is a foe damaging him from an adjacent tile → a comeback Roast (at 2 Roasted: a meltdown)
+      sb({ heroes: [S(3, 4, { items: ['syl_studded_jacket'] })], enemies: [E('test_grunt', 4, 4)] });
+      me = syl(); g = at(4, 4);
+      t.ok(DD.Combat.move(me, 0, 4) && stacks(g) === 1, 'jacket: the attack of opportunity draws a comeback Roast');
+      sb({ heroes: [S(3, 4, { items: ['syl_studded_jacket'] })], enemies: [E('test_grunt', 4, 4)] });
+      me = syl(); g = at(4, 4);
+      DD.Syllamin.roast(me, g, 2);
+      hp = me.hp;
+      t.ok(DD.Combat.move(me, 0, 4), 'he flies off from a Roasted 2 grunt');
+      t.ok(has(g, 'stun') && stacks(g) === 0 && me.hp === hp - 4 && key(me) === '0,4', 'its stab draws the comeback that melts it down (Stunned); his walk goes on');
+      // Fae Blink: the cleric pinned between two grunts is teleported out, nobody strikes
+      sb({ heroes: [S(2, 2), H('test_cleric', 5, 4)], enemies: [E('test_grunt', 4, 4), E('test_grunt', 6, 4)] });
+      me = syl();
+      const cleric = hero('test_cleric');
+      t.eq(DD.Act.provokers(cleric, [{ x: 5, y: 3 }]).length, 2, 'walking out, the cleric would provoke both grunts');
+      hp = cleric.hp;
+      fresh();
+      t.ok(use(me, socket(me, 'syl_fae_blink', 1), 5, 4), 'Fae Blink on the pinned cleric');
+      t.ok(DD.Grid.dist(cleric, me) === 1 && cleric.hp === hp && seen.length === 0, 'teleported out: no attack of opportunity (' + key(cleric) + ')');
+      // Discordant Shriek: push the grunt off him, then walk away for free
+      sb({ heroes: [S(3, 4)], enemies: [E('test_grunt', 4, 4)] });
+      me = syl(); g = at(4, 4);
+      t.ok(use(me, socket(me, 'syl_shriek', 1), 4, 4) && key(g) === '5,4', 'Shriek pushes the grunt out of reach');
+      fresh();
+      t.eq(DD.Combat.provokes(me, 0, 4).length, 0, 'the walk provokes nobody now');
+      t.ok(DD.Combat.move(me, 0, 4) && seen.length === 0 && key(me) === '0,4', 'he walks off for free');
+      // Mosh Pit drags a grunt away from the knight: a pull is not a move action (no free slash)
+      sb({ heroes: [S(1, 1), H('test_knight', 4, 5)], enemies: [E('test_grunt', 4, 4)] });
+      const knight = hero('test_knight');
+      g = at(4, 4);
+      t.ok(DD.Act.provokers(g, [{ x: 4, y: 3 }]).indexOf(knight) >= 0, 'walking off, the grunt would provoke the knight');
+      fresh();
+      t.ok(use(syl(), socket(syl(), 'syl_mosh_pit', 1), 4, 2) && key(g) === '4,3', 'Mosh Pit pulls it away from him');
+      t.ok(seen.length === 0 && g.hp === 14 - 2 && knight.oppRound !== DD.Combat.state.round, 'no attack of opportunity on a pull');
+      // his control switches a foe's attacks of opportunity off — Sleep (Lullaby), until its turn is slept away
+      sb({ heroes: [S(3, 4), H('test_knight', 4, 5)], enemies: [E('test_grunt', 4, 4)] });
+      me = syl(); g = at(4, 4);
+      t.ok(pinned(me, g), 'before: the grunt pins him');
+      t.ok(use(me, socket(me, 'syl_lullaby', 1), 4, 4) && has(g, 'sleep'), 'Lullaby: the grunt sleeps');
+      t.ok(!pinned(me, g), 'asleep: no attack of opportunity');
+      hp = me.hp;
+      fresh();
+      t.ok(DD.Combat.move(me, 0, 4) && seen.length === 0 && me.hp === hp, 'he walks off untouched');
+      DD.Combat.endRound();
+      t.ok(round() === 2 && !has(g, 'sleep') && pinned(hero('test_knight'), g), 'its turn slept away: awake, it pins the knight again');
+      // Dazzle (Glitter Bomb): the cleric walks off on her turn
+      sb({ heroes: [S(1, 4), H('test_cleric', 4, 4)], enemies: [E('test_grunt', 5, 4)] });
+      me = syl();
+      const c1 = hero('test_cleric');
+      g = at(5, 4);
+      t.ok(pinned(c1, g), 'before: the grunt pins the cleric');
+      t.ok(use(me, socket(me, 'syl_glitter_bomb', 1), 6, 4) && has(g, 'dazzled'), 'Glitter Bomb: the grunt is Dazzled');
+      t.ok(!pinned(c1, g), 'Dazzled: no attack of opportunity');
+      DD.Combat.endTurn();
+      hp = c1.hp;
+      fresh();
+      t.ok(cur() === c1 && DD.Combat.move(c1, 4, 2) && seen.length === 0 && c1.hp === hp, 'on her turn the cleric walks off untouched');
+      // Charm (Heckle): no attacks on the party, but its own friend walking away from it gets stabbed
+      sb({ heroes: [S(1, 4), H('test_cleric', 4, 4)], enemies: [E('test_grunt', 5, 4, 3), E('test_grunt', 5, 5)] });
+      me = syl();
+      const c2 = hero('test_cleric'), a = at(5, 4), b = at(5, 5);
+      t.ok(use(me, socket(me, 'syl_heckle', 1), 5, 4) && has(a, 'charmed'), 'Heckle: the grunt next to the cleric is Charmed');
+      t.ok(!pinned(c2, a), 'Charmed: no attack of opportunity on the party');
+      hp = b.hp;
+      fresh();
+      DD.AI.moveTo(b, 7, 5);
+      t.ok(seen.join(' ') === 'test_grunt>test_grunt' && b.hp === hp - 4, 'its friend walking away from it gets stabbed (' + seen.join(' ') + ')');
+      // Stun (Emotional Damage): he walks off untouched
+      sb({ heroes: [S(3, 4)], enemies: [E('test_grunt', 4, 4)] });
+      me = syl(); g = at(4, 4);
+      DD.Syllamin.roast(me, g, 2);
+      t.ok(use(me, me.basic, 4, 4) && has(g, 'stun'), 'the third joke: Emotional Damage (Stunned)');
+      t.ok(!pinned(me, g), 'Stunned: no attack of opportunity');
+      hp = me.hp;
+      fresh();
+      t.ok(DD.Combat.move(me, 0, 4) && seen.length === 0 && me.hp === hp, 'he flies off untouched');
+      t.ok(sane(t, 'attacks of opportunity'), 'state sane');
+    } finally { off(); }
+  });
+
   // ---- previews -------------------------------------------------------------------------------------------------
   /** Busy board so every skill has something to do (enemies frozen: previews are about his own turn). */
   function previewArena(seed) {
@@ -919,7 +1131,7 @@
       surfaces: [{ x: 6, y: 5, id: 'oil', turns: 4 }, { x: 6, y: 6, id: 'oil', turns: 4 }],
       terrain: function (tl) { if (tl.x === 0 && tl.y === 0) tl.t = 'pit'; if (tl.x === 7 && tl.y === 4) tl.t = 'water'; } });
     const knight = hero('test_knight');
-    slotOf(knight, 'test_shield_bash').cd = 1; // something for Encore
+    slotOf(knight, 'test_shield_bash').cd = 2; // something for Encore (still cooling down on the knight's next turn)
     DD.Syllamin.roast(syl(), DD.Grid.unitAt(5, 6), 2); // a meltdown waiting to happen
     s.hype = 100;
     return { s: s, me: syl() };
@@ -1057,5 +1269,47 @@
     t.ok(used.indexOf('syl_heckle@5,4') >= 0, 'AutoPlay heckled the grunt next to the cleric (' + used.join(', ') + ')');
     t.ok(has(at(5, 4), 'charmed') || has(at(5, 4), 'stun'), 'it will not hit the cleric on its turn');
     t.ok(s.round === 1 && sane(t, 'autoplay heckle'), 'state sane');
+  });
+
+  // ---- v2 requests (user, Nov 3): flyers ignore the floor, barrels ---------------------------------------------
+  T.suite('hero_syllamin: v2 requests — four inches above every puddle (flyers ignore the floor), clouds still reach him, barrels', function (t) {
+    if (!guard(t)) return;
+    // 1. a born flyer: fire, poison, his own Glitter — none of it touches him; a steam cloud does
+    sb({ heroes: [S(1, 4)], enemies: [E('test_grunt', 8, 8)],
+      surfaces: [{ x: 2, y: 4, id: 'fire', turns: 3 }, { x: 3, y: 4, id: 'poison', turns: 3 }, { x: 4, y: 4, id: 'syl_glitter', turns: 3 }, { x: 5, y: 4, id: 'fire', turns: 3 }] });
+    const s = syl();
+    t.ok(DD.Grid.isFlying(s) && !DD.Grid.feelsFloor(s), 'Syllamin flies (flags.flying)');
+    t.ok(DD.Combat.move(s, 5, 4), 'he flies over fire, poison and glitter');
+    t.ok(s.hp === s.maxHp && !has(s, 'burn') && !has(s, 'poison'), 'no Burn, no Poison on the way');
+    t.ok(DD.Grid.hazardAt(2, 4, s) === null && DD.Grid.hazardAt(3, 4, s) === null, 'and no hazard shading for him there');
+    DD.Combat.endTurn();
+    t.ok(toTurn(s) && s.hp === s.maxHp && !has(s, 'burn'), 'a whole round hovering over the fire: nothing');
+    DD.Act.push(null, s, { x: -1, y: 0 }, 1);
+    t.eq(key(s), '4,4', 'pushed onto his own Glitter: no extra slide (he glides over it)');
+    // a cloud is not a floor: steam scalds a flyer too
+    DD.Act.setSurface(3, 4, 'steam', 2);
+    t.ok(DD.Grid.feelsSurface(s, 'steam') && !DD.Grid.feelsSurface(s, 'fire') && !DD.Grid.feelsSurface(s, 'syl_glitter'), 'clouds (airborne) reach him, floor surfaces don\'t');
+    // a grounded foe pushed onto Glitter still slides; a flying one doesn't
+    sb({ heroes: [S(1, 4)], enemies: [E('test_grunt', 3, 4), E('test_grunt', 3, 6), E('test_grunt', 8, 8)],
+      surfaces: [{ x: 4, y: 4, id: 'syl_glitter', turns: 3 }, { x: 4, y: 6, id: 'syl_glitter', turns: 3 }] });
+    const walker = at(3, 4), flyer = at(3, 6);
+    flyer.flags = Object.assign({}, flyer.flags, { flying: true });   // test setup: a flying foe
+    DD.Act.push(null, walker, { x: 1, y: 0 }, 1);
+    DD.Act.push(null, flyer, { x: 1, y: 0 }, 1);
+    t.eq(key(walker) + ' / ' + key(flyer), '5,4 / 4,6', 'Glitter: the walker slides 1 extra, the flyer stops where pushed (the desc says grounded)');
+    t.ok(/grounded unit/.test(DD.getSurface('syl_glitter').desc), 'Glitter desc: grounded units slide');
+
+    // 2. barrels: Your Mom Joke (his basic) and Mic Drop (no line of sight) set one off
+    sb({ heroes: [S(1, 4)], enemies: [E('test_grunt', 5, 4), E('test_grunt', 8, 8)], objects: [{ x: 4, y: 4, id: 'barrel_explosive' }] });
+    let u = syl();
+    t.ok(DD.Targeting.validTargets(u, u.basic).some(function (q) { return q.obj && key(q) === '4,4'; }), 'Your Mom Joke can be aimed at the barrel');
+    t.ok(use(u, u.basic, 4, 4) && !DD.Grid.tile(4, 4).obj && at(5, 4).hp === 6 && stacks(at(5, 4)) === 0,
+      'the joke lands on a barrel: KABOOM, 8 to the foe beside it (blast damage is no roast: no Roasted stack)');
+    sb({ heroes: [S(1, 4)], enemies: [E('test_grunt', 8, 8)], objects: [{ x: 4, y: 4, id: 'barrel_explosive' }, { x: 3, y: 4, id: 'pillar' }] });
+    u = syl();
+    const mic = socket(u, 'syl_mic_drop', 1);
+    t.ok(DD.Targeting.validTargets(u, mic).some(function (q) { return q.obj && key(q) === '4,4'; }), 'Mic Drop: a barrel behind a pillar (no line of sight needed)');
+    t.ok(use(u, mic, 4, 4) && !DD.Grid.tile(4, 4).obj && u.ap === 0 && mic.uses === 1, 'mic dropped on the barrel: KABOOM, 3 AP, the once-per-combat charge spent');
+    t.ok(sane(t, 'v2 requests'), 'state sane');
   });
 })();

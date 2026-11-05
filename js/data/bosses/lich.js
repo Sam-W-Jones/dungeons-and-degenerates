@@ -1,32 +1,38 @@
 /* Dungeons and Degenerates — js/data/bosses/lich.js
  * Act 2 boss: LICH-TENSTEIN, the Overdue Librarian (enemy 'lichtenstein', encounter 'boss_lichtenstein').
  * Arena "The Restricted Section": aisles of Restricted Section Shelves, two Card Catalogs, a book-return chute (pit).
- * Custom planner: Overdue Notice (tracking bolt) every turn plus a 3-step rotation —
- *   phase 1: Bookfall (checkerboard, ⏳1) → SHHHH! (radius 2, ⏳1, Silence) + interns → Bulk Mailing (2 notices)
- *   phase 2 (≤ 50% HP, Bulk Mailing every turn): Bookfall whose Second Printing (the other colour) is telegraphed as
- *   the first wave lands → Final Notice (2 rows/columns, ⏳1, the big hit) + interns → QUIET!!! (radius 3, ⏳1).
- * Late Fees: stacking buff on the lich (+2 a round, +3 in phase 2, +1 per living skeleton, max 8 — uncapped from round 13,
- * "the library is closing", so no fight stalls): +fees on his hits and ¾ of the fees as Block-piercing interest on every
- * hero at the end of his turn. A shredded phylactery waives them.
- * Puzzle: 3 of the 8 Restricted Section Shelves hide phylacteries (always among the 6 deepest), 2 are mimics. Card
- * Catalogs (once a round each) reveal phylactery shelves; searching one (or breaking it) shreds it: 25 damage + fees
- * waived + Stun (unless Speed-Reading). With none left he is Mortal Again (+50% damage taken). At 0 HP with phylacteries
- * left he collapses into an invulnerable Pile of Bones and renews himself at his next turn (25% HP, burning a
- * phylactery); shredding the last one while he is bones finishes him. Any stun buys him 2 turns of Speed-Reading (no
- * stun-locks). Public helpers: DD.Act2Bosses.lich.
+ * v2 (initiative): on his own turn he fires an Overdue Notice (a bolt, at once) and takes the next step of his rotation:
+ *   phase 1: Bookfall (checkerboard WIND-UP) → its Second Printing (the other squares) → SHHHH! (radius 2 WIND-UP,
+ *   Silence) → Unpaid Internship (2 skeletons);
+ *   phase 2 "FINAL NOTICE" (≤ 50% HP): Final Notice (2 rows / columns WIND-UP) → Bookfall → its Second Printing (the
+ *   other squares) → QUIET!!! (radius 3 WIND-UP) → Unpaid Internship.
+ * Wind-ups land at the start of his next turn (DD.AI.windUp); a stun / freeze interrupts them. The wind-up skills are not
+ * in his skill list (his rotation drives them), so the HUD's threat shading and AutoPlay only count what he can do at once.
+ * A first wave of Bookfall that lands is always followed by its Second Printing (the rotation waits a turn if needed).
+ * Late Fees (a stacking buff): +N.feeRate at the end of each of his turns (N.feeRate2 in phase 2, +1 per living skeleton),
+ * +1 damage per fee on his attacks, no cap (his clock: shredding a phylactery resets it).
+ * Puzzle: 3 of the 8 Restricted Section Shelves hide phylacteries (always among the 6 deepest), 2 are mimics. A Card
+ * Catalog (once a round each) makes the nearest hidden phylactery's shelf glow; searching (or breaking) it shreds it:
+ * 25 damage, fees waived, Stunned (not while Speed-Reading). None left: Mortal Again (no more reforming). While one is
+ * left he can't die: at 0 HP he collapses into an invulnerable Pile of Bones and spends his next turn reforming (25% HP),
+ * burning a phylactery. A stun buys him Speed-Reading (no stun-locks). Public helpers: DD.Act2Bosses.lich.
  */
 (function () {
   'use strict';
   const DD = window.DD;
   const TAU = Math.PI * 2;
 
-  // ---- numbers (DESIGN §5, Act 2 boss: HP 260-320, hits 10-14, big telegraphs 22-30) ----------------------------
+  // ---- numbers (DESIGN §5 act 2 boss; v2 level band: a party of about level 3-4) -----------------------------------
   const N = {
-    hp: 260, notice: 11, noticeRange: 8, bookfall: 12, shhh: 10, shhhR: 2, quiet: 14, quietR: 3, final: 24, phylactery: 25,
-    reformPct: 0.25, feeCap: 8, feeStart: 2, feeRate: 2, feeRate2: 3, interest: 0.75, closing: 13, internCap: 3, internHp: 12, internDmg: 6,
-    internMark: 3, mimicHp: 20, mimicDmg: 7, mimicSurprise: 6, boon: 5, mortal: 0.5,
+    hp: 320, notice: 12, noticeRange: 30, bookfall: 11, shhh: 9, shhhR: 2, quiet: 12, quietR: 3, final: 20, phylactery: 25,
+    reformPct: 0.25, feeRate: 4, feeRate2: 5, focus: 3, internCap: 3, internHp: 12, internDmg: 5, internMark: 2,
+    mimicHp: 20, mimicDmg: 6, mimicSurprise: 5, boon: 5, mortal: 0, noticeNearest: 1,
   };
   const LICH = 'lichtenstein';
+  // his rotation, one step a turn (after the Overdue Notice); 'reprint' = the Second Printing of the Bookfall that landed
+  const ROTATION = { 1: ['bookfall', 'reprint', 'shhh', 'interns'], 2: ['final', 'bookfall', 'reprint', 'shhh', 'interns'] };
+  const STEP_NAMES = { bookfall: 'Bookfall ⏳', reprint: 'Second Printing ⏳', shhh: 'SHHHH! ⏳', quiet: 'QUIET!!! ⏳', final: 'Final Notice ⏳', interns: 'Unpaid Internship' };
+  const WINDUPS = ['lich_bookfall', 'lich_shhh', 'lich_quiet', 'lich_final_notice'];
 
   // ---- small helpers -------------------------------------------------------------------------------------------
   function A() { return DD.Act; }
@@ -39,14 +45,16 @@
   function units() { const s = S(); return s ? s.units : []; }
   function findLich() { return units().filter(function (u) { return u.defId === LICH && !u.dead; })[0] || null; }
   function lichData(u) {
-    if (!u.data.lich) u.data.lich = { turn: 0, phase: 1, renewals: 0 };
+    if (!u.data.lich) u.data.lich = { turn: 0, step: 0, phase: 1, renewals: 0 };
     return u.data.lich;
   }
   // collapsed state lives in his data too: a dispelled Pile of Bones status can't strand him invulnerable forever
   function isBones(u) { return !!u && (has(u, 'lich_bonepile') || !!lichData(u).collapsed); }
+  /** Stun-likes (stun, frozen, any stunLike status) and charm: what Speed-Reading shrugs off. */
+  function incapacitates(id) { return id === 'charmed' || (DD.Act.isStunLike ? DD.Act.isStunLike(id) : id === 'stun' || id === 'frozen'); }
+  function pending(u, skillId) { return (u.intents || []).some(function (i) { return i.skillId === skillId; }); }
 
-  // minor DM asides: logged like Act.narrate (narrator line, cosmetic RNG, never during previews) but kept local, so this
-  // file registers few narration keys (the generic content suite treats 11+ keys as "the narrator pack is loaded")
+  // minor DM asides: logged like Act.narrate (narrator line, cosmetic RNG, never during previews) but kept local
   const QUIPS = {
     catalog: ['{hero} uses the Card Catalog. The DM is visibly moved: nobody has used a card catalog since 1994.',
       '{hero} finds the right index card on the first try. The DM suspects metagaming.'],
@@ -54,8 +62,6 @@
       'Roll for... no, it\'s just a mimic. It\'s always a mimic.'],
     collapse: ['The lich crumbles. The DM checks his notes and smiles an awful little smile.',
       'Bones everywhere. You are pretty sure liches don\'t stay down while their books are still checked out.'],
-    closing: ['The lights flicker. "The library will be closing in... oh, it is closed. Fines are now uncapped." The DM looks thrilled.',
-      'A bell rings three times. Closing time. Nobody leaves until the fines are paid, and the fines are now infinite.'],
   };
   function quip(id, vars) {
     const lines = QUIPS[id];
@@ -85,11 +91,9 @@
   }
   function hiddenPhylacteries() { return phylacteryTiles().filter(function (t) { return !t.obj.data.revealed; }); }
   function aliveOf(defId) { return units().filter(function (u) { return u.defId === defId && active(u); }); }
-  function heroFoes(u) { return units().filter(function (o) { return active(o) && G().hostile(u, o) && !has(o, 'stealth'); }); }
 
-  // Telegraph numbers are the engine's live ones (DD.AI.intentDmg: weak / inspired / empowered / item bonus /
-  // difficulty, plus the Late Fees through the status's telegraphFlat), so the planner never passes an explicit dmg:
-  // a number frozen at planning goes stale when a hero Weakens him or Weak runs out before a ⏳ attack lands.
+  // Wind-up numbers are the engine's live ones (DD.AI.intentDmg: weak / inspired / empowered / item bonus / difficulty,
+  // plus the Late Fees through the status's telegraphFlat): the planner never passes an explicit dmg.
   function feesOf(u) { const st = DD.Act.getStatus(u, 'lich_late_fees'); return st ? st.stacks : 0; }
   function outMult(u) {
     let m = 1;
@@ -101,56 +105,50 @@
     m *= (s && s.difficulty && s.difficulty.dmg) || 1;
     return m;
   }
-  /** What a telegraph of `base` damage shows right now (same formula as DD.AI.intentDmg). */
+  /** What a wind-up of `base` damage shows right now (same formula as DD.AI.intentDmg). */
   function teleDmg(u, base) {
     return Math.round(base * outMult(u)) + (DD.AI && DD.AI.telegraphFlat ? DD.AI.telegraphFlat(u) : feesOf(u));
   }
 
   // ---- statuses ------------------------------------------------------------------------------------------------
   DD.registerStatus({
-    // the cap lives in addFees (it lifts at closing time), so the status itself allows plenty of stacks
     id: 'lich_late_fees', name: 'Late Fees', icon: '💸', color: '#9be36b', type: 'buff', stacking: 'stack', maxStacks: 99,
     decay: 'never', defaultTurns: -1,
     desc: function (st) {
       const n = (st && st.stacks) || 1;
-      return 'Its attacks deal +' + n + ' damage, and at the end of its turn every hero pays ' + Math.ceil(n * N.interest) +
-        ' HP of interest (' + Math.round(N.interest * 100) + '% of the fees, rounded up; Block does not help). Grows by ' + N.feeRate +
-        ' each round (' + N.feeRate2 + ' below half HP) plus 1 per living Work-Study Skeleton, max ' + N.feeCap + ' (no max from round ' + N.closing +
-        ': the library is closing). Shredding a phylactery waives the fees.';
+      return 'His attacks deal +' + n + ' damage. He gains ' + N.feeRate + ' more at the end of each of his turns (' + N.feeRate2 +
+        ' below half HP), +1 per living Work-Study Skeleton. Shredding a phylactery waives them all.';
     },
     hooks: {
       modifyOutgoingDamage: function (d, st) { if (d.cause === 'skill') d.flat += st.stacks; },
-      // [autoplay fidelity] the interest is not telegraphed: AutoPlay / the HUD read it here (threatAt, docs/notes/autoplay.md)
-      threatAt: function (unit, hero, tile, st) { return interestThreat(unit, hero, st); },
     },
-    // the telegraphs show it live (DD.AI adds it after the multipliers, where the damage pipeline adds d.flat)
+    // wind-up numbers and reach estimates show it live (DD.AI adds it after the multipliers, where the pipeline adds d.flat)
     telegraphFlat: function (st) { return (st && st.stacks) || 0; },
   });
   DD.registerStatus({
     id: 'lich_bonepile', name: 'Pile of Bones', icon: '🦴', color: '#e8e2cf', type: 'buff', stacking: 'none', maxStacks: 1,
     decay: 'never', defaultTurns: -1,
     desc: function () {
-      return 'Collapsed and Invulnerable. At his next turn he renews himself (25% HP), burning one phylactery — unless the last one is shredded first.';
+      return 'Collapsed and Invulnerable. He spends his next turn reforming (' + Math.round(N.reformPct * 100) +
+        '% HP), burning one phylactery, unless the last one is shredded first.';
     },
   });
   DD.registerStatus({
     id: 'lich_focus', name: 'Speed-Reading', icon: '👓', color: '#c9a03a', type: 'buff', stacking: 'refresh', maxStacks: 1,
-    decay: 'turnEnd', defaultTurns: 2,
+    decay: 'turnEnd', defaultTurns: N.focus,
     desc: function (st) {
-      return 'Shook off the last stun: can\'t be Stunned, Frozen or Charmed (a shredded phylactery still hurts and waives the fees).' +
-        (st && st.turns > 0 ? ' (' + st.turns + ' turn' + (st.turns === 1 ? '' : 's') + ' left)' : '');
+      return 'Shook off the last stun: can\'t be Stunned, Frozen or Charmed' +
+        (st && st.turns > 0 ? ' (' + st.turns + ' more turn' + (st.turns === 1 ? '' : 's') + ')' : '') + '.';
     },
   });
-  const INCAPACITATE = { stun: 1, frozen: 1, charmed: 1 };
   DD.registerStatus({
     id: 'lich_mortal', name: 'Mortal Again', icon: '🕯️', color: '#ff9a7a', type: 'debuff', stacking: 'none', maxStacks: 1,
     decay: 'never', defaultTurns: -1,
     desc: function () {
-      return 'His last phylactery is gone: he takes ' + Math.round(N.mortal * 100) + '% more damage and can no longer renew himself.';
+      return 'His last phylactery is gone: he can no longer reform' + (N.mortal > 0 ? ' and takes ' + Math.round(N.mortal * 100) + '% more damage' : '') + '.';
     },
-    hooks: {
-      modifyIncomingDamage: function (d) { d.mult *= 1 + N.mortal; },
-    },
+    // declarative (previews, the AI and AutoPlay see it); N.mortal is a balance knob, 0 = no damage bonus
+    takenMult: function () { return 1 + N.mortal; },
   });
 
   // ---- FX helpers ----------------------------------------------------------------------------------------------
@@ -196,7 +194,14 @@
   }
 
   // ---- area helpers ----------------------------------------------------------------------------------------------
-  /** Fallback checkerboard (5×5 around the target, the target square included) when no explicit tiles were planned. */
+  function openTile(x, y) {
+    const t = G().tile(x, y);
+    if (!t) return false;
+    const td = G().terrain(t);
+    if (td.walkable === false && !td.pit) return false;
+    return !(t.obj && G().objBlocksMove(t.obj));
+  }
+  /** Fallback checkerboard (5×5 around the target, the target square included) when no explicit tiles were given. */
   function checkerArea(ctx) {
     const t = ctx && ctx.target;
     if (!t) return [];
@@ -204,11 +209,11 @@
     const out = [];
     for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
       const x = t.x + dx, y = t.y + dy;
-      if (((x + y) % 2 + 2) % 2 === par && G().inBounds(x, y)) out.push({ x: x, y: y });
+      if (((x + y) % 2 + 2) % 2 === par && openTile(x, y)) out.push({ x: x, y: y });
     }
     return out;
   }
-  /** Fallback Final Notice (the default AI aiming it, e.g. while charmed): the target's row and the next one, like the desc. */
+  /** Fallback Final Notice (no explicit tiles): the target's row and the next one, like the desc. */
   function rowArea(ctx) {
     const t = ctx && ctx.target, s = S();
     if (!t || !s) return [];
@@ -218,23 +223,17 @@
     });
     return out;
   }
-  function openTile(x, y) {
-    const t = G().tile(x, y);
-    if (!t) return false;
-    const td = G().terrain(t);
-    if (td.walkable === false && !td.pit) return false;
-    return !(t.obj && G().objBlocksMove(t.obj));
-  }
 
   // ---- skills ----------------------------------------------------------------------------------------------------
+  // at once, every turn (his one skill-list attack: the HUD's reach and AutoPlay read it)
   eskill({
     id: 'lich_overdue_notice', name: 'Overdue Notice', icon: '📜', kind: 'spell', tags: ['ranged'], anchor: 'unit',
-    levels: [{ dmg: N.notice }], target: { type: 'unit', range: [1, N.noticeRange], filter: 'enemy', los: true },
+    levels: [{ dmg: N.notice }], target: { type: 'unit', range: [1, N.noticeRange], filter: 'enemy', los: false },
     desc: function (L) {
-      return 'Deal ' + L.dmg + ' damage (+ Late Fees) to the tracked target. Fizzles if it breaks line of sight or gets out of range (' +
-        N.noticeRange + ').';
+      return 'Deal ' + L.dmg + ' damage (+ Late Fees) to the nearest foe' + (N.noticeRange >= 30 ? ', however far' : ' within ' + N.noticeRange + ' tiles') +
+        ' (on a tie, the one with the most HP). It\'s mail: walls and shelves don\'t stop it.';
     },
-    flavor: 'Third and final reminder. Fourth and final reminder. Fifth...',
+    flavor: 'Third and final reminder. Fourth and final reminder. Fifth... It will find you. It always finds you.',
     execute: function (ctx) {
       ctx.foes.forEach(function (f) {
         if (!active(f)) return;
@@ -244,30 +243,34 @@
     },
   });
 
+  // WIND-UPS (his rotation; they land at the start of his next turn)
   eskill({
     id: 'lich_bookfall', name: 'Bookfall', icon: '📚', kind: 'spell', tags: ['aoe'], anchor: 'ground',
     levels: [{ dmg: N.bookfall }], target: { type: 'tile', range: [0, 30], filter: 'any', los: false },
     area: { shape: 'custom', fn: checkerArea },
     desc: function (L) {
-      return 'Books rain on a checkerboard of marked squares: ' + L.dmg + ' damage (+ Late Fees) to everyone standing on one (his own minions too). ' +
-        'Step onto an unmarked square to dodge.';
+      return 'Books rain on the marked checkerboard squares: ' + L.dmg + ' damage (+ Late Fees) to everyone on one (his own ' +
+        'minions too). When a first wave lands, he charges its Second Printing on the other squares.';
     },
     flavor: 'The Dewey Decimal System, delivered at terminal velocity.',
     execute: function (ctx) {
       bookRainFx(ctx.tiles);
       DD.FX.shake(4, 260);
       ctx.units.forEach(function (u) { if (u !== ctx.user && active(u)) A().damage(ctx.user, u, ctx.L.dmg, { tags: ['books'] }); });
+      // a landing first wave leaves its region for the Second Printing (the other squares, charged this turn)
+      const rp = ctx.intent && ctx.intent.data && ctx.intent.data.reprint;
+      if (rp && active(ctx.user)) lichData(ctx.user).reprint = rp;
     },
   });
 
-  // SHHHH! (phase 1) and QUIET!!! (phase 2) are separate skills: intents always resolve at their slot's level
+  // SHHHH! (phase 1) and QUIET!!! (phase 2) are two skills: a wind-up resolves at its skill's own numbers
   function shushSkill(id, name, dmg, r, flavor) {
     eskill({
       id: id, name: name, icon: '🤫', kind: 'attack', tags: ['aoe'], anchor: 'self',
       levels: [{ dmg: dmg, r: r, turns: 1 }], target: { type: 'self' },
       area: { shape: 'circle', size: function (L) { return L.r; } },
       desc: function (L) {
-        return 'Each of his foes within ' + L.r + ' tiles of Lich-tenstein takes ' + L.dmg + ' damage (+ Late Fees) and is Silenced (no spells) for ' +
+        return 'Each of his foes within ' + L.r + ' tiles of him takes ' + L.dmg + ' damage (+ Late Fees) and is Silenced (no spells) for ' +
           L.turns + ' turn. The circle moves with him.';
       },
       flavor: flavor,
@@ -285,22 +288,11 @@
   shushSkill('lich_quiet', 'QUIET!!!', N.quiet, N.quietR, 'The library voice, but at a volume that cracks stained glass.');
 
   eskill({
-    id: 'lich_interns', name: 'Unpaid Internship', icon: '💀', kind: 'summon', tags: ['summon'], anchor: 'self', cooldown: 3,
-    levels: [{ n: 2 }], target: { type: 'self' },
-    desc: function (L) {
-      return 'Summon ' + L.n + ' Work-Study Skeletons out of the book-return chute (never more than ' + N.internCap + ' at once; each living one ' +
-        'adds 1 to the Late Fees every round).';
-    },
-    flavor: 'The pay is exposure. The exposure is to necromancy.',
-    execute: function (ctx) { spawnInterns(ctx.user, ctx.L.n); },
-  });
-
-  eskill({
     id: 'lich_final_notice', name: 'Final Notice', icon: '🧾', kind: 'spell', tags: ['aoe'], anchor: 'ground',
     levels: [{ dmg: N.final }], target: { type: 'tile', range: [0, 30], filter: 'any', los: false },
     area: { shape: 'custom', fn: rowArea },
     desc: function (L) {
-      return 'Final Notices fly down two whole rows or columns (the marked lines): ' + L.dmg + ' damage (+ Late Fees) to each of his foes in them.';
+      return 'Final Notices fly down the two marked rows or columns: ' + L.dmg + ' damage (+ Late Fees) to each of his foes in them.';
     },
     flavor: 'Final. Notice. (Not legally binding. Legally haunting.)',
     execute: function (ctx) {
@@ -314,10 +306,20 @@
   });
 
   eskill({
+    id: 'lich_interns', name: 'Unpaid Internship', icon: '💀', kind: 'summon', tags: ['summon'], anchor: 'self', cooldown: 2,
+    levels: [{ n: 2 }], target: { type: 'self' },
+    desc: function (L) {
+      return 'Summon ' + L.n + ' Work-Study Skeletons out of the book-return chute (never more than ' + N.internCap + ' at once).';
+    },
+    flavor: 'The pay is exposure. The exposure is to necromancy.',
+    execute: function (ctx) { spawnInterns(ctx.user, ctx.L.n); },
+  });
+
+  eskill({
     id: 'lich_intern_stamp', name: 'OVERDUE Stamp', icon: '🔖', kind: 'attack', tags: ['melee'], anchor: 'self',
     levels: [{ dmg: N.internDmg, mark: N.internMark }], target: { type: 'unit', range: [1, 1], filter: 'enemy' },
     desc: function (L) {
-      return 'Deal ' + L.dmg + ' damage to the adjacent tile and stamp the target OVERDUE (Marked ' + L.mark + ': the next hit on it deals +' + L.mark + ').';
+      return 'Deal ' + L.dmg + ' damage to an adjacent foe and stamp it OVERDUE (Marked ' + L.mark + ': the next hit on it deals +' + L.mark + ').';
     },
     flavor: 'Ka-chunk. You are now property of the library.',
     execute: function (ctx) {
@@ -333,7 +335,7 @@
   eskill({
     id: 'lich_mimic_chomp', name: 'Paperback Chomp', icon: '📕', kind: 'attack', tags: ['melee'], anchor: 'self',
     levels: [{ dmg: N.mimicDmg }], target: { type: 'unit', range: [1, 1], filter: 'enemy' },
-    desc: function (L) { return 'Deal ' + L.dmg + ' damage to the adjacent tile and Root the target for 1 turn (it is stuck between the pages).'; },
+    desc: function (L) { return 'Deal ' + L.dmg + ' damage to an adjacent foe and Root it for 1 turn (stuck between the pages).'; },
     flavor: 'It has been waiting three hundred years to be checked out.',
     execute: function (ctx) {
       if (ctx.target) DD.FX.lunge(ctx.user, ctx.target);
@@ -375,38 +377,14 @@
   }
 
   // ---- Late Fees -----------------------------------------------------------------------------------------------------
-  /** The fee cap: N.feeCap, lifted at closing time (no fight stalls forever: the interest keeps growing). */
-  function feeCapNow() { const s = S(); return s && s.round >= N.closing ? 99 : N.feeCap; }
+  /** Add n Late Fees (no cap: the fees are his clock; shredding a phylactery resets them). Returns how many. */
   function addFees(u, n) {
-    const before = feesOf(u), cap = feeCapNow();
-    if (before >= cap || !active(u)) return 0;
-    const add = Math.min(n, cap - before);
-    A().addStatus(u, 'lich_late_fees', { stacks: add, turns: -1, silent: true }, u);
-    DD.FX.text(u, '💸 Late Fees +' + add, { color: '#b8f28a', size: 14 });
-    A().log('Late Fees compound: Lich-tenstein\'s attacks now deal +' + (before + add) + ' damage.', 'enemy');
-    return add;
-  }
-  /** End of his turn: every hero pays ¾ of the Late Fees (rounded up) as interest. You can't Block paperwork. */
-  function chargeInterest(u) {
-    const n = Math.ceil(feesOf(u) * N.interest);
-    if (n <= 0 || !active(u) || isBones(u)) return 0;
-    const victims = units().filter(function (h) { return h.side === 'hero' && h.kind === 'hero' && active(h); });
-    if (!victims.length) return 0;
-    A().log('Interest accrues on the Late Fees: every hero pays ' + n + ' HP.', 'enemy');
-    victims.forEach(function (h) {
-      if (!active(h)) return;
-      A().damage(u, h, n, { cause: 'status', tags: ['late fees'], ignoreBlock: true, silent: true });
-    });
+    if (!active(u) || !(n > 0)) return 0;
+    const before = feesOf(u);
+    A().addStatus(u, 'lich_late_fees', { stacks: n, turns: -1, silent: true }, u);
+    DD.FX.text(u, '💸 Late Fees +' + n, { color: '#b8f28a', size: 14 });
+    A().log('Late Fees compound: Lich-tenstein\'s attacks now deal +' + (before + n) + ' damage.', 'enemy');
     return n;
-  }
-  /**
-   * threatAt (see DD.AutoPlay): the interest a hero will pay at the end of his turn, wherever it stands (Block does not
-   * help, so { ignoreBlock: true }); 0 for summons, while he is a pile of bones or once the fees are waived.
-   */
-  function interestThreat(u, h, st) {
-    if (!active(u) || isBones(u) || !h || h.kind !== 'hero' || h.side !== 'hero' || !active(h)) return 0;
-    const n = Math.ceil(((st && st.stacks) || feesOf(u)) * N.interest);
-    return n > 0 ? { dmg: n, label: 'Late Fees interest', ignoreBlock: true } : 0;
   }
   function waiveFees(u) {
     if (!u || !feesOf(u)) return false;
@@ -465,13 +443,17 @@
     const left = list.length;
     const lich = findLich();
     const head = 'Phylacteries shredded ' + fd.shredded + (fd.spent ? ' · burnt ' + fd.spent : '') + ' · left ' + left + '. ';
-    if (!left) return head + 'He is Mortal Again (takes ' + Math.round(N.mortal * 100) + '% more damage): finish him!';
+    if (!left) {
+      return head + 'He is Mortal Again: no more reforming' + (N.mortal > 0 ? ' (and he takes ' + Math.round(N.mortal * 100) + '% more damage)' : '') +
+        '. Finish him!';
+    }
     const glowing = list.some(function (t) { return t.obj.data.revealed; });
     if (lich && isBones(lich)) {
-      return head + 'He is a Pile of Bones and renews next turn: ' + (glowing ? 'Search the glowing shelf now' +
+      return head + 'He is a Pile of Bones and reforms on his next turn: ' + (glowing ? 'Search the glowing shelf now' +
         (left === 1 ? ' (the last one finishes him)!' : '!') : 'Look Up a Card Catalog and Search the shelf it lights up!');
     }
-    return head + (glowing ? 'Search the glowing shelf (1 AP) to shred it.' : 'Look Up a Card Catalog (1 AP), then Search the shelf that glows.');
+    return head + (glowing ? 'Search the glowing shelf (1 AP) to shred it: 25 damage, fees waived, Stun.' :
+      'Look Up a Card Catalog (1 AP), then Search the shelf that glows.');
   }
   function updateFlavor() { const s = S(); if (s && s.objective) s.objective.flavor = flavorText(); }
 
@@ -510,16 +492,11 @@
     }
   }
 
+  /** A plain shelf: a good book with a happy ending (+5 HP). */
   function boon(unit, o) {
-    const s = S();
     const title = o.data.title || BOOKS[0];
-    if (s.rng.chance(0.5)) {
-      A().addBlock(unit, N.boon);
-      A().log(unit.name + ' finds "' + title + '" and hides behind it (+' + N.boon + ' Block).', 'hero');
-    } else {
-      A().heal(null, unit, N.boon);
-      A().log(unit.name + ' finds "' + title + '". It has a happy ending (+' + N.boon + ' HP).', 'hero');
-    }
+    A().heal(null, unit, N.boon);
+    A().log(unit.name + ' finds "' + title + '". It has a happy ending (+' + N.boon + ' HP).', 'hero');
     DD.FX.text(unit, '📖 ' + title, { color: '#f3e3b0', size: 12 });
   }
 
@@ -564,7 +541,7 @@
     updateFlavor();
   }
 
-  /** A phylactery is torn up: 25 damage + Stun + Late Fees waived — or, on a pile of bones, the final page. */
+  /** A phylactery is torn up: 25 damage + Late Fees waived + Stun — or, on a pile of bones, one renewal fewer / the end. */
   function shred(hero, tile, o) {
     const fd = fightData();
     fd.shredded++;
@@ -582,20 +559,21 @@
       else { DD.FX.text(lich, 'One less renewal!', { color: '#b8f28a', size: 15 }); A().bark(lich, 'hurt'); }
       return;
     }
-    DD.FX.banner('PHYLACTERY SHREDDED', { sub: left ? left + ' left: he can still renew himself' : 'He is finally mortal!', color: '#9dff8a', ms: 900 });
+    DD.FX.banner('PHYLACTERY SHREDDED', { sub: left ? left + ' left: he can still reform' : 'He is finally mortal!', color: '#9dff8a', ms: 900 });
     A().damage(hero || null, lich, N.phylactery, { cause: 'status', tags: ['phylactery'], ignoreBlock: true });
-    // the stun respects Speed-Reading: shredding every round can't lock him out of the whole fight
+    // the stun respects Speed-Reading: shredding every round can't lock him out of the fight. It interrupts his wind-up.
     if (active(lich) && !isBones(lich)) A().addStatus(lich, 'stun', { turns: 1 }, hero || null);
     if (!left) makeMortal(lich);
     if (active(lich)) A().bark(lich, 'phylactery');
   }
 
-  /** No phylactery left (shredded or burnt): he can't renew any more and takes extra damage for the rest of the fight. */
+  /** No phylactery left (shredded or burnt): he can't reform any more (N.mortal: an optional damage-taken bonus). */
   function makeMortal(u) {
     if (!active(u) || isBones(u) || has(u, 'lich_mortal')) return false;
     A().addStatus(u, 'lich_mortal', { turns: -1, silent: true }, null);
     DD.FX.text(u, '🕯️ MORTAL AGAIN!', { color: '#ff9a7a', size: 17 });
-    A().log('With no phylacteries left, Lich-tenstein is mortal again: he takes ' + Math.round(N.mortal * 100) + '% more damage.', 'system');
+    A().log('With no phylacteries left, Lich-tenstein is mortal again: he can no longer reform' +
+      (N.mortal > 0 ? ' and takes ' + Math.round(N.mortal * 100) + '% more damage' : '') + '.', 'system');
     return true;
   }
 
@@ -608,15 +586,30 @@
     A().kill(lich, hero || null, { force: true, text: 'DUST!', cause: 'other' });
   }
 
-  /** 0 HP with a phylactery left: collapse into an invulnerable pile of bones (renews at his next turn). */
+  /**
+   * A pile of bones only reforms on its next turn: his skills cool down through it, so the HUD's reach line / threat
+   * shading and AutoPlay (DD.AI.reachOf: ready skills only) don't count an Overdue Notice that is not coming.
+   */
+  function holdSkills(u) {
+    DD.Combat.slotsOf(u).forEach(function (sl) {
+      if (!((sl.cd || 0) >= 2 || (sl.cd === 1 && sl.fresh))) A().setCooldown(u, sl.id, 1);
+    });
+  }
+  /** 0 HP with a phylactery left: collapse into an invulnerable pile of bones (he reforms on his next turn). */
   function collapse(u) {
     u.hp = 1;
-    u.intents = [];
+    if (u.intents && u.intents.length && DD.AI && DD.AI.cancelIntents) DD.AI.cancelIntents(u, 'Collapsed!');
     lichData(u).collapsed = true;
+    // collapsed during his own turn (his landing wind-up hit thorns, an attack of opportunity on his walk...): he reforms
+    // on his NEXT turn, never in this one, so the heroes always get a turn against the bones (cleared at his turn end)
+    lichData(u).collapsedOwn = !!(DD.Combat.isTurnOf && DD.Combat.isTurnOf(u));
+    holdSkills(u);
+    // a pile of bones doesn't walk on (collapsed by an attack of opportunity on his way back to the desk)
+    if (A().stopMove) A().stopMove(u);
     A().addStatus(u, 'lich_bonepile', { turns: -1, silent: true }, u);
     A().addStatus(u, 'invulnerable', { turns: -1, silent: true }, u);
     DD.FX.text(u, 'Collapses...', { color: '#e8e2cf', size: 16 });
-    DD.FX.banner('OVERDUE, NOT DEAD', { sub: 'He renews himself next turn: shred his phylacteries!', color: '#c9ffb0', ms: 1000 });
+    DD.FX.banner('OVERDUE, NOT DEAD', { sub: 'He reforms on his next turn: shred his phylacteries!', color: '#c9ffb0', ms: 1000 });
     A().log('Lich-tenstein collapses into a pile of bones... and the bones are already renewing their membership. (' +
       phylacteryTiles().length + ' phylacteries left)', 'enemy');
     quip('collapse', {});
@@ -625,14 +618,14 @@
     A().touch();
   }
 
-  /** At his next planning: burn the farthest phylactery, come back at 25% HP, reveal another hiding place. */
+  /** His turn as a pile of bones: burn the farthest phylactery, come back at 25% HP, reveal another hiding place. */
   function reassemble(u) {
     const list = phylacteryTiles();
     lichData(u).collapsed = false;
     A().removeStatus(u, 'lich_bonepile', { silent: true });
     A().removeStatus(u, 'invulnerable', { silent: true });
     if (!list.length) return false;
-    const foes = heroFoes(u);
+    const foes = units().filter(function (o) { return active(o) && G().hostile(u, o); });
     const far = function (t) { let d = 99; foes.forEach(function (f) { d = Math.min(d, G().dist(f, t)); }); return d; };
     list.sort(function (a, b) { return far(b) - far(a) || a.y - b.y || a.x - b.x; });
     const t = list[0];
@@ -652,10 +645,10 @@
     DD.FX.banner('RENEWED!', {
       sub: '"Checked out for another three hundred years." (' + (list.length - 1) + ' phylacteries left)', color: '#c9ffb0', ms: 1000,
     });
-    A().log('Lich-tenstein renews himself (' + u.hp + ' HP), burning the phylactery at ' + t.x + ',' + t.y + '.', 'enemy');
+    A().log('Lich-tenstein reforms (' + u.hp + ' HP), burning the phylactery at ' + t.x + ',' + t.y + '. That takes him all turn.', 'enemy');
     A().narrate('lich_renew', {});
     A().bark(u, 'renew');
-    // he renews straight into phase 2 (a party that burst him from above half HP to 0 still gets the FINAL NOTICE banner)
+    // he reforms straight into phase 2 (a party that burst him from above half HP to 0 still gets the FINAL NOTICE banner)
     enterPhase2(u);
     revealNearest(u, 'His soul\'s backup copy flickers');
     if (list.length === 1) makeMortal(u); // that was the last one: no more renewals
@@ -669,64 +662,85 @@
     const d = lichData(u);
     if (d.phase >= 2) return;
     d.phase = 2;
+    d.step = 0;
     DD.FX.flash('#7dff8a', 220);
-    DD.FX.banner('FINAL NOTICE', { sub: 'Bulk Mailing every turn · Late Fees +' + N.feeRate2 + ' a round', color: '#c9ffb0', ms: 1000 });
-    A().log('Lich-tenstein slams his date stamp: FINAL NOTICE! Two Overdue Notices every turn, and his Late Fees now grow by ' +
-      N.feeRate2 + ' a round.', 'enemy');
+    DD.FX.banner('FINAL NOTICE', { sub: 'Final Notices, QUIET!!! and Late Fees +' + N.feeRate2 + ' a turn', color: '#c9ffb0', ms: 1000 });
+    A().log('Lich-tenstein slams his date stamp: FINAL NOTICE! His rotation is now Final Notice → Bookfall → its Second Printing → ' +
+      'QUIET!!! → Unpaid Internship, and his Late Fees grow by ' + N.feeRate2 + ' a turn.', 'enemy');
     A().narrate('lich_phase2', {});
     A().bark(u, 'phase');
   }
 
-  function noticeTarget(u, foes, exclude) {
+  function rotation(u) { return ROTATION[lichData(u).phase >= 2 ? 2 : 1]; }
+  /** The step he will take on his next turn (for the inspect panel). */
+  function nextStep(u) {
+    // a charged first wave: once it lands, its Second Printing comes next (whatever the rotation says)
+    if ((u.intents || []).some(function (i) { return i.skillId === 'lich_bookfall' && i.data && i.data.reprint; })) return 'reprint';
+    const r = rotation(u);
+    let name = r[lichData(u).step % r.length];
+    // the Second Printing step with no first wave coming (it was interrupted): he shouts instead
+    if (name === 'reprint') name = 'shhh';
+    return name === 'shhh' && lichData(u).phase >= 2 ? 'quiet' : name;
+  }
+
+  /**
+   * Whom the Overdue Notice goes to (review v2): the NEAREST foe in range (no line of sight needed), on a tie the one
+   * with the most HP. A readable rule the party can play around: whoever stands closest to his desk gets the mail, so a
+   * tough hero holding the line in front of him shields the backline (an infinite-range notice scored like a normal
+   * shooter — kills first — sniped the weakest hero anywhere: half its notices hit the lowest-HP hero and they caused
+   * ~90% of the party's downs). N.noticeNearest 0 = the old scoring (balance comparisons only).
+   */
+  function noticeTarget(u, foes) {
     let best = null, bestSc = -Infinity;
     foes.forEach(function (f) {
-      if (exclude && f === exclude) return;
-      const d = G().dist(u, f);
-      if (d < 1 || d > N.noticeRange || !G().los(u, f)) return;
-      const sc = (has(f, 'marked') ? 4 : 0) + (1 - f.hp / Math.max(1, f.maxHp)) * 6 - d * 0.1 - (f.block || 0) * 0.2;
+      const dd = G().dist(u, f);
+      if (dd < 1 || dd > N.noticeRange) return;
+      let sc;
+      if (N.noticeNearest) sc = -dd * 1000 + (f.hp || 0) + (f.block || 0) * 0.01;
+      else {
+        const est = DD.AI.estimate(u, f, N.notice, null) + feesOf(u);
+        sc = est + DD.AI.targetValue(u, f, est, 'ranged') - dd * 0.05;
+      }
       if (sc > bestSc) { bestSc = sc; best = f; }
     });
     return best;
   }
 
   /**
-   * Hover about 3 tiles from the nearest hero with line of sight to as many heroes as possible, never into hazards and
-   * never far from his desk (the rows next to the boss spawn: he guards the returns slot).
+   * A desk-bound caster: he only drifts when nobody is within his notices' reach, he stands in something nasty or he was
+   * shoved more than 2 rows off his desk; then toward a tile about 3 from the nearest foe, back by his desk rows. Walks
+   * pay their attacks of opportunity.
    */
   function reposition(u, api, foes) {
+    const home = lichData(u).home || (lichData(u).home = { x: u.x, y: u.y });
+    const reaches = foes.some(function (f) { const d = G().dist(u, f); return d >= 1 && d <= N.noticeRange; });
+    if (reaches && !G().hazardAt(u.x, u.y, u) && Math.abs(u.y - home.y) <= 2) return;
     const reach = api.reachable(u);
     if (!reach || !reach.size) return;
-    const home = lichData(u).home || (lichData(u).home = { x: u.x, y: u.y });
     const score = function (p) {
       let dn = 99, seen = 0;
       foes.forEach(function (f) {
         const d = G().dist(p, f);
         dn = Math.min(dn, d);
-        if (d >= 1 && d <= N.noticeRange && G().los(p, f)) seen++;
+        if (d >= 1 && d <= N.noticeRange) seen++;
       });
       let sc = seen * 3 - Math.abs(dn - 3) * 1.4 - (dn <= 1 ? 4 : 0) - (p.cost || 0) * 0.05 - (G().hazardAt(p.x, p.y, u) ? 20 : 0);
       const off = Math.abs(p.y - home.y);
       if (off > 2) sc -= (off - 2) * 6;
       return sc;
     };
-    const here = { x: u.x, y: u.y, cost: 0 };
-    // a desk-bound caster: he only drifts when nobody is in sight (or he is standing in something nasty)
-    const seesSomeone = foes.some(function (f) { const d = G().dist(u, f); return d >= 1 && d <= N.noticeRange && G().los(u, f); });
-    if (seesSomeone && !G().hazardAt(u.x, u.y, u) && Math.abs(u.y - home.y) <= 2) return;
-    let best = null, bestSc = score(here);
+    let best = null, bestSc = score({ x: u.x, y: u.y, cost: 0 });
     reach.forEach(function (e) {
       if (DD.AI.pathRisk && DD.AI.pathRisk(u, e).lethal) return;
-      const sc = score(e);
+      const aoo = api.aooCost ? api.aooCost(u, e) : 0;
+      if (aoo === Infinity) return;
+      const sc = score(e) - aoo;
       if (sc > bestSc + 0.75) { best = e; bestSc = sc; }
     });
     if (best) api.moveTo(u, best.x, best.y);
   }
 
-  function addNotice(u, api, target, label) {
-    return api.addIntent(u, 'lich_overdue_notice', target, { anchor: 'unit', label: label });
-  }
-
-  /** Checkerboard region: the heroes' bounding box grown by 1, at most 7×7, inside the grid. */
+  /** Checkerboard region: the foes' bounding box grown by 1, at most 7×7, inside the grid. */
   function checkerRegion(foes) {
     const s = S();
     let x0 = 99, y0 = 99, x1 = -1, y1 = -1, cx = 0, cy = 0;
@@ -745,38 +759,35 @@
     }
     return out;
   }
-  function bookfall(u, api, foes, waves) {
+
+  // rotation steps: each returns true if it did something (the planner falls back to the next one otherwise)
+  function bookfall(u, api, foes) {
+    if (has(u, 'silenced') || pending(u, 'lich_bookfall')) return false;
     const reg = checkerRegion(foes);
     const hits = [0, 0];
     foes.forEach(function (f) { hits[(f.x + f.y) % 2]++; });
     const par = hits[0] === hits[1] ? (S().round % 2) : (hits[0] > hits[1] ? 0 : 1);
-    const center = { x: reg.cx, y: reg.cy };
-    // a 2-wave Bookfall remembers its region: the second printing is planned when the first wave is about to land
-    api.addIntent(u, 'lich_bookfall', center, { anchor: 'ground', tiles: checkerTiles(reg, par), delay: 1,
-      data: waves > 1 ? { reprint: { x0: reg.x0, y0: reg.y0, x1: reg.x1, y1: reg.y1, cx: reg.cx, cy: reg.cy, par: 1 - par } } : {} });
-    return true;
-  }
-  /** Second Printing: the other colour of a landing Bookfall's region, one turn later (red now, amber next). */
-  function secondPrinting(u, api) {
-    const first = (u.intents || []).filter(function (i) { return i.skillId === 'lich_bookfall' && !(i.delay > 0) && i.data && i.data.reprint; })[0];
-    if (!first) return false;
-    const r = first.data.reprint;
-    first.data.reprint = null;
-    api.addIntent(u, 'lich_bookfall', { x: r.cx, y: r.cy }, {
-      anchor: 'ground', tiles: checkerTiles(r, r.par), delay: 1, label: 'Bookfall (2nd Printing)',
+    return !!api.windUp(u, 'lich_bookfall', { x: reg.cx, y: reg.cy }, {
+      tiles: checkerTiles(reg, par), label: 'Bookfall', banner: 'Stand on an unmarked square (a Second Printing follows)',
+      data: { reprint: { x0: reg.x0, y0: reg.y0, x1: reg.x1, y1: reg.y1, cx: reg.cx, cy: reg.cy, par: 1 - par } },
     });
-    return true;
   }
-
-  function shhh(u, api, foes, level) {
-    const r = level >= 2 ? N.quietR : N.shhhR;
+  /** Second Printing: the other colour of the region `r` of the Bookfall that just landed (this turn). */
+  function secondPrinting(u, api, r) {
+    if (!r || has(u, 'silenced') || pending(u, 'lich_bookfall')) return false;
+    return !!api.windUp(u, 'lich_bookfall', { x: r.cx, y: r.cy }, { tiles: checkerTiles(r, r.par), label: 'Bookfall (2nd Printing)', banner: 'The other squares this time' });
+  }
+  function shout(u, api, foes) {
+    const two = lichData(u).phase >= 2;
+    const r = two ? N.quietR : N.shhhR;
+    if (pending(u, 'lich_shhh') || pending(u, 'lich_quiet')) return false;
+    // only worth it with a foe close by (inside the circle or a step from it)
     if (!foes.some(function (f) { return G().dist(u, f) <= r + 1; })) return false;
-    api.addIntent(u, level >= 2 ? 'lich_quiet' : 'lich_shhh', u, { anchor: 'self', delay: 1 });
-    return true;
+    return !!api.windUp(u, two ? 'lich_quiet' : 'lich_shhh', u, { anchor: 'self', label: two ? 'QUIET!!!' : 'SHHHH!', banner: 'Get out of the circle (or push him)' });
   }
-
-  /** Two rows (or columns, whichever catches more heroes) of Final Notices. */
+  /** Two rows (or columns, whichever catches more foes) of Final Notices. */
   function finalNotice(u, api, foes) {
+    if (has(u, 'silenced') || pending(u, 'lich_final_notice')) return false;
     const s = S();
     const tally = function (axis) {
       const c = {};
@@ -801,49 +812,72 @@
       }
     });
     const center = useRows ? { x: Math.floor(s.grid.w / 2), y: pick[0].k } : { x: pick[0].k, y: Math.floor(s.grid.h / 2) };
-    api.addIntent(u, 'lich_final_notice', center, { anchor: 'ground', tiles: tiles, delay: 1 });
-    return true;
+    return !!api.windUp(u, 'lich_final_notice', center, { tiles: tiles, label: 'Final Notice', banner: 'Two whole ' + (useRows ? 'rows' : 'columns') + ': get off them' });
   }
-
   function interns(u, api) {
     if (aliveOf('lich_intern').length >= N.internCap || !api.canUse(u, 'lich_interns')) return false;
-    api.addIntent(u, 'lich_interns', u, { anchor: 'self' });
-    return true;
+    return api.act(u, 'lich_interns', u, { anchor: 'self' });
+  }
+  const STEPS = {
+    bookfall: function (u, api, foes) { return bookfall(u, api, foes) || shout(u, api, foes); },
+    // no first wave landed (interrupted): the shout step instead (what the passive line's "Next:" announces)
+    reprint: function (u, api, foes, rp) { return secondPrinting(u, api, rp) || shout(u, api, foes) || bookfall(u, api, foes); },
+    shhh: function (u, api, foes) { return shout(u, api, foes) || bookfall(u, api, foes); },
+    final: function (u, api, foes) { return finalNotice(u, api, foes) || shout(u, api, foes); },
+    interns: function (u, api) { return interns(u, api); },
+  };
+
+  /**
+   * His turn (wind-ups already landed): reform if he is a pile of bones (that is the whole turn); phase 2 at half HP;
+   * drift back to his desk if needed; an Overdue Notice; then the next step of his rotation (a wind-up or the interns).
+   */
+  function lichPlan(unit, api) {
+    const d = lichData(unit);
+    if (isBones(unit)) {
+      if (d.collapsedOwn) return;   // he collapsed at the start of this very turn: the reform waits for his next one
+      if (!reassemble(unit)) d.final = true;
+      return;
+    }
+    if (d.phase < 2 && unit.hp <= unit.maxHp * 0.5) enterPhase2(unit);
+    d.turn++;
+    // the region of a first-wave Bookfall that landed at the start of this turn (read once: never carried over)
+    const rp = d.reprint;
+    d.reprint = null;
+    const foes = api.foes(unit);   // taunt-aware: a taunted librarian only has eyes for the taunter
+    if (!foes.length) return;
+    // a pile of bones does nothing more: an attack of opportunity on his walk or a retaliation (thorns) on his notice can
+    // collapse him mid-turn (and a stun on the way ends his turn too)
+    const done = function () { return !active(unit) || isBones(unit) || DD.Act.isStunned(unit); };
+    reposition(unit, api, foes);
+    if (done()) { updateFlavor(); return; }
+    if (api.canUse(unit, 'lich_overdue_notice')) {
+      const t = noticeTarget(unit, foes);
+      if (t) api.act(unit, 'lich_overdue_notice', t, { anchor: 'unit' });
+      if (done()) { updateFlavor(); return; }
+    }
+    const r = rotation(unit);
+    const name = r[d.step % r.length];
+    // a first wave that landed is always followed by its Second Printing (as its banner promises): if a fallback Bookfall
+    // or a phase change put another step here, the Second Printing takes this turn and the rotation waits a turn
+    if (rp && name !== 'reprint' && secondPrinting(unit, api, rp)) { updateFlavor(); return; }
+    d.step++;
+    STEPS[name](unit, api, foes, rp);
+    updateFlavor();
   }
 
-  function lichPlan(unit, api) {
-    if (isBones(unit)) {
-      if (!reassemble(unit)) { lichData(unit).final = true; return; }
+  /** The inspect panel's passive line: his rule and what comes next. */
+  function passiveText(u) {
+    const two = !!u && lichData(u).phase >= 2;
+    const r = ROTATION[two ? 2 : 1].map(function (n) { return n === 'shhh' && two ? 'quiet' : n; });
+    const next = u && !isBones(u) ? ' Next: ' + STEP_NAMES[nextStep(u)] + '.' : '';
+    // who gets the mail if nobody moves (the HUD reads this live, so it stays pure: no RNG, no state)
+    let to = '';
+    if (u && !isBones(u) && S() && DD.AI && DD.AI.targetsFor) {
+      const t = noticeTarget(u, DD.AI.targetsFor(u) || []);
+      if (t) to = ' (now: ' + t.name + ')';
     }
-    const d = lichData(unit);
-    if (d.phase < 2 && unit.hp <= unit.maxHp * 0.5) enterPhase2(unit);
-    const foes = heroFoes(unit);
-    if (!foes.length) return;
-    const kept = (unit.intents || []).map(function (i) { return i.skillId; });
-    const step = d.turn % 3;
-    d.turn++;
-    if (kept.indexOf('lich_shhh') < 0 && kept.indexOf('lich_quiet') < 0) reposition(unit, api, foes);
-    if (!active(unit) || has(unit, 'stun')) return;
-    const t1 = noticeTarget(unit, foes, null);
-    if (t1) addNotice(unit, api, t1);
-    secondPrinting(unit, api);
-    const pendingFall = kept.indexOf('lich_bookfall') >= 0;
-    if (d.phase < 2) {
-      if (step === 0) { if (!pendingFall) bookfall(unit, api, foes, 1); }
-      else if (step === 1) { if (!shhh(unit, api, foes, 1) && !pendingFall) bookfall(unit, api, foes, 1); interns(unit, api); }
-      else {
-        const t2 = noticeTarget(unit, foes, t1);
-        if (t2) addNotice(unit, api, t2, 'Overdue Notice (Bulk Mail)');
-        else if (!pendingFall) bookfall(unit, api, foes, 1);
-      }
-    } else {
-      // FINAL NOTICE: Bulk Mailing every turn on top of the rotation
-      const t2 = noticeTarget(unit, foes, t1);
-      if (t2) addNotice(unit, api, t2, 'Overdue Notice (Bulk Mail)');
-      if (step === 0) { if (!pendingFall) bookfall(unit, api, foes, 2); }
-      else if (step === 1) { finalNotice(unit, api, foes); interns(unit, api); }
-      else if (!shhh(unit, api, foes, 2) && !pendingFall) bookfall(unit, api, foes, 1);
-    }
+    return 'His turn: an Overdue Notice to the nearest foe' + to + ', then the next of ' + r.map(function (n) { return STEP_NAMES[n]; }).join(' → ') + '.' + next +
+      ' While a phylactery is left he can\'t die: he collapses and reforms.';
   }
 
   // ---- objects ----------------------------------------------------------------------------------------------------
@@ -851,31 +885,66 @@
   function hashOf(x, y) { let h = (x * 374761393 + y * 668265263) | 0; h = (h ^ (h >>> 13)) * 1274126177; return ((h ^ (h >>> 16)) >>> 0) / 4294967296; }
   const BOOK_COLS = ['#8e2b2b', '#2d4f8a', '#3b6b3f', '#6a4a8c', '#b08a2a', '#2c6b6b', '#7a3a5a'];
 
-  /** Iso bookshelf with book rows; `fill` 0..1 = how stocked it is. */
+  // ---- map rotation: the library furniture turns with the board (def.yawAware: g.box stands on the view's ground quad).
+  // Face details run along each visible face's bottom edge (f.x0, f.y0 -> f.x1, f.y1: exactly the classic left / right face
+  // edges at the default view), or keep their classic yaw-0 coordinates and are moved onto the view (exactly the same
+  // pixels at yaw 0). A side facing away hides its details.
+  function classic() { return DD.Iso.view().legacy; }
+  /** The visible faces of a block on (cx, cy, hw, hh) by physical side ('N' | 'E' | 'S' | 'W'); a hidden side is absent. */
+  function sideFaces(g, cx, cy, hw, hh) {
+    const by = {};
+    g.faces(cx, cy, hw, hh).forEach(function (f) { by[f.dir] = f; });
+    return by;
+  }
+  /** A point drawn at yaw 0 on a block's left (S side) face, put on that side's face f at the same spot ([px, py] at yaw 0). */
+  function onLeftFace(f, cx, cy, hw, hh, px, py) {
+    if (classic()) return [px, py];
+    const s = (px - cx + hw) / hw;
+    return f.at(s, cy + hh * s - py);
+  }
+  /** A point drawn at yaw 0 `h` px above the square (cx, cy, hw, hh) (on a block's top), in the current view. */
+  function onTop(g, cx, cy, hw, hh, h, px, py) {
+    if (classic()) return [px, py];
+    const a = (px - cx) / hw, b = (py + h - cy) / hh;
+    return g.on(cx, cy, hw, hh, (a + b) / 2, (b - a) / 2, h);
+  }
+
+  /**
+   * Iso bookshelf with book rows; `fill` 0..1 = how stocked it is. Every side holds books: the classic left (S) and right (E)
+   * faces draw first from the seeded stream, the far sides continue it, so each side keeps its books as the map turns.
+   */
   function paintShelf(g, t, wood, fill, seed) {
     const c = g.ctx;
     g.ellipse(0, 3, 24, 9, 'rgba(0,0,0,0.28)', null);
     g.box(0, 0, 20, 10, 54, wood, true);
     let r = seed;
     const rnd = function () { r = (r * 9301 + 49297) % 233280; return r / 233280; };
-    [[-20, 0, 0, 10, 0], [0, 10, 20, 0, -0.2]].forEach(function (f) {
+    const vis = sideFaces(g, 0, 0, 20, 10);
+    ['S', 'E', 'N', 'W'].forEach(function (dir) {
+      const fc = vis[dir], f = fc ? [fc.x0, fc.y0, fc.x1, fc.y1, fc.shade > 0 ? -0.2 * fc.shade : 0] : null;
       for (let s = 0; s < 3; s++) {
         const base = -4 - s * 17, top = base - 13;
-        const a0 = edge(f[0], f[1], f[2], f[3], 0.04), a1 = edge(f[0], f[1], f[2], f[3], 0.96);
-        c.beginPath(); c.moveTo(a0[0], a0[1] + base); c.lineTo(a1[0], a1[1] + base); c.lineTo(a1[0], a1[1] + top); c.lineTo(a0[0], a0[1] + top); c.closePath();
-        c.fillStyle = 'rgba(20,10,5,0.78)'; c.fill();
+        let a0 = null, a1 = null;
+        if (f) {
+          a0 = edge(f[0], f[1], f[2], f[3], 0.04); a1 = edge(f[0], f[1], f[2], f[3], 0.96);
+          c.beginPath(); c.moveTo(a0[0], a0[1] + base); c.lineTo(a1[0], a1[1] + base); c.lineTo(a1[0], a1[1] + top); c.lineTo(a0[0], a0[1] + top); c.closePath();
+          c.fillStyle = 'rgba(20,10,5,0.78)'; c.fill();
+        }
         let uu = 0.06;
         while (uu < 0.92) {
           const w = 0.06 + rnd() * 0.06, hgt = 8 + rnd() * 4;
           if (rnd() < fill) {
-            const a = edge(f[0], f[1], f[2], f[3], uu), b = edge(f[0], f[1], f[2], f[3], Math.min(0.94, uu + w));
-            c.beginPath(); c.moveTo(a[0], a[1] + base); c.lineTo(b[0], b[1] + base); c.lineTo(b[0], b[1] + base - hgt); c.lineTo(a[0], a[1] + base - hgt); c.closePath();
-            c.fillStyle = DD.util.shade(BOOK_COLS[Math.floor(rnd() * BOOK_COLS.length)], f[4]); c.fill();
-            c.strokeStyle = 'rgba(0,0,0,0.4)'; c.lineWidth = 0.5; c.stroke();
+            const col = BOOK_COLS[Math.floor(rnd() * BOOK_COLS.length)];
+            if (f) {
+              const a = edge(f[0], f[1], f[2], f[3], uu), b = edge(f[0], f[1], f[2], f[3], Math.min(0.94, uu + w));
+              c.beginPath(); c.moveTo(a[0], a[1] + base); c.lineTo(b[0], b[1] + base); c.lineTo(b[0], b[1] + base - hgt); c.lineTo(a[0], a[1] + base - hgt); c.closePath();
+              c.fillStyle = DD.util.shade(col, f[4]); c.fill();
+              c.strokeStyle = 'rgba(0,0,0,0.4)'; c.lineWidth = 0.5; c.stroke();
+            }
           }
           uu += w + 0.01;
         }
-        c.beginPath(); c.moveTo(a0[0], a0[1] + base); c.lineTo(a1[0], a1[1] + base); c.strokeStyle = '#2a1a10'; c.lineWidth = 1.5; c.stroke();
+        if (f) { c.beginPath(); c.moveTo(a0[0], a0[1] + base); c.lineTo(a1[0], a1[1] + base); c.strokeStyle = '#2a1a10'; c.lineWidth = 1.5; c.stroke(); }
       }
     });
   }
@@ -886,9 +955,14 @@
     const seed = Math.floor(hashOf(t.x, t.y) * 233280);
     const wood = d.searched ? { top: '#4a3a30', left: '#3c2c22', right: '#30221a' } : { top: '#5a3a5e', left: '#4a2c4c', right: '#3a203c' };
     paintShelf(g, t, wood, d.searched ? (d.role === 'spent' ? 0.15 : 0.35) : 0.9, seed);
-    // red OVERDUE sticker on the left face
-    g.poly([[-15, -48], [-6, -43.5], [-6, -38.5], [-15, -43]], '#c0263a', '#3a0c12');
-    g.line(-13.5, -44.5, -7.5, -41.5, '#ffe0e0', 1);
+    // red OVERDUE sticker on the south side (the left face by default)
+    const south = sideFaces(g, 0, 0, 20, 10).S;
+    if (south) {
+      const P = function (x, y) { return onLeftFace(south, 0, 0, 20, 10, x, y); };
+      g.poly([P(-15, -48), P(-6, -43.5), P(-6, -38.5), P(-15, -43)], '#c0263a', '#3a0c12');
+      const a = P(-13.5, -44.5), b = P(-7.5, -41.5);
+      g.line(a[0], a[1], b[0], b[1], '#ffe0e0', 1);
+    }
     if (d.role === 'spent') {
       g.glow(0, -30, 18, '#3a3a3a', 0.35);
       for (let i = 0; i < 3; i++) g.circle(-6 + i * 6, -58 - ((time * 8 + i * 5) % 14), 2.2 - i * 0.4, 'rgba(90,90,90,0.5)', null);
@@ -910,14 +984,15 @@
     const wood = { top: '#9a6b3f', left: '#7a5230', right: '#5e3e24' };
     g.box(0, 0, 15, 7.5, 28, wood, true);
     const c = g.ctx;
-    // drawer grid on both visible faces
-    [[-15, 0, 0, 7.5], [0, 7.5, 15, 0]].forEach(function (f, fi) {
+    // drawer grid on every visible face (lit like the face: the classic left / right colours at the quarter views)
+    g.faces(0, 0, 15, 7.5).forEach(function (fc) {
+      const f = [fc.x0, fc.y0, fc.x1, fc.y1], front = g.mix('#8a5e36', '#6e4a2a', fc.shade);
       for (let row = 0; row < 3; row++) for (let col = 0; col < 3; col++) {
         const u0 = 0.08 + col * 0.3, u1 = u0 + 0.24;
         const a = edge(f[0], f[1], f[2], f[3], u0), b = edge(f[0], f[1], f[2], f[3], u1);
         const yb = -4 - row * 8, yt = yb - 6;
         c.beginPath(); c.moveTo(a[0], a[1] + yb); c.lineTo(b[0], b[1] + yb); c.lineTo(b[0], b[1] + yt); c.lineTo(a[0], a[1] + yt); c.closePath();
-        c.fillStyle = fi ? '#6e4a2a' : '#8a5e36'; c.fill(); c.strokeStyle = '#2a1a10'; c.lineWidth = 0.7; c.stroke();
+        c.fillStyle = front; c.fill(); c.strokeStyle = '#2a1a10'; c.lineWidth = 0.7; c.stroke();
         const m = edge(a[0], a[1], b[0], b[1], 0.5);
         g.circle(m[0], m[1] + yb - 3, 0.9, '#e8c060', null);
       }
@@ -936,11 +1011,18 @@
     g.box(0, 0, 20, 10, 20, { top: '#7a4a2a', left: '#5e3820', right: '#4a2c18' }, true);
     g.rect(-10, -34, 20, 8, '#2a1a10', '#e8c060', 1.5);
     g.text('RETURNS', 0, -30, 6, '#e8c060');
-    g.ellipse(9, -21, 3.2, 1.6, '#c9a03a', true);
-    g.circle(9, -23, 1, '#f3d27a', null);
-    g.poly([[-12, -22], [-3, -18], [-3, -15], [-12, -19]], '#f3e3b0', true);
+    // the service bell and a returns slip lie on the top: they turn with the board
+    const on = function (x, y) { return onTop(g, 0, 0, 20, 10, 20, x, y); };
+    const bell = on(9, -21);
+    g.ellipse(bell[0], bell[1], 3.2, 1.6, '#c9a03a', true);
+    g.circle(bell[0], bell[1] - 2, 1, '#f3d27a', null);
+    g.poly([on(-12, -22), on(-3, -18), on(-3, -15), on(-12, -19)], '#f3e3b0', true);
   }
 
+  /**
+   * AutoPlay hints (the interactions are the registered defs', so AutoPlay also dry-runs them: a shred's stun
+   * interrupting a pending wind-up shows up as danger saved on top of these numbers).
+   */
   function shelfHint(unit, o) {
     const d = o.data || {};
     if (d.searched) return 0;
@@ -954,12 +1036,10 @@
   function catalogHint(unit, o) { return o && catalogReady(o) ? 16 : 0; }
 
   DD.registerObject({
-    id: 'lich_shelf', name: 'Restricted Section Shelf', blocksMove: true, blocksLos: true, hp: 8, height: 1.7, color: '#5a3a5e',
-    desc: 'Search (1 AP). Three of these shelves hide Lich-tenstein\'s phylacteries: shredding one deals ' + N.phylactery + ' damage to him, ' +
-      'waives his Late Fees and Stuns him (not while he is Speed-Reading). While any phylactery is left, he renews himself instead of dying; ' +
-      'with none left he is Mortal Again (takes ' + Math.round(N.mortal * 100) + '% more damage). ' +
-      'Two shelves are mimics; the rest hold a good book (+' + N.boon + ' Block or +' + N.boon + ' HP to the searcher). ' +
-      'The Card Catalog lights up the right ones (green glow). Breaking a shelf (8 HP) counts as searching it.',
+    id: 'lich_shelf', name: 'Restricted Section Shelf', blocksMove: true, blocksLos: true, hp: 8, height: 1.7, color: '#5a3a5e', yawAware: true,
+    desc: 'Search (1 AP) or break it (8 HP). Three shelves hide Lich-tenstein\'s phylacteries: shredding one deals ' + N.phylactery +
+      ' damage to him, waives his Late Fees and Stuns him (not while he is Speed-Reading). Two are mimics; the rest hold a good ' +
+      'book (+' + N.boon + ' HP). A Card Catalog makes the right ones glow green.',
     available: function (o) { return !(o.data && o.data.searched); },
     interact: { ap: 1, label: 'Search', fn: function (unit, o, tile) { searchShelf(unit, o, tile); } },
     onDestroyed: function (o, tile, src) { shelfDestroyed(o, tile, src); },
@@ -967,20 +1047,20 @@
     draw: drawShelf,
   });
   DD.registerObject({
-    id: 'lich_catalog', name: 'Card Catalog', blocksMove: true, blocksLos: false, hp: 0, height: 1.1, color: '#8a5a2c',
-    desc: 'Look Up (1 AP, once per round): the Dewey Decimal System reveals the shelf hiding the nearest of Lich-tenstein\'s phylacteries ' +
-      '(it glows green). Mimics are not in the catalog. Nobody is in the catalog.',
+    id: 'lich_catalog', name: 'Card Catalog', blocksMove: true, blocksLos: false, hp: 0, height: 1.1, color: '#8a5a2c', yawAware: true,
+    desc: 'Look Up (1 AP, once per round): the shelf hiding the nearest of Lich-tenstein\'s phylacteries glows green. ' +
+      'Mimics are not in the catalog. Nobody is in the catalog.',
     available: function (o) { return catalogReady(o); },
     interact: { ap: 1, label: 'Look Up', fn: function (unit, o, tile) { lookUp(unit, o, tile); } },
     autoplay: catalogHint,
     draw: drawCatalog,
   });
   DD.registerObject({
-    id: 'lich_desk', name: 'Circulation Desk', blocksMove: true, blocksLos: false, hp: 0, height: 0.6, color: '#7a4a2a',
+    id: 'lich_desk', name: 'Circulation Desk', blocksMove: true, blocksLos: false, hp: 0, height: 0.6, color: '#7a4a2a', yawAware: true,
     desc: 'Blocks movement. The returns slot has teeth marks. Ring the bell for service (nobody will come).',
     draw: drawDesk,
   });
-  // the reading-room rug is green (not the core red carpet): red telegraph hatching must stay readable on it
+  // the reading-room rug is green (not the core red carpet): the red wind-up hatching must stay readable on it
   DD.registerTerrain({
     id: 'lich_rug', name: 'Reading-Room Rug', walkable: true, cost: 1, blocksLos: false,
     colors: { top: '#2f5a48', left: '#234536', right: '#1c382c' },
@@ -1146,29 +1226,27 @@
       bounds: { l: -40, r: 40, t: -78, b: 16 }, portrait: { x: 0, y: -38, r: 18 },
       draw: drawLich,
     },
-    skills: ['lich_overdue_notice', 'lich_bookfall', 'lich_shhh', 'lich_quiet', 'lich_interns', 'lich_final_notice'],
-    ai: lichPlan, xp: 50, gold: [80, 100],
+    // his skill list is what he does at once (the HUD's reach and AutoPlay read it); the wind-ups come from his rotation
+    skills: ['lich_overdue_notice', 'lich_interns'],
+    ai: lichPlan, aiStyle: 'ranged', xp: 50, gold: [80, 100],
+    passive: { name: 'Overdue Policy', icon: '📚', desc: function (u) { return passiveText(u); } },
     hooks: {
-      onRoundStart: function (unit, round) {
-        const d = lichData(unit);
-        if (round >= N.closing && !d.closing && active(unit)) {
-          d.closing = true;
-          DD.FX.banner('THE LIBRARY IS CLOSING', { sub: 'Late Fees have no cap any more', color: '#ffb86b', ms: 1000 });
-          A().log('The library is closing. Lich-tenstein\'s Late Fees are no longer capped: they (and the interest) grow every round.', 'enemy');
-          quip('closing', {});
-        }
-        if (round < N.feeStart || isBones(unit)) return;
-        addFees(unit, (d.phase >= 2 ? N.feeRate2 : N.feeRate) + aliveOf('lich_intern').length);
+      // the fees grow at the END of his turn: a wind-up he just charged shows the new number for the heroes' whole window
+      // (growing at the round start would raise it after the last hero turn before it lands)
+      onTurnEnd: function (unit) {
+        lichData(unit).collapsedOwn = false;   // a collapse in this turn: he reforms on the next one
+        // a pile of bones that lost its turn (stunned) still reforms on the next one: keep the skills cooling down
+        if (isBones(unit) && active(unit)) holdSkills(unit);
+        if (isBones(unit) || !active(unit)) return;
+        addFees(unit, (lichData(unit).phase >= 2 ? N.feeRate2 : N.feeRate) + aliveOf('lich_intern').length);
       },
-      onTurnEnd: function (unit) { chargeInterest(unit); },
       onTakeDamage: function (d) {
         const u = d.target;
         if (!u || u.dead || u.hp > 0 || lichData(u).final) return;
         if (phylacteryTiles().length) collapse(u);
       },
-      // [phase 4, engine preventDeath] instant kills (Act.kill) skip onTakeDamage: a lich with phylacteries left refuses
-      // that death and collapses instead, before any of a death happens (no death bark or log, no XP/gold tally, no
-      // Hype, no onKill). It used to un-kill him in onDeath, after all of that. docs/notes/bosses-act2.md
+      // instant kills (Act.kill) skip onTakeDamage: a lich with phylacteries left refuses that death and collapses
+      // instead, before any of a death happens (no death bark or log, no gold tally, no Hype, no onKill)
       preventDeath: function (unit) {
         if (lichData(unit).final || !phylacteryTiles().length) return false;
         collapse(unit);
@@ -1176,15 +1254,14 @@
       },
       onDeath: function () { A().narrate('lich_victory', {}); },
       onStatusApplied: function (unit, st) {
-        // a boss is not stun-locked: every incapacitation (a shredded phylactery's too) buys him 2 turns of Speed-Reading
-        if (st && INCAPACITATE[st.id] && active(unit)) A().addStatus(unit, 'lich_focus', { turns: 2, silent: true }, unit);
+        // a boss is not stun-locked: every incapacitation (a shredded phylactery's too) buys him Speed-Reading: the turn
+        // he loses plus his next 2
+        if (st && incapacitates(st.id) && active(unit)) A().addStatus(unit, 'lich_focus', { turns: N.focus, silent: true }, unit);
       },
       modifyStatus: function (s) {
-        if (!INCAPACITATE[s.id] || !s.unit) return;
-        if (has(s.unit, 'lich_focus')) {
-          s.cancel = true;
-          DD.FX.text(s.unit, '👓 Speed-Reading: shrugs it off', { color: '#e8c060', size: 13 });
-        }
+        if (!s.unit || !incapacitates(s.id) || !has(s.unit, 'lich_focus')) return;
+        s.cancel = true;
+        DD.FX.text(s.unit, '👓 Speed-Reading: shrugs it off', { color: '#e8c060', size: 13 });
       },
     },
     boss: { title: 'The Overdue Librarian', intro: '"Your books are LATE. Your fines are COMPOUNDING. And you are TALKING. IN. MY. LIBRARY."', music: null },
@@ -1199,7 +1276,8 @@
       renew: ['Renewed for another 300 years!', 'You cannot cancel my membership!'],
     },
     desc: 'Head librarian of the Necromancy Academy, undead since the late-fee schedule was last updated. Hides his soul in overdue ' +
-      'books because nobody, living or dead, has ever returned one. His golem security guard has been threatening to quit for two hundred years.',
+      'books because nobody, living or dead, has ever returned one. Moves: Overdue Notice, Bookfall, SHHHH! (later QUIET!!!), Final Notice, Unpaid ' +
+      'Internship. His golem security guard has been threatening to quit for two hundred years.',
   });
 
   DD.registerEnemy({
@@ -1272,7 +1350,7 @@
       },
     },
     enemies: [{ id: LICH, n: 1 }, { id: 'lich_intern', n: 2 }],
-    objective: { type: 'boss', flavor: 'Check the Card Catalog, then Search the glowing shelf to shred a phylactery.' },
+    objective: { type: 'boss', flavor: 'Look Up a Card Catalog (1 AP), then Search the shelf that glows to shred a phylactery.' },
     onStart: function (state) { setupLibrary(state); A().narrate('lich_start', {}); },
     reward: { goldMult: 1, itemRarity: 'legendary' },
   });
@@ -1306,10 +1384,10 @@
   // ---- public helpers (tests, other content) -------------------------------------------------------------------------------
   DD.Act2Bosses = DD.Act2Bosses || {};
   DD.Act2Bosses.lich = {
-    N: N, plan: lichPlan, phylacteryTiles: phylacteryTiles, hiddenPhylacteries: hiddenPhylacteries, shelves: shelves,
-    setupLibrary: setupLibrary, reveal: revealNearest, fees: feesOf, teleDmg: teleDmg, checkerRegion: checkerRegion,
+    N: N, ROTATION: ROTATION, WINDUPS: WINDUPS, plan: lichPlan, phylacteryTiles: phylacteryTiles, hiddenPhylacteries: hiddenPhylacteries,
+    shelves: shelves, setupLibrary: setupLibrary, reveal: revealNearest, fees: feesOf, teleDmg: teleDmg, checkerRegion: checkerRegion,
     checkerTiles: checkerTiles, spawnInterns: spawnInterns, findLich: findLich, collapse: collapse, reassemble: reassemble,
-    data: lichData, fight: fightData, interest: chargeInterest, addFees: addFees, waiveFees: waiveFees, isBones: isBones,
-    makeMortal: makeMortal,
+    data: lichData, fight: fightData, addFees: addFees, waiveFees: waiveFees, isBones: isBones, makeMortal: makeMortal,
+    nextStep: nextStep, passiveText: passiveText, noticeTarget: noticeTarget,
   };
 })();

@@ -92,7 +92,10 @@ Technical contract: `docs/ARCHITECTURE.md`. This doc is the design intent + cont
    Block lasts until the start of its owner's next turn.
 
 Positioning still matters: enemies act from where they stand, so pushing a goblin out of reach, rooting the
-charger, stunning the caster before its turn or killing the archer first all change what happens next.
+charger, stunning the caster before its turn or killing the archer first all change what happens next. And since
+walking away from a melee fighter provokes an **attack of opportunity** (§4.2) and enemies weigh that cost, melee
+heroes **hold the line**: a goblin next to the barbarian keeps swinging at the barbarian instead of strolling past him
+to the wizard.
 
 ### 4.2 Actions
 - **Move** (1 AP): up to `mov` path cost. Several moves per turn are allowed if AP remains.
@@ -101,9 +104,37 @@ charger, stunning the caster before its turn or killing the archer first all cha
 - **Signature** (100 Hype + AP) — one dramatic, comedic ultimate per hero.
 - **Consumables** (1 AP, party inventory of 3). **Interact** (levers, chests, fountains: usually 1 AP).
   **Help Up** a downed adjacent ally (2 AP → revive at 25% HP).
+- **Heals bring the downed back up** (v2, user request). A single-target heal (a skill or a consumable: Mostly Medicine,
+  Carrot Toss, a Red Drink…) can be **aimed at a downed ally**: it gets back on its feet with the healed amount as HP
+  (after healing bonuses; at least 1, at most its max HP), with 0 AP, and acts on its own initiative slot as usual (if
+  its slot already passed this round, next round). The preview shows "UP! 7 HP". Area heals, regeneration, lifesteal,
+  passives, Blessings and round-end heals don't revive anyone — you have to mean it. Help Up and revive skills
+  (Smelling Salts) work as before.
+- **Shoot the barrel** (v2, user request). Any single-target attack — basic attacks included, and consumables thrown at a
+  foe — can be **aimed at a volatile object** (an explosive barrel, Mayor Buga's Pork Barrel) within its normal range
+  and line of sight: it **detonates** outright, and the blast is yours (kills, Hype, gold). It costs the attack's AP and
+  cooldown; the attack's own riders don't happen (there is nothing to poison). The preview shows the whole blast. The
+  enemies never do this on purpose — barrels are a hero tool. Adjacent heroes can still Smash objective objects.
 - **No Guard** (v2): unused AP is simply lost.
+- **Attacks of opportunity** (v2, user request: melee should be able to hold the line). When a unit uses a **Move**
+  action and leaves a tile next to an opposing unit that has a **melee basic attack**, that unit makes **one free
+  basic attack** on it as it leaves ("Attack of opportunity!"): heroes with their basic attack if it is melee (range
+  1), enemies and summons with their first ready melee skill; normal damage rules, no AP, no cooldown. It works both
+  ways (heroes punish enemies that walk away from them, on the enemy's turn).
+  - Each unit makes **at most one per round**. Stunned / asleep / frozen / polymorphed / downed units can't, nor can
+    Dazzled or Confused enemies, nor an enemy taunted by someone else (it only strikes its taunter).
+  - **Never provoke**: pushes, pulls, knockbacks, teleports, swaps, throws, jumps, and skill-based dashes, charges
+    and leaps — that is what makes mobility skills valuable — plus deployment swaps. Stealthed units slip away.
+  - If the hit downs, stuns, puts to sleep, freezes, roots or moves the mover, **its walk ends there**. Several
+    adjacent foes each strike once (each step off a tile next to a foe leaves its reach; with 4-way adjacency every
+    step off such a tile does).
+  - Paths avoid provoking when a route within the move exists; the move preview shows "⚔ provokes N" with who and
+    how hard. A move that provoked can't be undone.
+  - Content can opt in: "can't be opportunity-attacked" (mover), "never makes them" (attacker), "+N damage on attacks
+    of opportunity" (hooks `modifyOpportunity` / `onOpportunityAttack`, flags `noProvoke` / `noOpportunity`).
 - **Deployment**: before initiative is rolled, heroes may be freely swapped within the green start zone.
-- **Undo move**: the current hero's last move can be undone if nothing else happened since.
+- **Undo move**: the current hero's last move can be undone if nothing else happened since (not one that provoked an
+  attack of opportunity).
 
 ### 4.3 Battlefield
 - **Elevation** 0–4. Climbing costs +1 per level, max +1 per step (Professor Marbles hops +2; flyers ignore).
@@ -111,7 +142,8 @@ charger, stunning the caster before its turn or killing the archer first all cha
 - **Terrain**: floors per theme · walls · water (cost 2, makes Wet, puts out Burn) · deep water · mud (cost 2) ·
   ice (pushed units slide 1 extra) · lava (8 fire damage + Burn on entry) · pits (pushed non-boss enemies die
   instantly — "YEET"; heroes/bosses take 25% max HP and climb out) · rubble.
-- **Objects**: crates/barrels (destructible cover), explosive barrels (fire explosion r1), pillars/trees/rocks
+- **Objects**: crates/barrels (destructible cover), explosive barrels (fire explosion r1; aim any single-target attack
+  at one to set it off, §4.2), pillars/trees/rocks
   (block movement + LOS), bushes, spikes (damage on entry), pressure plates, levers (puzzle wiring), chests
   (interact: bonus loot), fountains (interact: heal), braziers (knock over → fire), totems (objective targets),
   bookshelves, mirrors (boss puzzle), giant dice (DM table).
@@ -120,6 +152,16 @@ charger, stunning the caster before its turn or killing the archer first all cha
 - **Elements**: fire ignites oil, evaporates water into steam, burns webs, melts ice, detonates barrels; frost
   freezes water; lightning electrifies whole water bodies (damage + stun everyone standing in them); water
   extinguishes fire and cools lava to stone. Push enemies into hazards — **environmental kills** grant big Hype.
+- **Flyers ignore the floor** (v2, user request). A flying unit (by nature — Syllamin, Onyx the raven, the imp, wisps, the
+  Beholder, the Lich — or thanks to an item, a Blessing or a status) ignores **everything on the floor, good and bad**:
+  terrain effects (lava, water, ice slides, mud…), surfaces (fire, poison, oil, ice, water, blood, webs, holy ground,
+  live current, cheeto dust, every trail and crumb a hero leaves), ground objects and traps (bear traps, runes, banana
+  peels, gold piles — and **a flyer never presses a pressure plate**), anything that ticks for "standing in it", and the
+  floor's element reactions (a lit oil slick doesn't burn the flyer above it). What still hits a flyer: attacks and
+  spells aimed at it or its area, an explosion's blast, auras around a unit, and **clouds and gases** (steam, smoke,
+  Plague Miasma). Previews, enemy paths and AutoPlay know it (no fire warning for a flyer), and in the same way a
+  hazard that can't hurt a unit isn't one for it (Pebbles strolls through fire; poison-proof slimes cross poison).
+  Puzzles stay solvable by walkers.
 
 ### 4.4 Status semantics (normative; `js/data/statuses.js`)
 | id | Effect |
@@ -253,9 +295,10 @@ Corgi, Entangling Roots, Barkskin, Fetch! (a corgi drags a target), Healing Spri
 Shape: Absolute Unit (become a giant corgi). Signature: *Release the Corgis!*
 
 ### Josiah — Plague Doctor *(unlock: clear Act 1)*
-Beaked plague doctor who brews questionable potions and commands a raven. Long coat, wide hat, smoke from the
+Beaked plague doctor who brews questionable potions and commands a raven named **Onyx** (user request: always Onyx,
+re-summoned or not). Long coat, wide hat, smoke from the
 beak. Role: healer / poison DoT / summon. ~26 HP, move 4. Ideas: passive *Apothecary* — +1 consumable slot and
-a chance to brew a potion after each victory (via `state.run`/`onCombatEnd`); starts combat with his raven
+a chance to brew a potion after each victory (via `state.run`/`onCombatEnd`); starts combat with Onyx
 (summon, flying, Peck + Mark). Skills: Plague Flask (Poison), Healing Draught, Miasma (poison cloud),
 Leeches (drain), Raven Dive, Quarantine (root + vulnerable), Vaccinate (cleanse + debuff immunity), Volatile
 Concoction (fire explosion), Smelling Salts (revive at range), Murder of Crows. Signature: *Pandemic*.
@@ -360,6 +403,49 @@ Stun), Howl (allies Inspired), Savage Bite (heals on kill). Signature: *Blood Mo
 savages every adjacent foe). Sprite: human swordsman (worn coat over mail, silvered sword, stubble, a few too many
 scratches) and a werewolf form via the sprite override (grey fur, snout, ears, claws, a little bigger).
 
+### Valdris — Human Forge Cleric (he/him) *(available from the start)*
+User's brief: *Valdris (male), a human forge cleric with long blonde hair. Focuses on forging weapons and armour.*
+A devout smith-priest of the forge god who tempers steel with prayer and is very, very protective of his long,
+golden, somehow soot-free hair ("Mind the hair."). Role: support / frontline buffer — he forges gear for the party
+mid-fight. ~28 HP, move 3, init 0. v2-simple kit ideas: passive *Master Smith* (one rule, e.g. at the start of each
+fight he hands one ally a fresh blade: +2 damage on its first hit, or each of his forge buffs also gives +1 armor
+until that ally's next turn); Forge Weapon (an ally's attacks deal +N damage until its next turn), Flame-Forged
+Edge (an ally's next hit sets the target Burning), Forge Armour (an ally gains Block — skill Block), Reinforce
+(an ally gains +2 armor until its next turn), Hammer of Faith (melee hit + push 1), Molten Spray (cone of fire,
+small), Temper (cleanse one debuff from an ally), Anvil Drop (a heavy hit on one tile + Stun). Signature:
+*Divine Forge* (every ally's weapon glows: big damage bonus and fire on hit, plus Block for all). Combos: buffing
+the party's big hitters (Marwyn, Betty, Basanos) right before their turn; fire riders feed Zarathor's and
+Pebbles' fire play. Sprite: armored human cleric with long flowing blonde hair, forge apron over chainmail, a big
+smithing hammer, a holy-symbol anvil charm, ember-orange glow.
+
+### Hjalmar — Mischievous Monkey (he/him) *(available from the start)*
+User's brief: *Hjalmar (male), a monkey. Very mischievous, focuses on comedic traps.*
+A small, gleeful menace of a monkey who steals hats, rigs everything and laughs at his own pranks. Role: trapper /
+trickster — he litters the battlefield with comedic traps and makes enemies walk into them. ~22 HP, move 5,
+init +4, `hop` (climbs everything). v2-simple kit ideas: passive *Monkey Business* (one rule, e.g. foes that
+trigger his traps give the party Hype, or enemies can't see his traps and walk right into them); each trap is ONE
+verb: Banana Peel (a foe that steps on it slips and slides 2 tiles), Bear Trap (Root), Whoopee Cushion (Taunt — the
+foe must attack the cushion... or Confused), Paint Bucket (Dazzled), Firecracker Bundle (damage on trigger),
+Spring Glove (push 2 on trigger); plus Pickpocket (steal gold from an adjacent foe), Fling Coconut (ranged hit),
+Swing Away (jump to a tile up to 3 away). Signature: *Prank War* (a trap appears under every foe / every trap
+triggers at once). Combos: allies push and pull foes onto his traps; Rooted foes feed Betty's and Basanos' hits.
+Sprite: small monkey (brown fur, pale face and belly, long curly tail), a tiny fez or vest, a huge grin, a sack of
+props.
+
+### Pebbles — Dog Made of Fire (he/him) *(available from the start)*
+User's brief: *Pebbles (male), a dog made of fire. A good boy.*
+A living bonfire in the shape of a happy dog: wags his tail and sets the carpet on fire, brings back sticks that
+are now torches, loves everyone. Role: melee skirmisher / fire control. ~26 HP, move 5, init +3, immune to fire.
+v2-simple kit ideas: passive *Hot Dog* (one rule, e.g. his attacks set foes Burning, or fire surfaces heal him
+instead of hurting him); Fire Bite (melee hit + Burn), Zoomies (dash up to 4 tiles leaving a trail of fire), Fetch!
+(pull a foe 2 tiles to him), Big Wag (adjacent foes take fire damage + push 1), Good Boy! (an adjacent ally heals a
+little and is Inspired — he's just so happy), Bork (taunt nearby foes), Roll in the Embers (become Empowered),
+Sit. Stay. (he Roots himself but gains Block). Signature: *WHO'S A GOOD BOY?!* (a joyful fire nova: big fire damage
+around him and every ally Inspired). Combos: oil + his fire, Burning foes for Valdris' and Zarathor's payoffs,
+pulls into allies' cleaves; Wet foes resist him (watch out for Ellaria's water). Sprite: quadruped dog made of
+flames (orange-yellow body, darker ember core, flickering flame aura, glowing eyes, a little collar tag reading
+"PEBBLES").
+
 ## 7. Shared content
 - **Generic skills** (`owner: 'generic'`, ~12, learnable by anyone via tomes): Throw Chair, Second Wind, Dodge
   Roll, Shove, Rally, First Aid, Pocket Sand, Taunt, Sucker Punch, Barrel Toss, Power Nap, Tactical Retreat.
@@ -404,6 +490,15 @@ Design rules: every enemy has a **readable gimmick** shown in its tooltip/inspec
 behaves; 1–3 skills; an AI style; an initiative modifier; a strong silhouette (SpriteSpec); 2–4 barks per key; a
 codex `desc` joke. v2: enemies act on their initiative turn without telegraphs (only bosses wind up big attacks).
 Each act ships ~8 normal/minion enemies + 3 elites + 8–12 encounters (normal + elite) using its themes.
+- **Targeting (v2, user request: "mobs seem to prioritize the lowest health hero irrespective of range, and melee
+  characters feel very weak")**: enemies attack what they can actually **reach this turn** (walk cost, line of sight,
+  the attacks of opportunity a walk would provoke count as a cost). Brutes **stick to the hero next to them**
+  (engaged), then weigh threat (how hard a hero hits) and damage; low HP is only a tiebreak, though a sure kill still
+  tempts an unengaged enemy. Ranged enemies keep their distance and shoot what is in range (a melee hero next to an
+  archer pins it). Taunt still forces: a taunted enemy walks to its taunter through attacks of opportunity. Only
+  **sneaky types dive the weakest hero**: give rogues, flyers, imps and assassins the `'assassin'` (alias
+  `'skirmisher'`) AI style — they go for kills, the wounded and the squishy and shrug off attacks of opportunity
+  (though never a lethal one). Nobody walks into an attack of opportunity that would drop it.
 - **Act 1**: Dire-ish Rat (packs, bleed), Goblin Grunt, Goblin Slingshot Kid (line shot), Kobold Union Rep
   (buffs allies: "Strike Action"), Sewer Slime (splits on death), Spore Bro (walks up and explodes into poison),
   Cellar Spider (web root), Bandit Bard Critic ("Bad Review": Weak). Elites: Mimic (Disappointed), Bugbear
@@ -468,6 +563,7 @@ Narrator lines for every key in ARCHITECTURE §3.10 (8+ lines for common keys), 
 - Isometric, chunky, readable. Procedural canvas art only (no image files): diamond tiles with subtle per-tile
   noise, darker side faces for elevation, animated water/lava/fire. Chibi units (big heads, bold dark outline,
   idle bob, squash on hit, white hit-flash, lunge on attack, fade + tumble on death).
+- The camera turns (middle-drag to any angle, Q / R quarter turns, Home resets): art must read from every side.
 - v2: the **initiative tracker** (portraits in turn order, current turn highlighted, rolls shown) and **boss
   wind-ups** (red pulsing tiles with hatching + ⏳) must be unmissable; hold-to-show threat shading for enemy reach.
   No per-enemy telegraphs.

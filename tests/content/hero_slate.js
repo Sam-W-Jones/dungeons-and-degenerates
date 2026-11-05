@@ -3,9 +3,11 @@
  * definition + level tables + simplicity rules, Short Fuse (Rage from hits / heals / buffs, the flare), every skill at
  * every level in DD.Combat.sandbox fights (damage vs armor-free fixture foes, statuses lasting exactly the right own
  * turns, throws, crashes, pits, lava, water, walls, map edges, objects, grapple holds and drags, cooldowns, ranges),
- * the signature, the items, combos with other heroes, previews vs reality, v2 edge cases (disabled users, deaths
- * mid-skill, no AP, not his turn) and AutoPlay battles with party [slate, test_knight, test_cleric, test_mage] against
- * the fixture encounters of acts 1-3 at levels 1 / 3 / 5.
+ * the signature, the items, combos with other heroes (fixtures; Betty, Corelos, Hjalmar and Valdris when loaded),
+ * attacks of opportunity (he provokes and makes them; a held foe never strikes its holder; a foe Taunted by Get Off My
+ * Lawn lets allies walk off it; throws, slams, pulls, drags and Air Mail never provoke), previews vs reality, v2 edge cases
+ * (disabled users, deaths mid-skill, no AP, not his turn) and AutoPlay battles with party [slate, test_knight,
+ * test_cleric, test_mage] against the fixture encounters of acts 1-3 at levels 1 / 3 / 5.
  */
 (function () {
   'use strict';
@@ -149,11 +151,12 @@
       lines.forEach(function (b) {
         t.ok(typeof b === 'string' && b.length > 0 && b.length <= 70, 'bark ≤ 70 chars: ' + b);
         t.ok(!REMOVED.test(b), 'bark mentions nothing removed: ' + b);
-        const m = b.match(/Zarathor|Syllamin|Marbles|Marwyn|Ellaria|Josiah|Sparrow|Corelos|Buga|Kiri|Betty|Basanos/g);
+        const m = b.match(/Zarathor|Syllamin|Marbles|Marwyn|Ellaria|Josiah|Sparrow|Corelos|Buga|Kiri|Betty|Basanos|Valdris|Hjalmar|Pebbles/g);
         if (m) { mentions++; m.forEach(function (n) { named[n] = 1; }); }
       });
     });
-    t.ok(mentions >= 6 && named.Kiri && named.Betty && named.Basanos, 'barks name other heroes, the new ones too: ' + Object.keys(named).join(', '));
+    t.ok(mentions >= 6 && named.Kiri && named.Betty && named.Basanos && named.Valdris && named.Hjalmar && named.Pebbles,
+      'barks name other heroes, the new ones too: ' + Object.keys(named).join(', '));
     // statuses, object, items
     t.ok(!!DD.getStatus('sla_rage') && DD.getStatus('sla_rage').decay === 'never', 'sla_rage: never decays (no drain)');
     const held = DD.getStatus('sla_grappled');
@@ -250,14 +253,24 @@
         allies: [{ id: 'test_mage', x: 6, y: 4, hp: 4 }], enemies: [{ id: 'test_grunt', x: 4, y: 4 }] }, extra || {}));
       return { f: f, u: f.u, g: at(4, 4), mage: at(6, 4) };
     }
-    // control: without the hold, the grunt walks over and stabs the mage
+    /** Slate's attack of opportunity of this round is used up: nothing but the hold keeps the grunt next to him. */
+    function spent(u) { u.oppRound = DD.Combat.state.round; }
+    // control 1 (v2 targeting): a free grunt next to him sticks to him (engaged; walking off would eat his Love Tap)
     let c = bait(1);
+    t.ok(!!DD.Act.opportunityOf(c.u, c.g), 'control: walking away would provoke Slate');
+    t.ok(untilTurnOf(c.u), 'control: a round passes');
+    t.ok(c.g.x === 4 && c.g.y === 4 && c.mage.hp === 4 && c.u.hp === L5_HP - 3, 'control: the engaged grunt stays and stabs Slate (4 − 1 armor)');
+    // control 2: his reaction spent, the free grunt leaves him for the wounded mage
+    c = bait(1);
+    spent(c.u);
+    t.ok(!DD.Act.opportunityOf(c.u, c.g), 'control: reaction spent, walking away is free');
     t.ok(untilTurnOf(c.u), 'control: a round passes');
     t.ok(!(c.g.x === 4 && c.g.y === 4) && (c.mage.hp < 4 || c.mage.downed), 'control: a free grunt leaves Slate for the wounded mage');
     for (let lv = 1; lv <= 3; lv++) {
       const Lv = L('sla_hold_still', lv);
       c = bait(lv);
       const u = c.u, g = c.g, mage = c.mage;
+      spent(u);   // the hold alone keeps the mage safe
       t.eq(use(u, 'sla_hold_still', 4, 4), true, 'L' + lv + ': used');
       t.eq(g.hp, 14 - Lv.dmg, 'L' + lv + ': ' + Lv.dmg + ' damage');
       t.ok(has(g, 'sla_grappled') && st(g, 'sla_grappled').turns === Lv.turns && st(g, 'sla_grappled').source === u.id, 'L' + lv + ': Grappled for ' + Lv.turns);
@@ -276,6 +289,7 @@
         t.ok(!has(g, 'sla_grappled') && !DD.Combat.cantMove(g), 'L' + lv + ': free at the end of its one held turn');
       } else {
         t.ok(has(g, 'sla_grappled') && st(g, 'sla_grappled').turns === 1, 'L' + lv + ': still held for its second turn');
+        spent(u);
         untilTurnOf(u);
         t.ok(g.x === 4 && g.y === 4 && mage.hp === 4, 'L' + lv + ': second turn held too');
         t.ok(!has(g, 'sla_grappled'), 'L' + lv + ': then free');
@@ -284,6 +298,7 @@
     // the foe acts before Slate: the hold still covers exactly its next turn
     c = bait(1, { initiative: 'enemiesFirst', noPlan: true });
     t.ok(DD.Combat.current() === c.u && DD.Combat.state.round === 1, 'enemies first: the grunt passed round 1, Slate acts');
+    c.u.oppRound = DD.Combat.state.round + 1;   // his round-2 reaction is spent: only the hold keeps the grunt there
     use(c.u, 'sla_hold_still', 4, 4);
     untilTurnOf(c.u);   // the mage, then round 2: the grunt (held), then Slate
     t.ok(DD.Combat.current() === c.u && DD.Combat.state.round === 2, 'round 2, Slate\'s turn');
@@ -293,7 +308,13 @@
     // dragging along
     let f = fight({ slate: { x: 4, y: 4, skills: [{ id: 'sla_hold_still', level: 2 }] }, enemies: [{ id: 'test_grunt', x: 5, y: 4 }] });
     let g = at(5, 4);
+    const reach0 = DD.AI.reachOf(g).tiles.size;
     t.eq(use(f.u, 'sla_hold_still', 5, 4), true, 'drag: grabbed');
+    // [review v2] the HUD's threat shading knows a held foe can't walk: it only threatens what its stab reaches from there
+    const reach1 = DD.AI.reachOf(g).tiles;
+    let near = true;
+    reach1.forEach(function (v, k) { const p = k.split(',').map(Number); if (Math.abs(p[0] - g.x) + Math.abs(p[1] - g.y) > 1) near = false; });
+    t.ok(reach1.size > 0 && reach1.size < reach0 && near, 'threat shading: held, it threatens only the tiles next to it (' + reach0 + ' → ' + reach1.size + ')');
     t.ok(DD.Combat.move(f.u, 2, 4), 'drag: Slate walks two tiles west');
     t.ok(f.u.x === 2 && g.x === 3 && g.y === 4, 'drag: the grunt was dragged into the tile behind him (' + g.x + ',' + g.y + ')');
     t.ok(has(g, 'sla_grappled') && DD.Slate.heldBy(f.u) === g, 'drag: still held');
@@ -459,6 +480,16 @@
     f = fight({ slate: { x: 1, y: 4, skills: sk }, enemies: [{ id: 'test_grunt', x: 4, y: 4 }], objects: [{ x: 2, y: 4, id: 'sla_boulder' }] });
     t.eq(use(f.u, 'sla_personal_space', 4, 4), true, 'boulder: throwable');
     t.eq(at(4, 4).hp, 14 - PS, 'boulder: ' + PS + ' damage');
+    // [v2 fix] a thrown object never vanishes: it can't come down on another object, not even flat spikes, so it breaks
+    // on the last clear tile short of it (it used to disappear without exploding)
+    f = fight({ slate: { x: 1, y: 4, skills: sk }, enemies: [{ id: 'test_grunt', x: 4, y: 5 }, { id: 'test_grunt', x: 8, y: 8 }],
+      objects: [{ x: 2, y: 4, id: 'barrel_explosive' }, { x: 5, y: 4, id: 'spikes' }] });
+    t.ok(valid(f.u, 'sla_personal_space', 5, 4), 'flat object: can aim at the spike trap');
+    const prevSpikes = DD.Combat.preview(f.u, slotOf(f.u, 'sla_personal_space'), 5, 4);
+    t.eq(use(f.u, 'sla_personal_space', 5, 4), true, 'flat object: barrel thrown at the spikes');
+    t.ok(DD.Grid.tile(5, 4).obj && DD.Grid.tile(5, 4).obj.id === 'spikes', 'flat object: the trap is still there');
+    t.eq(at(4, 5).hp, 14 - 8, 'flat object: the barrel broke just short of it (4,4) and exploded (8 fire to its neighbour)');
+    t.eq((prevSpikes.perUnit[at(4, 5).id] || {}).dmg, 8, 'flat object: and the preview said so');
     // things he can't throw: allies, immovable foes, levers (a pushable boss is fair game)
     f = fight({ slate: { x: 4, y: 4, skills: sk }, allies: [{ id: 'test_knight', x: 5, y: 4 }], enemies: [{ id: 'test_brute', x: 4, y: 5 }, { id: 'test_grunt', x: 8, y: 8 }],
       objects: [{ x: 4, y: 3, id: 'lever' }] });
@@ -827,7 +858,7 @@
     DD.Act.damage(at(2, 4), f.u, 2);
     t.eq(rage(f.u), 2, 'Ledger: a hit → 2 Rage');
     DD.Act.heal(at(1, 3), f.u, 1);
-    t.ok(rage(f.u) === 4 && !DD.Slate.flared(f.u) === false, 'Ledger: a heal → 2 more (flared after two touches)');
+    t.ok(rage(f.u) === 4 && DD.Slate.flared(f.u), 'Ledger: a heal → 2 more (flared after two touches)');
     DD.Act.damage(at(2, 4), f.u, 2);
     t.eq(rage(f.u), 5, 'Ledger: still capped at 5');
   });
@@ -882,6 +913,227 @@
     DD.Combat.useSkill(cl, slotOf(cl, 'test_bless'), 4, 4);
     t.ok(rage(f.u) === 3 && DD.Slate.flared(f.u), 'healed (+1) and Inspired (+1): runes flare ("Did I ASK?")');
     noErrors(t, 'combos', p0);
+  });
+
+  // ---- combos with the real cast (run in the full suite; skipped when the other hero files are isolated out) -------
+  T.suite('hero_slate: combos with the cast — Betty\'s cheap shot, Corelos\' runes, Hjalmar\'s traps, Valdris\' forge', function (t) {
+    const p0 = DD.problems.length;
+    const kick = DD.getSkill('bet_kick');
+    if (DD.getHero('betty') && kick) {
+      // a held foe counts as Rooted for Betty's Kick 'Em While They're Down (noMove: "held count too")
+      const lost = function (hold) {
+        const f = fight({ slate: { x: 2, y: 4, skills: [{ id: 'sla_hold_still', level: 1 }] }, allies: [{ id: 'betty', x: 3, y: 5, skills: [{ id: 'bet_kick', level: 1 }] }],
+          enemies: [{ id: 'test_grunt', x: 3, y: 4, hpMult: 3 }] });
+        const g = at(3, 4);
+        if (hold) t.eq(use(f.u, 'sla_hold_still', 3, 4), true, 'Slate grabs the goblin');
+        f.u.ap = 0;
+        pass();
+        const b = DD.Combat.current();
+        t.ok(b && b.defId === 'betty', 'Betty\'s turn');
+        const hp = g.hp;
+        t.ok(b && DD.Combat.useSkill(b, slotOf(b, 'bet_kick'), 3, 4), 'Betty kicks it' + (hold ? ' while it is held' : ''));
+        return hp - g.hp;
+      };
+      const Lk = DD.skillLevel(kick, 1);
+      const free = lost(false), held = lost(true);
+      t.eq(held - free, Lk.down - Lk.dmg, 'held by Slate: Betty\'s kick is the cheap shot (' + free + ' → ' + held + ')');
+    } else t.log('Betty not loaded: Hold Still → Kick \'Em While They\'re Down skipped');
+    const glyph = DD.getSkill('cor_glyph');
+    if (DD.getHero('corelos') && glyph) {
+      // Corelos inscribes a rune; Slate throws a goblin onto it on his next turn: it bursts on the goblin and its neighbour
+      const f = fight({ slate: { x: 1, y: 4, skills: [{ id: 'sla_personal_space', level: 1 }] }, allies: [{ id: 'corelos', x: 3, y: 6, skills: [{ id: 'cor_glyph', level: 1 }] }],
+        enemies: [{ id: 'test_grunt', x: 2, y: 4, hpMult: 3 }, { id: 'test_grunt', x: 4, y: 5, hpMult: 3 }] });
+      const g = at(2, 4), nb = at(4, 5);
+      f.u.ap = 0;
+      pass();
+      const c = DD.Combat.current();
+      t.ok(c && c.defId === 'corelos' && DD.Combat.useSkill(c, slotOf(c, 'cor_glyph'), 4, 4), 'Corelos inscribes a rune at 4,4');
+      t.ok(DD.Grid.tile(4, 4).obj && DD.Grid.tile(4, 4).obj.id === 'cor_rune', 'the rune is on the floor');
+      t.ok(untilTurnOf(f.u), 'round 2: Slate\'s turn');
+      const rune = DD.skillLevel(glyph, 1).rune, PS = L('sla_personal_space', 1).dmg;
+      t.eq(use(f.u, 'sla_personal_space', 4, 4), true, 'Slate throws the goblin onto the rune');
+      t.ok(g.x === 4 && g.y === 4, 'it landed on the rune');
+      t.eq(42 - g.hp, PS + rune, 'thrown (' + PS + ') and burst (' + rune + ')');
+      t.eq(42 - nb.hp, rune, 'the rune burst on its neighbour too (' + rune + ')');
+    } else t.log('Corelos not loaded: throw onto a rune skipped');
+    // [review v2] Hjalmar sets a Bear Trap; on Slate's next turn a goblin is thrown onto it (and another is dragged onto
+    // one): every forced landing springs it — root + snap, and the crowd's Hype
+    const bear = DD.getSkill('hja_bear_trap');
+    if (DD.getHero('hjalmar') && bear) {
+      const snap = DD.skillLevel(bear, 1).snap;
+      const trapRun = function (hj, trap, how) {
+        const f = fight({ slate: { x: 2, y: 4, skills: [{ id: 'sla_personal_space', level: 1 }, { id: 'sla_hold_still', level: 1 }] },
+          allies: [{ id: 'hjalmar', x: hj.x, y: hj.y, skills: [{ id: 'hja_bear_trap', level: 1 }] }], enemies: [{ id: 'test_grunt', x: 3, y: 4, hpMult: 3 }] });
+        const g = at(3, 4);
+        f.u.ap = 0;
+        pass();
+        const h = DD.Combat.current();
+        t.ok(h && h.defId === 'hjalmar' && DD.Combat.useSkill(h, slotOf(h, 'hja_bear_trap'), trap.x, trap.y), how + ': Hjalmar sets a bear trap at ' + trap.x + ',' + trap.y);
+        t.ok(untilTurnOf(f.u), how + ': round 2, Slate\'s turn');
+        const hp = g.hp, hype = f.s.hype;
+        if (how === 'throw') t.eq(use(f.u, 'sla_personal_space', trap.x, trap.y), true, how + ': Slate throws the goblin at the trap');
+        else {
+          t.eq(use(f.u, 'sla_hold_still', 3, 4), true, how + ': Slate grabs the goblin');
+          t.ok(DD.Combat.move(f.u, 0, 4), how + ': and walks off with it');
+        }
+        const want = (how === 'throw' ? L('sla_personal_space', 1).dmg : L('sla_hold_still', 1).dmg) + snap;
+        t.ok(g.x === trap.x && g.y === trap.y && has(g, 'root') && hp - g.hp === want, how + ': it landed on the trap: ' + want + ' damage and Rooted (' + (hp - g.hp) + ')');
+        t.ok(!DD.Grid.tile(trap.x, trap.y).obj && f.s.hype > hype, how + ': the trap sprang (Hype ' + hype + ' → ' + f.s.hype + ')');
+      };
+      trapRun({ x: 4, y: 6 }, { x: 5, y: 4 }, 'throw');
+      trapRun({ x: 1, y: 6 }, { x: 1, y: 4 }, 'drag');
+    } else t.log('Hjalmar not loaded: throws onto his traps skipped');
+    // [review v2] Valdris forges Slate a weapon: a buff from someone else (+1 Rage, Short Fuse), stacking with the flare
+    const forge = DD.getSkill('val_forge_weapon');
+    if (DD.getHero('valdris') && forge) {
+      const f = fight({ slate: { x: 4, y: 4 }, allies: [{ id: 'valdris', x: 4, y: 6, skills: [{ id: 'val_forge_weapon', level: 1 }] }],
+        enemies: [{ id: 'test_grunt', x: 5, y: 4, hpMult: 3 }] });
+      const g = at(5, 4);
+      DD.Act.damage(g, f.u, 4); DD.Act.damage(g, f.u, 4);
+      t.eq(rage(f.u), 2, 'Valdris: two stabs, 2 Rage');
+      f.u.ap = 0;
+      pass();
+      const v = DD.Combat.current();
+      t.ok(v && v.defId === 'valdris' && DD.Combat.useSkill(v, slotOf(v, 'val_forge_weapon'), 4, 4), 'Valdris forges Slate a weapon');
+      t.ok(rage(f.u) === 3 && DD.Slate.flared(f.u), 'a forge buff is someone else buffing him: 3 Rage, runes flare ("Did I ASK?")');
+      t.ok(untilTurnOf(f.u), 'Valdris: back to Slate');
+      const hp = g.hp;
+      t.eq(use(f.u, 'sla_love_tap', 5, 4), true, 'Valdris: Love Tap with a fresh blade');
+      t.eq(hp - g.hp, L('sla_love_tap', 1).dmg + 2 + DD.skillLevel(forge, 1).bonus, 'Valdris: 5 + 2 (flare) + ' + DD.skillLevel(forge, 1).bonus + ' (forged)');
+    } else t.log('Valdris not loaded: forge buffs skipped');
+    noErrors(t, 'combos with the cast', p0);
+  });
+
+  // ---- attacks of opportunity (v2) -------------------------------------------------------------------------------
+  T.suite('hero_slate: attacks of opportunity — he holds the line; throws, slams, pulls, drags and Air Mail never provoke', function (t) {
+    const p0 = DD.problems.length;
+    const seen = [];
+    const off = DD.Events.on('opportunity:attack', function (e) { seen.push(e); });
+    function fresh() { seen.length = 0; }
+    try {
+      // 1. Slate walks away from a grunt: the preview says so, the grunt stabs him once, and that annoys him
+      let f = fight({ slate: { x: 4, y: 4 }, enemies: [{ id: 'test_grunt', x: 5, y: 4 }] });
+      let u = f.u, g = at(5, 4);
+      const e = DD.Combat.reachable(u).get('2,4');
+      t.ok(e && e.provokes.length === 1 && e.provokes[0] === g.id, 'walking off: the move preview knows the grunt strikes');
+      const pv = DD.Combat.provokes(u, 2, 4);
+      t.ok(pv.length === 1 && pv[0].dmg === 3, 'walking off: and how hard (4 − 1 armor): ' + JSON.stringify(pv.map(function (p) { return p.dmg; })));
+      fresh();
+      t.ok(DD.Combat.move(u, 2, 4), 'walking off: he walks');
+      t.ok(seen.length === 1 && seen[0].attacker === g && seen[0].mover === u, 'walking off: one attack of opportunity, by the grunt');
+      t.ok(u.x === 2 && u.y === 4 && u.hp === L5_HP - 3, 'walking off: stabbed on the way out (3), and he walked on');
+      t.eq(rage(u), 1, 'walking off: the cheap shot is +1 Rage (Short Fuse)');
+      t.ok(!DD.Combat.canUndo(), 'walking off: a move that provoked can\'t be undone');
+      // 2. a grunt walking away from him eats a free Love Tap: 5, flared 7 — and the AI's estimate knows the flare
+      [0, 3].forEach(function (r) {
+        f = fight({ slate: { x: 4, y: 4 }, enemies: [{ id: 'test_grunt', x: 5, y: 4 }] });
+        u = f.u; g = at(5, 4);
+        setRage(u, r);
+        const want = L('sla_love_tap', 1).dmg + (r >= 3 ? 2 : 0);
+        t.eq(DD.AI.opportunityDmg(u, g, { x: 5, y: 4 }), want, 'Rage ' + r + ': the AI expects a ' + want + '-damage Love Tap');
+        const ap = u.ap;
+        fresh();
+        DD.AI.moveTo(g, 7, 4);
+        t.ok(seen.length === 1 && seen[0].attacker === u && seen[0].skillId === 'sla_love_tap', 'Rage ' + r + ': Slate strikes with Love Tap');
+        t.eq(g.hp, 14 - want, 'Rage ' + r + ': ' + want + ' damage');
+        t.ok(g.x === 7 && u.ap === ap && u.oppRound === DD.Combat.state.round, 'Rage ' + r + ': it walks on; free for Slate (no AP), his reaction of the round');
+        t.eq(rage(u), r, 'Rage ' + r + ': hitting someone is not being touched (no Rage)');
+      });
+      // once per round: the second grunt walking off that round goes free; next round he strikes again
+      f = fight({ slate: { x: 4, y: 4 }, enemies: [{ id: 'test_grunt', x: 5, y: 4 }, { id: 'test_grunt', x: 4, y: 5 }] });
+      u = f.u;
+      const a = at(5, 4), b = at(4, 5);
+      fresh();
+      DD.AI.moveTo(a, 7, 4);
+      DD.AI.moveTo(b, 4, 7);
+      t.ok(seen.length === 1 && a.hp === 9 && b.hp === 14 && b.y === 7, 'once a round: the second grunt walks off free');
+      DD.Combat.endRound();
+      t.ok(DD.Combat.current() === u && DD.Combat.state.round === 2, 'round 2, his turn');
+      DD.Act.teleport(b, 4, 5, { fx: false, noEnter: true });
+      fresh();
+      DD.AI.moveTo(b, 4, 7);
+      t.ok(seen.length === 1 && b.hp === 9, 'round 2: his reaction is back');
+      // who can't strike: a stunned / asleep / frozen / sheeped Slate, nor a charmed one at his charmer; silence is fine
+      ['stun', 'sleep', 'frozen', 'sheep', 'charmed', 'silenced'].forEach(function (sid) {
+        f = fight({ slate: { x: 4, y: 4 }, enemies: [{ id: 'test_grunt', x: 5, y: 4 }] });
+        u = f.u; g = at(5, 4);
+        DD.Act.addStatus(u, sid, { turns: 1 }, g);
+        fresh();
+        DD.AI.moveTo(g, 7, 4);
+        const strikes = sid === 'silenced';
+        t.ok(seen.length === (strikes ? 1 : 0) && g.hp === (strikes ? 9 : 14), sid + ' Slate: ' + (strikes ? 'still strikes (Love Tap is no spell)' : 'no attack of opportunity'));
+      });
+      // 3. a held foe never swings at him while he drags it; a free one next to his path still does
+      f = fight({ slate: { x: 4, y: 4, skills: [{ id: 'sla_hold_still', level: 1 }] }, allies: [{ id: 'test_knight', x: 6, y: 4 }],
+        enemies: [{ id: 'test_grunt', x: 5, y: 4, hpMult: 2 }, { id: 'test_grunt', x: 4, y: 5 }] });
+      u = f.u;
+      const held = at(5, 4), loose = at(4, 5), kn = at(6, 4);
+      t.eq(use(u, 'sla_hold_still', 5, 4), true, 'drag: he grabs the east grunt');
+      t.ok(!DD.Act.opportunityOf(held, u) && !!DD.Act.opportunityOf(loose, u), 'drag: the held grunt gets no attack of opportunity on him, the free one does');
+      t.ok(!!DD.Act.opportunityOf(held, kn), 'drag: the held grunt still punishes anyone else walking off (the knight)');
+      const pv2 = DD.Combat.provokes(u, 2, 4);
+      t.ok(pv2.length === 1 && pv2[0].unitId === loose.id, 'drag: the move preview lists the free grunt only');
+      fresh();
+      t.ok(DD.Combat.move(u, 2, 4), 'drag: he walks off with it');
+      t.ok(seen.length === 1 && seen[0].attacker === loose, 'drag: one attack of opportunity, by the free grunt (the knight never swung at the dragged one)');
+      t.ok(held.x === 3 && held.y === 4 && DD.Slate.heldBy(u) === held, 'drag: the held grunt came along (at ' + held.x + ',' + held.y + ')');
+      t.eq(u.hp, L5_HP - 3, 'drag: only the free grunt\'s stab');
+      // 4. forced movement never provokes: a knight with his reaction ready stands next to each victim
+      function quiet(label, o, run, check) {
+        const q = fight(o);
+        const k = DD.Combat.heroes().filter(function (x) { return x.defId === 'test_knight'; })[0];
+        fresh();
+        run(q);
+        t.ok(seen.length === 0 && (!k || !k.oppRound), label + ': nobody got an attack of opportunity');
+        t.ok(check(q), label + ': it happened');
+      }
+      quiet('Personal Space', { slate: { x: 1, y: 4, skills: [{ id: 'sla_personal_space', level: 1 }] }, allies: [{ id: 'test_knight', x: 2, y: 5 }],
+        enemies: [{ id: 'test_grunt', x: 2, y: 4 }] }, function (q) { use(q.u, 'sla_personal_space', 5, 4); },
+      function () { return !!at(5, 4) && at(5, 4).defId === 'test_grunt'; });
+      quiet('Rock Bottom', { slate: { x: 4, y: 4, skills: [{ id: 'sla_rock_bottom', level: 1 }] }, allies: [{ id: 'test_knight', x: 5, y: 5 }],
+        enemies: [{ id: 'test_grunt', x: 5, y: 4, hpMult: 2 }] }, function (q) { use(q.u, 'sla_rock_bottom', 5, 4); },
+      function () { return !!at(3, 4) && at(3, 4).defId === 'test_grunt'; });
+      quiet('Get Over Here', { slate: { x: 1, y: 4, skills: [{ id: 'sla_get_over_here', level: 1 }] }, allies: [{ id: 'test_knight', x: 5, y: 5 }],
+        enemies: [{ id: 'test_grunt', x: 5, y: 4 }] }, function (q) { use(q.u, 'sla_get_over_here', 5, 4); },
+      function () { return !!at(2, 4) && at(2, 4).defId === 'test_grunt'; });
+      quiet('Putting My Foot Down', { slate: { x: 2, y: 4, skills: [{ id: 'sla_foot_down', level: 1 }] }, allies: [{ id: 'test_knight', x: 3, y: 5 }],
+        enemies: [{ id: 'test_grunt', x: 3, y: 4 }] }, function (q) { use(q.u, 'sla_foot_down', 3, 4); },
+      function () { return !!at(4, 4) && at(4, 4).defId === 'test_grunt'; });
+      quiet('Tectonic Tantrum', { w: 11, h: 11, slate: { x: 5, y: 5 }, allies: [{ id: 'test_knight', x: 6, y: 6 }],
+        enemies: [{ id: 'test_grunt', x: 6, y: 5, hpMult: 2 }] }, function (q) { q.s.hype = 100; DD.Combat.useSkill(q.u, q.u.signature, 5, 5); },
+      function () { return !!at(8, 5) && at(8, 5).defId === 'test_grunt'; });
+      // 5. Air Mail: the escape hatch — an ally in a brawl leaves without a scratch
+      f = fight({ slate: { x: 4, y: 4, skills: [{ id: 'sla_air_mail', level: 1 }] }, allies: [{ id: 'test_mage', x: 4, y: 3 }],
+        enemies: [{ id: 'test_grunt', x: 5, y: 3 }] });
+      const mage = at(4, 3);
+      g = at(5, 3);
+      t.ok(!!DD.Act.opportunityOf(g, mage), 'Air Mail: walking off, the mage would be stabbed');
+      fresh();
+      t.eq(use(f.u, 'sla_air_mail', 4, 1), true, 'Air Mail: mailed out of the brawl');
+      t.ok(mage.x === 4 && mage.y === 1 && mage.hp === mage.maxHp && seen.length === 0 && !g.oppRound, 'Air Mail: she lands clear, unstabbed (no attack of opportunity)');
+      // 6. [review v2] Get Off My Lawn: a taunted foe only swings at its taunter, so the mage walks off it for free; a
+      //    foe out of earshot still stabs her, and a taunted one still punishes Slate himself walking away
+      const lawn = function (yell) {
+        const q = fight({ slate: { x: 4, y: 4, skills: [{ id: 'sla_lawn', level: 1 }] }, allies: [{ id: 'test_mage', x: 5, y: 5 }],
+          enemies: [{ id: 'test_grunt', x: 5, y: 4 }, { id: 'test_grunt', x: 6, y: 5 }] });
+        const r = { q: q, near: at(5, 4), far: at(6, 5), mage: at(5, 5) };
+        if (yell) t.eq(use(q.u, 'sla_lawn', 4, 4), true, 'Lawn: GET OFF MY LAWN');
+        q.u.ap = 0;
+        pass();   // the mage's turn (heroes first)
+        t.ok(DD.Combat.current() === r.mage, 'Lawn: the mage\'s turn');
+        fresh();
+        t.ok(DD.Combat.move(r.mage, 5, 7), 'Lawn: the mage walks off both grunts');
+        r.by = seen.map(function (e) { return e.attacker; });
+        return r;
+      };
+      let lw = lawn(false);
+      t.ok(lw.by.length === 2 && lw.by.indexOf(lw.near) >= 0 && lw.by.indexOf(lw.far) >= 0, 'Lawn control: without the yell both grunts stab her (' + lw.by.length + ')');
+      lw = lawn(true);
+      t.ok(DD.Act.hasStatus(lw.near, 'taunt') && !DD.Act.hasStatus(lw.far, 'taunt'), 'Lawn: the near grunt is Taunted, the one 3 tiles away is not');
+      t.ok(lw.by.length === 1 && lw.by[0] === lw.far && !lw.near.oppRound, 'Lawn: only the untaunted grunt stabs her; the taunted one only has eyes for Slate');
+      t.ok(!!DD.Act.opportunityOf(lw.near, lw.q.u), 'Lawn: Slate walking off his taunted grunt would still be stabbed');
+    } finally { off(); }
+    noErrors(t, 'attacks of opportunity', p0);
   });
 
   // ---- previews vs reality --------------------------------------------------------------------------------------
@@ -1037,11 +1289,11 @@
     // a whole AI round with a hold, a taunt and a stun on the board: no errors, statuses tick per own turn
     f = fight({ ai: true, slate: { x: 4, y: 4, skills: [{ id: 'sla_hold_still', level: 3 }, { id: 'sla_lawn', level: 1 }] },
       allies: [{ id: 'test_knight', x: 3, y: 3 }], enemies: [{ id: 'test_grunt', x: 5, y: 4 }, { id: 'test_archer', x: 4, y: 6 }, { id: 'test_minion', x: 8, y: 8 }] });
-    use(f.u, 'sla_hold_still', 5, 4);
-    use(f.u, 'sla_lawn', 4, 4);
+    t.eq(use(f.u, 'sla_hold_still', 5, 4), true, 'AI round: grabbed (III: its next 2 turns)');
+    t.eq(use(f.u, 'sla_lawn', 4, 4), true, 'AI round: yelled');
     for (let i = 0; i < 4 && !f.s.result; i++) DD.Combat.endRound();
-    t.ok(!has(at(5, 4) || f.u, 'sla_grappled') || DD.Slate.heldBy(f.u), 'after 4 rounds the hold is over (or still a real one)');
-    t.ok(DD.Combat.state.units.every(function (x) { return (x.statuses || []).every(function (q) { return q.id !== 'taunt' || q.turns >= 0; }); }), 'statuses sane');
+    // [review v2] exact: the III hold covered rounds 1-2 and the taunt round 1, so nothing of either is left by round 5
+    t.ok(!DD.Slate.heldBy(f.u) && DD.Combat.state.units.every(function (x) { return !has(x, 'sla_grappled') && !has(x, 'taunt'); }), 'after 4 rounds no hold and no taunt is left');
     noErrors(t, 'edge cases', p0);
   });
 
@@ -1194,6 +1446,44 @@
     for (let i = 3; i < d.length; i += 4) if (d[i] > 30) n++;
     t.ok(n > 300, 'Boulder painter draws (' + n + ' px)');
     t.eq(DD.problems.slice(p0).filter(function (w) { return /Sprite|sprite|Error in/.test(w); }).length, 0, 'no sprite warnings');
+  });
+
+  // ---- v2 requests (Nov 3): barrels, flyers --------------------------------------------------------------------------
+  T.suite('hero_slate: v2 requests — Love Tap pops a barrel (his own blast, as previewed); Hold Still and Rock Bottom are for foes only; a thrown flyer floats over the lava', function (t) {
+    const p0 = DD.problems.length;
+    const f = fight({ slate: { skills: [{ id: 'sla_hold_still', level: 3 }, { id: 'sla_rock_bottom', level: 3 }] },
+      objects: [{ x: 3, y: 4, id: 'barrel_explosive' }, { x: 2, y: 5, id: 'barrel_explosive' }], enemies: [{ id: 'test_grunt', x: 4, y: 4 }, { id: 'test_grunt', x: 8, y: 8 }] });
+    const u = f.u, g = at(4, 4), g0 = g.hp, r0 = rage(u);
+    t.ok(!valid(u, 'sla_hold_still', 3, 4) && !valid(u, 'sla_hold_still', 2, 5), 'Hold Still: a barrel is not a foe to grab');
+    t.ok(!valid(u, 'sla_rock_bottom', 3, 4) && !valid(u, 'sla_rock_bottom', 2, 5), 'Rock Bottom: nor one to slam');
+    t.ok(!DD.Targeting.validTargets(u, slotOf(u, 'sla_hold_still')).some(function (q) { return q.obj; }) &&
+      !DD.Targeting.validTargets(u, slotOf(u, 'sla_rock_bottom')).some(function (q) { return q.obj; }), '...neither lists a barrel among its targets');
+    const love = DD.Targeting.validTargets(u, u.basic).filter(function (q) { return q.obj === 'barrel_explosive'; });
+    t.eq(love.length, 2, 'Love Tap can be aimed at both adjacent barrels');
+    const hp0 = u.hp;
+    const prev = DD.Combat.preview(u, u.basic, 3, 4);
+    t.eq(prev.detonates, 'barrel_explosive', 'the preview detonates it');
+    t.eq(use(u, 'sla_love_tap', 3, 4), true, 'Love Tap on the barrel');
+    t.ok(!DD.Grid.tile(3, 4).obj, 'it went off');
+    t.eq(hp0 - u.hp, (prev.perUnit[u.id] || {}).dmg || 0, 'Slate eats his own blasts exactly as previewed (' + (hp0 - u.hp) + ')');
+    t.eq(g0 - g.hp, (prev.perUnit[g.id] || {}).dmg || 0, 'the grunt too (' + (g0 - g.hp) + ')');
+    t.eq(rage(u), r0, 'no Rage from his own blast (nobody ELSE hit him)');
+    t.eq(u.ap, 2, '1 AP');
+    // a flying foe thrown onto lava hovers there, unburnt (the floor is not its problem); a walker is not so lucky
+    function lavaThrow(flying) {
+      const l = fight({ slate: { skills: [{ id: 'sla_personal_space', level: 1 }] }, terrain: function (tl) { if (tl.x === 5 && tl.y === 4) tl.t = 'lava'; },
+        enemies: [{ id: 'test_grunt', x: 3, y: 4, hpMult: 3 }, { id: 'test_grunt', x: 8, y: 8 }] });
+      const v = at(3, 4), v0 = v.hp;
+      v.flags.flying = flying;
+      const pv = DD.Combat.preview(l.u, slotOf(l.u, 'sla_personal_space'), 5, 4);
+      t.eq(use(l.u, 'sla_personal_space', 5, 4), true, (flying ? 'flyer' : 'walker') + ' thrown at the lava');
+      return { v: v, lost: v0 - (v.dead ? 0 : v.hp), said: (pv.perUnit[v.id] || {}).dmg || 0 };
+    }
+    const fly = lavaThrow(true), walk = lavaThrow(false);
+    t.ok(fly.v.x === 5 && fly.v.y === 4 && !fly.v.dead && !has(fly.v, 'burn'), 'the flyer comes down over the lava, unburnt');
+    t.eq(fly.lost, fly.said, 'the flyer loses what the preview said (' + fly.lost + ')');
+    t.ok(walk.v.dead || walk.lost > fly.lost || has(walk.v, 'burn'), 'a walker thrown there pays for the lava (' + walk.lost + ' lost)');
+    noErrors(t, 'v2 requests', p0);
   });
 })();
 

@@ -439,7 +439,16 @@
     t.ok(rel === 4 && rel0 === 0, 'Debt hint: a 3-HP foe in sight is worth 4, healthy foes 0 (' + rel + ' / ' + rel0 + ')');
     // the status desc is exact
     const d = DD.getStatus('cor_debt').desc({ id: 'cor_debt', stacks: 7, turns: -1, data: {} });
-    t.ok(/Owes 7 HP/.test(d) && /next turn/.test(d) && /pays off 4/.test(d), 'Debt desc: ' + d);
+    t.ok(/Owes 7 HP/.test(d) && /his next turn/.test(d) && /pays off 4/.test(d), 'Debt desc (he/him): ' + d);
+    const fd = fight({ allies: [{ id: 'test_mage', x: 1, y: 6 }], enemies: [{ id: 'test_grunt', x: 8, y: 8 }] });
+    DD.Corelos.addDebt(fd.me, 3, fd.me);
+    const dOn = DD.getStatus('cor_debt').desc(st(fd.me, 'cor_debt'));
+    t.ok(/^Owes 3 HP, paid at the start of his next turn .*pays off 4 of it\.$/.test(dOn), 'Debt tooltip on Corelos (he/him): ' + dOn);
+    const mageFd = units('test_mage')[0];
+    DD.Corelos.addDebt(mageFd, 2, fd.me);
+    const dMage = DD.getStatus('cor_debt').desc(st(mageFd, 'cor_debt'));
+    t.ok(/^Owes 2 HP, paid at the start of its next turn \(ignores Block, never below 1 HP\)\.$/.test(dMage),
+      'on anyone else: "its", and no payoff clause (only Corelos\' own Debt is paid off by deaths): ' + dMage);
     // Debt does not outlive the fight: he skips town (a victory log line)
     const fv = fight({ objective: { type: 'killAll' }, enemies: [{ id: 'test_grunt', x: 3, y: 4, hpMult: 0.2 }] });
     DD.Corelos.addDebt(fv.me, 6, fv.me);
@@ -660,8 +669,12 @@
       const arch = units('test_archer')[0];
       use(t, imp, obj, 8, 4, 'objection L' + lv);
       t.eq((st(arch, 'taunt') || {}).turns, 1, 'L' + lv + ': archer taunted for its next turn');
-      t.eq(imp.block, L('cor_imp_objection', lv).block, 'L' + lv + ': imp Block');
+      t.eq(imp.block, 0, 'L' + lv + ': Objection! only taunts (one verb: no Block rider at any level)');
       t.eq(obj.cd, 2, 'L' + lv + ': Objection cooldown 2');
+      // the summon's desc tells the whole story at every level
+      t.ok(/Billable Poke deals \d+, Objection! taunts\./.test(desc('cor_lawyer', lv)) &&
+        desc('cor_imp_objection', lv) === 'Taunt a foe: on its next turn it must attack this Lawyer if it can.',
+        'L' + lv + ': the Lawyer desc matches its skills: ' + desc('cor_lawyer', lv));
     });
     // v2 taunt: on its turn the archer must shoot the Lawyer, not Corelos
     const f = fight({ cx: 1, cy: 1, ai: true, skills: [{ id: 'cor_lawyer', level: 1 }], enemies: [{ id: 'test_archer', x: 5, y: 2 }] });
@@ -674,6 +687,29 @@
     t.ok(f.me.hp === 24 && imp.hp === hp - 4, 'the taunted archer shot the Lawyer (imp ' + imp.hp + '/' + hp + ', Corelos ' + f.me.hp + ')');
     t.ok(!st(units('test_archer')[0], 'taunt'), 'the taunt lasted exactly its one turn');
     t.eq(imp.ap, 2, 'the Lawyer gets its AP back at Corelos\' turn start');
+    // combo: Soul Contract co-signs the Lawyer, so the arrow it drew with Objection! only scratches the Block
+    const fc = fight({ cx: 1, cy: 1, ai: true, ap: 6, skills: [{ id: 'cor_lawyer', level: 1 }, { id: 'cor_soul_contract', level: 1 }],
+      enemies: [{ id: 'test_archer', x: 5, y: 2 }] });
+    use(t, fc.me, slotOf(fc.me, 'cor_lawyer'), 2, 2, 'summon for the co-sign');
+    const ic = units('cor_imp')[0];
+    ic.ap = 2;
+    use(t, ic, slotOf(ic, 'cor_imp_objection'), 5, 2, 'objection before the co-sign');
+    use(t, fc.me, slotOf(fc.me, 'cor_soul_contract'), ic.x, ic.y, 'co-sign the Lawyer');
+    t.eq(ic.block, 8, 'the Lawyer holds 8 Block');
+    DD.Combat.endTurn();
+    t.ok(ic.hp === ic.maxHp && fc.me.hp === 24 - 4, 'the taunted archer shot the co-signed Lawyer: Block only; Corelos paid just his 4 Debt (imp ' +
+      ic.hp + '/' + ic.maxHp + ', Corelos ' + fc.me.hp + ')');
+    // combo: a taunt drags the foe across his runes on its own turn (the same goes for every ally's taunt)
+    const fd = fight({ cx: 1, cy: 4, ai: true, skills: [{ id: 'cor_lawyer', level: 1 }], enemies: [{ id: 'test_grunt', x: 6, y: 4 }] });
+    use(t, fd.me, fd.slot, 2, 4, 'summon for the drag');
+    const id2 = units('cor_imp')[0];
+    id2.ap = 2;
+    DD.Corelos.placeRune(fd.me, 4, 4, { dmg: 5 });
+    use(t, id2, slotOf(id2, 'cor_imp_objection'), 6, 4, 'objection across the rune');
+    DD.Combat.endTurn();
+    const gd = units('test_grunt')[0];
+    t.ok(gd.hp === 14 - 5 && !hasRune(4, 4) && fd.me.hp === 24 && id2.hp === id2.maxHp - 4,
+      'the taunted grunt marched over the rune and stabbed the Lawyer, not Corelos (grunt ' + gd.hp + ' HP at ' + gd.x + ',' + gd.y + ', imp ' + id2.hp + ')');
   });
 
   // ---- Collect Debt ---------------------------------------------------------------------------------------
@@ -768,6 +804,7 @@
     t.eq(debt(f.me), 2, 'a death pays off 7');
     // Notarized Soul: once per combat, a lethal hit leaves him at half HP + 10 Debt, which really comes due
     f = fight({ items: ['cor_notarized'], enemies: [{ id: 'test_grunt', x: 2, y: 4 }] });
+    t.ok(/stays up at half his max HP and takes 10 Debt/.test(DD.getItem('cor_notarized').desc), 'desc: ' + DD.getItem('cor_notarized').desc);
     t.eq(f.me.maxHp, 30, 'Notarized Soul: +6 max HP');
     const g = units('test_grunt')[0];
     A().damage(g, f.me, 40);
@@ -847,6 +884,60 @@
     const imp = units('cor_imp')[0] || null;
     t.ok(imp === null || imp.side === 'hero', 'forced uses stay sane');
     t.eq(DD.problems.slice(before).filter(function (w) { return /^Error in /.test(w); }).length, 0, 'no swallowed errors with null targets');
+  });
+
+  // ---- attacks of opportunity (v2) ---------------------------------------------------------------------------
+  T.suite(P + 'attacks of opportunity: he makes none, walks off foes with his tools, the Lawyer and the pull hold the line', function (t) {
+    // Rune Bolt is ranged: Corelos never makes an attack of opportunity, and walking off a grunt costs him a stab
+    let f = fight({ cx: 4, cy: 4, enemies: [{ id: 'test_grunt', x: 5, y: 4 }] });
+    t.eq(A().opportunitySlot(f.me), null, 'Rune Bolt is ranged: no attack of opportunity of his own');
+    t.eq((DD.Combat.provokes(f.me, 2, 4) || []).length, 1, 'walking off the grunt provokes it');
+    t.ok(DD.Combat.move(f.me, 2, 4) && f.me.hp === 24 - 4, 'the grunt stabs him on the way out (' + f.me.hp + ')');
+    // his three ways out: shove it away, stun it or sign it, then walk off for free
+    [['cor_restraining', 4, 4, 'Restraining Order shoved it away'], ['cor_cease', 5, 4, 'Cease & Desist stunned it'],
+      ['cor_sign_here', 5, 4, 'Sign Here charmed it']].forEach(function (c) {
+      f = fight({ cx: 4, cy: 4, ap: 5, skills: [{ id: c[0], level: 1 }], enemies: [{ id: 'test_grunt', x: 5, y: 4 }] });
+      use(t, f.me, f.slot, c[1], c[2], c[0]);
+      t.eq((DD.Combat.provokes(f.me, 2, 4) || []).length, 0, c[3] + ': walking off provokes nothing');
+      t.ok(DD.Combat.move(f.me, 2, 4) && f.me.hp === 24, c[3] + ': he walks off untouched (' + f.me.hp + ')');
+    });
+    // the Lawyer's Billable Poke is a melee basic: a foe walking off it gets poked (the imp holds the line)
+    f = fight({ cx: 1, cy: 4, skills: [{ id: 'cor_lawyer', level: 2 }], enemies: [{ id: 'test_grunt', x: 4, y: 4 }] });
+    use(t, f.me, f.slot, 3, 4, 'summon next to the grunt');
+    const imp = units('cor_imp')[0], g = units('test_grunt')[0];
+    t.eq((A().opportunitySlot(imp) || {}).id, 'cor_imp_poke', 'the Lawyer reacts with Billable Poke');
+    let pokes = 0;
+    const off = DD.Events.on('opportunity:attack', function (e) { if (e.attacker === imp && e.mover === g) pokes++; });
+    try { DD.AI.moveTo(g, 7, 4); } finally { off(); }
+    t.ok(pokes === 1 && g.hp === 14 - L('cor_imp_poke', 2).dmg, 'the grunt walking off the Lawyer takes one Billable Poke (' + g.hp + ')');
+    // pulls never provoke; a grunt served into the knight's reach sticks to the knight on its turn
+    [true, false].forEach(function (knight) {
+      const fs = fight({ cx: 1, cy: 4, ai: true, skills: [{ id: 'cor_served', level: 1 }], allies: knight ? [{ id: 'test_knight', x: 3, y: 5 }] : [],
+        enemies: [{ id: 'test_grunt', x: 6, y: 4 }] });
+      const gs = units('test_grunt')[0], k = units('test_knight')[0];
+      let opp = 0, kBefore = null;
+      const offS = DD.Events.on('opportunity:attack', function () { opp++; });
+      const offK = DD.Events.on('turn:start', function (e) { if (e.unit === gs && k) kBefore = k.hp + k.block; });
+      try {
+        use(t, fs.me, fs.slot, 6, 4, 'serve' + (knight ? ' next to the knight' : ''));
+        t.ok(gs.x === 3 && gs.y === 4 && opp === 0, 'pulled 3 tiles' + (knight ? ' past the knight' : '') + ': no attack of opportunity (' + gs.x + ',' + gs.y + ')');
+        DD.Combat.endRound();
+      } finally { offS(); offK(); }
+      if (knight) {
+        t.ok(gs.x === 3 && gs.y === 4 && fs.me.hp === 24 && kBefore !== null && k.hp + k.block < kBefore,
+          'engaged with the knight, the grunt stays and hits HIM, not Corelos (grunt ' + gs.x + ',' + gs.y + ', Corelos ' + fs.me.hp +
+          ', knight HP + Block ' + kBefore + ' → ' + (k.hp + k.block) + ')');
+      } else {
+        t.ok(DD.Grid.dist(gs, fs.me) === 1 && fs.me.hp === 24 - 4, 'control, no knight: the grunt walks up and stabs Corelos (' + fs.me.hp + ')');
+      }
+    });
+    // a binding rune still ends a walk that already provoked the knight
+    f = fight({ cx: 1, cy: 1, allies: [{ id: 'test_knight', x: 4, y: 5 }], enemies: [{ id: 'test_grunt', x: 4, y: 4, hpMult: 2 }] });
+    DD.Corelos.placeRune(f.me, 4, 2, { dmg: 6, root: true });
+    const gb = units('test_grunt')[0];
+    const walked = A().moveAlong(gb, [{ x: 4, y: 3 }, { x: 4, y: 2 }, { x: 4, y: 1 }], { provoke: true });
+    t.ok(walked.provoked === 1 && gb.x === 4 && gb.y === 2 && !!st(gb, 'root') && gb.hp === 28 - 5 - 6,
+      'knight\'s stab (5), then the binding rune (6) roots it and the walk ends on the rune (' + gb.x + ',' + gb.y + ', ' + gb.hp + ' HP)');
   });
 
   // ---- previews -----------------------------------------------------------------------------------------
@@ -935,5 +1026,38 @@
       t.ok(kinds.length >= 4, 'Corelos used ' + kinds.length + ' different skills besides his basic: ' + kinds.join(', '));
       t.eq(DD.problems.slice(before).filter(function (w) { return /^Error in /.test(w); }).length, 0, 'no swallowed errors');
     });
+  });
+
+  // ---- v2 requests (user, Nov 3): barrels, flyers --------------------------------------------------------------
+  T.suite(P + 'v2 requests: Rune Bolt, You\'ve Been Served and the imp set barrels off; flyers sail over runes', function (t) {
+    // 1. Rune Bolt at a barrel: the barrel goes off; the bolt's rider (runes next to the target burst) does not happen
+    let f = fight({ enemies: [{ id: 'test_grunt', x: 5, y: 4 }, { id: 'test_grunt', x: 6, y: 6 }], objects: [{ x: 4, y: 4, id: 'barrel_explosive' }] });
+    DD.Corelos.placeRune(f.me, 4, 5, { dmg: 5 });
+    t.ok(DD.Targeting.validTargets(f.me, f.me.basic).some(function (q) { return q.obj && q.x === 4 && q.y === 4; }), 'Rune Bolt can be aimed at the barrel');
+    previewMatches(t, f.me, f.me.basic, 4, 4, 'bolt at the barrel');
+    t.ok(!DD.Grid.tile(4, 4).obj && units('test_grunt')[0].hp === 14 - 8, 'KABOOM: 8 to the grunt beside it');
+    t.ok(hasRune(4, 5), 'the rune next to the barrel does not burst (a barrel shot has no riders)');
+    t.eq(f.me.ap, 2, '1 AP');
+    // You've Been Served at a barrel in a straight line: the letter blows it up (nothing to pull)
+    f = fight({ skills: [{ id: 'cor_served', level: 1 }], enemies: [{ id: 'test_grunt', x: 8, y: 8 }], objects: [{ x: 4, y: 4, id: 'barrel_explosive' }] });
+    use(t, f.me, f.slot, 4, 4, 'served on a barrel');
+    t.ok(!DD.Grid.tile(4, 4).obj && f.me.x === 1 && f.slot.cd === 2, 'the barrel has been served: KABOOM, cooldown 2');
+    // the Infernal Lawyer's Billable Poke at an adjacent barrel: the blast reaches the (flying) imp too
+    f = fight({ cx: 4, cy: 4, skills: [{ id: 'cor_lawyer', level: 1 }], ap: 5, enemies: [{ id: 'test_grunt', x: 8, y: 8 }], objects: [{ x: 6, y: 5, id: 'barrel_explosive' }] });
+    use(t, f.me, f.slot, 5, 5, 'summon the lawyer');
+    const imp = units('cor_imp')[0];
+    imp.ap = 2;
+    use(t, imp, slotOf(imp, 'cor_imp_poke'), 6, 5, 'billable poke at the barrel');
+    t.ok(!DD.Grid.tile(6, 5).obj && imp.hp === imp.maxHp - 8, 'flying is no shelter from a blast: the imp eats 8 (billed to Corelos)');
+
+    // 2. flyers: a flying foe pushed across his runes sets none off; a walker pushed the same way does
+    f = fight({ skills: [{ id: 'cor_restraining', level: 1 }], cx: 3, cy: 4, enemies: [{ id: 'test_grunt', x: 4, y: 4 }, { id: 'test_grunt', x: 3, y: 5 }, { id: 'test_grunt', x: 8, y: 8 }] });
+    const fl = DD.Grid.unitAt(4, 4), wk = DD.Grid.unitAt(3, 5);
+    fl.flags = Object.assign({}, fl.flags, { flying: true });   // test setup: a flying foe
+    DD.Corelos.placeRune(f.me, 5, 4, { dmg: 5 });
+    DD.Corelos.placeRune(f.me, 3, 6, { dmg: 5 });
+    use(t, f.me, f.slot, 3, 4, 'Restraining Order: push both 2 tiles');
+    t.ok(fl.x === 6 && hasRune(5, 4) && fl.hp === 14 - 2, 'the flyer sails over the rune: only the order\'s 2 damage');
+    t.ok(wk.y === 7 && !hasRune(3, 6) && wk.hp === 14 - 2 - 5, 'the walker is shoved over the rune: it bursts (2 + 5)');
   });
 })();

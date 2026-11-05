@@ -1,7 +1,9 @@
 /* Dungeons and Degenerates — js/data/heroes/ellaria.js
  * Ellaria the Corgi Whisperer, elf druid: corgi summoner / healer / control. v2 kit: one verb per skill, power from
  * combinations (Healing Spring puddles for lightning / frost, flammable Brambles for fire and shoves, Who's a Good Boy?
- * Empowers an ally, Thorn Whip / Fetch! pull foes into allies' cleaves, corgis taunt).
+ * Empowers an ally, Thorn Whip / Fetch! pull foes into allies' cleaves and traps, corgis taunt). Her basic is ranged,
+ * so she makes no attacks of opportunity herself; her corgis (melee Bite) and the Absolute Unit (Chomp) do: they hold
+ * the line, and The Ol' Switcheroo / Fetch! move without provoking.
  * Passive Pack Leader: every fight starts with a corgi at her side; a fallen corgi Inspires the party (AVENGE BISCUIT!).
  * Registers the hero, basic Thorn Whip (Chomp while shapeshifted), 9 pool skills, signature Release the Corgis!,
  * the ell_corgi summon (Bite, Bark taunt), status ell_absolute_unit (Wild Shape), surface ell_bramble, 3 items.
@@ -35,12 +37,14 @@
   function heroLevel(u) { return u && u.level > 0 ? Math.floor(u.level) : 1; }
   function corgiHp(owner) { return 8 + heroLevel(owner); }
 
-  /** Ellaria's living corgis, in board order (deterministic). */
+  /** Ellaria's living corgis, in unit order (deterministic). */
   function corgisOf(owner) {
     const s = S();
     if (!s || !owner) return [];
     return s.units.filter(function (u) { return active(u) && isCorgiOf(u, owner); });
   }
+  /** A corgi that can act (not stunned, asleep, frozen or a sheep): only these answer Fetch! and Zoomies. */
+  function able(c) { return active(c) && !A().isStunned(c) && !A().hasStatus(c, 'sheep'); }
 
   /** A free tile a corgi can safely stand on (no pit / deep water / damaging hazard). */
   function safeFree(x, y) { return G().isFree(x, y) && !G().isDrop(x, y) && !G().hazardAt(x, y, null); }
@@ -108,10 +112,23 @@
     return m;
   }
 
-  /** The corgi that answers Fetch! for `foe`: Ellaria's corgi nearest to it (board order breaks ties). */
+  /**
+   * The corgi that answers Fetch! for `foe`: Ellaria's able corgi nearest to it. On a tie the one standing on the drag
+   * lane goes (it steps aside or backs up; another corgi would drag the foe into it), then board order.
+   */
   function fetcher(owner, foe) {
     if (!foe) return null;
-    return corgisOf(owner).sort(function (a, b) { return dist(a, foe) - dist(b, foe) || byPos(a, b); })[0] || null;
+    const lane = dragTile(foe, owner);
+    const off = function (c) { return lane && c.x === lane.x && c.y === lane.y ? 0 : 1; };
+    return corgisOf(owner).filter(able).sort(function (a, b) {
+      return dist(a, foe) - dist(b, foe) || off(a) - off(b) || byPos(a, b);
+    })[0] || null;
+  }
+  /** canUse for skills that order a corgi about: refuses without a corgi that can act. */
+  function needsAble(ctx) {
+    const pack = corgisOf(ctx.user);
+    if (!pack.length) return 'Needs a corgi.';
+    return pack.some(able) ? true : 'Your corgis can\'t act right now.';
   }
 
   // ---- Wild Shape bookkeeping (sprite override, immovable flag, basic attack swap) ---------------------------
@@ -234,7 +251,7 @@
     id: 'ell_absolute_unit', name: 'Absolute Unit', icon: '🐕', color: '#e48d3a', type: 'buff', stacking: 'refresh',
     maxStacks: 1, decay: 'turnEnd', defaultTurns: 1,
     desc: function (st) {
-      return 'A giant corgi: can\'t be pushed or pulled, and Thorn Whip is replaced by Chomp.' +
+      return 'A giant corgi: can\'t be pushed or pulled, and Thorn Whip is replaced by Chomp (it bites foes that walk away, too).' +
         (st && st.turns > 0 ? ' (' + plural(st.turns, 'turn') + ' left)' : '');
     },
     hooks: {
@@ -259,7 +276,8 @@
     id: BRAMBLE, name: 'Brambles', color: 'rgba(72,118,44,0.55)', turns: 2,
     // a hazard only for the other side: enemies path around it, heroes and corgis walk through
     hazard: function (unit) { return !!unit && unit.side !== 'hero'; }, hazardDmg: BRAMBLE_DMG,
-    desc: 'Foes that enter take 3-5 damage (Entangling Roots I-III) and are Rooted; Ellaria\'s side walks through. Flammable: fire spreads through the whole patch.',
+    desc: 'Grounded foes that enter take 3-5 damage (Entangling Roots I-III) and are Rooted (flyers pass over); Ellaria\'s side ' +
+      'walks through. Flammable: fire spreads through the whole patch.',
     react: { fire: { surface: 'fire', turns: 2, spread: true } },
     onEnter: function (unit, tile) { prick(unit, tile); },
     draw: function (g, sf, t) {
@@ -323,12 +341,13 @@
     id: 'ell_summon_corgi', name: 'Summon Corgi', owner: 'ellaria', icon: '🐕', kind: 'summon', tags: ['summon', 'corgi'],
     ap: 2, cooldown: function (L) { return L.cd; },
     levels: [{ cd: 3 }, { cd: 2 }, { cd: 2, ready: true }],
-    target: { type: 'tile', range: [1, 2], los: false, filter: 'empty' },
+    // never onto lava, fire, poison or spikes (it would only burn there: the summon preview can't show that)
+    target: { type: 'tile', range: [1, 2], los: false, filter: 'empty',
+      canTarget: function (ctx) { const p = ctx.target; return p && safeFree(p.x, p.y) ? true : 'Not there: corgis don\'t do lava.'; } },
     canUse: function (ctx) { return corgisOf(ctx.user).length < PACK ? true : 'The pack is full (' + PACK + ' corgis).'; },
     desc: function (L, user) {
-      const hp = user && user.level > 0 ? corgiHp(user) + ' HP' : '8 + your level HP';
-      return 'Summon a corgi (' + hp + ', Bite ' + BITE + ', Bark taunts) on an empty tile. Up to ' + PACK + ' corgis.' +
-        (L.ready ? ' It acts right away.' : '');
+      const hp = user && user.level > 0 ? corgiHp(user) + ' HP' : 'HP 8 + your level';
+      return 'Summon a corgi (' + hp + ', Bite ' + BITE + ', Bark taunts). Max ' + PACK + ' corgis.' + (L.ready ? ' It acts at once.' : '');
     },
     flavor: 'Ellaria does not know where they come from. Neither do the corgis. Nobody asks.',
     execute: function (ctx) {
@@ -345,7 +364,7 @@
     levels: [{ heal: 5 }, { heal: 6 }, { heal: 8 }],
     target: { type: 'tile', range: [0, 4], los: true, filter: 'any' },
     area: { shape: 'circle', size: 1 },
-    desc: function (L) { return 'Allies in radius 1 heal ' + L.heal + ' HP; every other tile there becomes a puddle (Wet).'; },
+    desc: function (L) { return 'Heal yourself and allies in radius 1 for ' + L.heal + ' HP; puddles (Wet) fill the rest of the area.'; },
     flavor: 'Locally sourced, organic, and only slightly full of tadpoles. Conducts lightning beautifully.',
     execute: function (ctx) {
       const u = ctx.user, L = ctx.L;
@@ -368,9 +387,12 @@
     target: { type: 'tile', range: [2, 5], los: true, filter: 'any' },
     area: { shape: 'circle', size: 1 },
     desc: function (L) {
-      return 'Brambles fill radius 1 for ' + plural(L.turns, 'round') + ': foes in or entering them take ' + L.dmg + ' damage and are Rooted.';
+      // "caught": the cast hits foes there once (flyers too: it is aimed at them); after that only grounded foes
+      // entering are pricked (the patch is a floor effect; no per-turn damage)
+      return 'Brambles fill radius 1 for ' + plural(L.turns, 'round') + '. Foes caught, and grounded foes entering, take ' + L.dmg +
+        ' damage and are Rooted.';
     },
-    flavor: 'The plants are on her side. They are also extremely flammable, so keep Zarathor on her side too.',
+    flavor: 'The plants are on her side. They are also extremely flammable, so keep Zarathor and Pebbles on her side too.',
     execute: function (ctx) {
       const u = ctx.user, L = ctx.L;
       if (!u || !ctx.target) return;
@@ -394,7 +416,7 @@
     ap: 1, cooldown: 1,
     levels: [{ block: 5, thorns: 2 }, { block: 7, thorns: 2 }, { block: 9, thorns: 3 }],
     target: { type: 'unit', range: [0, 3], los: false, filter: 'allyOrSelf' },
-    desc: function (L) { return 'You or an ally gains ' + L.block + ' Block, plus Thorns ' + L.thorns + ' until the end of their next turn.'; },
+    desc: function (L) { return 'Give yourself or an ally ' + L.block + ' Block, and Thorns ' + L.thorns + ' through their next turn.'; },
     flavor: 'Moisturize. Then lignify.',
     execute: function (ctx) {
       const u = ctx.user, f = ctx.targetUnit, L = ctx.L;
@@ -411,7 +433,7 @@
     levels: [{ heal: 3, cd: 2 }, { heal: 5, cd: 2 }, { heal: 6, cd: 1 }],
     target: { type: 'unit', range: [0, 4], los: false, filter: 'allyOrSelf' },
     desc: function (L) {
-      return 'Treat an ally, a corgi or yourself: heal ' + L.heal + ' HP and Empowered (next damaging skill +50%).';
+      return 'Heal an ally, a corgi or yourself for ' + L.heal + ' HP and Empower them (next damaging skill +50%).';
     },
     flavor: 'Works on corgis, barbarians and, once, a very confused tax goblin. Best served right before a big swing.',
     // a treat is worth most on someone about to hit hard (not on someone already Empowered)
@@ -421,7 +443,8 @@
     },
     execute: function (ctx) {
       const u = ctx.user, f = ctx.targetUnit;
-      if (!u || !active(f)) return;
+      // a downed ally too: the aimed heal gets it back up (engine), then the Empower lands on the risen
+      if (!u || !f || f.dead) return;
       DD.FX.projectile(u, f, { kind: 'bone', arc: true });
       DD.FX.particles(f, { kind: 'hearts', count: 8 });
       A().heal(u, f, ctx.L.heal);
@@ -434,15 +457,17 @@
     ap: 1, cooldown: 2,
     levels: [{ dmg: 3, pull: 2 }, { dmg: 4, pull: 3 }, { dmg: 5, pull: 3 }],
     target: { type: 'unit', range: [1, 6], los: false, filter: 'enemy',
+      // never at an explosive barrel: the corgi's dash and drag would not happen, so it was a free sight-free blast at 6
+      objects: false,
       // the corgi needs somewhere to stand: already next to the foe, or a free safe tile beside it
       canTarget: function (ctx) {
         const f = ctx.targetUnit, c = fetcher(ctx.user, f);
         if (!c) return 'Needs a corgi.';
         return dist(c, f) === 1 || besideTiles(f, null).length ? true : 'No room for a corgi next to it.';
       } },
-    canUse: function (ctx) { return corgisOf(ctx.user).length ? true : 'Needs a corgi.'; },
+    canUse: needsAble,
     desc: function (L) {
-      return 'The corgi nearest the foe bites it for ' + L.dmg + ' damage and drags it up to ' + plural(L.pull, 'tile') + ' toward you.';
+      return 'The corgi nearest the foe dashes in, bites it for ' + L.dmg + ' damage and drags it up to ' + plural(L.pull, 'tile') + ' toward you.';
     },
     flavor: 'She threw a stick. The corgi brought back a goblin. Close enough.',
     execute: function (ctx) {
@@ -470,11 +495,12 @@
     ap: 2, cooldown: 2,
     levels: [{ dmg: 4, push: 1 }, { dmg: 5, push: 1 }, { dmg: 6, push: 2 }],
     target: { type: 'self' },
-    // tiles around the corgis, minus those holding friends (never hit; AutoPlay would read them as friendly fire)
+    // tiles around the corgis that can act, minus those holding friends (never hit; AutoPlay would read them as
+    // friendly fire)
     area: { shape: 'custom', fn: function (ctx) {
       const out = [];
       const u = ctx && ctx.user;
-      corgisOf(u).forEach(function (c) {
+      corgisOf(u).filter(able).forEach(function (c) {
         DD.util.DIRS.forEach(function (d) {
           const o = G().unitAt(c.x + d.x, c.y + d.y);
           if (!o || G().hostile(u, o)) out.push({ x: c.x + d.x, y: c.y + d.y });
@@ -483,10 +509,10 @@
       return out;
     } },
     canUse: function (ctx) {
-      const pack = corgisOf(ctx.user);
-      if (!pack.length) return 'Needs a corgi.';
+      const why = needsAble(ctx);
+      if (why !== true) return why;
       // with nobody to zoom past it would only burn 2 AP
-      const near = pack.some(function (c) {
+      const near = corgisOf(ctx.user).filter(able).some(function (c) {
         return DD.util.DIRS.some(function (d) { const f = G().unitAt(c.x + d.x, c.y + d.y); return active(f) && G().hostile(ctx.user, f); });
       });
       return near ? true : 'No foe next to a corgi.';
@@ -500,7 +526,7 @@
       if (!u) return;
       const hit = {};
       corgisOf(u).forEach(function (c, i) {
-        if (!active(c)) return;
+        if (!able(c)) return;
         DD.FX.particles(c, { kind: 'dust', count: 10, parallel: i > 0 });
         DD.FX.text(c, 'ZOOM!', { color: '#ffe08a', size: 14 });
         DD.util.DIRS.forEach(function (d) {
@@ -508,9 +534,12 @@
           const f = G().unitAt(c.x + d.x, c.y + d.y);
           if (!active(f) || !G().hostile(u, f) || hit[f.id]) return;
           hit[f.id] = 1;
-          DD.FX.lunge(c, f);
+          // a foe next to several corgis is shoved by one whose lane holds no friend (not into a packmate or an ally)
+          const by = corgisOf(u).filter(function (k) { return able(k) && dist(k, f) === 1; });
+          const z = by.filter(function (k) { const o = G().unitAt(2 * f.x - k.x, 2 * f.y - k.y); return !o || G().hostile(u, o); })[0] || c;
+          DD.FX.lunge(z, f);
           A().damage(u, f, L.dmg, { tags: ['corgi'] });
-          if (active(f)) A().push(u, f, d, L.push);
+          if (active(f)) A().push(u, f, { x: f.x - z.x, y: f.y - z.y }, L.push);
         });
       });
     },
@@ -535,18 +564,19 @@
 
   DD.registerSkill({
     id: 'ell_wildshape', name: 'Wild Shape: Absolute Unit', owner: 'ellaria', icon: '🐶', kind: 'buff', tags: ['shapeshift', 'corgi'],
-    ap: 2, cooldown: 0, charges: 1,
+    // 1 AP: a 1-turn form must leave AP to Chomp with (at 2 AP it traded evenly with three Thorn Whips)
+    ap: 1, cooldown: 0, charges: 1,
     levels: [{ chomp: CHOMP[0], turns: 1 }, { chomp: CHOMP[1], turns: 1 }, { chomp: CHOMP[2], turns: 2 }],
     target: { type: 'self' },
     desc: function (L) {
-      return 'Once per fight: become an immovable giant corgi until the end of your next ' + (L.turns === 1 ? 'turn' : L.turns + ' turns') +
-        '; Thorn Whip becomes Chomp (' + L.chomp + ' damage, knockback 1).';
+      return 'Once per fight: become an immovable giant corgi through your next ' + (L.turns === 1 ? 'turn' : L.turns + ' turns') +
+        '. Thorn Whip becomes Chomp (' + L.chomp + ' damage, knockback 1).';
     },
     flavor: 'She can still cast spells. Nobody knows how. The corgi union has filed a complaint.',
-    // the form pays off in Chomps: worth it with a foe within a walk and a bite
+    // the form pays off in Chomps: worth it next to a foe (AutoPlay scores walk + cast from the tile it walks to)
     aiScore: function (ctx) {
       const u = ctx.user;
-      return u && DD.Combat.foesOf(u).some(function (f) { return dist(f, u) <= (u.mov || 4) + 1; }) ? 6 : 0;
+      return u && DD.Combat.foesOf(u).some(function (f) { return dist(f, u) === 1; }) ? 6 : 0;
     },
     execute: function (ctx) {
       const u = ctx.user, L = ctx.L;
@@ -554,8 +584,10 @@
       DD.FX.particles(u, { kind: 'leaves', count: 22 });
       DD.FX.shake(6, 300);
       DD.FX.sound('corgi');
-      A().addStatus(u, 'ell_absolute_unit', { turns: L.turns }, u);
+      // silent: the engine's line would read "Ellaria is Absolute Unit."
+      A().addStatus(u, 'ell_absolute_unit', { turns: L.turns, silent: true }, u);
       shapeOn(u, ctx.level || 1);
+      A().log(u.name + ' is an Absolute Unit.', 'status');
       DD.FX.text(u, 'ABSOLUTE UNIT!', { color: '#ffd76a', size: 20 });
     },
   });
@@ -571,7 +603,7 @@
       return DD.Combat.foesOf(ctx.user).some(function (f) { return besideTiles(f, null).length > 0; }) ? true : 'No room next to any foe.';
     },
     desc: function (L) {
-      return 'A corgi pounces beside each of up to ' + L.n + ' foes (nearest first), biting it for ' + L.dmg + ' damage and Taunting it for 1 turn.';
+      return 'A corgi pounces beside each of up to ' + L.n + ' foes (nearest first), bites it for ' + L.dmg + ' damage and Taunts it.';
     },
     flavor: 'Somewhere, a dog park is suddenly very quiet.',
     execute: function (ctx) {
@@ -606,7 +638,7 @@
     ap: 1, cooldown: 0,
     levels: [{ dmg: BITE }],
     target: { type: 'unit', range: [1, 1], filter: 'enemy' },
-    desc: function (L) { return 'Deal ' + L.dmg + ' damage to an adjacent foe. Ankles first.'; },
+    desc: function (L) { return 'Deal ' + L.dmg + ' damage to an adjacent foe.'; },
     flavor: 'Herding instinct: mostly ankles.',
     execute: function (ctx) {
       const u = ctx.user, f = ctx.targetUnit;
@@ -622,7 +654,7 @@
     levels: [{ r: 1 }],
     target: { type: 'self' },
     area: { shape: 'circle', size: function (L) { return L.r; } },
-    desc: function () { return 'Taunt every adjacent foe for 1 turn: on its turn it must attack this corgi if it can.'; },
+    desc: function () { return 'Taunt every adjacent foe: on its next turn it must attack this corgi if it can.'; },
     flavor: 'Look at me. LOOK AT ME. I AM SMALL AND LOUD.',
     execute: function (ctx) {
       const u = ctx.user;
@@ -645,23 +677,26 @@
         if (!s || !unit) return;
         if (s.units.some(function (o) { return o !== unit && !o.dead && o.defId === CORGI && o.name === unit.name; })) unit.name = freshName();
       },
-      // The Good Stick: Ellaria's corgis bite harder for it
+      // Pack Leader / the Flower Crown: the corgi's own death hook, so it counts while Ellaria is downed too
+      onDeath: function (unit) { corgiFell(unit); },
+      // The Good Stick: Ellaria's corgis bite harder for it (attacks of opportunity included)
       modifyOutgoingDamage: function (d) {
         if (d.cause === 'skill' && hasItem(ownerOf(d.source), STICK)) d.flat += 2;
       },
     },
     barks: {
       spawn: ['Woof!', 'Bork!', '*happy wiggle*', '*sploot*', 'Arf! Arf!'],
-      attack: ['GRRR!', 'Bork!', '*nom*'],
+      attack: ['GRRR!', 'Bork!', '*nom*', '*ankle nibble*'],
       hurt: ['Yip!', '*indignant boof*'],
       death: ['*sad boof*', '*whimper*'],
     },
-    desc: 'A low-riding herding dog of immense dignity: 70% fluff, 30% loaf, 100% willing to die for Ellaria. HP 8 + Ellaria\'s level, Bite 3, Bark taunts adjacent foes.',
+    desc: 'A low-riding herding dog of immense dignity: 70% fluff, 30% loaf, 100% willing to die for Ellaria. HP 8 + Ellaria\'s level, ' +
+      'Bite 3 (it also bites foes that walk away from it), Bark taunts adjacent foes.',
   });
 
   // ---- passive ------------------------------------------------------------------------------------------------
   /**
-   * Starting corgi: within 2 tiles of Ellaria, standing guard on her foe-facing side, inside the deploy zone when
+   * Starting corgi: within 2 tiles of Ellaria, on her foe-facing side, inside the deploy zone when
    * there is one (so it can be redeployed with the party).
    */
   function startingCorgi(unit) {
@@ -687,22 +722,34 @@
     DD.Combat.party().forEach(function (f) { if (active(f)) A().addStatus(f, 'inspired', { turns: 1 }, unit); });
   }
 
+  /**
+   * One of Ellaria's corgis fell (fired by the corgi's own onDeath, so it counts while she is downed too): Pack Leader
+   * rallies the party; with the Flower Crown a new corgi is due at the start of her next turn.
+   */
+  function corgiFell(dead) {
+    const s = S(), owner = ownerOf(dead);
+    if (!s || s.result || !owner || owner.dead || owner.defId !== 'ellaria') return;
+    avenge(owner, dead);
+    if (hasItem(owner, CROWN)) { owner.data = owner.data || {}; owner.data.ellCrownPending = true; }
+  }
+
   // ---- hero ---------------------------------------------------------------------------------------------------
   DD.registerHero({
     id: 'ellaria', name: 'Ellaria', epithet: 'the Corgi Whisperer', race: 'Elf', cls: 'Druid',
     role: 'Corgi summoner / healer / control', complexity: 2,
     blurb: 'A serene elf druid who believes every problem can be solved with corgis, and has yet to be proven wrong. ' +
-      'She heals the party, tangles the enemy in brambles and fields a pack of loyal loaves who will happily die for her. Keep them away from the Mayor.',
+      'She heals the party, tangles the enemy in brambles and fields a pack of loyal loaves who nip the ankles of anyone ' +
+      'trying to leave. Keep them away from the Mayor.',
     color: '#7cc35a', unlock: null,
     stats: { hp: 26, ap: 3, mov: 4, armor: 0, init: 1 }, growth: { hp: 4 }, flags: {},
     sprite: ELLARIA_SPRITE,
     basic: 'ell_thorn_whip', signature: 'ell_release',
     passive: {
       name: 'Pack Leader',
-      desc: 'Starts each fight with a corgi. While she stands, each fallen corgi Inspires the party until the end of their next turn. AVENGE BISCUIT!',
+      desc: 'Starts each fight with a corgi. A fallen corgi Inspires the party for their next turn. AVENGE BISCUIT!',
       hooks: {
         onCombatStart: function (unit) { startingCorgi(unit); },
-        onAllyDeath: function (unit, dead) { if (isCorgiOf(dead, unit)) avenge(unit, dead); },
+        // the rally itself is the corgi's onDeath (corgiFell), so it works while she is downed
         onTurnStart: function (unit) { syncShape(unit); },
         onTurnEnd: function (unit) { syncShape(unit); },
         onSkillUsed: function (ctx) { if (ctx && ctx.user) syncShape(ctx.user); },
@@ -716,13 +763,16 @@
     summons: [CORGI],
     barks: {
       select: ['The corgis and I are listening.', 'Yes? Biscuit was just asking the same thing.', 'Nature provides. Mostly corgis.',
-        'Shh. The grass is telling me a secret.', 'Did someone say walkies?'],
+        'Shh. The grass is telling me a secret.', 'Did someone say walkies?', 'Pebbles and the corgis signed a ceasefire. Mostly.'],
       start: ['Corgis, assemble! Gently. GENTLY.', 'Roll for initiative! Biscuit rolled a 20. With his nose.',
-        'Nature finds a way. The way is corgis.', 'Everyone stay calm. And nobody pet the goblins.', 'Who\'s ready for walkies? Violent walkies?'],
-      move: ['Walkies!', 'Coming, little ones. Mind the paws.', 'The moss says this way.', 'Heel. No, not you, Marwyn.', 'Pardon me, mushrooms.'],
+        'Nature finds a way. The way is corgis.', 'Everyone stay calm. And nobody pet the goblins.', 'Who\'s ready for walkies? Violent walkies?',
+        'Corgis, herd them. Nobody leaves without a nip.'],
+      move: ['Walkies!', 'Coming, little ones. Mind the paws.', 'The moss says this way.', 'Heel. No, not you, Marwyn.', 'Pardon me, mushrooms.',
+        'Biscuit, keep him busy while I tiptoe away.'],
       kill: ['Returned to the earth. With love.', 'You\'re compost now. Beautiful compost.', 'Good boys. GOOD boys.',
         'Nature is healing. You are not.', 'That one was a bad dog.'],
-      hurt: ['Ow! Rude!', 'The corgis saw that. They will remember.', 'Not the flower crown!', 'I\'m composting that grudge.'],
+      hurt: ['Ow! Rude!', 'The corgis saw that. They will remember.', 'Not the flower crown!', 'I\'m composting that grudge.',
+        'Ow! I provoked that one, didn\'t I?'],
       lowhp: ['I may need to lie down in a meadow.', 'Biscuit... tell the others I loved them...', 'Someone heal me! Or pet me! Either!',
         'Wilting... a bit... over here.'],
       downed: ['Tell the corgis... they were all good boys...', 'Returning to the earth... briefly...', 'Feed the dogs... twice a day...',
@@ -730,14 +780,16 @@
       revive: ['Photosynthesis! I\'m back!', 'The corgis licked me back to life.', 'Nature always returns. Like a boomerang.',
         'Back on my paws. Feet. Paws.'],
       ally_down: ['No! Corgis, protect them!', 'Someone get them a treat! Or a healer!', 'That\'s it. Nobody gets belly rubs.',
-        'Josiah, do the thing with the leeches!', 'Captain Loaf, sit on them until they feel better!'],
+        'Josiah, do the thing with the leeches!', 'Captain Loaf, sit on them until they feel better!',
+        'Valdris, hammer them back into shape! Gently!'],
       levelup: ['I\'ve learned the true name of every corgi.', 'Stronger roots, fluffier friends.', 'The pack grows!',
         'My power grows. So does the dog hair.'],
       victory: ['Everyone gets a treat! Even you, Slate.', 'Walkies are over. Nap time.', 'Peace, love and corgis.',
-        'Good fight. Now, who wants belly rubs?', 'The earth thanks you. The corgis thank you more.'],
+        'Good fight. Now, who wants belly rubs?', 'The earth thanks you. The corgis thank you more.',
+        'Treats for everyone! A fireproof one for Pebbles.'],
       idle: ['Waffles, no. We do not eat the Mayor.', 'Zarathor, the corgis are not "bling".', 'Professor Marbles, they chase you out of love.',
         'Betty, those are the corgis\' treats. Put them down.', 'Basanos, they just want to sniff you. You know why.',
-        'Marwyn, they can\'t all fit on your lap. Stop trying.'],
+        'Hjalmar, give Biscuit his collar back. And my crown.'],
       signature: ['RELEASE THE CORGIS!', 'Every dog has its day. Today is that day!', 'THE PACK IS UPON YOU!',
         'Cry havoc and let slip the corgis of war!', 'Loaves! Out of the oven!'],
     },
@@ -761,7 +813,7 @@
   DD.registerItem({
     id: ROBE, name: 'Robe of Perpetual Shedding', slot: 'armor', rarity: 'common', icon: '🥼', hero: 'ellaria',
     stats: { hp: 4 },
-    desc: '+4 max HP. Foes that hit you in melee are Dazzled until the end of their next turn (corgi fur allergy).',
+    desc: '+4 max HP. Foes that hit you in melee are Dazzled until the end of their next turn.',
     flavor: 'Woven from 100% reclaimed corgi fluff. Achoo.',
     hooks: {
       onTakeDamage: function (d) {
@@ -778,12 +830,10 @@
   DD.registerItem({
     id: CROWN, name: 'Flower Crown of the Corgi Queen', slot: 'trinket', rarity: 'legendary', icon: '🌸', hero: 'ellaria',
     stats: { heal: 0.15 },
-    desc: '+15% healing. Lost a corgi? One new corgi bounds in beside you at the start of your next turn (pack of 3).',
+    desc: '+15% healing. Lost a corgi? A new one bounds in near you at the start of your next turn (up to 3 corgis).',
     flavor: 'Every daisy is a good boy who crossed the Rainbow Bridge. And then came back. Repeatedly.',
     hooks: {
-      onAllyDeath: function (unit, dead) {
-        if (isCorgiOf(dead, unit)) { unit.data = unit.data || {}; unit.data.ellCrownPending = true; }
-      },
+      // the loss is noted by the corgi's own onDeath (corgiFell), also while Ellaria is downed
       onTurnStart: function (unit) {
         if (!unit.data || !unit.data.ellCrownPending || !active(unit)) return;
         unit.data.ellCrownPending = false;

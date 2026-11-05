@@ -1,9 +1,10 @@
 /* Dungeons and Degenerates — tests/content/hero_buga.js
  * Suites 'hero_buga: …' for Mayor Buga (js/data/heroes/buga.js), v2 (initiative order, no telegraphs, no Guard,
- * durations count the owner's own turns): registration, the Skimming Off the Top passive (credit gold for allies'
- * kills), basic + signature, every pool skill at every level in sandbox fights (numbers, statuses and how many of the
- * owner's turns they last, displacement, costs, cooldowns, charges, gold), combos with other heroes, items, v2 edge
- * cases (whose turn, stunned / silenced / sheep / charmed user, dying targets, pits, lava, water, map edges, AP),
+ * durations count the owner's own turns, attacks of opportunity): registration, the Skimming Off the Top passive
+ * (credit gold for allies' kills), basic + signature, every pool skill at every level in sandbox fights (numbers,
+ * statuses and how many of the owner's turns they last, displacement, costs, cooldowns, charges, gold), combos with
+ * other heroes, Delegate / the Toast with every real hero as the swinging ally (when loaded), items, v2 edge cases (whose turn, stunned / silenced / sheep / charmed user, dying targets, pits, lava,
+ * water, map edges, AP), attacks of opportunity (walking off a foe provokes; swaps, pulls and free swings never do),
  * exact previews, stated ranges, AutoPlay battles with usage counts, and the sprite / object / surface painters.
  */
 (function () {
@@ -100,8 +101,9 @@
         const d = DD.skillDesc(s, i + 1, null);
         texts.push(d);
         t.ok(d.length > 10 && !/undefined|NaN/.test(d), id + ' L' + (i + 1) + ' desc: ' + d);
-        // DESIGN §6 "the desc reads in one breath": one verb + at most one rider
-        t.ok(d.split(/\s+/).length <= 30, id + ' L' + (i + 1) + ': one breath (' + d.split(/\s+/).length + ' words)');
+        // DESIGN §6 "the desc reads in one breath": one verb + at most one rider, no if/else clause
+        t.ok(d.split(/\s+/).length <= 25, id + ' L' + (i + 1) + ': one breath (' + d.split(/\s+/).length + ' words)');
+        t.ok(!/\b(if|unless|otherwise|instead|except)\b/i.test(d), id + ' L' + (i + 1) + ': no if/else clause');
         return JSON.stringify([d, DD.resolve(s.cooldown, DD.skillLevel(s, i + 1), null, 0)]);
       });
       if (pooled) t.ok(faces[0] !== faces[1] && faces[1] !== faces[2], id + ': every level changes something visible');
@@ -118,6 +120,16 @@
     });
     const all = BARK_KEYS.map(function (k) { return h.barks[k].join(' '); }).join(' ');
     t.ok(/Marwyn|Syllamin|Zarathor|Josiah|Marbles/.test(all), 'barks reference other heroes');
+    t.ok(/Kiri/.test(all) && /Betty/.test(all) && /Basanos/.test(all) && /Valdris/.test(all) && /Hjalmar/.test(all) && /Pebbles/.test(all),
+      'barks name the newest party members too (Kiri, Betty, Basanos, Valdris, Hjalmar, Pebbles)');
+    // pronouns per the user: she/her for Ellaria, Sparrow and Kiri, he/him for everyone else
+    const SHE = /\b(Ellaria|Sparrow|Kiri)\b/, HE = /\b(Zarathor|Syllamin|Marbles|Marwyn|Josiah|Corelos|Slate|Betty|Basanos|Valdris|Hjalmar|Pebbles)\b/;
+    BARK_KEYS.forEach(function (k) {
+      h.barks[k].forEach(function (l) {
+        if (SHE.test(l)) t.ok(!/\b(he|him|his|himself)\b/i.test(l), 'she/her in: ' + l);
+        if (HE.test(l)) t.ok(!/\b(she|her|hers|herself)\b/i.test(l), 'he/him in: ' + l);
+      });
+    });
     t.ok(!DD.getStatus('buga_endorsed') && !DD.getStatus('buga_promise'), 'v1 statuses (Endorsed, promise debt) are gone');
     t.ok(!!DD.getSurface('buga_crumbs') && !!DD.getObject('buga_pork_barrel'), 'surface buga_crumbs, object buga_pork_barrel');
     texts.push(DD.getSurface('buga_crumbs').desc, DD.getObject('buga_pork_barrel').desc);
@@ -235,7 +247,7 @@
   });
 
   // ---- basic + signature -----------------------------------------------------------------------------
-  T.suite('hero_buga: Campaign Pamphlet and Toast of the Town (every ally swings, Empowered, for free)', function (t) {
+  T.suite('hero_buga: Campaign Pamphlet and Toast of the Town (every ally swings twice, for free)', function (t) {
     arena({ heroes: [buga([])], enemies: [{ id: 'test_grunt', x: 6, y: 4 }, { id: 'test_grunt', x: 7, y: 4 }] });
     let b = unit('buga');
     t.ok(cur() === b && b.ap === 3, 'Buga\'s turn, 3 AP');
@@ -244,7 +256,7 @@
     t.eq(at(6, 4).hp, 10, '4 damage');
     t.eq(b.ap, 2, '1 AP');
 
-    // the toast: knight (adjacent), mage (in bolt range) and cleric (in smite range) swing, Empowered; a far ally does not
+    // the toast: knight (adjacent), mage (in bolt range) and cleric (in smite range) each swing twice; a far ally does not
     let s = arena({ heroes: [buga([], 1, 4), { id: 'test_knight', x: 4, y: 4 }, { id: 'test_mage', x: 3, y: 7 }, { id: 'test_cleric', x: 6, y: 6 },
       { id: 'test_rogue', x: 0, y: 0 }], enemies: [{ id: 'test_brute', x: 5, y: 4 }, { id: 'test_grunt', x: 8, y: 8 }] });
     b = unit('buga');
@@ -258,20 +270,24 @@
     t.ok(use(b, 'buga_toast_of_the_town', brute), 'Toast of the Town');
     t.eq(s.hype, 0, 'Hype spent');
     t.eq(b.ap, 1, '2 AP');
-    t.eq(brute.maxHp - brute.hp, (8 - 1) + (6 - 1) + (6 - 1), 'slash 5 → 8, bolt 4 → 6, smite 4 → 6 (+50% each, minus 1 armor)');
-    t.eq(JSON.stringify(used.filter(function (x) { return x.indexOf('buga:') < 0; }).sort()),
-      JSON.stringify(['test_cleric:test_smite', 'test_knight:test_slash', 'test_mage:test_bolt']), 'each ally made its basic attack');
-    t.ok([knight, mage, cleric].every(function (u) { return !st(u, 'empowered'); }), 'the Empowered swings used it up');
-    t.ok(!st(rogue, 'empowered'), 'the rogue could not hit it: no swing, no Empowered');
+    t.eq(brute.maxHp - brute.hp, 2 * ((5 - 1) + (4 - 1) + (4 - 1)), 'slash 5, bolt 4 and smite 4, twice each, minus 1 armor per hit: 20');
+    const swings = used.filter(function (x) { return x.indexOf('buga:') < 0; });
+    t.eq(JSON.stringify(swings.slice().sort()), JSON.stringify(['test_cleric:test_smite', 'test_cleric:test_smite', 'test_knight:test_slash',
+      'test_knight:test_slash', 'test_mage:test_bolt', 'test_mage:test_bolt']), 'each ally made its basic attack twice');
+    t.ok(swings.length === 6 && swings.slice(0, 3).join() === swings.slice(3).join() && swings[0] === 'test_knight:test_slash',
+      'a dogpile: everyone swings (best hitter first), then everyone swings again (' + swings.join(', ') + ')');
+    t.ok(used.indexOf('test_rogue:test_stab') < 0 && rogue.hp === rogue.maxHp, 'the rogue could not hit it: no swing');
     t.eq(JSON.stringify([knight, mage, cleric, rogue].map(function (u) { return [u.ap, u.apBank || 0]; })), JSON.stringify(aps), 'free: no ally spent or banked AP');
+    t.ok([knight, mage, cleric].every(function (u) { return DD.Combat.slotsOf(u).every(function (sl) { return !sl.cd && !sl.uses; }); }), 'free: no cooldowns or charges used');
     t.ok(toTurn(knight) && knight.ap === 3, 'the knight still gets his full turn');
-    // the target dies mid-toast: the rest keep their turn and get no Empowered
+    // the target dies mid-toast: nobody swings at a corpse
     s = arena({ heroes: [buga([], 1, 4), { id: 'test_knight', x: 4, y: 4 }, { id: 'test_mage', x: 3, y: 7 }], enemies: [{ id: 'test_grunt', x: 5, y: 4 }, { id: 'test_grunt', x: 8, y: 8 }] });
     s.hype = 100;
-    at(5, 4).hp = 8;
-    t.ok(use(unit('buga'), 'buga_toast_of_the_town', { x: 5, y: 4 }), 'toast at a grunt with 8 HP');
-    t.ok(!unit('test_grunt') || unit('test_grunt').x === 8, 'the Empowered slash (8) finishes it');
-    t.ok(!st(unit('test_mage'), 'empowered'), 'the mage never swung: no Empowered left over');
+    at(5, 4).hp = 12;
+    const used2 = usage();
+    t.ok(use(unit('buga'), 'buga_toast_of_the_town', { x: 5, y: 4 }), 'toast at a grunt with 12 HP');
+    t.ok(!at(5, 4), 'slash 5, bolt 4, slash 5: it falls to the third swing');
+    t.eq(used2.filter(function (x) { return x.indexOf('test_mage:') === 0; }).length, 1, 'the mage\'s second bolt is never thrown at a corpse');
     t.ok(DD.Combat.state.log.some(function (l) { return /takes full credit for Sir Testsalot/.test(l.text); }), 'and Buga takes the credit for the toast\'s kill');
     // no ally in reach: not a target
     s = arena({ heroes: [buga([], 1, 4), { id: 'test_knight', x: 0, y: 8 }], enemies: [{ id: 'test_grunt', x: 5, y: 4 }] });
@@ -614,6 +630,8 @@
       t.eq(b.ap, 1, 'L' + lv + ': 2 AP');
       const o = barrelAt(6, 4);
       t.ok(!!o && o.data.dmg === L.boom && o.data.fuse === 1 && o.data.owner === b.id, 'L' + lv + ': a lit barrel carrying ' + L.boom + ' boom');
+      // the inspect panel shows the object's label: the exact blast of this barrel, not the 8-12 range of the def text
+      t.eq(o && o.label, 'Pork Barrel (' + L.boom + ' fire' + (L.gold ? ', +' + L.gold + ' gold' : '') + ')', 'L' + lv + ': its name states its blast');
       t.ok([[5, 4], [7, 4], [6, 5]].every(function (p) { return at(p[0], p[1]).hp === 14; }), 'L' + lv + ': no damage yet');
       const g0 = gold();
       DD.Act.damageObject(b, 6, 4, 1);
@@ -743,7 +761,7 @@
   });
 
   // ---- combos with other heroes ---------------------------------------------------------------------------------------------
-  T.suite('hero_buga: combos with other heroes (Butter Up a big skill, crumbs + fire, Red Tape into a cleave, shove into a barrel)', function (t) {
+  T.suite('hero_buga: combos with other heroes (Butter Up a big skill or the Toast, crumbs + fire, Red Tape into a cleave, shove into a barrel)', function (t) {
     // Butter Up → the mage's Fire Fixture deals +50% to every foe it hits
     const dmg = [false, true].map(function (buttered) {
       arena({ heroes: [buga([sk('buga_butter_up', 1)], 1, 4), { id: 'test_mage', x: 2, y: 6 }], enemies: [{ id: 'test_grunt', x: 5, y: 5 }, { id: 'test_grunt', x: 5, y: 6 }] });
@@ -753,6 +771,15 @@
       return 28 - at(5, 5).hp - at(5, 6).hp;
     });
     t.ok(dmg[1] > dmg[0] && dmg[1] >= Math.round(dmg[0] * 1.4), 'Butter Up + the mage\'s AoE: ' + dmg[0] + ' → ' + dmg[1] + ' total');
+    // Butter Up → Toast of the Town: the buttered knight's first swing of the dogpile is +50%
+    const dog = [false, true].map(function (buttered) {
+      const s2 = arena({ heroes: [buga([sk('buga_butter_up', 1)], 1, 4), { id: 'test_knight', x: 4, y: 4 }], enemies: [{ id: 'test_grunt', x: 5, y: 4 }, { id: 'test_grunt', x: 8, y: 8 }] });
+      s2.hype = 100;
+      if (buttered) use(unit('buga'), 'buga_butter_up', unit('test_knight'));
+      t.ok(use(unit('buga'), 'buga_toast_of_the_town', { x: 5, y: 4 }), (buttered ? 'Butter Up, then ' : '') + 'Toast of the Town');
+      return 14 - at(5, 4).hp;
+    });
+    t.eq(JSON.stringify(dog), JSON.stringify([10, 13]), 'Butter Up + Toast: the knight\'s two free slashes go 5 + 5 → 8 + 5');
     // Crumb Trail → the mage's fire turns the whole trail into a fire field under the foes
     arena({ heroes: [buga([sk('buga_crumbs', 2)], 1, 4), { id: 'test_mage', x: 1, y: 7 }], enemies: [{ id: 'test_grunt', x: 4, y: 4 }, { id: 'test_grunt', x: 4, y: 6 }, { id: 'test_grunt', x: 6, y: 4 }] });
     use(unit('buga'), 'buga_crumbs', { x: 4, y: 4 });
@@ -782,6 +809,43 @@
     t.eq(gold() - g0, 2, 'the knight\'s kill, Buga\'s credit (+2)');
   });
 
+  // ---- Delegate / the Toast with the real party: their payoff is every other hero's basic attack ----------------------
+  T.suite('hero_buga: Delegate and the Toast with every real hero (free swings, exact previews)', function (t) {
+    const ids = Object.keys(DD.defs.heroes).filter(function (id) { return !/^test_/.test(id) && id !== 'buga'; });
+    if (!ids.length) { t.skip('no other real heroes loaded (isolated run)'); return; }
+    ids.forEach(function (id) {
+      ['buga_delegate', 'buga_toast_of_the_town'].forEach(function (sid) {
+        // the ally next to the grunt (melee basics), else 2 tiles off (ranged ones with a minimum range)
+        let ok = false;
+        [{ x: 4, y: 4 }, { x: 5, y: 6 }].some(function (pos) {
+          const s = arena({ heroes: [buga([sk('buga_delegate', 1)], 1, 4), { id: id, x: pos.x, y: pos.y, level: 3 }],
+            enemies: [{ id: 'test_grunt', x: 5, y: 4 }, { id: 'test_grunt', x: 8, y: 8 }] });
+          s.hype = 100;
+          const b = unit('buga'), ally = unit(id), g = at(5, 4);
+          const sl = slotOf(b, sid);
+          if (!DD.Targeting.isValidTarget(b, sl, g.x, g.y)) return false;
+          const prev = DD.Combat.preview(b, sl, g.x, g.y);
+          const hp0 = {};
+          s.units.forEach(function (u) { hp0[u.id] = u.hp; });
+          const ap0 = [ally.ap, ally.apBank || 0];
+          t.ok(DD.Combat.useSkill(b, sl, g.x, g.y), id + ' ' + sid + ': used');
+          t.ok(g.dead || g.hp < hp0[g.id], id + ' ' + sid + ': the free swing landed');
+          t.eq(JSON.stringify([ally.ap, ally.apBank || 0]), JSON.stringify(ap0), id + ' ' + sid + ': free for the ally (no AP spent or banked)');
+          t.ok(DD.Combat.slotsOf(ally).every(function (x) { return !x.cd && !x.uses; }), id + ' ' + sid + ': no cooldown or charge used');
+          s.units.forEach(function (u) {
+            if (hp0[u.id] === undefined) return;
+            const e = prev.perUnit[u.id];
+            const said = e ? (e.dmg || 0) - (e.heal || 0) : 0;
+            const real = hp0[u.id] - (u.dead ? 0 : u.hp);
+            t.ok(said === real || (u.dead && said >= hp0[u.id]), id + ' ' + sid + ': ' + u.name + ' as previewed (' + said + ' vs ' + real + ')');
+          });
+          return (ok = true);
+        });
+        t.ok(ok, id + ' ' + sid + ': an ally next to the foe (or 2 tiles off) can be delegated');
+      });
+    });
+  });
+
   // ---- items -----------------------------------------------------------------------------------------------------------
   T.suite('hero_buga: items (Pen marks, Chain of Office, Re-Election Toaster)', function (t) {
     arena({ heroes: [buga([], 2, 4, { items: ['buga_golden_pen'] }), { id: 'test_knight', x: 4, y: 4 }], enemies: [{ id: 'test_grunt', x: 5, y: 4 }, { id: 'test_grunt', x: 8, y: 8 }] });
@@ -809,6 +873,15 @@
     t.ok(!b.downed && b.hp === Math.round(b.maxHp * 0.5), 'Toaster: DING! back up at 50% HP (' + b.hp + '/' + b.maxHp + ')');
     DD.Act.damage(at(3, 4), b, 999);
     t.ok(b.downed, 'Toaster: only once per combat');
+    // downed mid-walk by an attack of opportunity: DING!, but he did go down, so that walk ends where he fell (DESIGN §4.2)
+    arena({ heroes: [buga([], 2, 4, { items: ['buga_toaster'] }), { id: 'test_knight', x: 0, y: 0 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
+    b = unit('buga');
+    b.hp = 2;
+    t.ok(DD.Combat.move(b, 0, 4), 'Toaster: at 2 HP he walks off a grunt (its stab: 4 − 1 armor)');
+    t.ok(!b.downed && b.hp === Math.round(b.maxHp * 0.5), 'Toaster: downed by the stab, DING! back up at 50% (' + b.hp + ')');
+    t.ok(b.x === 2 && b.y === 4 && b.ap === 0, 'Toaster: the walk ended where he fell, 0 AP left (' + b.x + ',' + b.y + ', ' + b.ap + ' AP)');
+    DD.Combat.endRound();
+    t.ok(cur() === b && DD.Combat.move(b, 2, 6) && b.x === 2 && b.y === 6, 'Toaster: his next walk goes all the way (stab and all)');
   });
 
   // ---- v2 edge cases -----------------------------------------------------------------------------------------------------------
@@ -872,6 +945,94 @@
     });
     t.ok(b.downed, 'a downed Buga running skills (scripted) does not crash');
     t.ok(T.contentHelpers ? T.contentHelpers.sanity(t, 'edge cases') : true, 'state sane');
+  });
+
+  // ---- v2 attacks of opportunity -----------------------------------------------------------------------------------------
+  T.suite('hero_buga: v2 attacks of opportunity (walking off a foe provokes; his swap, pull and free swings never do)', function (t) {
+    /** Run fn while recording 'opportunity:attack' events as 'attacker>mover:skill'. */
+    function aoo(fn) {
+      const seen = [];
+      const off = DD.Events.on('opportunity:attack', function (e) { seen.push(e.attacker.defId + '>' + e.mover.defId + ':' + e.skillId); });
+      try { fn(); } finally { off(); }
+      return seen;
+    }
+    // walking away from a grunt: one free stab on the way out, the walk goes on, the move can't be undone
+    arena({ heroes: [buga([], 2, 4)], enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
+    let b = unit('buga'), g = at(3, 4);
+    const e = DD.Combat.reachable(b).get('0,4');
+    t.ok(e && e.provokes.length === 1 && e.provokes[0] === g.id, 'the move preview: walking off provokes the grunt');
+    const pv = DD.Combat.provokes(b, 0, 4);
+    t.ok(pv.length === 1 && pv[0].skillId === 'test_grunt_stab' && pv[0].dmg === 4, 'Combat.provokes: a Stab for 4 (' + JSON.stringify(pv) + ')');
+    let hp = b.hp;
+    let seen = aoo(function () { t.ok(DD.Combat.move(b, 0, 4), 'he walks off'); });
+    t.eq(seen.join(), 'test_grunt>buga:test_grunt_stab', 'attack of opportunity');
+    t.eq(hp - b.hp, 4, 'stabbed for 4 on the way out');
+    t.ok(b.x === 0 && b.y === 4 && b.ap === 2, 'and he walks on (one move action, 1 AP)');
+    t.ok(!DD.Combat.canUndo(), 'a move that provoked cannot be undone');
+    t.eq(DD.Combat.reachable(b).get('0,6').provokes.length, 0, 'once clear of it, his moves are free again');
+    // his basic attack is ranged: he never makes one
+    arena({ heroes: [buga([], 2, 4)], enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
+    b = unit('buga'); g = at(3, 4);
+    t.eq(DD.Act.opportunitySlot(b), null, 'a ranged basic attack: no attacks of opportunity');
+    seen = aoo(function () { DD.AI.moveTo(g, 6, 4); });
+    t.ok(!seen.length && g.x === 6 && g.hp === 14, 'a grunt walks away from the Mayor untouched');
+    // Human Shield swaps him out without provoking; the knight it pulls in is engaged, holds the line and soaks the stab
+    arena({ enemyAi: true, order: ['buga', 'test_grunt', 'test_knight'], heroes: [buga([sk('buga_human_shield', 1)], 2, 4), { id: 'test_knight', x: 2, y: 6 }],
+      enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
+    b = unit('buga'); g = at(3, 4);
+    const k = unit('test_knight');
+    hp = b.hp;
+    seen = aoo(function () { t.ok(use(b, 'buga_human_shield', k), 'Human Shield'); });
+    t.ok(!seen.length && b.hp === hp && b.x === 2 && b.y === 6, 'a swap never provokes: the Mayor is out, unhurt');
+    t.ok(k.x === 2 && k.y === 4 && k.block === 4, 'the knight stands next to the grunt with 4 Block');
+    const khp = k.hp;
+    let stabbed = null;
+    const off = DD.Events.on('turn:end', function (ev) { if (ev.unit === g && stabbed === null) stabbed = { knight: k.hp, block: k.block, buga: b.hp, gx: g.x, gy: g.y }; });
+    DD.Combat.endTurn();
+    off();
+    t.ok(!!stabbed && stabbed.gx === 3 && stabbed.gy === 4, 'on its turn the grunt sticks to the knight (walking past him would provoke)');
+    t.ok(!!stabbed && stabbed.buga === hp, 'the Mayor is not touched');
+    t.ok(!!stabbed && stabbed.knight === khp && stabbed.block === 1, 'it stabs the knight: 4 − 1 armor = 3, soaked by the 4 Block (1 left)');
+    // Red Tape drags a grunt off the knight: a pull never provokes
+    arena({ heroes: [buga([sk('buga_red_tape', 1)], 1, 4), { id: 'test_knight', x: 5, y: 5 }], enemies: [{ id: 'test_grunt', x: 5, y: 4 }] });
+    g = at(5, 4);
+    seen = aoo(function () { t.ok(use(unit('buga'), 'buga_red_tape', g), 'Red Tape'); });
+    t.ok(!seen.length && g.x === 3 && g.hp === 14, 'pulled 2 tiles off the knight: no attack of opportunity, no damage');
+    t.ok(unit('test_knight').oppRound !== DD.Combat.state.round, 'the knight\'s reaction for the round is unused');
+    // Delegate's swing is not the ally's reaction: the knight still strikes a grunt that walks off him
+    arena({ heroes: [buga([sk('buga_delegate', 1)], 1, 4), { id: 'test_knight', x: 4, y: 4 }], enemies: [{ id: 'test_grunt', x: 5, y: 4 }] });
+    g = at(5, 4);
+    seen = aoo(function () { t.ok(use(unit('buga'), 'buga_delegate', g), 'Delegate'); });
+    t.ok(!seen.length && g.hp === 9, 'the delegated slash (5) is a plain free attack, not a reaction');
+    seen = aoo(function () { DD.AI.moveTo(g, 8, 4); });
+    t.ok(seen.join() === 'test_knight>test_grunt:test_slash' && g.hp === 4 && g.x === 8, 'walking off the knight still provokes his slash (5)');
+    // an ally's attack of opportunity that kills is an ally's kill: Buga takes the credit
+    arena({ heroes: [buga([], 1, 4), { id: 'test_knight', x: 4, y: 4 }], enemies: [{ id: 'test_grunt', x: 5, y: 4 }, { id: 'test_grunt', x: 8, y: 8 }] });
+    g = at(5, 4);
+    g.hp = 5;
+    let g0 = gold();
+    seen = aoo(function () { DD.AI.moveTo(g, 7, 3); });
+    t.ok(seen.length === 1 && g.dead, 'the knight\'s attack of opportunity drops the fleeing grunt');
+    t.eq(gold() - g0, 2, 'an ally\'s kill: Buga takes the credit (+2)');
+    // a bribed foe fights for him: its friend walking off it is stabbed in the back (Buga's credit); nobody strikes the
+    // bribed one when it walks off them (its old friends are not its foes any more, the knight is on its side now)
+    arena({ heroes: [buga([sk('buga_bribe', 1)], 1, 4), { id: 'test_knight', x: 3, y: 4 }],
+      enemies: [{ id: 'test_grunt', x: 4, y: 4 }, { id: 'test_grunt', x: 4, y: 5 }, { id: 'test_grunt', x: 4, y: 3 }] });
+    const ga = at(4, 4), gb = at(4, 5), gc = at(4, 3);
+    t.ok(use(unit('buga'), 'buga_bribe', ga), 'bribe the grunt in the middle');
+    gb.hp = 4;
+    g0 = gold();
+    seen = aoo(function () { DD.AI.moveTo(gb, 6, 6); });
+    t.eq(seen.join(), 'test_grunt>test_grunt:test_grunt_stab', 'its friend walks off it: the bribed grunt stabs it in the back');
+    t.ok(gb.dead && gold() - g0 === 2, 'the kill by the foe he bribed is Buga\'s credit (+2)');
+    seen = aoo(function () { DD.AI.moveTo(ga, 6, 4); });
+    t.ok(!seen.length && ga.x === 6 && ga.hp === 14 && gc.hp === 14, 'the bribed grunt walks off its old friend and the knight: nobody strikes a colleague on the payroll');
+    // Red Tape III pulls a foe right up to him: Rooted, it can't walk, but it still stabs him if he walks off
+    arena({ heroes: [buga([sk('buga_red_tape', 3)], 1, 4)], enemies: [{ id: 'test_grunt', x: 6, y: 4 }] });
+    b = unit('buga'); g = at(6, 4);
+    use(b, 'buga_red_tape', g);
+    t.ok(g.x === 2 && g.y === 4 && st(g, 'root'), 'pulled 4 tiles, next to the Mayor, Rooted');
+    t.eq(DD.Combat.reachable(b).get('1,7').provokes.length, 1, 'walking off it provokes (a Root stops walks, not stabs): mind your own red tape');
   });
 
   // ---- previews ---------------------------------------------------------------------------------------------------------------
@@ -950,20 +1111,23 @@
   });
 
   // ---- AutoPlay -----------------------------------------------------------------------------------------------------------------
-  T.suite('hero_buga: AutoPlay v2 battles (fixture party, acts 1-3, levels 1/3/5, skills used)', function (t) {
+  T.suite('hero_buga: AutoPlay v2 battles (fixture party, acts 1-3, levels 1/3/5 and the bosses, skills used)', function (t) {
+    // every pool skill sits in at least two kits (L3 / L5 kits: normal fight of act k and elite fight of act k − 1;
+    // the act k boss at L5 gets the kit of act k + 2)
     const kits = {
       1: { 1: ['buga_delegate', 'buga_fine'], 2: ['buga_delegate', 'buga_fine'], 3: ['buga_delegate', 'buga_fine'] },
-      3: { 1: ['buga_delegate', 'buga_fine', 'buga_promise', 'buga_red_tape'], 2: ['buga_delegate', 'buga_fine', 'buga_butter_up', 'buga_human_shield'],
+      3: { 1: ['buga_delegate', 'buga_fine', 'buga_promise', 'buga_red_tape'], 2: ['buga_delegate', 'buga_fine', 'buga_butter_up', 'buga_pork_barrel'],
         3: ['buga_delegate', 'buga_fine', 'buga_bribe', 'buga_crumbs'] },
-      5: { 1: ['buga_delegate', 'buga_pork_barrel', 'buga_crumbs', 'buga_photo_op'], 2: ['buga_delegate', 'buga_bribe', 'buga_butter_up', 'buga_red_tape'],
-        3: ['buga_fine', 'buga_promise', 'buga_human_shield', 'buga_photo_op'] },
+      5: { 1: ['buga_delegate', 'buga_pork_barrel', 'buga_crumbs', 'buga_photo_op'], 2: ['buga_delegate', 'buga_bribe', 'buga_butter_up', 'buga_human_shield'],
+        3: ['buga_promise', 'buga_human_shield', 'buga_red_tape', 'buga_photo_op'] },
     };
     const used = {};
     let battles = 0, wins = 0;
-    [[1, 'normal'], [2, 'normal'], [3, 'normal'], [1, 'elite'], [2, 'elite'], [3, 'elite']].forEach(function (fight) {
+    [[1, 'normal'], [2, 'normal'], [3, 'normal'], [1, 'elite'], [2, 'elite'], [3, 'elite'], [1, 'boss'], [2, 'boss'], [3, 'boss']].forEach(function (fight) {
       const act = fight[0], kind = fight[1];
-      const kitAct = kind === 'elite' ? (act % 3) + 1 : act;   // elites get the other kits of their level
-      [1, 3, 5].forEach(function (level) {
+      // elites and bosses get the other kits of their level
+      const kitAct = kind === 'elite' ? (act % 3) + 1 : kind === 'boss' ? ((act + 1) % 3) + 1 : act;
+      (kind === 'boss' ? [5] : [1, 3, 5]).forEach(function (level) {
         const tag = 'act ' + act + ' ' + kind + ' L' + level;
         const enc = DD.getEncounter('test_a' + act + '_' + kind);
         if (!enc) { t.fail('fixture encounter test_a' + act + '_' + kind + ' missing'); return; }
@@ -995,8 +1159,43 @@
     });
     const distinct = Object.keys(used).filter(function (k) { return POOL.indexOf(k) >= 0; });
     t.log('battles ' + battles + ', wins ' + wins + ', usage ' + JSON.stringify(used));
-    t.ok(distinct.length >= 6, 'AutoPlay used ' + distinct.length + ' different pool skills: ' + distinct.join(', '));
+    t.ok(distinct.length >= 7, 'AutoPlay used ' + distinct.length + ' different pool skills: ' + distinct.join(', '));
     t.ok((used.buga_delegate || 0) >= 3, 'Delegate is a staple (' + (used.buga_delegate || 0) + ' uses)');
+    // the situational skills, on cue: three grunts around an empty tile → the barrel goes in the middle; 100 Hype and the
+    // whole party in reach of the boss → the Toast (AutoPlay holds signatures for a boss or a crowd)
+    // v2 (barrels are volatile): with the AP left it may pop its own barrel at once with a pamphlet, before the grunts move
+    [1, 3].forEach(function (lv) {
+      arena({ enemyAi: true, heroes: [buga([sk('buga_pork_barrel', lv)], 1, 4)],
+        enemies: [{ id: 'test_grunt', x: 5, y: 3 }, { id: 'test_grunt', x: 5, y: 5 }, { id: 'test_grunt', x: 6, y: 4 }] });
+      const seen = [];
+      DD.Act.addRule({ id: 'hb_plant', name: 'Plant', hooks: { onSkillUsed: function (ctx) {
+        if (DD.Act.simulating || !ctx || !ctx.user || ctx.user.defId !== 'buga' || !ctx.target) return;
+        seen.push({ id: ctx.skill.id, at: ctx.target.x + ',' + ctx.target.y, obj: ctx.targetObj ? ctx.targetObj.id : null });
+      } } });
+      const grunts = DD.Combat.enemies().slice();
+      DD.AutoPlay.takeTurn();
+      const planted = seen.some(function (e) { return e.id === 'buga_pork_barrel' && e.at === '5,4'; });
+      const popped = seen.some(function (e) { return e.obj === 'buga_pork_barrel' && e.at === '5,4'; });
+      const L = lvl('buga_pork_barrel', lv);
+      t.log('Pork Barrel L' + lv + ' cue: ' + (popped ? 'planted and popped at once' : 'planted') + ' ' + JSON.stringify(seen));
+      t.ok(planted && (popped ? !barrelAt(5, 4) && grunts.every(function (g) { return g.dead || 14 - g.hp >= L.boom; }) : !!barrelAt(5, 4)),
+        'Pork Barrel L' + lv + ': AutoPlay plants it between three grunts' + (popped ? ' and pops it at once (' + L.boom + ' to each)' : '') + ' (' + JSON.stringify(seen) + ')');
+    });
+    const s = arena({ enemyAi: true, heroes: [buga([sk('buga_delegate', 1)], 2, 4), { id: 'test_knight', x: 4, y: 3 }, { id: 'test_mage', x: 2, y: 2 },
+      { id: 'test_cleric', x: 4, y: 5 }], enemies: [{ id: 'test_boss', x: 5, y: 3 }] });
+    s.hype = 100;
+    const mine = usage();
+    DD.AutoPlay.takeTurn();
+    t.ok(mine.indexOf('buga:buga_toast_of_the_town') >= 0 && s.hype === 0, 'Toast of the Town: AutoPlay raises a glass at the boss (' + mine.join(', ') + ')');
+    // pinned between two grunts that act before the knight, at half HP: walking off would provoke both, so AutoPlay
+    // swaps the Mayor out with Human Shield (II: range 4) and the knight takes his place
+    arena({ enemyAi: true, order: ['buga', 'test_grunt', 'test_knight'], heroes: [buga([sk('buga_human_shield', 2)], 3, 4, { level: 1 }),
+      { id: 'test_knight', x: 1, y: 6 }], enemies: [{ id: 'test_grunt', x: 4, y: 4 }, { id: 'test_grunt', x: 3, y: 3 }] });
+    unit('buga').hp = 12;
+    const mine2 = usage();
+    DD.AutoPlay.takeTurn();
+    t.ok(mine2.indexOf('buga:buga_human_shield') >= 0 && unit('test_knight').x === 3 && unit('test_knight').y === 4,
+      'Human Shield: AutoPlay swaps the pinned Mayor out (' + mine2.join(', ') + ')');
   });
 
   // ---- painters --------------------------------------------------------------------------------------------------------------------
@@ -1038,5 +1237,48 @@
       ctx.restore();
       t.ok(inked() > 100, 'crumbs paint');
     }
+  });
+
+  // ---- v2 requests (Nov 3): barrels, flyers ---------------------------------------------------------------------------
+  T.suite('hero_buga: v2 requests — the Pork Barrel is volatile: a single-target attack sets it off (credit, skim, kickbacks); a fine served on it collects nothing; flyers float over the crumbs', function (t) {
+    t.ok(DD.getObject('buga_pork_barrel').volatile === true && DD.Act.isVolatile({ id: 'buga_pork_barrel' }), 'the Pork Barrel is flagged volatile');
+    // 1. Buga fines his own barrel: it goes off at once, his blast and his kill (no credit for his own work), no fine gold
+    arena({ heroes: [buga([sk('buga_pork_barrel', 3), sk('buga_fine', 1)], 1, 4)],
+      enemies: [{ id: 'test_grunt', x: 5, y: 4, hpMult: 0.5 }, { id: 'test_grunt', x: 8, y: 8 }] });
+    let b = unit('buga'), g = at(5, 4);
+    t.ok(use(b, 'buga_pork_barrel', { x: 4, y: 4 }) && !!barrelAt(4, 4), 'planted next to a 7-HP grunt');
+    const fine = slotOf(b, 'buga_fine');
+    t.ok(DD.Targeting.validTargets(b, fine).some(function (q) { return q.obj === 'buga_pork_barrel' && q.x === 4 && q.y === 4; }), 'Loitering Fine can be aimed at it');
+    t.eq(DD.getSkill('buga_fine').autoplayValue(DD.Targeting.buildCtx(b, fine, { x: 4, y: 4 })), 0, 'AutoPlay: a fine on a barrel is worth no gold');
+    t.eq(DD.getSkill('buga_fine').autoplayValue(DD.Targeting.buildCtx(b, fine, { x: 5, y: 4 })), lvl('buga_fine', 1).gold, '...a fine on a foe still is');
+    const pv = DD.Combat.preview(b, fine, 4, 4);
+    t.ok(pv.detonates === 'buga_pork_barrel' && pv.perUnit[g.id] && pv.perUnit[g.id].lethal, 'the preview: it detonates, the grunt is KO');
+    let g0 = gold();
+    t.ok(use(b, 'buga_fine', { x: 4, y: 4 }), 'fined');
+    t.ok(!barrelAt(4, 4) && g.dead, 'the barrel went off and the grunt is gone');
+    t.eq(gold() - g0, lvl('buga_pork_barrel', 3).gold, 'gold: the kickbacks only (no fine from a barrel, no credit for his own kill)');
+    t.eq(b.ap, 0, 'AP: 2 + 1');
+    // 2. an ally's basic attack sets it off: the ally's kill, so Buga takes the credit
+    arena({ heroes: [buga([sk('buga_pork_barrel', 3)], 1, 4), { id: 'test_mage', x: 1, y: 6 }],
+      enemies: [{ id: 'test_grunt', x: 5, y: 4, hpMult: 0.5 }, { id: 'test_grunt', x: 8, y: 8 }] });
+    b = unit('buga'); g = at(5, 4);
+    const m = unit('test_mage');
+    t.ok(use(b, 'buga_pork_barrel', { x: 4, y: 4 }), 'planted');
+    t.ok(toTurn(m), 'the mage\'s turn (same round: the fuse has not burnt down)');
+    t.ok(!!barrelAt(4, 4) && DD.Targeting.validTargets(m, m.basic).some(function (q) { return q.obj === 'buga_pork_barrel'; }), 'the mage can shoot the barrel');
+    g0 = gold();
+    t.ok(DD.Combat.useSkill(m, m.basic, 4, 4), 'shot');
+    t.ok(!barrelAt(4, 4) && g.dead, 'it went off: the grunt is gone');
+    t.eq(gold() - g0, lvl('buga_pork_barrel', 3).gold + 2, 'gold: kickbacks + Buga\'s credit for the mage\'s kill');
+    // 3. the crumbs are a floor surface: a flying foe that walks in or stays over them is never Slowed
+    arena({ heroes: [buga([sk('buga_crumbs', 1)], 1, 4)], enemies: [{ id: 'test_grunt', x: 4, y: 4 }, { id: 'test_grunt', x: 8, y: 8 }] });
+    b = unit('buga'); g = at(4, 4);
+    g.flags.flying = true;
+    t.ok(use(b, 'buga_crumbs', { x: 4, y: 4 }), 'crumbs under a flyer');
+    t.ok(!st(g, 'slow'), 'the flyer is not Slowed by crumbs scattered under it');
+    DD.Act.teleport(g, 4, 5, { fx: false });
+    DD.Act.teleport(g, 4, 4, { fx: false });
+    t.ok(!st(g, 'slow'), 'nor when it comes back over them');
+    t.eq(DD.Grid.hazardAt(4, 4, g), null, 'the crumbs are no hazard to anyone');
   });
 })();

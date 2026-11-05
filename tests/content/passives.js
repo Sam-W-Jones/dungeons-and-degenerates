@@ -3,6 +3,8 @@
  * registered rp_* entry, one sandbox spec per entry proving that each level does exactly what its desc says
  * (forced RNG for every proc branch + statistics over many trials for the odds), stats / runMods / requires checks,
  * HUD previews with passives on, and AutoPlay fights with random 4-passive loadouts at levels 1/4/7/10.
+ * v2: initiative turns (sandboxes default to heroesFirst; spec arenas keep the AI quiet with enemyAi: false unless a
+ * spec needs enemies to act), no Guard, no fight-start Block, no intents (only boss wind-ups), no XP.
  * Uses the test_ fixtures (tests/fixtures.js); works in isolation (?isolate=data/passives,content/passives).
  */
 (function () {
@@ -11,11 +13,19 @@
   const DD = window.DD;
 
   const RARITIES = ['common', 'uncommon', 'rare', 'legendary', 'cursed'];
+  // ARCHITECTURE §5.3 (v2): modifyGuard is gone with Guard, so it is not on the list
   const HOOKS = ['onCombatStart', 'onCombatEnd', 'onRoundStart', 'onTurnStart', 'onTurnEnd', 'onMove', 'onEnterTile', 'onSkillUsed',
     'modifyCost', 'modifyRange', 'modifyOutgoingDamage', 'modifyIncomingDamage', 'onDealDamage', 'onTakeDamage', 'onKill', 'onDeath',
-    'onDowned', 'onHealed', 'onStatusApplied', 'onAllyDeath', 'modifyStatus', 'modifyPush'];
-  const STAT_KEYS = ['hp', 'ap', 'mov', 'armor', 'dmg', 'heal', 'range', 'block', 'hype'];
+    'onDowned', 'onHealed', 'onStatusApplied', 'onAllyDeath', 'modifyStatus', 'modifyPush',
+    'modifyFinalDamage', 'preventDeath', 'onAnyDeath', 'onAllyDowned', 'modifyHeal', 'modifyMoveCost', 'modifyOutgoingPush', 'onCostPaid',
+    'modifyInitiative', 'modifyOpportunity', 'onOpportunityAttack'];
+  const STAT_KEYS = ['hp', 'ap', 'mov', 'armor', 'dmg', 'heal', 'range', 'block', 'hype', 'init'];
   const MOD_KEYS = ['gold', 'xp', 'price', 'heal'];
+  // runMods bounds: fractions, except xp = the extra weight in the DM's level-up roll (Teacher's Pet III counts as 3 heroes)
+  const MOD_MAX = { gold: 1, xp: 2, price: 1, heal: 1 };
+  // v1 words a v2 Blessing must not use (no Guard, no telegraphs / intents / planning, no XP)
+  const V1_WORDS = /\bGuard\b|telegraph|\bintents?\b|\bplan(s|ned|ning)?\b|aiming at|\bXP\b|experience/i;
+  const DESC_MAX = 170;   // simplified texts (v2): one or two short sentences
   const FIXTURE_HEROES = ['test_knight', 'test_mage', 'test_cleric', 'test_rogue', 'test_summoner'];
 
   // ---- helpers ------------------------------------------------------------------------------------
@@ -26,8 +36,9 @@
   }
   function badText(s) { return typeof s !== 'string' || !s.trim() || /undefined|NaN|\[object /.test(s); }
   function dist(a, b) { return Math.abs(a.x - b.x) + Math.abs(a.y - b.y); }
+  /** A sandbox that never ends by itself; the AI passes every turn (enemyAi: false) unless cfg says otherwise. */
   function quiet(cfg) {
-    return DD.Combat.sandbox(Object.assign({ w: 9, h: 9, seed: 7, noPlan: true, objective: { type: 'custom', text: 'Testing' },
+    return DD.Combat.sandbox(Object.assign({ w: 9, h: 9, seed: 7, noPlan: true, enemyAi: false, objective: { type: 'custom', text: 'Testing' },
       encounter: { id: 'pt_quiet', checkObjective: function () { return null; } } }, cfg || {}));
   }
   /** Standard arena: the hero (passive id at level lv) at (1,4); foes default to an adjacent grunt (2,4) and a far one (7,7). */
@@ -54,6 +65,28 @@
     const r = DD.Combat.state.rng, orig = r.next;
     r.next = function () { return v; };
     try { return fn(); } finally { r.next = orig; }
+  }
+  /** The next rolls on the combat RNG come from the queue (then the real dice) while fn runs. */
+  function queued(list, fn, rngObj) {
+    const r = rngObj || DD.Combat.state.rng, orig = r.next, q = list.slice();
+    r.next = function () { return q.length ? q.shift() : orig.call(r); };
+    try { return fn(); } finally { r.next = orig; }
+  }
+  /** 'x,y' → 1 for every tile an enemy could hit before the hero's next turn (reach + wind-ups), as the table reads it. */
+  function dangerOf(u) {
+    const out = {};
+    DD.AI.threatMap(DD.Grid.effectiveSide(u)).forEach(function (v, k) { out[k] = 1; });
+    DD.AI.windups().forEach(function (w) { (w.tiles || []).forEach(function (q) { out[q.x + ',' + q.y] = 1; }); });
+    return out;
+  }
+  /** Free tiles at distance min..max from (x, y) on the 9×9 arena. */
+  function ringTiles(x, y, min, max) {
+    const out = [];
+    for (let yy = 0; yy < 9; yy++) for (let xx = 0; xx < 9; xx++) {
+      const k = Math.abs(xx - x) + Math.abs(yy - y);
+      if (k >= min && k <= max && DD.Grid.isFree(xx, yy)) out.push({ x: xx, y: yy });
+    }
+    return out;
   }
   /** Call one hook of a passive instance directly: fire(p, 'onTurnStart', unit). */
   function fire(p, name) {
@@ -83,7 +116,7 @@
 
   /** Unit fields with the passive minus without it (level-3 hero), against the numbers the desc promises. */
   function unitDelta(t, id, lv, expect, tag, heroId) {
-    const fields = ['maxHp', 'armor', 'maxAp', 'mov', 'dmgBonus', 'healBonus', 'rangeBonus', 'hypeBonus'];
+    const fields = ['maxHp', 'armor', 'maxAp', 'mov', 'dmgBonus', 'healBonus', 'rangeBonus', 'hypeBonus', 'init'];
     function unit(passives) {
       quiet({ heroes: [{ id: heroId || 'test_knight', x: 1, y: 4, level: 3, passives: passives }], enemies: [{ id: 'test_grunt', x: 7, y: 7 }] });
       return DD.Combat.heroes()[0];
@@ -109,7 +142,7 @@
       const run = { party: party };
       if (expect.gold) t.ok(Math.abs(DD.Passives.goldMult(run) - (1 + expect.gold)) < 1e-9, tag + ': party gold income ×' + (1 + expect.gold));
       if (expect.price) t.ok(Math.abs(DD.Passives.priceMult(run) - Math.max(0.5, 1 + expect.price)) < 1e-9, tag + ': shop prices ×' + (1 + expect.price));
-      if (expect.xp) t.ok(Math.abs(DD.Passives.xpMult(party[0]) - (1 + expect.xp)) < 1e-9, tag + ': XP ×' + (1 + expect.xp));
+      if (expect.xp) t.ok(Math.abs(DD.Passives.xpMult(party[0]) - (1 + expect.xp)) < 1e-9, tag + ': weight ' + (1 + expect.xp) + ' in the level-up rotation');
       if (expect.heal) t.ok(Math.abs(DD.Passives.healMult(party[0]) - (1 + expect.heal)) < 1e-9, tag + ': healing ×' + (1 + expect.heal));
       party[0].dead = true;
       t.ok(DD.Passives.goldMult(run) === 1 && DD.Passives.priceMult(run) === 1, tag + ': a dead hero gives nothing');
@@ -152,24 +185,43 @@
     },
     rp_thick_skull: function (t, lv, L, tag, id) { unitDelta(t, id, lv, { armor: L.armor, maxHp: L.hp || 0 }, tag); },
     rp_big_boned: function (t, lv, L, tag, id) { unitDelta(t, id, lv, { maxHp: L.hp }, tag); },
-    rp_muscle_tank_top: function (t, lv, L, tag, id) {
-      unitDelta(t, id, lv, { dmgBonus: L.pct / 100 }, tag);
-      const a = arena(id, lv, { hpMult: 5 });
-      bare(a.foe);
-      t.eq(lost(a.foe, function () { hit(a.me, a.foe, 20); }), Math.round(20 * (1 + L.pct / 100)), tag + ': a 20 hit deals +' + L.pct + '%');
+    rp_cheap_shot: function (t, lv, L, tag) {
+      // initiative: the minion first (it passes), then the knight, then the grunt
+      const a = arena('rp_cheap_shot', lv, { enemies: [{ id: 'test_grunt', x: 2, y: 4, hpMult: 5 }, { id: 'test_minion', x: 1, y: 5, hpMult: 8 }],
+        sb: { order: ['test_minion', 'test_knight'] } });
+      const u = a.me, g = bare(a.foe), m = bare(a.far);
+      t.ok(DD.Combat.current() === u && DD.Combat.order()[0].unitId === m.id, tag + ": the knight's turn, right after the minion's");
+      t.eq(lost(g, function () { hit(u, g, 5); }), 5 + L.dmg, tag + ': the grunt has its turn still to come: +' + L.dmg);
+      t.eq(lost(m, function () { hit(u, m, 5); }), 5, tag + ': the minion already had its turn: no bonus');
+      t.eq(lost(g, function () { hit(u, g, 5, { cause: 'other' }); }), 5, tag + ': only skill hits');
+      t.ok(DD.Combat.useSkill(u, u.basic, g.x, g.y), tag + ': a real basic attack');
+      t.eq(g.maxHp - g.hp, 5 + L.dmg + 5 + 5 + L.dmg, tag + ': it gets the bonus too (Test Slash 5 + ' + L.dmg + ')');
+      // between rounds the order holds: round 2, the minion is again done before the knight, the grunt is not
+      DD.Combat.endTurn();
+      t.ok(a.s.round === 2 && DD.Combat.current() === u, tag + ': round 2, the knight again');
+      t.eq(lost(g, function () { hit(u, g, 5); }), 5 + L.dmg, tag + ': round 2: the grunt is still to come: +' + L.dmg);
+      t.eq(lost(m, function () { hit(u, m, 5); }), 5, tag + ': round 2: the minion is not');
+      // a foe that rolled in mid-round joins the order next round: no turn this round, no bonus
+      const late = bare(DD.Act.spawn('test_grunt', 4, 4, { noFx: true, silent: true, hpMult: 5 }));
+      t.eq(lost(late, function () { hit(u, late, 5); }), 5, tag + ': a newcomer joining next round has no turn this round');
     },
-    rp_participation_trophy: function (t, lv, L, tag) {
-      function fight(killer) {
-        DD.Combat.sandbox({ w: 9, h: 9, seed: 7, noPlan: true, enemies: [{ id: 'test_grunt', x: 5, y: 5 }],
-          heroes: [{ id: 'test_knight', x: 1, y: 4, passives: [{ id: 'rp_participation_trophy', level: lv }] }, { id: 'test_mage', x: 1, y: 6 }] });
-        const s = DD.Combat.state;
-        DD.Combat._action(function () { DD.Act.kill(DD.Combat.enemies()[0], DD.Combat.heroes()[killer]); });
-        return s;
-      }
-      let s = fight(1);
-      t.ok(s.result === 'victory' && s.sandboxGold === L.gold, tag + ': won without a kill of your own → +' + L.gold + ' gold (got ' + s.sandboxGold + ')');
-      s = fight(0);
-      t.ok(s.result === 'victory' && s.sandboxGold === 0, tag + ': you scored a kill → no trophy');
+    rp_hall_monitor: function (t, lv, L, tag, id) {
+      requiresCheck(t, id, [heroCase('test_knight'), heroCase('test_rogue')],
+        [heroCase('test_mage'), heroCase('test_cleric'), heroCase('test_summoner'), [{ id: 'pt_none' }, { id: 'pt_none' }, 'no basic attack at all']], tag);
+      const a = arena(id, lv, { enemies: [{ id: 'test_grunt', x: 2, y: 4, hpMult: 5 }, { id: 'test_grunt', x: 7, y: 7 }] });
+      const u = a.me, g = bare(a.foe);
+      t.eq(DD.AI.opportunityDmg(u, g, { x: g.x, y: g.y }), 5 + L.dmg, tag + ': the AI prices walking away from the knight at ' + (5 + L.dmg));
+      t.eq(DD.Combat.provokes(g, 5, 4).map(function (o) { return o.dmg; }).join(','), String(5 + L.dmg), tag + ': so does the move preview');
+      const h0 = g.hp;
+      DD.AI.moveTo(g, 5, 4);
+      t.eq(h0 - g.hp, 5 + L.dmg, tag + ': the grunt walks away: Test Slash 5 + ' + L.dmg);
+      if (L.stop) t.ok(g.x === 2 && g.y === 4, tag + ': ...and its walk ends right there (' + g.x + ',' + g.y + ')');
+      else t.ok(g.x === 5 && g.y === 4, tag + ': ...and it walks on');
+      // the other way round (the knight walks away from a grunt): the grunt's attack is not the knight's to boost
+      const b = arena(id, lv);
+      const k = bare(b.me);
+      t.eq(lost(k, function () { DD.Combat.move(k, 1, 7); }), 4, tag + ': walking away yourself: the grunt stabs for its usual 4');
+      t.ok(k.x === 1 && k.y === 7, tag + ': and the hall monitor walks on (no running is for other people)');
     },
     rp_coin_magnet: function (t, lv, L, tag) {
       const a = arena('rp_coin_magnet', lv, { allies: [{ id: 'test_mage', x: 1, y: 6 }] });
@@ -179,10 +231,19 @@
       t.eq(a.s.sandboxGold, L.gold, tag + ": an ally's kill → nothing");
     },
     rp_pet_rock: function (t, lv, L, tag) {
-      const a = arena('rp_pet_rock', lv, { enemies: [{ id: 'test_grunt', x: 6, y: 4 }, { id: 'test_grunt', x: 7, y: 7 }] });
       function rocks() { return DD.Grid.allTiles().filter(function (tl) { return tl.obj && tl.obj.label === 'Rocky'; }); }
-      // noPlan only skips the first planning: the grunts are kept from swinging
-      function endTurn() { DD.Combat.endTurn(); DD.Combat.enemies().forEach(function (e) { e.intents = []; }); }
+      // v2: nobody starts a fight with Block — in deployment Rocky is already there, his Block comes with your first turn
+      quiet({ heroes: [{ id: 'test_knight', x: 1, y: 4, passives: [{ id: 'rp_pet_rock', level: lv }] }], enemies: [{ id: 'test_grunt', x: 6, y: 4 }],
+        initiative: 'enemiesFirst', deploy: true, deployTiles: [{ x: 1, y: 4 }, { x: 1, y: 6 }] });
+      const k0 = DD.Combat.heroes()[0];
+      t.ok(DD.Combat.isDeploying() && rocks().length === 1 && k0.block === 0, tag + ': deployment: Rocky sits beside you, no Block yet');
+      let early = -1;
+      const offEarly = DD.Events.on('turn:start', function (e) { if (e.unit && e.unit.side === 'enemy' && early < 0) early = k0.block; });
+      try { DD.Combat.rollInitiative(); } finally { offEarly(); }
+      t.ok(early === 0 && DD.Combat.current() === k0 && k0.block === 3 + L.block,
+        tag + ': enemies acting first meet a hero without Block (' + early + '); his own turn brings 3 (Overly Prepared) + ' + L.block);
+      const a = arena('rp_pet_rock', lv, { enemies: [{ id: 'test_grunt', x: 6, y: 4 }, { id: 'test_grunt', x: 7, y: 7 }] });
+      function endTurn() { DD.Combat.endTurn(); }
       const u = a.me, o = tile(1, 3).obj;
       t.ok(o && o.id === 'rock' && o.label === 'Rocky' && o.hp === 10 && o.maxHp === 10, tag + ': Rocky (10 HP) appears beside the hero (north; the nearest foe is east)');
       t.ok(!tile(2, 4).obj, tag + ': not between the hero and the nearest foe');
@@ -228,17 +289,25 @@
       quiet({ heroes: [{ id: 'test_knight', x: 1, y: 4, passives: [{ id: 'rp_pet_rock', level: lv }] }, { id: 'test_mage', x: 5, y: 4, passives: [{ id: 'rp_pet_rock', level: lv }] }],
         enemies: [{ id: 'test_grunt', x: 8, y: 8 }] });
       const two = DD.Combat.heroes(), pa = instOf(two[0], 'rp_pet_rock'), pb = instOf(two[1], 'rp_pet_rock');
-      DD.Combat.enemies()[0].mov = 0;
       t.ok(rocks().length === 2 && dist(pa.data.rock, two[0]) === 1 && dist(pb.data.rock, two[1]) === 1, tag + ': two holders, two Rockies, one each');
       const spotA = pa.data.rock;
       DD.Act.damageObject(null, spotA.x, spotA.y, 99);                     // the knight's Rocky is gravel...
       const moved = DD.Act.removeObject(pb.data.rock.x, pb.data.rock.y);   // ...and the mage's turns up on that very spot
       DD.Act.placeObject(spotA.x, spotA.y, 'rock', moved);
       pb.data.rock = { x: spotA.x, y: spotA.y };
-      endTurn();
+      // the knight's next turn starts first (each hero has his own turn now): the hooks, as the turn start fires them
+      two[0].block = 0;
+      fire(pa, 'onTurnStart', two[0]);
+      t.ok(two[0].block === 0 && tile(spotA.x, spotA.y).obj && tile(spotA.x, spotA.y).obj.rockyOf === two[1].id,
+        tag + ": the knight's turn: nobody adopts the mage's Rocky (no Block, the rock stays put)");
+      two[1].block = 0;
+      fire(pb, 'onTurnStart', two[1]);
       const r3 = rocks();
-      t.ok(r3.length === 1 && dist(r3[0], two[1]) === 1 && two[0].block === 0 && two[1].block === L.block,
-        tag + ': nobody adopts the other holder\'s Rocky (only the mage gets ' + L.block + ' Block; knight ' + two[0].block + ', mage ' + two[1].block + ')');
+      t.ok(r3.length === 1 && dist(r3[0], two[1]) === 1 && two[1].block === L.block,
+        tag + ": the mage's turn: his own Rocky is beside him again (+" + L.block + ' Block)');
+      // and through the real turn order: endRound → the knight's round-2 turn finds no Rocky of his
+      DD.Combat.endRound();
+      t.ok(DD.Combat.current() === two[0] && two[0].block === 0 && rocks().length === 1, tag + ': round 2: the knight still has no Rocky, no Block');
     },
     rp_snack_pouch: function (t, lv, L, tag) {
       const a = arena('rp_snack_pouch', lv);
@@ -296,13 +365,19 @@
       DD.Act.kill(foes[2], mage);
       t.eq(s.hype, Math.max(0, 1 - L.penalty) + 8, tag + ': only up to what the party has');
     },
-    rp_overcaffeinated: function (t, lv, L, tag) {
-      const a = arena('rp_overcaffeinated', lv, { enemies: [{ id: 'test_grunt', x: 8, y: 8 }] });
+    rp_overcaffeinated: function (t, lv, L, tag, id) {
+      unitDelta(t, id, lv, { init: L.init }, tag);
+      const a = arena(id, lv, { enemies: [{ id: 'test_grunt', x: 8, y: 8 }] });
+      t.eq(DD.Combat.initOf(a.me), DD.getHero('test_knight').stats.init + L.init, tag + ': the initiative modifier the d20 is added to: +' + L.init);
       const want = [];
       for (let r = 1; r <= 4; r++) want.push(3 + (r <= L.boost ? 1 : 0) - (L.crash && r === L.crash ? 1 : 0));
       const got = [a.me.ap];
       for (let r = 2; r <= 4; r++) { DD.Combat.endTurn(); got.push(DD.Combat.heroes()[0].ap); }
       t.eq(got.join(','), want.join(','), tag + ': AP at the start of rounds 1-4');
+      // a real roll: d20 + (−1 + init); nobody else touches the knight's total
+      quiet({ heroes: [{ id: 'test_knight', x: 1, y: 4, passives: [{ id: id, level: lv }] }], enemies: [{ id: 'test_grunt', x: 8, y: 8 }], initiative: 'roll' });
+      const e = DD.Combat.state.order.filter(function (x) { return x.unitId === DD.Combat.heroes()[0].id; })[0];
+      t.ok(!!e && e.init === -1 + L.init && e.total === e.roll + e.init && e.roll >= 1 && e.roll <= 20, tag + ': rolled: d20 ' + (e && e.roll) + ' + ' + (e && e.init));
     },
     rp_superstitious: function (t, lv, L, tag) {
       const a = arena('rp_superstitious', lv, { enemies: [{ id: 'test_grunt', x: 2, y: 4, hpMult: 5 }, { id: 'test_grunt', x: 8, y: 8 }] });
@@ -364,22 +439,39 @@
       rate(t, n, 1500, L.pct, tag + ' Confused rate');
     },
     rp_sleepwalker: function (t, lv, L, tag) {
-      const a = arena('rp_sleepwalker', lv);
-      const u = a.me;
-      const danger = [];
-      for (let y = 0; y < 9; y++) for (let x = 0; x < 9; x++) {
-        const k = Math.abs(x - 1) + Math.abs(y - 4);
-        if (k >= 1 && k <= 2 && !(x === 3 && y === 4)) danger.push({ x: x, y: y });
-      }
-      DD.AI.makeIntent(a.far, 'test_grunt_stab', { x: 1, y: 3 }, { anchor: 'ground', tiles: danger, noCooldown: true });
+      // a grunt at (5,4) can reach the tiles east of the hero; a far grunt's silent wind-up covers the others but (1,6)
+      const a = arena('rp_sleepwalker', lv, { enemies: [{ id: 'test_grunt', x: 5, y: 4 }, { id: 'test_grunt', x: 8, y: 8 }] });
+      const u = a.me, home = { x: 1, y: 4 };
+      const ring = ringTiles(1, 4, 1, 2);
+      const reach = dangerOf(u);
+      t.ok(reach['3,4'] && reach['2,4'] && !reach['1,6'] && !reach['1,2'], tag + ": the grunt's reach covers the tiles east of the hero, not the far ones");
+      const windup = ring.filter(function (q) { return !reach[q.x + ',' + q.y] && !(q.x === 1 && q.y === 6); });
+      DD.AI.makeIntent(a.far, 'test_grunt_stab', { x: 1, y: 2 }, { anchor: 'ground', tiles: windup, noCooldown: true });
+      const danger = dangerOf(u);
+      t.ok(ring.filter(function (q) { return !danger[q.x + ',' + q.y]; }).map(function (q) { return q.x + ',' + q.y; }).join(';') === '1,6',
+        tag + ': within 2 tiles only (1,6) is out of every enemy\'s reach and wind-up');
       const b0 = u.block;
-      forced(0, function () { fire(a.p, 'onTurnEnd', u); });
+      queued([0], function () { fire(a.p, 'onTurnEnd', u); });
       t.eq(u.block, b0 + L.block, tag + ': sleepwalking gives ' + L.block + ' Block');
-      const d = dist(u, { x: 1, y: 4 });
+      const d = dist(u, home);
       t.ok(d >= 1 && d <= 2, tag + ': wandered 1-2 tiles (to ' + u.x + ',' + u.y + ')');
-      if (L.safe) t.ok(u.x === 3 && u.y === 4, tag + ': never into a tile an enemy is aiming at');
-      else t.ok(danger.some(function (q) { return q.x === u.x && q.y === u.y; }), tag + ': below level III it may wander into a telegraph');
-      DD.Act.teleport(u, 1, 4);
+      let calm = 0, into = 0, walks = 0;
+      for (let i = 0; i < 60; i++) {
+        DD.Act.teleport(u, home.x, home.y);
+        queued([0], function () { fire(a.p, 'onTurnEnd', u); });   // the walk always happens, the tile is the real dice
+        if (u.x === home.x && u.y === home.y) continue;
+        walks++;
+        if (u.x === 1 && u.y === 6) calm++; else if (danger[u.x + ',' + u.y]) into++;
+      }
+      if (L.safe) t.ok(walks === 60 && calm === 60, tag + ': level III always picks the one tile no enemy can reach (' + calm + '/' + walks + ')');
+      else t.ok(walks === 60 && into > 0, tag + ': below level III it may wander into reach (' + into + '/' + walks + ')');
+      // nowhere calm: still a sleepwalk (any free tile within 2)
+      a.far.intents = [];
+      DD.AI.makeIntent(a.far, 'test_grunt_stab', { x: 1, y: 2 }, { anchor: 'ground', tiles: ring, noCooldown: true });
+      DD.Act.teleport(u, home.x, home.y);
+      queued([0], function () { fire(a.p, 'onTurnEnd', u); });
+      t.ok(dist(u, home) >= 1 && dist(u, home) <= 2, tag + ': every tile in reach: it still wanders 1-2 tiles');
+      DD.Act.teleport(u, home.x, home.y);
       a.far.intents = [];
       const b1 = u.block;
       forced(0.999, function () { fire(a.p, 'onTurnEnd', u); });
@@ -408,7 +500,11 @@
     },
     rp_trust_fund: modSpec(function (L) { return { gold: L.pct / 100 }; }),
     rp_haggler: modSpec(function (L) { return { price: -L.pct / 100 }; }),
-    rp_teachers_pet: modSpec(function (L) { return { xp: L.pct / 100 }; }),
+    // v2: no XP; runMods.xp is the hero's weight in the DM's level-up roll among the lowest-level heroes (1 + xp)
+    rp_teachers_pet: function (t, lv, L, tag, id) {
+      modCheck(t, id, lv, { xp: L.weight - 1 }, tag);
+      t.ok(DD.passiveDesc({ id: id, level: lv }).indexOf('count as ' + L.weight + ' heroes') >= 0, tag + ': the text names the weight (' + L.weight + ')');
+    },
     rp_second_breakfast: modSpec(function (L) { return { heal: L.pct / 100 }; }),
     rp_quantum_pockets: function (t, lv, L, tag) {
       const a = arena('rp_quantum_pockets', lv, { sb: { run: fakeRun() } });
@@ -439,6 +535,11 @@
       t.ok(!has(f, 'weak'), tag + ': the joke can fall flat');
       forced(0, function () { DD.Combat.useSkill(u, u.skills[0], f.x, f.y); });
       t.ok(!has(f, 'weak'), tag + ': only the basic attack (Shield Bash tells no jokes)');
+      DD.Act.teleport(f, 2, 4);
+      // attacks of opportunity are basic attacks too: the grunt walks away and hears the punchline
+      forced(0, function () { DD.AI.moveTo(f, 5, 4); });
+      t.ok(has(f, 'weak'), tag + ': an attack of opportunity tells the joke too');
+      DD.Act.removeStatus(f, 'weak', { silent: true });
       DD.Act.teleport(f, 2, 4);
       let n = 0;
       for (let i = 0; i < 1000; i++) {
@@ -483,9 +584,7 @@
         [heroCase('test_knight'), heroCase('test_mage'), [{ id: 'pt_rock' }, { id: 'pt_rock', flags: {} }, 'a grounded hero']], tag);
       const a = arena(id, lv, { enemies: [{ id: 'test_grunt', x: 8, y: 8 }] });
       const u = a.me, p = a.p;
-      a.foe.mov = 0; // the grunt stays in its corner (planning walks enemies)
-      // noPlan only skips the first planning: the grunt is kept from swinging
-      function endTurn() { DD.Combat.endTurn(); DD.Combat.enemies().forEach(function (e) { e.intents = []; }); }
+      function endTurn() { DD.Combat.endTurn(); }
       function upgraded() { return u.ap === 3 + (p.data.last === 'ap' ? 1 : 0) && u.block === (p.data.last === 'block' ? 4 : 0) && has(u, 'inspired') === (p.data.last === 'inspired'); }
       t.eq(walkTiles(u, L.miles - 1), L.miles - 1, tag + ': walks ' + (L.miles - 1) + ' tiles');
       t.eq(p.data.miles, L.miles - 1, tag + ': one mile per tile walked');
@@ -534,6 +633,20 @@
       t.eq(lost(f, function () { hit(u, f, 5); }), 5, tag + ': only that one');
       t.ok(DD.Combat.move(u, 3, 7), tag + ': walks again');
       t.eq(u.block, b0 + L.block, tag + ': once per turn');
+      // a fresh count every turn of yours; an unused bonus does not carry over
+      DD.Combat.endTurn();
+      t.ok(DD.Combat.current() === u && u.block === 0, tag + ': next turn (Block gone at its start)');
+      t.ok(DD.Combat.move(u, 3, 4) && DD.Combat.move(u, 4, 4), tag + ': walks 3 + 1 tiles');
+      t.eq(u.block, L.block, tag + ': 4 tiles again: +' + L.block + ' Block');
+      DD.Combat.endTurn();
+      t.eq(lost(f, function () { hit(u, f, 5); }), 5, tag + ": last turn's bonus was not used: it is gone");
+      // walked on someone else's turn (an ally's scripted walk, like a friendly toss) is not cardio
+      const b = arena('rp_cardio_king', lv, { allies: [{ id: 'test_mage', x: 0, y: 0 }], enemies: [{ id: 'test_grunt', x: 8, y: 1 }] });
+      DD.Combat.endTurn();
+      t.ok(DD.Combat.current() === DD.Combat.heroes()[1], tag + ": the mage's turn");
+      const k = b.me, kb = k.block;
+      DD.Act.moveAlong(k, [{ x: 1, y: 5 }, { x: 1, y: 6 }, { x: 1, y: 7 }, { x: 2, y: 7 }]);
+      t.ok(k.x === 2 && k.y === 7 && k.block === kb && !b.p.data.fired, tag + ': a 4-tile walk outside your own turn counts for nothing');
     },
     rp_swamp_thing: function (t, lv, L, tag) {
       const a = arena('rp_swamp_thing', lv, { hpMult: 5 });
@@ -541,6 +654,12 @@
       t.eq(lost(a.foe, function () { hit(a.me, a.foe, 5); }), 5, tag + ': on dry floor: 5');
       DD.Act.setSurface(1, 4, 'blood', 3);
       t.eq(lost(a.foe, function () { hit(a.me, a.foe, 5); }), 5 + L.dmg, tag + ': standing in blood: +' + L.dmg);
+      // v2 request: flyers ignore the floor (no blood between their toes), but a cloud wraps them all the same
+      a.me.flags.flying = true;
+      t.eq(lost(a.foe, function () { hit(a.me, a.foe, 5); }), 5, tag + ': flying over the blood: no bonus');
+      DD.Act.setSurface(1, 4, 'smoke', 2);
+      t.eq(lost(a.foe, function () { hit(a.me, a.foe, 5); }), 5 + L.dmg, tag + ': flying in a smoke cloud: +' + L.dmg);
+      a.me.flags.flying = false;
     },
     rp_revenge_arc: function (t, lv, L, tag) {
       const a = arena('rp_revenge_arc', lv, { hpMult: 5, allies: [{ id: 'test_mage', x: 1, y: 6 }] });
@@ -646,23 +765,45 @@
       tile(2, 4).h = 2;
       t.eq(DD.Grid.canStep(a.me, { x: 1, y: 4 }, { x: 2, y: 4 }), !!L.hop, tag + ': one step up 2 levels');
     },
-    rp_loaded_dice: function (t, lv, L, tag) {
-      const seen = {};
-      for (let seed = 1; seed <= 400 && Object.keys(seen).length < (L.bonus ? 3 : 4); seed++) {
-        const r = Math.min(20, DD.RNG(seed).int(1, 20) + L.bonus);
-        const band = r <= 1 ? 'fail' : r <= 9 ? 'meh' : r <= 19 ? 'nice' : 'nat20';
-        if (seen[band]) continue;
-        seen[band] = 1;
-        const a = arena('rp_loaded_dice', lv, { sb: { seed: seed }, enemies: [{ id: 'test_grunt', x: 7, y: 7 }] });
-        const u = a.me, lab = tag + ' (seed ' + seed + ', rolled ' + r + ')';
-        t.eq(a.p.data.roll, r, lab + ': the shown roll');
-        if (band === 'fail') t.ok(has(u, 'vulnerable') && st(u, 'vulnerable').turns === 2 && u.block === 3, lab + ': 1 → Vulnerable for 2 turns');
-        if (band === 'meh') t.ok(u.block === 3 + 4 && !has(u, 'inspired'), lab + ': 2-9 → 4 Block');
-        if (band === 'nice') t.ok(has(u, 'inspired') && st(u, 'inspired').turns === 1 && a.s.hype === 0, lab + ': 10-19 → Inspired for 1 turn');
-        if (band === 'nat20') t.ok(has(u, 'inspired') && st(u, 'inspired').turns === 2 && a.s.hype === 15, lab + ': 20 → Inspired for 2 turns, +15 Hype');
+    rp_loaded_dice: function (t, lv, L, tag, id) {
+      // deployment open, nothing rolled yet; the knight is the first unit to roll, so the queue feeds his dice
+      // (his d20, then the loaded extra ones), then the real dice take over. d20 = 1 + floor(next × 20)
+      function rollWith(queue, passives) {
+        quiet({ heroes: [{ id: 'test_knight', x: 1, y: 4, passives: passives || [{ id: id, level: lv }] }], enemies: [{ id: 'test_grunt', x: 7, y: 7 }],
+          initiative: 'roll', deploy: true, deployTiles: [{ x: 1, y: 4 }, { x: 1, y: 6 }] });
+        const s = DD.Combat.state, u = DD.Combat.heroes()[0];
+        t.ok(DD.Combat.isDeploying() && u.block === 0 && !has(u, 'inspired'), tag + ': nothing happens before the roll (no starting Block or buff)');
+        queued(queue, function () { DD.Combat.rollInitiative(); });
+        return { s: s, u: u, p: instOf(u, id), e: s.order.filter(function (x) { return x.unitId === u.id; })[0] };
       }
-      t.eq(Object.keys(seen).sort().join(','), (L.bonus ? ['meh', 'nat20', 'nice'] : ['fail', 'meh', 'nat20', 'nice']).join(','),
-        tag + ': every reachable outcome was rolled' + (L.bonus ? ' (no natural 1 with +' + L.bonus + ')' : ''));
+      const extra = L.dice - 1;
+      const lowFirst = [0.1].concat(extra > 1 ? [0.3] : [], [0.7]);   // 3 (, 7), 15 → keeps 15
+      let r = rollWith(lowFirst);
+      t.eq(r.p.data.dice.join(','), (extra > 1 ? [3, 7, 15] : [3, 15]).join(','), tag + ': rolled ' + L.dice + ' d20s');
+      t.ok(r.e.roll === 15 && r.e.init === -1 + L.bonus && r.e.total === 15 - 1 + L.bonus, tag + ': keeps the best: d20 15, initiative ' +
+        (-1 + L.bonus) + ' → ' + (14 + L.bonus) + ' (got ' + r.e.roll + ' ' + r.e.init + ' ' + r.e.total + ')');
+      t.ok(!has(r.u, 'inspired') && r.s.hype === 0, tag + ': no natural 20: no Inspired, no Hype');
+      r = rollWith([0.7].concat(extra > 1 ? [0.1] : [], [0.1]));   // 15, 3 (, 3) → keeps the first die
+      t.ok(r.e.roll === 15 && r.e.total === 14 + L.bonus, tag + ': the first die can be the best one too');
+      r = rollWith([0.2].concat(extra > 1 ? [0.2] : [], [0.999]));   // 5 (, 5), 20
+      t.ok(r.e.roll === 20 && has(r.u, 'inspired') && st(r.u, 'inspired').turns === 2 && r.s.hype === 15, tag + ': a natural 20: Inspired for 2 turns and +15 Hype');
+      t.ok(r.s.log.some(function (l) { return /NATURAL TWENTY/.test(l.text); }), tag + ': the log cheers');
+      // the real dice: the knight's average roll is the best of n d20s (2: 13.8, 3: 15.5; one d20: 10.5)
+      const N = 300, mean = extra > 1 ? 15.4875 : 13.825, sd = extra > 1 ? 4.3 : 4.7;
+      let sum = 0, nat = 0;
+      for (let i = 0; i < N; i++) {
+        quiet({ seed: 'pt-dice-' + lv + '-' + i, heroes: [{ id: 'test_knight', x: 1, y: 4, passives: [{ id: id, level: lv }] }],
+          enemies: [{ id: 'test_grunt', x: 7, y: 7 }], initiative: 'roll' });
+        const e = DD.Combat.state.order.filter(function (x) { return x.unitId === DD.Combat.heroes()[0].id; })[0];
+        sum += e.roll;
+        if (e.roll === 20) nat++;
+      }
+      const avg = sum / N;
+      t.ok(Math.abs(avg - mean) <= 4.5 * sd / Math.sqrt(N), tag + ': average kept die ' + avg.toFixed(2) + ' over ' + N + ' rolled fights (best of ' + L.dice + ': ' + mean + ')');
+      rate(t, nat, N, 100 * (1 - Math.pow(19 / 20, L.dice)), tag + ' natural-20 rate');
+      // fixed orders (tests, scripted fights) roll no dice at all
+      const a = arena(id, lv);
+      t.ok(!a.p.data.dice && !has(a.me, 'inspired'), tag + ': no dice rolled in a fixed-order fight, nothing happens');
     },
     rp_method_actor: function (t, lv, L, tag, id) {
       // the casting pool rebuilt from the registry (the oracle): rollable, in-fight hooks, no stats / runMods / requires
@@ -719,46 +860,37 @@
         t.ok(ducks.length === 1 && ducks[0].maxHp === Math.round(DD.getSummon('wm_duck').hp * 1.5), tag + ': cast as an Emotional Support Duck owner: a 12-HP duck joins');
       }
     },
-    rp_greased_up: function (t, lv, L, tag) {
-      const a = arena('rp_greased_up', lv);
-      ['root', 'slow', 'stun'].forEach(function (id) {
-        DD.Act.addStatus(a.me, id, { turns: 1 }, a.foe);
-        const immune = L.ids.indexOf(id) >= 0;
-        t.eq(has(a.me, id), !immune, tag + ': ' + id + (immune ? ' slides right off' : ' still applies'));
+    rp_greased_up: function (t, lv, L, tag, id) {
+      const a = arena(id, lv);
+      ['root', 'slow', 'stun'].forEach(function (sid) {
+        DD.Act.addStatus(a.me, sid, { turns: 1 }, a.foe);
+        const immune = L.ids.indexOf(sid) >= 0;
+        t.eq(has(a.me, sid), !immune, tag + ': ' + sid + (immune ? ' slides right off' : ' still applies'));
       });
+      // can't be opportunity-attacked: walk away from the adjacent grunt (control: the same walk without the butter)
+      [[id, 0], [null, 4]].forEach(function (c) {
+        const b = arena(c[0], lv);
+        const u = bare(b.me);
+        const said = DD.Combat.provokes(u, 1, 7).length;
+        const took = lost(u, function () { t.ok(DD.Combat.move(u, 1, 7), tag + ': walks away from the grunt'); });
+        t.ok(said === (c[1] ? 1 : 0) && took === c[1] && u.y === 7,
+          tag + (c[0] ? ': greased: the move preview shows no attack of opportunity and none comes' : ': (control) unbuttered, the grunt stabs for 4'));
+      });
+      // the butter only works one way: the greased knight still makes his own attacks of opportunity
+      const d = arena(id, lv, { hpMult: 5 });
+      const g = bare(d.foe);
+      t.eq(lost(g, function () { DD.AI.moveTo(g, 5, 4); }), 5, tag + ': a grunt walking away from him still eats a Test Slash');
     },
     rp_displacer_ancestry: function (t, lv, L, tag) {
       const a = arena('rp_displacer_ancestry', lv);
-      const u = bare(a.me);
+      const u = bare(a.me), home = { x: 1, y: 4 };
       forced(0, function () { hit(a.foe, u, 4); });
-      const d = dist(u, { x: 1, y: 4 });
+      const d = dist(u, home);
       t.ok(d >= 2 && d <= 3, tag + ': blinked 2-3 tiles away (to ' + u.x + ',' + u.y + ')');
       t.eq(u.hp, u.maxHp - 4, tag + ': after taking the hit');
       DD.Act.teleport(u, 1, 4);
       forced(0.999, function () { hit(a.foe, u, 4); });
       t.ok(u.x === 1 && u.y === 4, tag + ': no blink on a bad roll');
-      // every tile 2-3 away is telegraphed except (1,7): the blink picks the calm one
-      const danger = [];
-      for (let y = 0; y < 9; y++) for (let x = 0; x < 9; x++) {
-        const k = Math.abs(x - 1) + Math.abs(y - 4);
-        if (k >= 2 && k <= 3 && !(x === 1 && y === 7)) danger.push({ x: x, y: y });
-      }
-      DD.AI.makeIntent(a.far, 'test_grunt_stab', { x: 1, y: 2 }, { anchor: 'ground', tiles: danger, noCooldown: true });
-      for (let i = 0; i < 6; i++) {
-        full(u);
-        forced(0, function () { hit(a.foe, u, 4); });
-        t.ok(u.x === 1 && u.y === 7, tag + ': blinks to the one tile no enemy is aiming at (got ' + u.x + ',' + u.y + ')');
-        DD.Act.teleport(u, 1, 4);
-      }
-      danger.push({ x: 1, y: 7 });
-      a.far.intents = [];
-      DD.AI.makeIntent(a.far, 'test_grunt_stab', { x: 1, y: 2 }, { anchor: 'ground', tiles: danger, noCooldown: true });
-      full(u);
-      forced(0, function () { hit(a.foe, u, 4); });
-      const k2 = dist(u, { x: 1, y: 4 });
-      t.ok(k2 >= 2 && k2 <= 3, tag + ': everything telegraphed: it still blinks 2-3 tiles (to ' + u.x + ',' + u.y + ')');
-      DD.Act.teleport(u, 1, 4);
-      a.far.intents = [];
       let n = 0;
       for (let i = 0; i < 1000; i++) {
         full(u);
@@ -766,6 +898,31 @@
         if (u.x !== 1 || u.y !== 4) { n++; DD.Act.teleport(u, 1, 4); }
       }
       rate(t, n, 1000, L.pct, tag + ' blink rate');
+      // v2 (no telegraphs): it prefers a tile no enemy can reach — a grunt at (4,4) covers the near side, a far one's
+      // silent wind-up covers everything else 2-3 tiles away but (1,7); the hitter is stunned (a stunned foe reaches nothing)
+      const b = arena('rp_displacer_ancestry', lv, { enemies: [{ id: 'test_grunt', x: 2, y: 4 }, { id: 'test_grunt', x: 8, y: 8 }, { id: 'test_grunt', x: 4, y: 4 }] });
+      const v = bare(b.me), hitter = DD.Combat.enemies()[0], near = DD.Combat.enemies()[2];
+      DD.Act.addStatus(hitter, 'stun', { turns: 1 }, v);
+      const reach = dangerOf(v);
+      const ring = ringTiles(1, 4, 2, 3);
+      t.ok(ring.some(function (q) { return reach[q.x + ',' + q.y]; }) && !reach['1,7'], tag + ': the grunt at (4,4) can reach part of the ring, not (1,7)');
+      const windup = ring.filter(function (q) { return !reach[q.x + ',' + q.y] && !(q.x === 1 && q.y === 7); });
+      DD.AI.makeIntent(b.far, 'test_grunt_stab', { x: 1, y: 1 }, { anchor: 'ground', tiles: windup, noCooldown: true });
+      let calm = 0;
+      for (let i = 0; i < 30; i++) {
+        full(v);
+        queued([0], function () { hit(hitter, v, 4); });   // the blink always happens, the tile is the real dice
+        if (v.x === 1 && v.y === 7) calm++;
+        DD.Act.teleport(v, 1, 4);
+      }
+      t.eq(calm, 30, tag + ': always blinks to the one tile 2-3 away that no enemy can reach (1,7)');
+      b.far.intents = [];
+      DD.AI.makeIntent(b.far, 'test_grunt_stab', { x: 1, y: 1 }, { anchor: 'ground', tiles: ring, noCooldown: true });
+      full(v);
+      queued([0], function () { hit(hitter, v, 4); });
+      const k2 = dist(v, home);
+      t.ok(k2 >= 2 && k2 <= 3, tag + ': everything in reach: it still blinks 2-3 tiles (to ' + v.x + ',' + v.y + ')');
+      t.ok(!!near && near.x === 4, tag + ' (setup: the near grunt)');
     },
     rp_cat_reflexes: function (t, lv, L, tag) {
       const a = arena('rp_cat_reflexes', lv);
@@ -853,7 +1010,22 @@
         [heroCase('test_knight'), heroCase('test_summoner'),
           [{ id: 'pt_once' }, { id: 'pt_once', skillPool: ['test_pt_bloodskill', 'test_slash'], basic: 'test_pt_bloodskill' }, 'one HP-cost skill listed twice counts once'],
           [{ id: 'corelos' }, { id: 'corelos', skillPool: [] }, 'Corelos by name (his Debt is not a skill HP cost)']], tag);
-      } finally { delete DD.defs.skills.test_pt_bloodskill; delete DD.defs.skills.test_pt_bloodskill2; }
+        // v2: an attack of opportunity with an HP-cost melee basic is free (no HP paid), so the card gives no Block for it
+        DD.registerSkill({ id: 'test_pt_bloodbite', name: 'Test Blood Bite', owner: 'test_knight', icon: '🩸', kind: 'attack', tags: ['melee', 'blood'], ap: 1,
+          hpCost: 3, levels: [{ dmg: 4 }], target: { type: 'unit', range: [1, 1], filter: 'enemy' },
+          desc: function (L) { return 'Pay 3 HP. Deal ' + L.dmg + ' damage.'; },
+          execute: function (ctx) { if (ctx.targetUnit) DD.Act.damage(ctx.user, ctx.targetUnit, ctx.L.dmg); } });
+        const c = arena(id, lv, { hpMult: 5 });
+        const k = bare(c.me), g = bare(c.foe);
+        k.basic = DD.Act.makeSlot('test_pt_bloodbite', 1);
+        const kh = k.hp, gh = g.hp;
+        DD.AI.moveTo(g, 5, 4);
+        t.ok(gh - g.hp === 4 && k.hp === kh && k.block === 0, tag + ': a grunt walks away: the blood bite strikes for free (no HP paid) and gives no Block (' +
+          (gh - g.hp) + ' dmg, ' + (kh - k.hp) + ' HP paid, ' + k.block + ' Block)');
+        DD.Act.teleport(g, 2, 4);
+        t.ok(DD.Combat.useSkill(k, k.basic, g.x, g.y) && kh - k.hp === Math.max(0, 3 - L.n) && k.block === L.block,
+          tag + ': the same bite on your turn pays ' + Math.max(0, 3 - L.n) + ' HP' + (L.block ? ' and gives ' + L.block + ' Block' : ''));
+      } finally { delete DD.defs.skills.test_pt_bloodskill; delete DD.defs.skills.test_pt_bloodskill2; delete DD.defs.skills.test_pt_bloodbite; }
     },
     // ---------------------------------------------------------------- rare
     rp_plot_armor: function (t, lv, L, tag) {
@@ -867,6 +1039,12 @@
       u.block = 0;
       hit(a.foe, u, 999);
       t.ok(u.downed, tag + ': only once per fight');
+      // the engine's preventDeath veto: an instant kill is refused too, and nothing of a down happens
+      const b = arena('rp_plot_armor', lv);
+      let downs = 0;
+      const off = DD.Events.on('unit:downed', function () { downs++; });
+      try { DD.Act.kill(b.me, b.foe); } finally { off(); }
+      t.ok(!b.me.downed && b.me.hp === 1 && downs === 0 && b.s.stats.downs === 0, tag + ': an instant kill leaves you at 1 HP (no down at all)');
     },
     rp_ambidextrous: function (t, lv, L, tag) {
       const a = arena('rp_ambidextrous', lv, { hpMult: 5 });
@@ -902,19 +1080,22 @@
       rate(t, n, 1500, L.pct, tag + ' reverse rate');
     },
     rp_extra_attack: function (t, lv, L, tag) {
-      const enemies = [1, 2, 3, 4, 5].map(function (y) { return { id: 'test_grunt', x: 6, y: y }; });
-      const a = arena('rp_extra_attack', lv, { enemies: enemies });
-      const u = a.me, es = DD.Combat.enemies(), s = a.s;
+      const enemies = [1, 2, 3, 4, 5, 6, 7].map(function (y) { return { id: 'test_grunt', x: 6, y: y }; });
+      const a = arena('rp_extra_attack', lv, { enemies: enemies, allies: [{ id: 'test_mage', x: 1, y: 6 }] });
+      const u = a.me, es = DD.Combat.enemies();
       const ap = [u.ap];
       for (let i = 0; i < 4; i++) { DD.Act.kill(es[i], u); ap.push(u.ap); }
       const want = [3];
       for (let i = 1; i <= 4; i++) want.push(3 + Math.min(i, L.n));
       t.eq(ap.join(','), want.join(','), tag + ': AP after 0-4 kills this turn');
-      s.phase = 'enemy';
-      const a0 = u.ap;
+      DD.Combat.endTurn();
+      t.ok(DD.Combat.current() === DD.Combat.heroes()[1], tag + ": the mage's turn");
       DD.Act.kill(es[4], u);
-      s.phase = 'player';
-      t.eq(u.ap, a0, tag + ': kills outside your turn give nothing');
+      t.ok(u.ap === 0 && !(u.apBank > 0), tag + ': kills on an ally\'s turn give nothing (not even AP for later)');
+      DD.Combat.endRound();
+      t.ok(DD.Combat.current() === u && u.ap === 3, tag + ': round 2, the knight again (3 AP)');
+      DD.Act.kill(es[5], u);
+      t.eq(u.ap, 4, tag + ': a new turn, a new count: +1 AP');
     },
     rp_circle_of_life: function (t, lv, L, tag) {
       const a = arena('rp_circle_of_life', lv, { enemies: [{ id: 'test_grunt', x: 7, y: 7 }] });
@@ -955,6 +1136,11 @@
       t.eq(calls.length, 2, tag + ': ' + (L.every * 2) + ' skills → 2 surges (every ' + L.every + ')');
       t.ok(calls.every(function (c) { return !!c.good === !!L.good && c.source === id; }), tag + ': ' + (L.good ? 'good surges only' : 'any surge'));
       t.eq(counts[0], 1, tag + ': consumables are not skills');
+      // attacks of opportunity are reactions, not skills you use
+      const c0 = a.p.data.count;
+      const h0 = f.hp;
+      surgeCalls(function () { DD.AI.moveTo(f, 5, 4); });
+      t.ok(f.hp < h0 && a.p.data.count === c0, tag + ': an attack of opportunity hit, and the count stayed at ' + c0);
     },
     rp_gold_plated_ego: function (t, lv, L, tag) {
       [[0, 0], [100, Math.min(L.max, Math.floor(100 / L.per))], [1000, L.max]].forEach(function (c) {
@@ -1031,6 +1217,10 @@
         if (prev.uncertain && e && e.uncertain && e.dmg >= 5 && e.dmg <= 10) hidden++;
       }
       t.eq(hidden, 40, tag + ': the HUD preview never gives the echo away (40/40 uncertain, expected 5–10)');
+      // attacks of opportunity are free reactions (one per round by rule): they never echo
+      const b = arena('rp_echo_chamber', lv, { hpMult: 60 });
+      const g = bare(b.foe);
+      t.eq(lost(g, function () { forced(0, function () { DD.AI.moveTo(g, 5, 4); }); }), 5, tag + ': an attack of opportunity hits once (no echo)');
     },
     rp_phoenix_feather: function (t, lv, L, tag) {
       const a = arena('rp_phoenix_feather', lv, { hpMult: 3, allies: [{ id: 'test_mage', x: 1, y: 5 }] });
@@ -1041,6 +1231,24 @@
       t.eq(mage.hp, mage.maxHp, tag + ': the adjacent ally is spared');
       DD.Act.kill(u, a.far);
       t.ok(u.downed, tag + ': only once per fight');
+      // something else got there first (an item that revives, say): the feather is kept for the next down
+      const b = arena('rp_phoenix_feather', lv);
+      const k = b.me;
+      k.hooks = { onDowned: function (unit) { DD.Act.revive(unit, 0.25); } };   // unit.hooks fire before Blessings
+      DD.Act.kill(k, b.far);
+      t.ok(!k.downed && k.hp === Math.round(k.maxHp * 0.25) && !instOf(k, 'rp_phoenix_feather').data.used, tag + ': already back up: the feather stays unused');
+      k.hooks = null;
+      DD.Act.kill(k, b.far);
+      t.ok(!k.downed && k.hp === Math.round(k.maxHp * L.pct / 100), tag + ': ...and saves the next down');
+      // v2 attacks of opportunity: downed by one mid-walk, he rises where he fell and that walk is over (DESIGN §4.2)
+      const c = arena('rp_phoenix_feather', lv);
+      const w = bare(c.me);
+      w.hp = 2;
+      let downs = 0;
+      const off = DD.Events.on('unit:downed', function () { downs++; });
+      try { t.ok(DD.Combat.move(w, 1, 7), tag + ': walks away from the grunt (the move action happens)'); } finally { off(); }
+      t.ok(downs === 1 && !w.downed && w.hp === Math.round(w.maxHp * L.pct / 100), tag + ': the attack of opportunity downs him, the feather raises him');
+      t.ok(w.x === 1 && w.y === 4, tag + ': ...on the tile he fell on: the walk ended there (at ' + w.x + ',' + w.y + ')');
     },
     rp_ultra_instinct: function (t, lv, L, tag) {
       const a = arena('rp_ultra_instinct', lv, { hpMult: 5, enemies: [{ id: 'test_grunt', x: 8, y: 8, hpMult: 5 }, { id: 'test_grunt', x: 8, y: 0, hpMult: 5 }] });
@@ -1080,20 +1288,27 @@
       modCheck(t, id, lv, { price: L.price / 100 }, tag);
     },
     rp_cursed_loud_eater: function (t, lv, L, tag, id) {
-      unitDelta(t, id, lv, { armor: L.armor }, tag);
-      // the grunt at (4,4) has a juicy mage right next to it; the Loud Eater (3 tiles away) is out of its reach
-      const a = arena(id, lv, { allies: [{ id: 'test_mage', x: 5, y: 4 }],
+      unitDelta(t, id, lv, {}, tag);   // v2: no armor any more (the taunt is control now); the snack is the upside
+      // the grunt at (4,4) has a juicy mage right next to it; the Loud Eater (3 tiles away) is out of its reach.
+      // The enemies really act here (on their own turns, after both heroes').
+      const a = arena(id, lv, { allies: [{ id: 'test_mage', x: 5, y: 4 }], sb: { enemyAi: true, noPlan: false },
         enemies: [{ id: 'test_grunt', x: 2, y: 4 }, { id: 'test_grunt', x: 4, y: 4 }, { id: 'test_grunt', x: 7, y: 7 }] });
       const u = a.me, es = DD.Combat.enemies(), mage = DD.Combat.heroes()[1];
       u.hp = 10;
       fire(a.p, 'onTurnStart', u);
       t.eq(u.hp, 10 + L.heal, tag + ': snacking heals ' + L.heal + ' at turn start');
-      fire(a.p, 'onRoundStart', u, 2);
-      t.ok(has(es[0], 'taunt') && st(es[0], 'taunt').source === u.id && has(es[1], 'taunt'), tag + ': enemies within 3 tiles are Taunted by you');
+      t.ok(has(es[0], 'taunt') && st(es[0], 'taunt').source === u.id && has(es[1], 'taunt'), tag + ': round 1 began: enemies within 3 tiles are Taunted by you');
       t.ok(!has(es[2], 'taunt'), tag + ': distant ones are not');
-      DD.Combat.endTurn();
-      const onMage = es[1].intents.some(function (it) { return DD.AI.intentTiles(es[1], it).some(function (q) { return q.x === mage.x && q.y === mage.y; }); });
-      t.ok(!onMage && dist(es[1], u) < 3, tag + ': next planning ignores the adjacent mage and comes for the Loud Eater');
+      u.block = 0;   // (Overly Prepared would soak the stab)
+      const mageHp = mage.hp, kHp = u.hp, from = dist(es[1], u);
+      let beforeSnack = null;   // his HP when his round-2 turn starts, before that turn's snack
+      const off = DD.Events.on('turn:start', function (e) { if (e.unit === u && e.round === 2) beforeSnack = u.hp; });
+      try { DD.Combat.endRound(); } finally { off(); }   // the knight's and the mage's turns pass, then the grunts act (taunted)
+      t.ok(a.s.round === 2 && DD.Combat.current() === u, tag + ': round 2');
+      t.eq(mage.hp, mageHp, tag + ': the grunt next to the mage left her alone');
+      t.ok(dist(es[1], u) < from, tag + ': and walked toward the Loud Eater (' + from + ' → ' + dist(es[1], u) + ' tiles)');
+      t.ok(beforeSnack !== null && beforeSnack < kHp, tag + ': the grunt next to him took its swing at him (' + kHp + ' → ' + beforeSnack + ' HP)');
+      t.ok(has(es[1], 'taunt') && st(es[1], 'taunt').source === u.id, tag + ': round 2 began: Taunted again');
     },
     rp_cursed_monkey_paw: function (t, lv, L, tag, id) {
       unitDelta(t, id, lv, { maxAp: 1 }, tag);
@@ -1128,9 +1343,10 @@
       const a = arena(id, lv, { enemies: [{ id: 'test_grunt', x: 8, y: 8 }] });
       forced(0, function () { fire(a.p, 'onTurnEnd', a.me); });
       t.ok(has(a.me, 'sleep'), tag + ': dozes off');
-      DD.Combat.endTurn();
-      t.ok(a.me.ap === 0 && has(a.me, 'sleep'), tag + ': and loses the next turn');
-      DD.Act.removeStatus(a.me, 'sleep', { silent: true });
+      forced(0.999, function () { DD.Combat.endTurn(); });   // (no new naps on the way)
+      t.ok(a.s.round === 3 && DD.Combat.current() === a.me && a.me.ap === 3 && !has(a.me, 'sleep'),
+        tag + ': slept through his round-2 turn (it passed by itself) and is up in round 3');
+      t.ok(a.s.log.some(function (l) { return l.round === 2 && /loses the turn/.test(l.text); }), tag + ': the log says he lost that turn');
       forced(0.999, function () { fire(a.p, 'onTurnEnd', a.me); });
       t.ok(!has(a.me, 'sleep'), tag + ': or stays awake');
       let n = 0;
@@ -1141,8 +1357,7 @@
       const a = arena('rp_cursed_blood_pact', lv, { enemies: [{ id: 'test_grunt', x: 2, y: 4, hpMult: 20 }, { id: 'test_grunt', x: 8, y: 8 }] });
       const u = a.me, cleave = slotOf(u, 'test_cleave'), bash = slotOf(u, 'test_shield_bash');
       function swing(slot) { slot.cd = 0; u.ap = 3; return DD.Combat.useSkill(u, slot, 2, 4); }
-      // noPlan only skips the first planning: the grunts are kept from swinging so only the pact touches HP
-      function endTurn() { DD.Combat.endTurn(); DD.Combat.enemies().forEach(function (e) { e.intents = []; }); }
+      function endTurn() { DD.Combat.endTurn(); }   // the AI passes (enemyAi: false): only the pact touches HP
       t.eq(DD.Combat.costOf(u, DD.getSkill('test_cleave'), 1).ap, 1, tag + ': Wide Cleave (2 AP) costs 1');
       t.eq(DD.Combat.costOf(u, DD.getSkill('test_shield_bash'), 1).ap, 1, tag + ': 1-AP skills stay at 1');
       t.eq(DD.Combat.costOf(u, DD.getSkill('test_slash'), 1).ap, 1, tag + ': and so does the basic attack');
@@ -1194,10 +1409,13 @@
       t.ok(!!s15 && s15.id === 'fire' && s15.turns === 1 && !!s25 && s25.id === 'fire' && s25.turns === 1, tag + ': the other tiles around you catch fire (1 round)');
       t.ok(!tile(1, 3).surface || tile(1, 3).surface.id !== 'fire', tag + ': water does not burn');
       [{ x: 2, y: 4 }, { x: 1, y: 5 }].forEach(function (q) { DD.Act.setSurface(q.x, q.y, null); });
-      DD.Combat.endTurn();
-      t.ok(has(mage, 'burn'), tag + ': the ally standing next to you at the end of your turn starts Burning (allies or not)');
+      DD.Combat.endTurn();   // the real end of his turn: the tiles around him catch fire, the mage's turn begins
+      const s15b = tile(1, 5).surface;
+      t.ok(DD.Combat.current() === mage && !!s15b && s15b.id === 'fire', tag + ": his turn ends: fire under the mage, now it's her turn");
+      DD.Combat.endTurn();   // she ends her turn standing in it
+      t.ok(has(mage, 'burn'), tag + ': the ally who ends her turn next to you starts Burning (allies or not)');
       t.ok(!has(u, 'burn'), tag + ': you, of course, do not');
-      t.ok(!tile(1, 5).surface && !tile(2, 4).surface, tag + ': the fire is gone by the next round');
+      t.ok(a.s.round === 2 && !tile(1, 5).surface && !tile(2, 4).surface, tag + ': the fire is gone by the next round');
     },
     rp_cursed_gamblers_ruin: function (t, lv, L, tag) {
       const a = arena('rp_cursed_gamblers_ruin', lv, { hpMult: 50 });
@@ -1213,10 +1431,14 @@
       [1, 2, 3].forEach(function (act) {
         arena(id, lv, { sb: { run: fakeRun({ act: act }) } });
         const ducks = enemiesOf('wm_duck_foe');
-        t.eq(ducks.length, L.base + act - 1, tag + ': act ' + act + ': ' + (L.base + act - 1) + ' Hostile Ducks');
+        t.eq(ducks.length, L.ducks[act - 1], tag + ': act ' + act + ': ' + L.ducks[act - 1] + ' Hostile Duck(s)');
       });
       arena(id, lv);
-      t.eq(enemiesOf('wm_duck_foe').length, L.base, tag + ': outside a run it counts as act 1');
+      t.eq(enemiesOf('wm_duck_foe').length, L.ducks[0], tag + ': outside a run it counts as act 1');
+      // v2: the collectors roll initiative like everyone else (they are in the order from round 1)
+      const ids = enemiesOf('wm_duck_foe').map(function (d) { return d.id; });
+      t.ok(ids.length > 0 && ids.every(function (did) { return DD.Combat.state.order.some(function (e) { return e.unitId === did; }); }),
+        tag + ': every Hostile Duck has an initiative turn of its own');
     },
   };
 
@@ -1227,7 +1449,7 @@
     // registered cleanly: no duplicate ids or missing required fields were reported while the table loaded
     const loadWarns = DD.problems.filter(function (w) { return /register passives|passives "rp_|passive rp_/.test(String(w)); });
     t.eq(loadWarns.length, 0, 'no registry warnings for the table' + (loadWarns.length ? ': ' + loadWarns.slice(0, 3).join(' | ') : ''));
-    const names = {}, icons = {};
+    const names = {}, icons = {}, longest = [];
     ids.forEach(function (id) {
       const d = DD.getPassive(id);
       const L0 = 'passive ' + id;
@@ -1243,6 +1465,7 @@
       t.ok(Array.isArray(d.levels) && d.levels.length >= 1 && d.levels.length <= 3, L0 + ': 1-3 levels');
       t.eq(d.maxLevel, d.levels.length, L0 + ': maxLevel = levels.length');
       t.ok(typeof d.flavor === 'string' && d.flavor.trim().length > 0 && d.flavor.length <= 120 && !badText(d.flavor), L0 + ': flavor (≤ 120 chars): ' + d.flavor.length);
+      t.ok(!V1_WORDS.test(d.flavor), L0 + ': flavor has no v1 words (Guard, telegraphs, intents, XP): ' + d.flavor);
       t.ok(Array.isArray(d.tags), L0 + ': tags array');
       t.ok(typeof d.desc === 'function' || typeof d.desc === 'string', L0 + ': desc');
       t.ok(d.hooks && typeof d.hooks === 'object', L0 + ': hooks object');
@@ -1261,9 +1484,11 @@
         const tag = L0 + ' L' + lv;
         t.ok(L && typeof L === 'object' && !Array.isArray(L), tag + ': level is an object');
         const text = DD.passiveDesc({ id: id, level: lv });
-        t.ok(!badText(text) && text.length <= 260, tag + ': desc "' + text + '"');
+        t.ok(!badText(text) && text.length <= DESC_MAX, tag + ': desc (≤ ' + DESC_MAX + ' chars, ' + text.length + ') "' + text + '"');
+        t.ok(!V1_WORDS.test(text), tag + ': no v1 words in the desc (Guard, telegraphs, intents, planning, XP)');
         t.ok(!seen[text], tag + ': desc differs from the other levels');
         seen[text] = 1;
+        longest.push({ n: text.length, id: id + ' ' + lv });
         const stats = DD.passiveStats({ id: id, level: lv });
         if (stats !== null) {
           t.ok(typeof stats === 'object', tag + ': stats object');
@@ -1275,12 +1500,14 @@
           const m = typeof d.runMods === 'function' ? d.runMods(L, lv) : d.runMods;
           t.ok(m && typeof m === 'object', tag + ': runMods object');
           Object.keys(m || {}).forEach(function (k) {
-            t.ok(MOD_KEYS.indexOf(k) >= 0 && typeof m[k] === 'number' && isFinite(m[k]) && Math.abs(m[k]) <= 1, tag + ': runMods.' + k + ' = ' + m[k]);
+            t.ok(MOD_KEYS.indexOf(k) >= 0 && typeof m[k] === 'number' && isFinite(m[k]) && Math.abs(m[k]) <= MOD_MAX[k], tag + ': runMods.' + k + ' = ' + m[k]);
           });
         }
       }
     });
     Object.keys(SPECS).forEach(function (id) { t.ok(!!DD.getPassive(id), 'spec ' + id + ' matches a registered passive'); });
+    longest.sort(function (a, b) { return b.n - a.n; });
+    t.log('longest descs: ' + longest.slice(0, 5).map(function (x) { return x.id + ' (' + x.n + ')'; }).join(', '));
   });
 
   T.suite('passive-table: the table is big, very random and in the designed rarity mix', function (t) {
@@ -1297,9 +1524,13 @@
     t.ok(req.length >= 4 && req.length <= 12, 'a few hero-specific entries (' + req.join(', ') + ')');
     const tagCount = {};
     ids.forEach(function (id) { (DD.getPassive(id).tags || []).forEach(function (g) { tagCount[g] = (tagCount[g] || 0) + 1; }); });
-    ['proc', 'wildmagic', 'duck', 'teleport', 'gold', 'run', 'surface', 'hype', 'status', 'stat'].forEach(function (g) {
+    ['proc', 'wildmagic', 'duck', 'teleport', 'gold', 'run', 'surface', 'hype', 'status', 'stat', 'initiative', 'opportunity'].forEach(function (g) {
       t.ok(tagCount[g] > 0, 'has "' + g + '" entries (' + (tagCount[g] || 0) + ')');
     });
+    // DESIGN §7.1 counts (kept through v2: new initiative / opportunity entries replaced old ones of the same rarity)
+    t.eq(RARITIES.map(function (r) { return by[r]; }).join('/'), '33/18/11/6/11', 'entries per rarity: 33 common / 18 uncommon / 11 rare / 6 legendary / 11 cursed');
+    t.ok(ids.every(function (id) { const d = DD.getPassive(id); return d.weight === { common: 10, uncommon: 6, rare: 3, legendary: 1, cursed: 4 }[d.rarity]; }),
+      'every entry has its rarity\'s default weight (10/6/3/1/4; owned ones are weighted by DD.Balance.passives.ownedWeight)');
     if (DD.Passives && typeof DD.Passives.table === 'function') {
       const tbl = DD.Passives.table(null);
       t.ok(tbl.length >= ids.length, 'DD.Passives.table lists every entry');
@@ -1342,6 +1573,17 @@
       t.ok(DD.getPassive(c[0]).requires(rh(c[1]), DD.getHero(c[1])), c[0] + ' is available to ' + c[1]);
     });
     t.ok(!DD.getPassive('rp_frequent_flyer').requires(rh('test_knight'), DD.getHero('test_knight')), 'a grounded knight never sees Frequent Flyer Miles');
+    // Hall Monitor (v2) goes to exactly the heroes whose basic attack makes attacks of opportunity, as the engine reads it
+    const hm = DD.getPassive('rp_hall_monitor'), melee = [];
+    heroes.slice().sort().forEach(function (hid) {
+      quiet({ heroes: [{ id: hid, x: 1, y: 4 }], enemies: [{ id: 'test_grunt', x: 7, y: 7 }] });
+      const u = DD.Combat.heroes()[0];
+      if (!u) return;
+      const engine = !!DD.Act.opportunitySlot(u);
+      if (engine) melee.push(hid);
+      t.eq(hm.requires(rh(hid), DD.getHero(hid)), engine, 'Hall Monitor for ' + hid + ': ' + (engine ? 'a melee basic attack' : 'no attacks of opportunity') + ' (the engine agrees)');
+    });
+    t.log('Hall Monitor is offered to: ' + melee.join(', '));
   });
 
   /** Run every spec of one rarity, at every level. */
@@ -1364,6 +1606,29 @@
     });
   }
   RARITIES.forEach(specSuite);
+
+  // v2 (user: "the shield at the start of combat should go"): whatever a Blessing does at fight start, the hero has no
+  // Block in deployment, and enemies that win initiative meet a hero without Block
+  T.suite('passive-table: v2 — no Blessing starts a fight with Block (deployment and enemies acting first see 0)', function (t) {
+    let n = 0;
+    rpIds().forEach(function (id) {
+      const lv = DD.getPassive(id).levels.length;
+      quiet({ heroes: [{ id: 'test_mage', x: 1, y: 4, passives: [{ id: id, level: lv }] }, { id: 'test_cleric', x: 1, y: 6 }],
+        enemies: [{ id: 'test_grunt', x: 7, y: 7 }, { id: 'test_grunt', x: 7, y: 1 }], initiative: 'enemiesFirst', gold: 500,
+        deploy: true, deployTiles: [{ x: 1, y: 4 }, { x: 1, y: 6 }, { x: 1, y: 2 }] });
+      const hs = DD.Combat.heroes();
+      const inDeploy = hs.map(function (h) { return h.block || 0; });
+      let atFirst = null;
+      const off = DD.Events.on('turn:start', function (e) {
+        if (!atFirst && e.unit && e.unit.side === 'enemy') atFirst = hs.map(function (h) { return h.block || 0; });
+      });
+      try { DD.Combat.rollInitiative(); } finally { off(); }
+      t.ok(inDeploy.join(',') === '0,0' && !!atFirst && atFirst.join(',') === '0,0',
+        id + ' ' + DD.util.roman(lv) + ': no Block in deployment (' + inDeploy + ') or on the first enemy turn (' + atFirst + ')');
+      n++;
+    });
+    t.log(n + ' Blessings at max level checked');
+  });
 
   T.suite('passive-table: stats on every entry reach the hero sheet and the unit (heroStats, combat units)', function (t) {
     rpIds().forEach(function (id) {
@@ -1574,7 +1839,7 @@
     DD.Run.useUi = false;
     try {
       DD.Run.newRun(FIXTURE_HEROES.slice(0, 4), 'normal', 'pt-live');
-      const loads = [['rp_cursed_predatory_loan', 'rp_ghost_accountant'], ['rp_participation_trophy', 'rp_quantum_pockets'],
+      const loads = [['rp_cursed_predatory_loan', 'rp_ghost_accountant'], ['rp_quantum_pockets', 'rp_teachers_pet'],
         ['rp_compound_interest'], ['rp_coin_magnet']];
       S().party.forEach(function (h, i) { h.passives = loads[i].map(function (id) { return { id: id, level: 1 }; }); });
       S().gold = 100;
@@ -1596,7 +1861,7 @@
       while (S().consumables.length < S().maxConsumables) S().consumables.push(S().consumables[0]);
       forced(0, function () { fire(qp, 'onCombatStart', hs[1]); });
       t.eq(S().consumables.length, S().maxConsumables, 'a full bag stays full');
-      // the win: the rogue kills everything (Coin Magnet), then the end-of-fight gold (Ghost Accountant, Participation Trophy)
+      // the win: the rogue kills everything (Coin Magnet), then the end-of-fight gold (Ghost Accountant)
       const deltas = [];
       let ended = false;
       const offGold = DD.Events.on('run:gold', function (e) { if (!ended) deltas.push(e.delta); });
@@ -1606,8 +1871,10 @@
       } finally { offGold(); offEnd(); }
       const kills = cs.units.filter(function (u) { return u.side === 'enemy' && u.dead; }).length;
       t.eq(cs.result, 'victory', 'the fight is won');
-      t.eq(deltas.join(','), Array(kills + 1).join('2,') + '5,5', 'run gold: +2 per Coin Magnet kill, then +5 (Ghost Accountant) and +5 (Participation Trophy)');
+      t.eq(deltas.join(','), Array(kills + 1).join('2,') + '5', 'run gold: +2 per Coin Magnet kill, then +5 (Ghost Accountant)');
       t.ok(!DD.Run.inCombat() && S().pending && S().pending.type === 'rewards', 'the run moved on to the rewards');
+      // v2 leveling: Teacher's Pet weighs its hero in the DM's level-up roll (the run layer reads runMods.xp)
+      t.ok(Math.abs(DD.Passives.xpMult(S().party[1]) - 1.5) < 1e-9 && DD.Passives.xpMult(S().party[0]) === 1, "Teacher's Pet: the run weighs that hero 1.5 in the level-up roll");
       // runMods are read live by the run: Trust Fund and the Kleptomaniac's prices
       S().party[2].passives = [{ id: 'rp_trust_fund', level: 3 }, { id: 'rp_cursed_kleptomaniac', level: 1 }];
       t.ok(Math.abs(DD.Run.passiveMods().gold - 0.2) < 1e-9 && Math.abs(DD.Run.passiveMods().price - 0.4) < 1e-9, 'the run sees +20% gold and +40% prices');
@@ -1741,6 +2008,20 @@
       const a = kitArena(hid, 'rp_compound_interest', 2);
       const ref = kitArena(hid, null, 2);
       t.eq(a.s.sandboxGold - ref.s.sandboxGold, Math.min(L.cap, Math.floor(100 * L.pct / 100)), 'Compound Interest on ' + hid + ': interest on 100 gold');
+      checked++;
+    });
+    // Hall Monitor (v2): a grunt walking away from the hero eats its real basic attack, +dmg
+    eligible('rp_hall_monitor').forEach(function (hid) {
+      const L = DD.skillLevel(DD.getPassive('rp_hall_monitor'), 2);
+      const out = [null, 'rp_hall_monitor'].map(function (pid) {
+        const a = kitArena(hid, pid, 2);
+        DD.Act.teleport(a.foe, 3, 4, { noEnter: true });   // next to the hero (2,4), not to the ally (2,5)
+        a.foe.armor = 0; a.foe.block = 0;
+        const h0 = a.foe.hp;
+        DD.AI.moveTo(a.foe, 6, 4);
+        return h0 - a.foe.hp;
+      });
+      t.ok(out[0] > 0 && out[1] - out[0] === L.dmg, note('Hall Monitor on ' + hid + ': its attack of opportunity deals +' + L.dmg + ' (' + out[0] + ' → ' + out[1] + ')'));
       checked++;
     });
     t.log(checked + ' hero/Blessing pairs checked against the real kits');

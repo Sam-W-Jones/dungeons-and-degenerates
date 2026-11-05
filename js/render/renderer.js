@@ -8,6 +8,17 @@
  * Scenes: 'combat' | 'title' | 'gallery' | 'none'.
  * Reads DD.Combat.state (or DD.Render.stateOverride) and DD.Render.overlay; never mutates game state.
  * World drawing happens in world px (ctx transform = camera); widgets are drawn in screen px.
+ * Map rotation (purely visual): everything world-side is drawn through the current DD.Iso view (the battlefield's yaw;
+ * yaw 0 is the classic view and pixel-identical to the pre-rotation renderer). Painter's order = depth groups
+ * (DD.Iso.depth), picking = view rays through tile columns, faces / contact shadows / rims follow the visible sides,
+ * textures are baked per yaw, content ground painters are warped onto the rotated tile, billboards stay upright.
+ * N / W border walls sink and border props fade as those borders turn toward the camera (never at yaw 0). The live
+ * yaw (getYaw / setYaw / rotateBy / turn / resetView / rotate drags; turns ease over 250 ms) keeps the board-area
+ * centre's ground point in place, is announced as 'render:view' { yaw, moving } and remembered in settings.viewYaw;
+ * debug param rot=<deg>. While the view turns, frames draw at a cheaper level of detail (texture bake buckets,
+ * half-resolution silhouettes); exact bakes follow under a per-frame budget once it settles, and a Q / R / Home turn
+ * bakes the view it lands on while it animates. Built-in blocks (and content objects with def.yawAware) turn with the
+ * board through the yawAware painter; other object painters are billboards.
  */
 (function () {
   'use strict';
@@ -92,22 +103,44 @@
   let zoomAnchor = null;          // { sx, sy, wx, wy } keeps a world point under the cursor while zooming
   let camEase = null;             // { tau, until } a slower camera ease while it follows the acting unit (R.follow)
   let renderErrorShown = {};
+  let liveYaw = 0;                // the battlefield's view yaw in degrees (rotation plan §2.2; 0 = the classic view)
+  let lodOff = false;             // offscreen renders (renderTo) always draw at full detail
+  /** Cheaper level of detail while the view turns (texture bake buckets, half-res silhouettes); live frames only. */
+  function viewMoving() { return !lodOff && isViewMoving(); }
   const camera = { x: 0, y: 0, zoom: 1 };
   const camTarget = { x: 0, y: 0, zoom: 1 };
   const brokenPainters = {};      // def ids whose custom painter threw once -> default painter
   const sceneHandlers = {};       // registerScene(id, { draw(view), enter(), leave() })
 
   // ---- tiny helpers -------------------------------------------------------------------------------------
+  // Ground helpers follow the current view (DD.Iso.view(): the live yaw, or the yaw a bake / renderTo runs under).
+  // HW / HH stay the yaw-0 footprint units; V.hx / V.hy are the rotated quad's screen half-extents.
   function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
   function rgba(c, a) { return U.rgba(c, a); }
   function shade(c, a) { return U.shade(c, a); }
-  function P(u, v) { return [(u - v) * HW, (u + v) * HH]; }
+  /** Ground offset (u along +x, v along +y, in tiles) -> tile-local px at the current view. */
+  function P(u, v) {
+    const V = Iso.view();
+    return V.legacy ? [(u - v) * HW, (u + v) * HH] : [V.ax * u + V.bx * v, V.ay * u + V.by * v];
+  }
+  /** The yaw-0 offset (billboards keep the classic look at every yaw). */
+  function P0(u, v) { return [(u - v) * HW, (u + v) * HH]; }
   function pulse(speed, phase) { return 0.5 + 0.5 * Math.sin(time * speed + (phase || 0)); }
+  /** Colour between a (t = 0) and b (t = 1); returns a / b themselves at the ends (quarter views stay exact). */
+  function mix(a, b, t) {
+    if (t <= 0) return a;
+    if (t >= 1) return b;
+    const A = U.parseColor(a), B = U.parseColor(b);
+    if (!A || !B) return t < 0.5 ? a : b;
+    const m = function (k) { return Math.round(A[k] + (B[k] - A[k]) * t); };
+    return 'rgb(' + m('r') + ',' + m('g') + ',' + m('b') + ')';
+  }
 
-  /** Run fn in uv space of a tile (origin = tile top center): rects become diamonds, circles flat ellipses. */
+  /** Run fn in uv space of a tile (origin = tile top center): rects become the tile quad, circles flat ellipses. */
   function inUV(c, fn) {
+    const V = Iso.view();
     c.save();
-    c.transform(HW, HH, -HW, HH, 0, 0);
+    c.transform(V.ax, V.ay, V.bx, V.by, 0, 0);
     fn();
     c.restore();
   }
@@ -115,10 +148,48 @@
     const a = P(u1, v1), b = P(u2, v2);
     c.moveTo(a[0], a[1]); c.lineTo(b[0], b[1]);
   }
-  function diamond(c, cx, cy, hw, hh) { Iso.diamondPath(c, cx, cy, hw, hh); }
+  /** A ground square of the current view (the tile quad scaled like a (hw, hh) diamond). */
+  function diamond(c, cx, cy, hw, hh) { Iso.quadPath(c, cx, cy, hw, hh); }
   function fillDiamond(c, cx, cy, color, hw, hh) {
     c.beginPath(); diamond(c, cx, cy, hw || HW, hh || HH); c.fillStyle = color; c.fill();
   }
+  /** Points [[x, y], ...] offset by (cx, cy) and scaled by k as an open subpath. */
+  function chainPath(c, pts, cx, cy, k) {
+    for (let i = 0; i < pts.length; i++) {
+      const x = cx + pts[i][0] * k, y = cy + pts[i][1] * k;
+      if (i) c.lineTo(x, y); else c.moveTo(x, y);
+    }
+  }
+
+  /** Byte-capped LRU of canvases (texture bakes, face images): a hit moves the entry to the back. */
+  function canvasLru(maxBytes, onEvict) {
+    const map = new Map();
+    let bytes = 0;
+    const size = function (cv) { return cv.width * cv.height * 4; };
+    return {
+      get: function (k) { const v = map.get(k); if (v) { map.delete(k); map.set(k, v); } return v; },
+      has: function (k) { return map.has(k); },
+      set: function (k, cv) {
+        if (map.has(k)) bytes -= size(map.get(k));
+        map.delete(k); map.set(k, cv); bytes += size(cv);
+        while (bytes > maxBytes && map.size > 1) {
+          const old = map.keys().next().value, ov = map.get(old);
+          map.delete(old); bytes -= size(ov);
+          if (onEvict) onEvict(old);
+        }
+      },
+      clear: function () { map.clear(); bytes = 0; },
+      get size() { return map.size; },
+      get bytes() { return bytes; },
+    };
+  }
+  /**
+   * Rotation counters for tests / perf runs (DD.Render._rot): warped draws, bakes, budget fallbacks, and budgetMax = the
+   * most budgeted (odd-angle) bake painting one frame did, in ms; prefetched = bakes done ahead for a turn's target.
+   */
+  const ROT = { warpDraws: 0, texBakes: 0, faceBakes: 0, fallbacks: 0, texMs: 0, budgetMax: 0, prefetched: 0 };
+  /** Times texture bakes (tests swap in a fake clock: the harness clock is virtual). */
+  let bakeClock = function () { return performance.now(); };
 
   /** Report a renderer failure once per message (keeps the rAF loop alive). */
   function renderError(label, err) {
@@ -235,30 +306,130 @@
     return s;
   }
 
-  const texCache = new Map();
   function texScale(zoom) {
     const z = zoom * DPR;
     return z <= 0.6 ? 0.6 : z <= 1 ? 1 : z <= 1.5 ? 1.5 : z <= 2 ? 2 : z <= 3 ? 3 : 4;
   }
-  function topTexture(style, variant, S, grid) {
-    const key = style.key + '#' + variant + '@' + S + (grid ? 'g' : '');
+  // Top textures are baked per view yaw (painted under Iso.withYaw: floor art turns with the floor, tufts / coins
+  // stay upright). texYaws: base key -> yaws baked so far (the nearest-bake fallback when the frame budget is spent).
+  const texYaws = new Map();
+  /** Yaw of a view key ('q1' -> 90, 'y30.000' -> 30). */
+  function keyYaw(vk) { return vk.charAt(0) === 'q' ? +vk.slice(1) * 90 : +vk.slice(1); }
+  const texCache = canvasLru(32 << 20, function (key) {
+    const cut = key.lastIndexOf('~');
+    const set = texYaws.get(cut < 0 ? key : key.slice(0, cut));
+    if (set) set.delete(cut < 0 ? 0 : keyYaw(key.slice(cut + 1)));
+  });
+  const UPRIGHT_TEX = { grass: 1, gold: 1, rubble: 1 };   // painters that add upright details (re-baked per yaw)
+  const TEX_BUDGET_MS = 2.5;
+  let texBudget = Infinity;      // ms of budgeted bake painting left in this frame (offscreen renders: unlimited)
+  let frameBakeMs = 0;           // budgeted bake painting done in this frame so far (ROT.budgetMax)
+  /** A new frame's bake budget (live frames) or none (offscreen renders bake everything at once). */
+  function resetBakeBudget(ms) { texBudget = ms; frameBakeMs = 0; }
+  function texBase(style, variant, S, grid) { return style.key + '#' + variant + '@' + S + (grid ? 'g' : ''); }
+  function texKey(base, BV) { return BV.legacy ? base : base + '~' + BV.key; }
+  function topTexture(style, variant, S, grid, bakeYaw) {
+    const BV = Iso.makeView(bakeYaw || 0);
+    const base = texBase(style, variant, S, grid), key = texKey(base, BV);
     let cv = texCache.get(key);
     if (cv) return cv;
-    if (texCache.size > 1600) texCache.clear();
+    const t0 = bakeClock();
     cv = document.createElement('canvas');
     cv.width = Math.ceil((HW + TEX_PAD) * 2 * S);
     cv.height = Math.ceil((HH + TEX_PAD) * 2 * S);
     const c = cv.getContext('2d');
     c.setTransform(S, 0, 0, S, (HW + TEX_PAD) * S, (HH + TEX_PAD) * S);
-    paintTop(c, style, variant, grid);
+    Iso.withYaw(BV, function () { paintTop(c, style, variant, grid); });
     texCache.set(key, cv);
+    let set = texYaws.get(base);
+    if (!set) texYaws.set(base, set = new Set());
+    set.add(BV.yaw);
+    const ms = bakeClock() - t0;
+    ROT.texBakes++; ROT.texMs += ms;
+    if (BV.quarter < 0) {
+      // odd-angle bakes share the frame's budget; quarter sets are mandatory (once per quarter)
+      texBudget -= ms;
+      frameBakeMs += ms;
+      if (frameBakeMs > ROT.budgetMax) ROT.budgetMax = frameBakeMs;
+    }
     return cv;
+  }
+  function yawGap(a, b) { const d = Math.abs(a - b) % 360; return d > 180 ? 360 - d : d; }
+  /**
+   * The yaw to draw a top texture from for target yaw `target` (rotation plan R9): a quarter view bakes on demand;
+   * a settled odd angle bakes at 0.1 deg ("budgeted": while the frame's bake budget lasts; otherwise the nearest
+   * cached bake within 15 deg, else the quarter). While the view turns, upright styles (tufts, coins) use budgeted
+   * 7.5 deg buckets (they lean at most 7.5 deg) and flat styles the nearest quarter's set (drawn through the exact
+   * residual warp); the exact bakes follow once it settles.
+   */
+  function bakeYawFor(s, variant, S, grid, target) {
+    if (target % 90 === 0) return target;   // quarter views (their yaws are exact multiples of 90)
+    let want;
+    if (!viewMoving()) want = Iso.normYaw(Math.round(target * 10) / 10);
+    else if (UPRIGHT_TEX[s.tex]) want = Iso.normYaw(Math.round(target / 7.5) * 7.5);
+    else return Iso.normYaw(Math.round(target / 90) * 90);
+    const base = texBase(s, variant, S, grid);
+    if (texBudget > 0 || texCache.has(texKey(base, Iso.makeView(want)))) return want;
+    ROT.fallbacks++;
+    let best = null, gap = 15 + 1e-9;
+    const set = texYaws.get(base);
+    if (set) set.forEach(function (y) { const g = yawGap(y, target); if (g <= gap) { gap = g; best = y; } });
+    return best !== null ? best : Iso.normYaw(Math.round(target / 90) * 90);
+  }
+
+  /**
+   * Prefetch (rotation plan C7.4): while a Q / R / Home / snap turn animates, the frame's leftover bake budget paints
+   * the textures and faces of the view it will land on, so the landing frame has nothing left to bake.
+   */
+  function prefetchYaw() {
+    return yawAnim && viewMoving() && texBudget > 0 ? Iso.normYaw(Math.round(yawAnim.to * 10) / 10) : null;
+  }
+  function spendBake(t0) {
+    const ms = bakeClock() - t0;
+    texBudget -= ms; frameBakeMs += ms;
+    if (frameBakeMs > ROT.budgetMax) ROT.budgetMax = frameBakeMs;
+    ROT.prefetched++;
+  }
+  function prefetchTop(s, variant, S, grid, target) {
+    if (texCache.has(texKey(texBase(s, variant, S, grid), Iso.makeView(target)))) return;
+    const t0 = bakeClock(), was = texBudget, wasMs = frameBakeMs;
+    topTexture(s, variant, S, grid, target);
+    texBudget = was; frameBakeMs = wasMs;   // an odd-angle bake books itself: count it once, here
+    spendBake(t0);
+  }
+  function prefetchFaces(F, s, t, target) {
+    const VT = Iso.makeView(target);
+    if (VT.quarter < 0) return;   // odd-angle faces are bare images, baked on demand
+    Iso.withYaw(VT, function () {
+      const top = topLevel(F, t);
+      for (let i = 0; i < VT.faces.length && texBudget > 0; i++) {
+        const e = VT.faces[i];
+        const d = Math.round((top - faceBottom(F, t.x + e.dx, t.y + e.dy, top)) * STEP * 2) / 2;
+        if (!(d > 0.01)) continue;
+        const variant = Iso.hash(t.x, t.y, FACE_SALT[e.dir]) & 3, roleLeft = e.frame === 'L';
+        if (faceCache.has(faceKey(s, roleLeft, d, variant, F.texS, e.dir))) continue;
+        const t0 = bakeClock();
+        faceImage(s, roleLeft, d, variant, F.texS, e.dir);
+        spendBake(t0);
+      }
+    });
   }
 
   function paintTop(c, s, variant, grid) {
+    const V = Iso.view();
     // slightly expanded base hides hairline seams between neighbours
     c.beginPath();
-    c.moveTo(0, -HH - 0.3); c.lineTo(HW + 0.9, 0); c.lineTo(0, HH + 1.1); c.lineTo(-HW - 0.9, 0); c.closePath();
+    const q = V.order.map(function (i) { return V.corners[i]; });
+    if (V.quarter >= 0) {
+      // top, right, bottom, left: today's offsets by screen position
+      c.moveTo(q[0][0], q[0][1] - 0.3); c.lineTo(q[1][0] + 0.9, q[1][1]); c.lineTo(q[2][0], q[2][1] + 1.1); c.lineTo(q[3][0] - 0.9, q[3][1]);
+    } else {
+      for (let i = 0; i < 4; i++) {
+        const k = 1 + 0.9 / (Math.hypot(q[i][0], q[i][1]) || 1), x = q[i][0] * k, y = q[i][1] * k + 0.2;
+        if (i) c.lineTo(x, y); else c.moveTo(x, y);
+      }
+    }
+    c.closePath();
     c.fillStyle = s.top;
     c.fill();
     c.save();
@@ -268,16 +439,27 @@
     try { fn(c, rnd, variant, s); } catch (e) { renderError('texture ' + s.id, e); }
     c.restore();
     c.lineWidth = 1;
-    c.beginPath(); c.moveTo(-HW + 1, 0); c.lineTo(0, -HH + 0.5); c.lineTo(HW - 1, 0);
+    // lit rim along the upper (back) edges, dark rim along the lower (front) ones
+    c.beginPath(); rimPath(c, V.backChain);
     c.strokeStyle = 'rgba(255,255,255,' + (s.pit ? 0 : 0.14) + ')';
     c.stroke();
-    c.beginPath(); c.moveTo(-HW + 1, 0); c.lineTo(0, HH - 0.5); c.lineTo(HW - 1, 0);
+    c.beginPath(); rimPath(c, V.frontChain);
     c.strokeStyle = 'rgba(0,0,0,0.26)';
     c.stroke();
     if (grid) {
       // optional tactical grid (settings.showGrid), baked in so it costs nothing per frame
       c.beginPath(); diamond(c, 0, 0, HW - 0.6, HH - 0.3);
       c.strokeStyle = 'rgba(10,6,8,0.22)'; c.lineWidth = 0.9; c.stroke();
+    }
+  }
+  /** A rim chain pulled inside the tile: ends 1 px inward on x, inner corners 0.5 px toward the centre on y. */
+  function rimPath(c, chain) {
+    const n = chain.length - 1;
+    for (let i = 0; i <= n; i++) {
+      const p = chain[i];
+      const x = i === 0 ? p[0] + 1 : i === n ? p[0] - 1 : p[0];
+      const y = i === 0 || i === n ? p[1] : p[1] < 0 ? p[1] + 0.5 : p[1] - 0.5;
+      if (i) c.lineTo(x, y); else c.moveTo(x, y);
     }
   }
 
@@ -713,7 +895,7 @@
         c.moveTo(k[0] - w, k[1]); c.lineTo(k[0], k[1] + w * 0.5); c.lineTo(k[0] + w, k[1]);
         c.lineTo(k[0] + w, k[1] - hgt); c.lineTo(k[0] - w, k[1] - hgt); c.closePath();
         c.fillStyle = shade(col, -0.3); c.fill();
-        c.beginPath(); diamond(c, k[0], k[1] - hgt, w, w * 0.5); c.fillStyle = shade(col, 0.1); c.fill();
+        c.beginPath(); Iso.diamondPath(c, k[0], k[1] - hgt, w, w * 0.5); c.fillStyle = shade(col, 0.1); c.fill();
         stroke(c, 'rgba(0,0,0,0.35)', 0.5);
       }
     },
@@ -751,16 +933,84 @@
   // ======================================================================================================
   function gridTile(F, x, y) { return x >= 0 && y >= 0 && x < F.gw && y < F.gh ? F.tiles[y * F.gw + x] : null; }
 
-  /** Visual top elevation (levels) of a tile: h plus wall height. */
-  function topLevel(F, t) { return (t.h || 0) + terrainStyle(t.t, F.theme).levels; }
+  /**
+   * Border cutaway weight (0..1, render-only) of a tile on the N (y = 0) or W (x = 0) border: how far that border's
+   * outward edge has turned toward the camera. Mapgen dresses those borders with tall walls / trees, which would wall
+   * the board off at 90-270 deg. Always 0 at yaw 0 (those edges face away there).
+   */
+  function cutK(t) {
+    if (t.y !== 0 && t.x !== 0) return 0;
+    const E = Iso.view().edges;
+    return Math.max(t.y === 0 ? E.N.cut : 0, t.x === 0 ? E.W.cut : 0);
+  }
+  /**
+   * Visual top elevation (levels) of a tile: h plus wall height; a tall tile on the N / W border sinks toward half a
+   * level as that border turns to face the camera (quantised to 1/4 level so face images do not churn). Faces, contact
+   * shadows, picking, bounds and widgets all read this, so what is drawn is what is picked.
+   */
+  function topLevel(F, t) {
+    const lv = terrainStyle(t.t, F.theme).levels;
+    if (lv > 0.5 && (t.y === 0 || t.x === 0)) {
+      const k = cutK(t);
+      if (k > 0.001) return (t.h || 0) + Math.max(0.5, Math.round(lv * (1 - 0.8 * k) * 4) / 4);
+    }
+    return (t.h || 0) + lv;
+  }
 
-  /** Elevation a tile's side face drops to on one side: the front neighbour's top or the board slab. */
+  // ---- painter's order (rotation plan §1.7) -------------------------------------------------------------------
+  // Cells sorted back to front by Iso.depth; cells of equal depth form a GROUP (an x + y diagonal at yaw 0 and every
+  // quarter view's analogue, usually a single tile at odd angles), members by x then y. A column that can hide another
+  // always has the larger depth, whatever the heights. Per group: tile blocks, objects + surface volumes, then units.
+  const orderMemo = new Map();
+  function depthOrder(gw, gh) {
+    const V = Iso.view();
+    const key = gw + 'x' + gh + '|' + V.key;
+    let o = orderMemo.get(key);
+    if (o) return o;
+    const n = gw * gh, idx = new Array(n), dep = new Float64Array(n);
+    for (let y = 0; y < gh; y++) for (let x = 0; x < gw; x++) { const i = y * gw + x; idx[i] = i; dep[i] = Iso.depth(x, y); }
+    idx.sort(function (a, b) { return dep[a] - dep[b] || a - b; });
+    const groups = [], depthOf = [], groupOf = new Int32Array(n);
+    let grp = null, first = -Infinity;
+    for (let k = 0; k < n; k++) {
+      const i = idx[k];
+      if (!grp || dep[i] - first > 1e-7) { grp = []; groups.push(grp); depthOf.push(dep[i]); first = dep[i]; }
+      grp.push(i);
+      groupOf[i] = groups.length - 1;
+    }
+    groups.forEach(function (g) { if (g.length > 1) g.sort(function (a, b) { return (a % gw) - (b % gw) || a - b; }); });
+    o = { key: key, gw: gw, gh: gh, groups: groups, groupOf: groupOf, depthOf: depthOf };
+    orderMemo.set(key, o);
+    if (orderMemo.size > 24) orderMemo.delete(orderMemo.keys().next().value);
+    return o;
+  }
+  function orderOf(F) { return F.order || (F.order = depthOrder(F.gw, F.gh)); }
+  /**
+   * Group a unit is drawn with: at yaw 0 today's ceil(x + y - 0.02); elsewhere the front-most group among the cells its
+   * (moving) feet may overlap, so a walker is never painted under the tile it is stepping onto.
+   */
+  function unitGroup(F, x, y) {
+    if (!F.gw || !F.gh) return 0;
+    if (Iso.view().legacy) return clamp(Math.ceil(x + y - 0.02), 0, F.gw + F.gh - 2);
+    const o = orderOf(F);
+    const xs = [Math.floor(x + 0.02), Math.ceil(x - 0.02)], ys = [Math.floor(y + 0.02), Math.ceil(y - 0.02)];
+    let g = -1;
+    for (let i = 0; i < 2; i++) {
+      for (let j = 0; j < 2; j++) {
+        if (xs[i] >= 0 && ys[j] >= 0 && xs[i] < F.gw && ys[j] < F.gh) g = Math.max(g, o.groupOf[ys[j] * F.gw + xs[i]]);
+      }
+    }
+    if (g < 0) g = o.groupOf[clamp(Math.round(y), 0, F.gh - 1) * F.gw + clamp(Math.round(x), 0, F.gw - 1)];
+    return g;
+  }
+
+  /** Elevation a tile's side face drops to on one side: the front neighbour's (visual) top or the board slab. */
   function faceBottom(F, nx, ny, selfTop) {
     const n = gridTile(F, nx, ny);
     if (!n) return -SLAB;
     const ns = terrainStyle(n.t, F.theme);
     if (ns.pit) return Math.min(selfTop, n.h || 0); // pits paint their own inner walls
-    return (n.h || 0) + ns.levels;
+    return topLevel(F, n);
   }
 
   function edgeAt(x0, y0, x1, y1, u) { return [x0 + (x1 - x0) * u, y0 + (y1 - y0) * u]; }
@@ -798,7 +1048,7 @@
     }
   }
 
-  // Side-face detail painters: (c, style, x0,y0 -> x1,y1 top edge, depth px, rng, isLeft, tile)
+  // Side-face detail painters: (c, style, x0,y0 -> x1,y1 top edge, depth px, rng, spines: the S / W side of a book stack)
   const FACE = {
     stone: function (c, s, x0, y0, x1, y1, d, r) {
       c.beginPath(); courses(c, x0, y0, x1, y1, d, 10); joints(c, x0, y0, x1, y1, d, 10, 2);
@@ -916,7 +1166,7 @@
       const wl = s.wallLook;
       if (wl && wl.trim) { c.beginPath(); c.moveTo(x0, y0 + 2.5); c.lineTo(x1, y1 + 2.5); stroke(c, wl.trim, 1.6); }
     },
-    books: function (c, s, x0, y0, x1, y1, d, r, isLeft) {
+    books: function (c, s, x0, y0, x1, y1, d, r, spines) {
       const cols = ['#7c3030', '#2d4f8a', '#3b6b3f', '#6a4a8c', '#8a6a2a', '#2f2f3a'];
       let k = 0;
       while (k < d - 0.5) {
@@ -924,7 +1174,7 @@
         const col = cols[Math.floor(r() * cols.length)];
         const b0 = Math.min(d, k + th);
         c.beginPath(); c.moveTo(x0, y0 + k); c.lineTo(x1, y1 + k); c.lineTo(x1, y1 + b0); c.lineTo(x0, y0 + b0); c.closePath();
-        if (isLeft) {
+        if (spines) {
           c.fillStyle = col; c.fill();
           c.beginPath();
           const a = edgeAt(x0, y0, x1, y1, 0.3 + r() * 0.2);
@@ -948,39 +1198,54 @@
     c.fillStyle = rgba(s.top, 0.85); c.fill();
   }
 
-  // Side faces are cached as images per (style, side, depth, variant, scale): clip + detail strokes + gradient
-  // per face per frame was the single most expensive part of the world pass.
-  const faceCache = new Map();
+  // Side faces are cached as images per (style, physical side, role, depth, variant, scale): clip + detail strokes +
+  // gradient per face per frame was the single most expensive part of the world pass. A face is painted in its ROLE
+  // frame (the left- or right-hand face on screen, today's two shapes) with the pattern of its PHYSICAL side (N/E/S/W:
+  // salt + rng stream), so a wall keeps its bricks when the view turns. Quarter views draw them at identity (yaw 0 =
+  // today's S = left, E = right); odd angles shear them onto the real top edge and cross-fade the two role colours.
+  const FACE_SALT = { N: 13, E: 12, S: 11, W: 14 }, FACE_ADD = { N: 9, E: 5, S: 1, W: 13 };
+  const faceCache = canvasLru(24 << 20);
   const FACE_PAD = 2;
-  function faceImage(s, isLeft, d, variant, S) {
-    const key = s.key + (isLeft ? '|L' : '|R') + d + '#' + variant + '@' + S;
-    let cv = faceCache.get(key);
-    if (cv) return cv;
-    if (faceCache.size > 1500) faceCache.clear();
-    cv = document.createElement('canvas');
+  function faceRng(s, dir, variant) { return Iso.stream(U.hash(s.key) ^ Math.imul(variant + FACE_ADD[dir], 0x85ebca6b)); }
+  function faceCanvas(roleLeft, d, S) {
+    const cv = document.createElement('canvas');
     cv.width = Math.ceil((HW + FACE_PAD * 2) * S);
     cv.height = Math.ceil((HH + d + FACE_PAD * 2) * S);
-    const c = cv.getContext('2d');
-    c.setTransform(S, 0, 0, S, (isLeft ? HW + FACE_PAD : FACE_PAD) * S, FACE_PAD * S);
-    paintFace(c, s, 0, 0, d, isLeft, Iso.stream(U.hash(s.key) ^ Math.imul(variant + (isLeft ? 1 : 5), 0x85ebca6b)));
-    faceCache.set(key, cv);
+    cv.getContext('2d').setTransform(S, 0, 0, S, (roleLeft ? HW + FACE_PAD : FACE_PAD) * S, FACE_PAD * S);
     return cv;
   }
-  function drawFace(F, c, s, t, cx, cy, d, isLeft) {
-    d = Math.round(d * 2) / 2;
-    const img = faceImage(s, isLeft, d, Iso.hash(t.x, t.y, isLeft ? 11 : 12) & 3, F.texS);
-    c.drawImage(img, cx - (isLeft ? HW + FACE_PAD : FACE_PAD), cy - FACE_PAD, img.width / F.texS, img.height / F.texS);
+  /** Quarter-view face image: role frame + role colour + role strokes (today's look), physical-side pattern. */
+  function faceKey(s, roleLeft, d, variant, S, dir) { return s.key + '|' + (roleLeft ? 'L' : 'R') + dir + d + '#' + variant + '@' + S; }
+  function faceImage(s, roleLeft, d, variant, S, dir) {
+    const key = faceKey(s, roleLeft, d, variant, S, dir);
+    let cv = faceCache.get(key);
+    if (cv) return cv;
+    cv = faceCanvas(roleLeft, d, S);
+    paintFace(cv.getContext('2d'), s, 0, 0, d, roleLeft, faceRng(s, dir, variant), dir === 'S' || dir === 'W', null, false);
+    faceCache.set(key, cv);
+    ROT.faceBakes++;
+    return cv;
   }
-  function paintFace(c, s, cx, cy, d, isLeft, rng) {
+  function drawFace(F, c, s, t, cx, cy, d, roleLeft, dir) {
+    d = Math.round(d * 2) / 2;
+    const img = faceImage(s, roleLeft, d, Iso.hash(t.x, t.y, FACE_SALT[dir]) & 3, F.texS, dir);
+    c.drawImage(img, cx - (roleLeft ? HW + FACE_PAD : FACE_PAD), cy - FACE_PAD, img.width / F.texS, img.height / F.texS);
+  }
+  /**
+   * One face in its role frame (top edge (-HW, 0) -> (0, HH) when roleLeft, else (0, HH) -> (HW, 0)). spines: the
+   * DM's rulebook stacks show spines (S / W sides) or pages. color: the fill (default: the role's colour). bare: no
+   * outer vertical / front-corner strokes (odd angles draw those per frame), the bottom edge stays.
+   */
+  function paintFace(c, s, cx, cy, d, isLeft, rng, spines, color, bare) {
     const x0 = isLeft ? cx - HW : cx, y0 = isLeft ? cy : cy + HH;
     const x1 = isLeft ? cx : cx + HW, y1 = isLeft ? cy + HH : cy;
     c.beginPath(); c.moveTo(x0, y0); c.lineTo(x1, y1); c.lineTo(x1, y1 + d); c.lineTo(x0, y0 + d); c.closePath();
-    c.fillStyle = isLeft ? s.left : s.right;
+    c.fillStyle = color || (isLeft ? s.left : s.right);
     c.fill();
     c.save();
     c.clip();
     const fd = FACE[s.side] || FACE.plain;
-    try { fd(c, s, x0, y0, x1, y1, d, rng, isLeft); } catch (e) { renderError('face ' + s.id, e); }
+    try { fd(c, s, x0, y0, x1, y1, d, rng, spines); } catch (e) { renderError('face ' + s.id, e); }
     const g = c.createLinearGradient(0, Math.min(y0, y1), 0, Math.max(y0, y1) + d);
     g.addColorStop(0, 'rgba(0,0,0,0)');
     g.addColorStop(1, 'rgba(0,0,0,' + Math.min(0.5, 0.12 + d / 170) + ')');
@@ -989,38 +1254,133 @@
     c.restore();
     c.lineWidth = 1;
     c.beginPath();
-    if (isLeft) { c.moveTo(x0, y0); c.lineTo(x0, y0 + d); c.lineTo(x1, y1 + d); }
+    if (bare) { c.moveTo(x0, y0 + d); c.lineTo(x1, y1 + d); }
+    else if (isLeft) { c.moveTo(x0, y0); c.lineTo(x0, y0 + d); c.lineTo(x1, y1 + d); }
     else { c.moveTo(x1, y1); c.lineTo(x1, y1 + d); c.lineTo(x0, y0 + d); }
     c.strokeStyle = 'rgba(8,4,6,0.5)';
     c.stroke();
+    if (bare) return;
     c.beginPath();
     c.moveTo(cx, cy + HH + 0.5); c.lineTo(cx, cy + HH + d);
     c.strokeStyle = 'rgba(255,255,255,0.07)';
     c.stroke();
   }
+  /** Odd-angle face image: the bare face of a physical side in its current role frame, in one role colour ('L' | 'R'). */
+  function faceImageV(s, e, end, d, variant, S) {
+    const key = s.key + '|v' + e.dir + e.frame + end + d + '#' + variant + '@' + S;
+    let cv = faceCache.get(key);
+    if (cv) return cv;
+    const isL = e.frame === 'L';
+    cv = faceCanvas(isL, d, S);
+    paintFace(cv.getContext('2d'), s, 0, 0, d, isL, faceRng(s, e.dir, variant), e.dir === 'S' || e.dir === 'W', end === 'L' ? s.left : s.right, true);
+    faceCache.set(key, cv);
+    ROT.faceBakes++;
+    return cv;
+  }
+  /**
+   * A face at an odd angle: the role-frame image mapped onto the real top edge pa -> pb (verticals stay vertical, the
+   * courses follow the edge), the left colour cross-faded into the right one by the face's angle in view.
+   */
+  function drawFaceV(F, c, s, t, cx, cy, d, e) {
+    const ex = e.pb[0] - e.pa[0], ey = e.pb[1] - e.pa[1];
+    if (ex < 0.25) return;   // edge-on sliver
+    const isL = e.frame === 'L';
+    const q0x = isL ? -HW : 0, q0y = isL ? 0 : HH, dqy = isL ? HH : -HH;
+    const a = ex / HW, b = (ey - dqy) / HW;
+    const variant = Iso.hash(t.x, t.y, FACE_SALT[e.dir]) & 3, S = F.texS;
+    c.save();
+    c.translate(cx, cy);
+    c.transform(a, b, 0, 1, e.pa[0] - a * q0x, e.pa[1] - q0y - b * q0x);
+    ROT.warpDraws++;
+    const ox = -(isL ? HW + FACE_PAD : FACE_PAD), oy = -FACE_PAD;
+    if (e.shade < 0.996) { const img = faceImageV(s, e, 'L', d, variant, S); c.drawImage(img, ox, oy, img.width / S, img.height / S); }
+    if (e.shade > 0.004) {
+      const img = faceImageV(s, e, 'R', d, variant, S);
+      if (e.shade < 0.996) c.globalAlpha *= e.shade;
+      c.drawImage(img, ox, oy, img.width / S, img.height / S);
+    }
+    c.restore();
+  }
+  /** Every visible face of a column at an odd angle + its silhouette verticals and front-corner highlight. */
+  function drawFacesV(F, c, s, t, cx, cy, top, V) {
+    const fs = V.faces, ds = [];
+    for (let i = 0; i < fs.length; i++) {
+      const e = fs[i];
+      const d = Math.round((top - faceBottom(F, t.x + e.dx, t.y + e.dy, top)) * STEP * 2) / 2;
+      ds.push(d);
+      if (d > 0.01) drawFaceV(F, c, s, t, cx, cy, d, e);
+    }
+    if (!fs.length) return;
+    const n = fs.length - 1;
+    c.fillStyle = 'rgba(8,4,6,0.5)';
+    if (ds[0] > 0.01) c.fillRect(cx + fs[0].pa[0] - 0.5, cy + fs[0].pa[1], 1, ds[0]);
+    if (ds[n] > 0.01) c.fillRect(cx + fs[n].pb[0] - 0.5, cy + fs[n].pb[1], 1, ds[n]);
+    if (n === 1 && Math.max(ds[0], ds[1]) > 0.6) {
+      c.fillStyle = 'rgba(255,255,255,0.07)';
+      c.fillRect(cx + fs[0].pb[0] - 0.5, cy + fs[0].pb[1] + 0.5, 1, Math.max(ds[0], ds[1]) - 0.5);
+    }
+  }
 
+  // contact-shadow strips per edge in uv (two rects each), drawn W, N, E, S: alpha fills are order-dependent
+  const SHADOW_ORDER = ['W', 'N', 'E', 'S'];
+  const SHADOW_STRIPS = {
+    W: [-0.5, -0.5, 0.2, 1, -0.5, -0.5, 0.1, 1], N: [-0.5, -0.5, 1, 0.2, -0.5, -0.5, 1, 0.1],
+    E: [0.3, -0.5, 0.2, 1, 0.4, -0.5, 0.1, 1], S: [-0.5, 0.3, 1, 0.2, -0.5, 0.4, 1, 0.1],
+  };
   function drawTop(F, c, t, s, cx, cy) {
+    const V = Iso.view();
     const variant = Iso.hash(t.x, t.y, 77) & 3;
-    const tex = topTexture(s, variant, F.texS, F.showGrid && !s.wall);
+    const grid = F.showGrid && !s.wall;
+    const flip = !!(s.flip && (Iso.hash(t.x, t.y, 91) & 1));
+    // a mirrored variant at yaw θ is the screen mirror of the bake at -θ (S_x·A(-θ) = A(θ)·(u <-> v))
+    const target = flip ? Iso.normYaw(-V.yaw) : V.yaw;
+    const by = bakeYawFor(s, variant, F.texS, grid, target);
+    const tex = topTexture(s, variant, F.texS, grid, by);
     const tw = (HW + TEX_PAD) * 2, th = (HH + TEX_PAD) * 2;
-    if (s.flip && (Iso.hash(t.x, t.y, 91) & 1)) {
-      c.save(); c.translate(cx, cy); c.scale(-1, 1);
+    if (!flip && by === target) {
+      c.drawImage(tex, cx - HW - TEX_PAD, cy - HH - TEX_PAD, tw, th);
+    } else {
+      c.save(); c.translate(cx, cy);
+      if (flip) c.scale(-1, 1);
+      if (by !== target) {
+        // a nearby bake through the exact residual warp W(target - bake)
+        const w = Iso.makeView(target - by).warp;
+        c.transform(w[0], w[1], w[2], w[3], 0, 0);
+        ROT.warpDraws++;
+      }
       c.drawImage(tex, -HW - TEX_PAD, -HH - TEX_PAD, tw, th);
       c.restore();
-    } else {
-      c.drawImage(tex, cx - HW - TEX_PAD, cy - HH - TEX_PAD, tw, th);
     }
+    const pf = prefetchYaw();
+    if (pf !== null) prefetchTop(s, variant, F.texS, grid, flip ? Iso.normYaw(-pf) : pf);
     if (t.h > 0 && !s.wall) fillDiamond(c, cx, cy, 'rgba(255,236,210,' + Math.min(0.12, t.h * 0.03) + ')');
-    // contact shadow cast by taller neighbours behind
+    if (s.levels > 0.5 && (t.y === 0 || t.x === 0)) {
+      // a cut-away border wall shows its section: a darker cap and a light inset rim
+      const k = cutK(t);
+      if (k > 0.001) {
+        fillDiamond(c, cx, cy, 'rgba(24,14,12,' + (0.42 * k) + ')');
+        c.beginPath(); diamond(c, cx, cy, HW - 4, HH - 2); stroke(c, 'rgba(255,230,200,' + (0.35 * k) + ')', 1.2);
+      }
+    }
+    // contact shadow cast by taller neighbours behind (weighted by how far each edge faces away from the viewer)
     if (!s.wall) {
-      const top = (t.h || 0) + s.levels;
-      const nw = gridTile(F, t.x - 1, t.y), nn = gridTile(F, t.x, t.y - 1);
-      const dw = nw ? topLevel(F, nw) - top : 0, dn = nn ? topLevel(F, nn) - top : 0;
-      if (dw > 0.01 || dn > 0.01) {
+      const top = topLevel(F, t);
+      let strips = null;
+      for (let i = 0; i < 4; i++) {
+        const e = V.edges[SHADOW_ORDER[i]];
+        if (!(e.shadowW > 0)) continue;
+        const n = gridTile(F, t.x + e.dx, t.y + e.dy);
+        const dh = n ? topLevel(F, n) - top : 0;
+        if (dh > 0.01) (strips = strips || []).push(e, dh);
+      }
+      if (strips) {
         c.save(); c.translate(cx, cy);
         inUV(c, function () {
-          if (dw > 0.01) { c.fillStyle = 'rgba(0,0,0,' + Math.min(0.3, 0.12 + dw * 0.06) + ')'; c.fillRect(-0.5, -0.5, 0.2, 1); c.fillRect(-0.5, -0.5, 0.1, 1); }
-          if (dn > 0.01) { c.fillStyle = 'rgba(0,0,0,' + Math.min(0.3, 0.12 + dn * 0.06) + ')'; c.fillRect(-0.5, -0.5, 1, 0.2); c.fillRect(-0.5, -0.5, 1, 0.1); }
+          for (let i = 0; i < strips.length; i += 2) {
+            const e = strips[i], r = SHADOW_STRIPS[e.dir];
+            c.fillStyle = 'rgba(0,0,0,' + Math.min(0.3, 0.12 + strips[i + 1] * 0.06) * e.shadowW + ')';
+            c.fillRect(r[0], r[1], r[2], r[3]); c.fillRect(r[4], r[5], r[6], r[7]);
+          }
         });
         c.restore();
       }
@@ -1029,12 +1389,15 @@
     else if (s.id === 'ice') drawIceGlint(F, c, t, cx, cy);
     if (s.def && typeof s.def.draw === 'function' && !TERRAIN[s.id]) {
       c.save(); c.translate(cx, cy);
+      // content terrain painters draw ground art in yaw-0 tile px: the exact ground warp lays it onto this view's quad
+      if (!V.legacy) { c.transform(V.warp[0], V.warp[1], V.warp[2], V.warp[3], 0, 0); ROT.warpDraws++; }
       safePaint('terrain:' + s.id, 'terrain draw ' + s.id, s.def.draw, s.def, [Iso.painter(c, { t: time, tile: t, pal: s.def.colors || {} }), t, time]);
       c.restore();
     }
   }
 
-  // Animated liquid layer. Everything stays inside the diamond analytically (no clip: clips are costly).
+  // Animated liquid layer. Everything stays inside the tile analytically (no clip: clips are costly): the diamond at
+  // the quarter views, the inscribed ellipse at odd angles.
   function drawLiquid(F, c, t, s, cx, cy) {
     const ph = Iso.rand(t.x, t.y, 5) * TAU;
     if (s.liquid === 'lava') {
@@ -1051,6 +1414,7 @@
       F.lights.push({ x: cx, y: cy, r: 46, color: '#ff6a1a', a: 0.16 + 0.05 * pulse(2.2, ph) });
       return;
     }
+    const V = Iso.view();
     const deep = s.liquid === 'deep';
     c.strokeStyle = deep ? 'rgba(170,210,255,0.18)' : 'rgba(225,245,255,0.32)';
     c.lineWidth = 1;
@@ -1058,8 +1422,15 @@
     c.beginPath();
     for (let i = 0; i < 3; i++) {
       const k = (time * (deep ? 0.12 : 0.22) + i / 3 + ph / TAU) % 1;
-      const y = cy - HH + 4 + k * (HH * 2 - 8);
-      const half = (1 - Math.abs(y - cy) / HH) * HW * 0.55;
+      let y, half;
+      if (V.quarter >= 0) {
+        y = cy - HH + 4 + k * (HH * 2 - 8);
+        half = (1 - Math.abs(y - cy) / HH) * HW * 0.55;
+      } else {
+        y = cy - V.eb + 3 + k * (V.eb * 2 - 6);
+        const q = (y - cy) / V.eb;
+        half = Math.sqrt(Math.max(0, 1 - q * q)) * V.ea * 0.55;
+      }
       const x = cx + Math.sin(time * 0.9 + i * 2 + ph) * 6 * (half / (HW * 0.55));
       c.moveTo(x - half * 0.6, y); c.quadraticCurveTo(x, y - 1.6, x + half * 0.6, y);
     }
@@ -1072,37 +1443,48 @@
     }
   }
 
-  /** A glint sweeping across an icy tile; corners sit on the diamond edge so no clip is needed. */
+  /** A glint sweeping across an icy tile; corners sit on the tile edge (or its inscribed ellipse) so no clip is needed. */
   function drawIceGlint(F, c, t, cx, cy) {
     const k = (time * 0.18 + Iso.rand(t.x, t.y, 6)) % 1.6;
     if (k > 1) return;
-    const half = function (x) { return HH * Math.max(0, 1 - Math.abs(x - cx) / HW); };
-    const x = cx - HW + 8 + k * (HW * 2 - 16);
+    const V = Iso.view();
+    let half, x;
+    if (V.quarter >= 0) {
+      half = function (px) { return HH * Math.max(0, 1 - Math.abs(px - cx) / HW); };
+      x = cx - HW + 8 + k * (HW * 2 - 16);
+    } else {
+      half = function (px) { const q = (px - cx) / V.ea; return V.eb * Math.sqrt(Math.max(0, 1 - q * q)); };
+      x = cx - V.ea + 8 + k * (V.ea * 2 - 16);
+    }
     const a = x + 3, b = x - 5, d = x - 9;
     c.beginPath();
     c.moveTo(x, cy - half(x)); c.lineTo(a, cy - half(a)); c.lineTo(b, cy + half(b)); c.lineTo(d, cy + half(d)); c.closePath();
     c.fillStyle = 'rgba(255,255,255,0.28)'; c.fill();
   }
 
+  /**
+   * A pit: dark hole, the inner walls under every back edge (the neighbour's side seen from inside: shaded like a face
+   * with the opposite normal), a depth gradient, rims along the back / front chains, and the occasional pair of eyes.
+   */
   function drawPitTop(F, c, t, cx, cy) {
+    const V = Iso.view();
     c.save();
     c.beginPath(); diamond(c, cx, cy, HW, HH); c.clip();
     c.fillStyle = '#060405';
     c.fillRect(cx - HW, cy - HH, HW * 2, HH * 2);
     const D = 26;
-    const nw = gridTile(F, t.x - 1, t.y), nn = gridTile(F, t.x, t.y - 1);
-    const sw = nw && terrainStyle(nw.t, F.theme), sn = nn && terrainStyle(nn.t, F.theme);
-    if (sw && !sw.pit) {
-      c.beginPath(); c.moveTo(cx - HW, cy); c.lineTo(cx, cy - HH); c.lineTo(cx, cy - HH + D); c.lineTo(cx - HW, cy + D); c.closePath();
-      c.fillStyle = shade(sw.right, -0.25); c.fill();
-      c.beginPath(); courses(c, cx - HW, cy, cx, cy - HH, D, 8); stroke(c, 'rgba(0,0,0,0.35)', 0.8);
+    const back = V.edgeList.filter(function (e) { return e.back; })
+      .sort(function (a, b) { return (a.pa[0] + a.pb[0]) - (b.pa[0] + b.pb[0]); });
+    for (let i = 0; i < back.length; i++) {
+      const e = back[i];
+      const nb = gridTile(F, t.x + e.dx, t.y + e.dy), ns = nb && terrainStyle(nb.t, F.theme);
+      if (!ns || ns.pit) continue;
+      const a = e.pa[0] <= e.pb[0] ? e.pa : e.pb, b = a === e.pa ? e.pb : e.pa;   // the edge, left -> right
+      c.beginPath(); c.moveTo(cx + a[0], cy + a[1]); c.lineTo(cx + b[0], cy + b[1]); c.lineTo(cx + b[0], cy + b[1] + D); c.lineTo(cx + a[0], cy + a[1] + D); c.closePath();
+      c.fillStyle = mix(shade(ns.left, -0.1), shade(ns.right, -0.25), e.opp.shade); c.fill();
+      c.beginPath(); courses(c, cx + a[0], cy + a[1], cx + b[0], cy + b[1], D, 8); stroke(c, 'rgba(0,0,0,0.35)', 0.8);
     }
-    if (sn && !sn.pit) {
-      c.beginPath(); c.moveTo(cx, cy - HH); c.lineTo(cx + HW, cy); c.lineTo(cx + HW, cy + D); c.lineTo(cx, cy - HH + D); c.closePath();
-      c.fillStyle = shade(sn.left, -0.1); c.fill();
-      c.beginPath(); courses(c, cx, cy - HH, cx + HW, cy, D, 8); stroke(c, 'rgba(0,0,0,0.35)', 0.8);
-    }
-    const g = c.createLinearGradient(0, cy - HH, 0, cy + HH);
+    const g = c.createLinearGradient(0, cy - V.hy, 0, cy + V.hy);
     g.addColorStop(0, 'rgba(4,2,3,0)');
     g.addColorStop(0.55, 'rgba(4,2,3,0.85)');
     g.addColorStop(1, 'rgba(4,2,3,1)');
@@ -1118,22 +1500,28 @@
       }
     }
     c.restore();
-    c.beginPath(); c.moveTo(cx - HW, cy); c.lineTo(cx, cy - HH); c.lineTo(cx + HW, cy);
+    c.beginPath(); chainPath(c, V.backChain, cx, cy, 1);
     stroke(c, 'rgba(0,0,0,0.6)', 1.2);
-    c.beginPath(); c.moveTo(cx - HW, cy); c.lineTo(cx, cy + HH); c.lineTo(cx + HW, cy);
+    c.beginPath(); chainPath(c, V.frontChain, cx, cy, 1);
     stroke(c, 'rgba(255,255,255,0.1)', 1);
   }
 
-  /** Full block for one tile: faces, top, flat surface layer, overlay + telegraph highlights. */
+  /** Full block for one tile: visible faces, top, flat surface layer, overlay + telegraph highlights. */
   function drawTile(F, c, t) {
     const s = terrainStyle(t.t, F.theme);
-    const top = (t.h || 0) + s.levels;
+    const top = topLevel(F, t);
     const wp = Iso.toWorld(t.x, t.y, top);
     const cx = wp.x, cy = wp.y;
-    const dl = (top - faceBottom(F, t.x, t.y + 1, top)) * STEP;
-    const dr = (top - faceBottom(F, t.x + 1, t.y, top)) * STEP;
-    if (dl > 0.01) drawFace(F, c, s, t, cx, cy, dl, true);
-    if (dr > 0.01) drawFace(F, c, s, t, cx, cy, dr, false);
+    const V = Iso.view();
+    if (V.quarter >= 0) {
+      for (let i = 0; i < V.faces.length; i++) {
+        const e = V.faces[i];
+        const d = (top - faceBottom(F, t.x + e.dx, t.y + e.dy, top)) * STEP;
+        if (d > 0.01) drawFace(F, c, s, t, cx, cy, d, e.frame === 'L', e.dir);
+      }
+    } else drawFacesV(F, c, s, t, cx, cy, top, V);
+    const pf = prefetchYaw();
+    if (pf !== null) prefetchFaces(F, s, t, pf);
     if (s.pit) drawPitTop(F, c, t, cx, cy);
     else drawTop(F, c, t, s, cx, cy);
     if (t.surface && !s.wall) drawSurfaceFlat(F, c, t, cx, cy);
@@ -1359,7 +1747,8 @@
       let drawn = false;
       if (def && typeof def.draw === 'function') {
         c.translate(cx, cy);
-        drawn = safePaint('surface:' + sf.id, 'surface draw ' + sf.id, def.draw, def, [Iso.painter(c, { t: time, tile: t }), sf, time]);
+        // unwarped (marbles stay round, caltrops upright) in the quad clip; g.diamond is the view's tile quad
+        drawn = safePaint('surface:' + sf.id, 'surface draw ' + sf.id, def.draw, def, [Iso.painter(c, { t: time, tile: t, ground: true }), sf, time]);
         c.translate(-cx, -cy);
       }
       if (!drawn) {
@@ -1436,15 +1825,21 @@
     if (!set[y * F.gw + x]) return false;
     return Math.abs(topLevel(F, F.tiles[y * F.gw + x]) - top) < 0.01;
   }
+  /** Stroke the physical edges (N, E, S, W) of a tile quad scaled by k for which open(edge) holds (merged outlines). */
+  function quadEdges(c, cx, cy, k, open) {
+    const V = Iso.view(), q = V.corners;
+    for (let i = 0; i < 4; i++) {
+      const e = V.edgeList[i];
+      if (!open(e)) continue;
+      c.moveTo(cx + q[e.sa][0] * k, cy + q[e.sa][1] * k);
+      c.lineTo(cx + q[e.sb][0] * k, cy + q[e.sb][1] * k);
+    }
+  }
   /** Fill a tile and stroke only the edges on the region's boundary (merged outline). */
   function regionTile(F, c, t, cx, cy, top, set, fill, line, width) {
     c.beginPath(); diamond(c, cx, cy, HW, HH); c.fillStyle = fill; c.fill();
-    const hw = HW - 2.5, hh = HH - 1.25;
     c.beginPath();
-    if (!inSet(F, set, t.x, t.y - 1, top)) { c.moveTo(cx, cy - hh); c.lineTo(cx + hw, cy); }
-    if (!inSet(F, set, t.x + 1, t.y, top)) { c.moveTo(cx + hw, cy); c.lineTo(cx, cy + hh); }
-    if (!inSet(F, set, t.x, t.y + 1, top)) { c.moveTo(cx, cy + hh); c.lineTo(cx - hw, cy); }
-    if (!inSet(F, set, t.x - 1, t.y, top)) { c.moveTo(cx - hw, cy); c.lineTo(cx, cy - hh); }
+    quadEdges(c, cx, cy, (HW - 2.5) / HW, function (e) { return !inSet(F, set, t.x + e.dx, t.y + e.dy, top); });
     c.lineCap = 'round';
     stroke(c, line, width || 1.8);
   }
@@ -1551,8 +1946,102 @@
     g.circle(x + 1.4 * s, y - 0.2 * s, 1 * s, OUT);
   }
 
+  // ---- built-in blocks in face space (rotation plan C7.3) ------------------------------------------------------
+  // These painters get a yawAware painter (g.box / g.diamond on the view's ground quad, g.faces / g.on / g.quad), so
+  // the block turns with the board. Details that belong to one side (a lock, a totem's face, a plinth label) stay on
+  // the physical south side (the front-left face at yaw 0) and hide while it faces away. Yaw 0 draws exactly as before.
+  const YAW_OBJ = { crate: 1, chest: 1, bookshelf: 1, totem: 1, pillar: 1, statue: 1, lever: 1, pressure_plate: 1, spikes: 1 };
+  function seg(c, a, b) { c.moveTo(a[0], a[1]); c.lineTo(b[0], b[1]); }
+  /**
+   * A point given in yaw-0 px on the south (front-left) face of a block standing on the square (cx, cy, hw, hh): the
+   * same point (exactly [px, py]) at yaw 0, the same spot of that face at other views, null while it faces away.
+   */
+  function southPt(g, cx, cy, hw, hh, px, py) {
+    if (Iso.view().legacy) return [px, py];
+    const S = g.faces(cx, cy, hw, hh).filter(function (f) { return f.dir === 'S'; })[0];
+    if (!S) return null;
+    const s = (px - (cx - hw)) / hw;
+    return S.at(s, cy + hh * s - py);
+  }
+  function crateV(g) {
+    const c = g.ctx, V = Iso.view();
+    shadowBlob(g, 21, 10);
+    g.box(0, 0, 18, 9, 22, { top: '#c08f52', left: '#a0713a', right: '#83592b' }, OUT);
+    const fs = g.faces(0, 0, 18, 9);
+    c.beginPath();
+    fs.forEach(function (f) { [7.3, 14.6].forEach(function (k) { seg(c, f.at(0, k), f.at(1, k)); }); });
+    c.strokeStyle = 'rgba(60,35,15,0.55)'; c.lineWidth = 0.8; c.stroke();
+    c.beginPath();
+    fs.forEach(function (f) { seg(c, f.at(0.056, 21), f.at(0.944, 1)); seg(c, f.at(0.056, 1.5), f.at(0.944, 20.5)); });
+    c.strokeStyle = '#6b4520'; c.lineWidth = 2.6; c.stroke();
+    c.strokeStyle = 'rgba(255,220,170,0.25)'; c.lineWidth = 0.7; c.stroke();
+    c.beginPath();
+    seg(c, g.on(0, -22, 18, 9, -0.5, 0), g.on(0, -22, 18, 9, 0.5, 0));   // the lid seam runs along x
+    chainPath(c, V.frontChain, 0, -22, 18 / HW);
+    c.strokeStyle = 'rgba(70,40,15,0.45)'; c.lineWidth = 0.8; c.stroke();
+  }
+  function chestV(g, obj, t, E, open, wood) {
+    const c = g.ctx, V = Iso.view();
+    g.box(0, 0, 14, 7, 11, wood, OUT);
+    const fs = g.faces(0, 0, 14, 7);
+    c.beginPath();
+    fs.forEach(function (f) { seg(c, f.at(0, 4), f.at(1, 4)); seg(c, f.at(0.5, 11), f.at(0.5, 7)); });
+    c.strokeStyle = '#d9a83a'; c.lineWidth = 1.6; c.stroke();
+    if (open) {
+      g.diamond(0, -11, 12, 6, '#2a1a10');
+      c.save(); c.beginPath(); Iso.quadPath(c, 0, -11, 12, 6); c.clip();
+      [[-4, -11], [3, -12], [0, -9], [5, -10], [-2, -13]].forEach(function (p) { g.ellipse(p[0], p[1], 3, 1.5, '#f0c040', 'rgba(120,80,10,0.8)'); });
+      c.restore();
+      // the lid stands open along the back edges of the top
+      const q = g.quad(0, -11, 14, 7);
+      const back = V.edgeList.filter(function (e) { return e.back; }).map(function (e) {
+        const a = q[e.a], b = q[e.b];
+        return a[0] <= b[0] ? [a, b] : [b, a];
+      }).sort(function (m, n) { return (m[0][0] + m[1][0]) - (n[0][0] + n[1][0]); });
+      back.forEach(function (e) {
+        const a = e[0], b = e[1], left = a[0] + b[0] < 0;
+        g.poly([[a[0], a[1]], [b[0], b[1]], [b[0], b[1] - 14], [a[0], a[1] - 14]], left ? '#7a4a24' : '#5e3a1c', OUT);
+        g.line(a[0], a[1] - 7, b[0], b[1] - 7, '#d9a83a', 1.4);
+      });
+      g.glow(0, -14, 20, '#ffd65a', 0.4 + 0.1 * pulse(3));
+      light(E, 0, -14, 34, '#ffd65a', 0.1);
+      return;
+    }
+    g.box(0, -11, 15, 7.5, 6, { top: '#b07238', left: '#8e5a2c', right: '#734622' }, OUT);
+    g.faces(0, -11, 15, 7.5).forEach(function (f) { const a = f.at(0, 3), b = f.at(1, 3); g.line(a[0], a[1], b[0], b[1], '#d9a83a', 1.6); });
+    const lock = southPt(g, 0, 0, 14, 7, -9.5, -9.5), hole = southPt(g, 0, 0, 14, 7, -7, -7.5);
+    if (lock) { g.rect(lock[0], lock[1], 5, 5.5, '#e8b84a', OUT, 1); g.circle(hole[0], hole[1], 0.9, OUT); }
+    const tw = pulse(2.2, t.x * 3 + t.y);
+    if (tw > 0.85) { c.fillStyle = 'rgba(255,255,220,' + (tw - 0.85) * 6 + ')'; c.fillRect(8, -19, 4, 0.8); c.fillRect(9.6, -21, 0.8, 4); }
+  }
+  function bookshelfV(g, obj, t, wood, cols) {
+    const c = g.ctx;
+    g.box(0, 0, 20, 10, 54, wood, OUT);
+    g.faces(0, 0, 20, 10).forEach(function (f) {
+      // one book stream per physical side: a side keeps its books when it changes role
+      const r = Iso.stream(Iso.hash(t.x, t.y, 27 + FACE_SALT[f.dir]));
+      for (let s = 0; s < 3; s++) {
+        const base = 4 + s * 17, top = base + 13;
+        let p = [f.at(0, base), f.at(1, base), f.at(1, top), f.at(0, top)];
+        c.beginPath(); c.moveTo(p[0][0], p[0][1]); c.lineTo(p[1][0], p[1][1]); c.lineTo(p[2][0], p[2][1]); c.lineTo(p[3][0], p[3][1]); c.closePath();
+        c.fillStyle = 'rgba(20,10,5,0.75)'; c.fill();
+        let u = 0.06;
+        while (u < 0.94) {
+          const w = 0.06 + r() * 0.06, hgt = 9 + r() * 4, u1 = Math.min(0.94, u + w);
+          p = [f.at(u, base), f.at(u1, base), f.at(u1, base + hgt), f.at(u, base + hgt)];
+          c.beginPath(); c.moveTo(p[0][0], p[0][1]); c.lineTo(p[1][0], p[1][1]); c.lineTo(p[2][0], p[2][1]); c.lineTo(p[3][0], p[3][1]); c.closePath();
+          c.fillStyle = shade(cols[Math.floor(r() * cols.length)], -0.2 * f.shade); c.fill();
+          c.strokeStyle = 'rgba(0,0,0,0.4)'; c.lineWidth = 0.5; c.stroke();
+          u += w + 0.01;
+        }
+        c.beginPath(); seg(c, f.at(0, base), f.at(1, base)); c.strokeStyle = '#3a2414'; c.lineWidth = 1.6; c.stroke();
+      }
+    });
+  }
+
   const OBJ = {
     crate: function (g) {
+      if (!Iso.view().legacy) { crateV(g); return; }
       shadowBlob(g, 21, 10);
       g.box(0, 0, 18, 9, 22, { top: '#c08f52', left: '#a0713a', right: '#83592b' }, OUT);
       const c = g.ctx;
@@ -1721,7 +2210,8 @@
       const st = stoneFor(E);
       shadowBlob(g, 18, 9);
       g.box(0, 0, 15, 7.5, 14, st, OUT);
-      g.text('NPC', -7.5, -6, 4.5, 'rgba(40,36,34,0.6)');
+      const tag = southPt(g, 0, 0, 15, 7.5, -7.5, -6);
+      if (tag) g.text('NPC', tag[0], tag[1], 4.5, 'rgba(40,36,34,0.6)');
       const c = g.ctx, y0 = -14, body = st.top, dark = st.left;
       g.rect(-5, y0 - 13, 4, 13, dark, OUT, 1.5);
       g.rect(1, y0 - 13, 4, 13, dark, OUT, 1.5);
@@ -1749,7 +2239,8 @@
     },
   };
 
-  function gs(dx, dy) { return [(dx - dy) * HW, (dx + dy) * HH]; }
+  // the mirror stands on the grid (its facing is gameplay): ground offsets follow the view
+  function gs(dx, dy) { return P(dx, dy); }
 
   /** Mirror orientation from obj.data.facing / obj.facing: {x,y} | 'N'..'NW' | '/' '\' | 0-3 (diagonal quarter turns) | degrees. */
   function mirrorFacing(obj) {
@@ -1787,6 +2278,7 @@
       const open = objFlag(obj, ['open', 'opened', 'looted', 'used']);
       shadowBlob(g, 17, 8.5);
       const wood = { top: '#9a6232', left: '#84522a', right: '#6a4120' };
+      if (!Iso.view().legacy) { chestV(g, obj, t, E, open, wood); return; }
       g.box(0, 0, 14, 7, 11, wood, OUT);
       const c = g.ctx;
       c.beginPath(); c.moveTo(-14, -4); c.lineTo(0, 3); c.lineTo(14, -4);
@@ -1794,7 +2286,7 @@
       c.strokeStyle = '#d9a83a'; c.lineWidth = 1.6; c.stroke();
       if (open) {
         g.diamond(0, -11, 12, 6, '#2a1a10');
-        c.save(); c.beginPath(); diamond(c, 0, -11, 12, 6); c.clip();
+        c.save(); c.beginPath(); Iso.diamondPath(c, 0, -11, 12, 6); c.clip();
         [[-4, -11], [3, -12], [0, -9], [5, -10], [-2, -13]].forEach(function (p) { g.ellipse(p[0], p[1], 3, 1.5, '#f0c040', 'rgba(120,80,10,0.8)'); });
         c.restore();
         g.poly([[-14, -11], [0, -18], [0, -32], [-14, -25]], '#7a4a24', OUT);
@@ -1892,9 +2384,14 @@
         const y = b[0], col = b[4];
         g.box(0, y, b[1], b[2], b[3], { top: shade(col, 0.15), left: col, right: shade(col, -0.25) }, OUT);
         const fy = y - b[3] * 0.55;
-        g.rect(-b[1] * 0.78, fy - 2.4 - b[1] * 0.1, 3, 2, 'rgba(210,150,255,' + glowA + ')');
-        g.rect(-b[1] * 0.38, fy - 0.6, 3, 2, 'rgba(210,150,255,' + glowA + ')');
-        g.line(-b[1] * 0.8, fy + 3.5, -b[1] * 0.25, fy + 6, OUT, 1.2);
+        // the carved face is on the south side (front-left at yaw 0)
+        const e1 = southPt(g, 0, y, b[1], b[2], -b[1] * 0.78, fy - 2.4 - b[1] * 0.1);
+        if (!e1) return;
+        const e2 = southPt(g, 0, y, b[1], b[2], -b[1] * 0.38, fy - 0.6);
+        const m0 = southPt(g, 0, y, b[1], b[2], -b[1] * 0.8, fy + 3.5), m1 = southPt(g, 0, y, b[1], b[2], -b[1] * 0.25, fy + 6);
+        g.rect(e1[0], e1[1], 3, 2, 'rgba(210,150,255,' + glowA + ')');
+        g.rect(e2[0], e2[1], 3, 2, 'rgba(210,150,255,' + glowA + ')');
+        g.line(m0[0], m0[1], m1[0], m1[1], OUT, 1.2);
       });
       g.poly([[-6, -42], [-11, -52], [-3, -45]], '#e8c84a', OUT);
       g.poly([[6, -42], [11, -52], [3, -45]], '#e8c84a', OUT);
@@ -1904,10 +2401,11 @@
     bookshelf: function (g, obj, t) {
       shadowBlob(g, 22, 10);
       const wood = { top: '#6e4a2c', left: '#5a3a22', right: '#47301c' };
+      const cols = ['#8e2b2b', '#2d4f8a', '#3b6b3f', '#6a4a8c', '#b08a2a', '#2c6b6b', '#7a3a5a'];
+      if (!Iso.view().legacy) { bookshelfV(g, obj, t, wood, cols); return; }
       g.box(0, 0, 20, 10, 54, wood, OUT);
       const c = g.ctx;
       const r = Iso.stream(Iso.hash(t.x, t.y, 27));
-      const cols = ['#8e2b2b', '#2d4f8a', '#3b6b3f', '#6a4a8c', '#b08a2a', '#2c6b6b', '#7a3a5a'];
       [[-20, 0, 0, 10, true], [0, 10, 20, 0, false]].forEach(function (f) {
         const x0 = f[0], y0 = f[1], x1 = f[2], y1 = f[3];
         for (let s = 0; s < 3; s++) {
@@ -1956,7 +2454,7 @@
         return [[a[0], a[1] + y0], [b[0], b[1] + y0], [b[0], b[1] + y1], [a[0], a[1] + y1]];
       }
       const front = { x: n.x * 0.04, y: n.y * 0.04 }, back = { x: -n.x * 0.04, y: -n.y * 0.04 };
-      const facingCam = n.x + n.y > 0;
+      const facingCam = Iso.depth(n.x, n.y) > 0;   // the reflective side turned toward the viewer
       const fq = quad(front, 0.36, -7, -42), bq = quad(back, 0.36, -7, -42);
       g.poly(facingCam ? bq : fq, '#5a3a22', OUT);
       g.poly([fq[0], bq[0], bq[3], fq[3]], '#c9a03a', OUT);
@@ -2020,7 +2518,7 @@
     },
     pencil: function (g) {
       const c = g.ctx;
-      const a = P(-0.44, 0.05), b = P(0.22, 0.05), tip = P(0.46, 0.05);
+      const a = P0(-0.44, 0.05), b = P0(0.22, 0.05), tip = P0(0.46, 0.05);
       g.ellipse(0, 4, 24, 6, 'rgba(0,0,0,0.25)');
       const facets = [[-7, -4.6, '#f7d24a'], [-4.6, -2.3, '#e8b928'], [-2.3, 0, '#c9971a']];
       facets.forEach(function (f) {
@@ -2094,7 +2592,7 @@
       g.cylinder(0, 0, 10, 5, 3, '#56534c', '#7d796f', OUT);
       g.cylinder(0, -3, 8, 4, 26, metal, '#86827a', OUT);
       g.cylinder(0, -27, 10, 5, 4, '#56534c', '#86827a', OUT);
-      const o = P(0.32, 0);
+      const o = P0(0.32, 0);
       g.line(0, -18, o[0], o[1] - 18, OUT, 9.5); g.line(0, -18, o[0], o[1] - 18, metal, 7);
       g.ellipse(o[0], o[1] - 18, 2.4, 4.4, '#22201c', OUT);
       g.ellipse(-3, -16, 2, 1.2, 'rgba(170,90,40,0.6)');
@@ -2159,15 +2657,28 @@
     const k = objScale(obj, def);
     const E = { F: F, cx: cx, cy: cy, tile: t, k: k };
     c.save();
+    // tall props on the N / W border (trees, shelves, statues) fade as that border turns toward the camera
+    if (t.y === 0 || t.x === 0) {
+      const ck = cutK(t);
+      if (ck > 0.001 && objHeight(obj, def) * k >= 30) c.globalAlpha *= 1 - 0.55 * ck;
+    }
     c.translate(cx, cy);
     if (k !== 1) c.scale(k, k);
-    if (!F.painter || F.painter.ctx !== c) F.painter = Iso.painter(c, {});
-    const g = F.painter;
-    g.t = time; g.obj = obj; g.tile = t; g.zoom = F.zoom * k; g.lw = 1.2; g.outline = OUT;
-    g.pal = (def && (def.colors || def.palette)) || {};
-    let drawn = false;
-    if (def && typeof def.draw === 'function') drawn = safePaint('object:' + obj.id, 'object draw ' + obj.id, def.draw, def, [g, obj, time]);
+    if (!F.painter || F.painter.ctx !== c) { F.painter = Iso.painter(c, {}); F.painterY = Iso.painter(c, { yawAware: true }); }
+    // billboard painter, or the yawAware one (blocks turn with the board) for def.yawAware content and built-in blocks
+    const paint = function (yaw) {
+      const g = yaw ? F.painterY : F.painter;
+      g.t = time; g.obj = obj; g.tile = t; g.zoom = F.zoom * k; g.lw = 1.2; g.outline = OUT;
+      g.pal = (def && (def.colors || def.palette)) || {};
+      return g;
+    };
+    let drawn = false, g = null;
+    if (def && typeof def.draw === 'function') {
+      g = paint(def.yawAware === true);
+      drawn = safePaint('object:' + obj.id, 'object draw ' + obj.id, def.draw, def, [g, obj, time]);
+    }
     if (!drawn) {
+      g = paint(!OBJ[obj.id] || !!YAW_OBJ[obj.id]);
       try {
         if (OBJ[obj.id]) OBJ[obj.id](g, obj, t, E);
         else genericObject(g, obj, def);
@@ -2175,7 +2686,10 @@
     }
     if (obj.googly) googlyEyes(g, obj, objHeight(obj, def), k);
     c.restore();
-    F.objList.push({ obj: obj, tile: t, cx: cx, cy: cy, h: objHeight(obj, def) * k, hw: (OBJ_W[obj.id] || 15) * k, diag: t.x + t.y });
+    // diag: the painter's-order group (x + y at yaw 0), depth: its Iso.depth (occluder windows)
+    const grp = F.gw && t.x >= 0 && t.y >= 0 && t.x < F.gw && t.y < F.gh ? orderOf(F).groupOf[t.y * F.gw + t.x] : t.x + t.y;
+    F.objList.push({ obj: obj, tile: t, cx: cx, cy: cy, h: objHeight(obj, def) * k, hw: (OBJ_W[obj.id] || 15) * k,
+      diag: grp, depth: Iso.depth(t.x, t.y) });
   }
 
   // ======================================================================================================
@@ -2247,7 +2761,7 @@
         // feet position; lunge offsets (vis.offX/offY), alpha and vis.scale are applied by DD.Sprites.drawUnit
         wx: w.x, wy: w.y, offX: v.offX || 0, offY: v.offY || 0, vscale: vscale,
         gwx: w.x, gwy: Iso.toWorld(x, y, Math.min(h, gh)).y,
-        diag: clamp(Math.ceil(x + y - 0.02), 0, F.gw + F.gh - 2),
+        diag: unitGroup(F, x, y),   // painter's-order group (an x + y diagonal at yaw 0)
         scale: (m.scale || unitScale(u)) * vscale, mh: m.height * vscale, mw: m.width * vscale,
         downed: !!(v.downed || u.downed), flying: isFlying(u), lift: liftOf(v),
       });
@@ -2265,7 +2779,8 @@
     c.save();
     c.globalAlpha *= clamp(v.alpha === undefined ? 1 : v.alpha, 0, 1);
     c.translate(sx + (v.offX || 0) * z, sy + (v.offY || 0) * z);
-    if (downed) c.rotate(-Math.PI / 2 * (u.facing === -1 ? -1 : 1) * 0.9);
+    const f = Iso.screenFacing(u.facing, u.lastDir);   // the display mirror at this view (yaw 0: u.facing)
+    if (downed) c.rotate(-Math.PI / 2 * f * 0.9);
     c.lineWidth = Math.max(1, 1.6 * s);
     c.strokeStyle = OUT;
     c.beginPath(); roundRect(c, -8 * s, -24 * s + bob, 16 * s, 22 * s, 6 * s);
@@ -2273,7 +2788,6 @@
     c.beginPath(); roundRect(c, -8 * s, -10 * s + bob, 16 * s, 3 * s, 1 * s); c.fillStyle = shade(col, -0.35); c.fill();
     c.beginPath(); c.arc(0, -31 * s + bob, 9 * s, 0, TAU);
     c.fillStyle = u.side === 'hero' ? '#f1d2b6' : '#a7c96b'; c.fill(); c.stroke();
-    const f = u.facing === -1 ? -1 : 1;
     c.fillStyle = OUT;
     c.beginPath(); c.arc(f * 2.5 * s, -32 * s + bob, 1.4 * s, 0, TAU); c.arc(f * 6 * s, -32 * s + bob, 1.4 * s, 0, TAU); c.fill();
     c.restore();
@@ -2368,12 +2882,20 @@
   }
 
   // ---- occlusion silhouettes ---------------------------------------------------------------------------
-  let silCanvas = null;
   function columnPoly(cx, cy) {
     return [[cx, cy - HH], [cx + HW, cy], [cx + HW, cy + 600], [cx, cy + HH + 600], [cx - HW, cy + 600], [cx - HW, cy]];
   }
+  /** Screen hull of a tile column at any view: the top's back chain, then the front chain dropped 600 px. */
+  function columnPolyV(V, cx, cy) {
+    const out = [];
+    for (let i = 0; i < V.backChain.length; i++) out.push([cx + V.backChain[i][0], cy + V.backChain[i][1]]);
+    for (let i = V.frontChain.length - 1; i >= 0; i--) out.push([cx + V.frontChain[i][0], cy + V.frontChain[i][1] + 600]);
+    return out;
+  }
   /** World-space occluder polygons in front of a unit that rise above its feet. */
   function occludersFor(F, d) {
+    const V = Iso.view();
+    if (!V.legacy) return occludersForV(F, d, V);
     const polys = [];
     const ux = Math.round(d.x), uy = Math.round(d.y);
     const feet = d.gwy - 2, reach = 18 * d.scale;
@@ -2397,6 +2919,31 @@
       if (o.diag <= d.diag || o.diag > d.diag + 5 || o.h < 14) continue;
       if (Math.abs(o.cx - d.wx) > o.hw + reach) continue;
       if (o.cy - o.h < feet) polys.push([[o.cx - o.hw, o.cy - o.h], [o.cx + o.hw, o.cy - o.h], [o.cx + o.hw, o.cy + 10], [o.cx - o.hw, o.cy + 10]]);
+    }
+    return polys;
+  }
+  /** The same rule at any other view, by depth: tiles up to 8 and objects up to 5 depth units in front of the unit. */
+  function occludersForV(F, d, V) {
+    const polys = [];
+    const feet = d.gwy - 2, reach = 18 * d.scale;
+    const o = orderOf(F), d0 = o.depthOf[d.diag];
+    for (let g = d.diag + 1; g < o.groups.length && o.depthOf[g] <= d0 + 8 + 1e-6; g++) {
+      const grp = o.groups[g];
+      for (let k = 0; k < grp.length; k++) {
+        const i = grp[k], t = F.tiles[i];
+        if (!t) continue;
+        const tx = i % F.gw, ty = (i - tx) / F.gw;
+        const top = topLevel(F, t);
+        const w = Iso.toWorld(tx, ty, top);
+        if (Math.abs(w.x - d.wx) > V.hx + reach) continue;
+        if (w.y - V.hy < feet && top > d.groundH + 0.5) polys.push(columnPolyV(V, w.x, w.y));
+      }
+    }
+    for (let i = 0; i < F.objList.length; i++) {
+      const ob = F.objList[i];
+      if (ob.diag <= d.diag || ob.depth > d0 + 5 + 1e-6 || ob.h < 14) continue;
+      if (Math.abs(ob.cx - d.wx) > ob.hw + reach) continue;
+      if (ob.cy - ob.h < feet) polys.push([[ob.cx - ob.hw, ob.cy - ob.h], [ob.cx + ob.hw, ob.cy - ob.h], [ob.cx + ob.hw, ob.cy + 10], [ob.cx - ob.hw, ob.cy + 10]]);
     }
     return polys;
   }
@@ -2434,15 +2981,35 @@
     return out && covered >= area * UNIT_COVER ? out : null;
   }
 
-  let ringCanvas = null, maskCanvas = null;
-  function scratch(cv, pw, ph) {
-    if (!cv) {
-      cv = document.createElement('canvas');
-      // CPU-backed on purpose: these small canvases are composited into each other several times per frame, and a
-      // GPU-promoted canvas pays a flush + readback for every such hop (measured: 1 ms → 40+ ms per frame).
-      cv.getContext('2d', { willReadFrequently: true });
+  // Scratch canvases for silhouettes, pooled by size (rounded up to 32 px): each set is barely larger than the unit's
+  // box, so the full-canvas composites below (source-in / destination-in / destination-out) touch only that box.
+  const SIL_POOL_BYTES = 24 << 20;
+  const silPool = new Map();   // 'w x h' -> { sil, ring, mask, bytes }, least recently used first
+  let silPoolBytes = 0;
+  function scratchCanvas(w, h) {
+    const cv = document.createElement('canvas');
+    cv.width = w; cv.height = h;
+    // CPU-backed on purpose: these small canvases are composited into each other several times per frame, and a
+    // GPU-promoted canvas pays a flush + readback for every such hop (measured: 1 ms → 40+ ms per frame).
+    cv.getContext('2d', { willReadFrequently: true });
+    return cv;
+  }
+  function silCanvases(pw, ph) {
+    const w = Math.ceil(pw / 32) * 32, h = Math.ceil(ph / 32) * 32, key = w + 'x' + h;
+    let set = silPool.get(key);
+    if (set) { silPool.delete(key); silPool.set(key, set); return set; }
+    set = { sil: scratchCanvas(w, h), ring: scratchCanvas(w, h), mask: scratchCanvas(w, h), bytes: w * h * 12 };
+    silPool.set(key, set);
+    silPoolBytes += set.bytes;
+    while (silPoolBytes > SIL_POOL_BYTES && silPool.size > 1) {
+      const old = silPool.keys().next().value;
+      silPoolBytes -= silPool.get(old).bytes;
+      silPool.delete(old);
     }
-    if (cv.width < pw || cv.height < ph) { cv.width = Math.max(pw, cv.width); cv.height = Math.max(ph, cv.height); }
+    return set;
+  }
+  /** A pooled scratch canvas, reset (identity transform, source-over, alpha 1, cleared). */
+  function scratch(cv) {
     const k = cv.getContext('2d');
     k.setTransform(1, 0, 0, 1, 0, 0);
     k.globalCompositeOperation = 'source-over';
@@ -2457,6 +3024,9 @@
   function drawSilhouettes(F) {
     const c = F.ctx;
     F.silhouettes = [];
+    // half resolution while the view turns (drawn back at full size); exact again once it settles
+    const SD = DPR * (viewMoving() ? 0.5 : 1);
+    F.silScale = SD / DPR;
     for (let i = 0; i < F.unitDraws.length; i++) {
       const d = F.unitDraws[i];
       if (d.alpha < 0.3 || d.sx === undefined) continue;
@@ -2466,28 +3036,27 @@
       const z = F.zoom;
       const bw = (Math.max(40, d.mw * 2.2) + 40) * z, bh = (d.mh + 56 + d.lift) * z;
       const bx = d.sx - bw / 2, by = d.sy - bh + 24 * z;
-      const pw = Math.ceil(bw * DPR), ph = Math.ceil(bh * DPR);
+      const pw = Math.ceil(bw * SD), ph = Math.ceil(bh * SD);
       if (pw < 2 || ph < 2) continue;
+      const set = silCanvases(pw, ph);
+      const silCanvas = scratch(set.sil), ringCanvas = scratch(set.ring), maskCanvas = scratch(set.mask);
       // 1) the whole sprite as a flat team-coloured shape
-      silCanvas = scratch(silCanvas, pw, ph);
       const k = silCanvas.getContext('2d');
-      k.setTransform(DPR, 0, 0, DPR, -bx * DPR, -by * DPR);
+      k.setTransform(SD, 0, 0, SD, -bx * SD, -by * SD);
       drawSprite(k, d.u, d.sx, d.sy, z, d.downed, true);
       k.setTransform(1, 0, 0, 1, 0, 0);
       k.globalCompositeOperation = 'source-in';
       k.fillStyle = sideColor(d.u);
       k.fillRect(0, 0, pw, ph);
       // 2) outline ring = shape dilated by ~1.5 px minus the shape (computed before masking: no line along the occluder)
-      ringCanvas = scratch(ringCanvas, pw, ph);
       const r = ringCanvas.getContext('2d');
-      const o = Math.max(1, Math.round(1.5 * DPR));
+      const o = Math.max(1, Math.round(1.5 * SD));
       [[o, 0], [-o, 0], [0, o], [0, -o]].forEach(function (q) { r.drawImage(silCanvas, 0, 0, pw, ph, q[0], q[1], pw, ph); });
       r.globalCompositeOperation = 'destination-out';
       r.drawImage(silCanvas, 0, 0, pw, ph, 0, 0, pw, ph);
       // 3) the occluders: taller tiles/objects in front as polygons, bigger units in front by their real pixels
-      maskCanvas = scratch(maskCanvas, pw, ph);
       const m = maskCanvas.getContext('2d');
-      m.setTransform(DPR, 0, 0, DPR, -bx * DPR, -by * DPR);
+      m.setTransform(SD, 0, 0, SD, -bx * SD, -by * SD);
       if (polys.length) {
         m.beginPath();
         for (let p = 0; p < polys.length; p++) {
@@ -2520,9 +3089,9 @@
       setScreenTransform(F);
       // over another unit the fill stays faint (the outline does the work) so the unit in front keeps its colours
       c.globalAlpha = (fronts ? 0.16 : 0.3) * d.alpha;
-      c.drawImage(silCanvas, 0, 0, pw, ph, bx, by, pw / DPR, ph / DPR);
+      c.drawImage(silCanvas, 0, 0, pw, ph, bx, by, pw / SD, ph / SD);
       c.globalAlpha = 0.95 * d.alpha;
-      c.drawImage(ringCanvas, 0, 0, pw, ph, bx, by, pw / DPR, ph / DPR);
+      c.drawImage(ringCanvas, 0, 0, pw, ph, bx, by, pw / SD, ph / SD);
       c.restore();
       F.silhouettes.push({ id: d.u.id, geometry: polys.length, units: fronts ? fronts.map(function (e) { return e.u.id; }) : [] });
     }
@@ -2720,6 +3289,7 @@
     let txt = '', bg = '#6b3fa0';
     if (prev.dmg > 0) { txt = '-' + prev.dmg; bg = prev.lethal ? '#8e0f0f' : '#c62828'; }
     else if (prev.heal > 0) { txt = '+' + prev.heal; bg = '#2e8b45'; }
+    else if (prev.revive) bg = '#1f9d55';   // v2: "UP! 7 HP" — a heal aimed at a downed ally gets it up
     if (prev.text) txt = txt ? txt + ' ' + prev.text : String(prev.text);
     if (!txt && !prev.lethal) return null;
     const zz = z * (1 + 0.06 * pulse(7));
@@ -2879,8 +3449,11 @@
         c.lineWidth = 1.2; c.strokeStyle = u.side === 'hero' ? 'rgba(150,235,160,0.85)' : 'rgba(255,150,130,0.85)'; c.stroke();
       }
       if (d.downed) {
-        label(c, 'DOWNED', d.sx, top + 18 * F.zoom + dy, Math.round(10 * z), '#ff8a7a');
-        if (u.side === 'hero') drawGlyph(c, '🆘', d.sx, top + 4 * F.zoom + dy, 14 * z);
+        // v2: a downed ally the armed heal can get up wears a pulsing green heart instead of the SOS
+        const up = !!(F.ov && F.ov.reviveIds && F.ov.reviveIds.indexOf(u.id) >= 0);
+        label(c, 'DOWNED', d.sx, top + 18 * F.zoom + dy, Math.round(10 * z), up ? '#9df5b0' : '#ff8a7a');
+        if (up) drawGlyph(c, '💚', d.sx, top + 4 * F.zoom + dy, (14 + 3 * pulse(6)) * z);
+        else if (u.side === 'hero') drawGlyph(c, '🆘', d.sx, top + 4 * F.zoom + dy, 14 * z);
       } else {
         hpBar(F, c, d, wg.bx, wg.by + dy, wg.bw, wg.bh, z);
         y = statusRow(F, c, u, d.sx, wg.by + dy - 4, z);
@@ -2937,6 +3510,25 @@
       c.fillStyle = '#3b2023'; c.fillRect(p.x - w / 2, p.y, w, h);
       c.fillStyle = '#e0a23a'; c.fillRect(p.x - w / 2, p.y, w * clamp(obj.hp / obj.maxHp, 0, 1), h);
     }
+    // v2 (UI requests): explosive objects the armed attack can set off get a pulsing 💥 target marker above them
+    const ot = F.ov && F.ov.objTargets;
+    if (ot) {
+      for (let i = 0; i < F.objList.length; i++) {
+        const o = F.objList[i];
+        if (!ot[o.tile.y * F.gw + o.tile.x]) continue;
+        const z = clamp(F.zoom, 0.65, 1.5);
+        const hov = F.ov.hover && F.ov.hover.x === o.tile.x && F.ov.hover.y === o.tile.y;
+        const r = (hov ? 11.5 : 9.5) * z * (1 + 0.07 * pulse(6));
+        const p = w2s(F, o.cx, o.cy - o.h - 10);
+        const y = p.y - r - (o.obj.maxHp > 0 && o.obj.hp < o.obj.maxHp ? 8 * z : 0);
+        c.beginPath(); c.moveTo(p.x - 3.5 * z, y + r - 1); c.lineTo(p.x, y + r + 5 * z); c.lineTo(p.x + 3.5 * z, y + r - 1); c.closePath();
+        c.fillStyle = 'rgba(255,196,96,0.95)'; c.fill();
+        c.beginPath(); c.arc(p.x, y, r, 0, Math.PI * 2);
+        c.fillStyle = 'rgba(48,16,8,0.9)'; c.fill();
+        c.lineWidth = hov ? 2.4 : 1.8; c.strokeStyle = 'rgba(255,200,96,' + (0.65 + 0.35 * pulse(5)) + ')'; c.stroke();
+        drawGlyph(c, '💥', p.x, y + 0.5, r * 1.25);
+      }
+    }
   }
 
   // ======================================================================================================
@@ -2948,6 +3540,8 @@
       previews: {}, deployTiles: [], interactTiles: [], showIntents: true, focusIntentUnitId: null,
       // v2: whose turn the HUD shows (turn ring), threat shading (hold Alt), one inspected enemy's reach
       turnUnitId: null, threat: null, reach: null,
+      // v2 (UI requests): [{x, y}] explosive objects the armed attack can set off · [unitId] downed allies a heal gets up
+      objTargets: [], reviveTargets: [],
     };
   }
 
@@ -2998,6 +3592,9 @@
       threatSet: th ? th.set : null, threatD: th ? th.d : null, threatL: th ? th.l : null, threatN: th ? th.n : 0,
       threatRef: Math.max(6, +(o.threat && o.threat.ref) || 20),
       reach: reach,
+      // v2 (UI requests): explosive objects an armed attack can set off (💥 marker), downed allies a heal gets up
+      objTargets: Array.isArray(o.objTargets) && o.objTargets.length ? tileSet(F, o.objTargets) : null,
+      reviveIds: Array.isArray(o.reviveTargets) && o.reviveTargets.length ? o.reviveTargets : null,
     };
   }
 
@@ -3151,22 +3748,19 @@
   function regionOutline(F, c, tiles, inset) {
     const keys = new Set();
     for (let i = 0; i < tiles.length; i++) { const p = tiles[i]; if (p) keys.add((p.y | 0) * F.gw + (p.x | 0)); }
-    const hw = HW - inset, hh = HH - inset / 2;
+    const k = 1 - inset / HW;   // = (HW - inset) / HW = (HH - inset / 2) / HH
     const has = function (x, y, top) {
       if (x < 0 || y < 0 || x >= F.gw || y >= F.gh || !keys.has(y * F.gw + x)) return false;
       return Math.abs(topLevel(F, F.tiles[y * F.gw + x]) - top) < 0.01;
     };
     let pts = 0;
-    keys.forEach(function (k) {
-      const x = k % F.gw, y = (k - x) / F.gw;
-      const t = F.tiles[k];
+    keys.forEach(function (key) {
+      const x = key % F.gw, y = (key - x) / F.gw;
+      const t = F.tiles[key];
       if (!t) return;
       const top = topLevel(F, t);
       const w = Iso.toWorld(x, y, top);
-      if (!has(x, y - 1, top)) { c.moveTo(w.x, w.y - hh); c.lineTo(w.x + hw, w.y); pts++; }
-      if (!has(x + 1, y, top)) { c.moveTo(w.x + hw, w.y); c.lineTo(w.x, w.y + hh); pts++; }
-      if (!has(x, y + 1, top)) { c.moveTo(w.x, w.y + hh); c.lineTo(w.x - hw, w.y); pts++; }
-      if (!has(x - 1, y, top)) { c.moveTo(w.x - hw, w.y); c.lineTo(w.x, w.y - hh); pts++; }
+      quadEdges(c, w.x, w.y, k, function (e) { if (has(x + e.dx, y + e.dy, top)) return false; pts++; return true; });
     });
     return pts;
   }
@@ -3342,7 +3936,7 @@
     const p = pulse(6);
     c.beginPath(); diamond(c, w.x, w.y, HW, HH);
     c.fillStyle = 'rgba(255,255,255,' + (0.07 + 0.05 * p) + ')'; c.fill();
-    const v = [[0, -HH], [HW, 0], [0, HH], [-HW, 0]];
+    const V = Iso.view(), v = V.order.map(function (i) { return V.corners[i]; });   // the quad, clockwise from the top
     const k = 0.3;
     c.beginPath();
     for (let i = 0; i < 4; i++) {
@@ -3452,7 +4046,7 @@
     if (!F.bounds) return;
     const c = F.ctx, b = F.bounds;
     setScreenTransform(F);
-    const p = w2s(F, (b.minX + b.maxX) / 2, b.maxY - HH);
+    const p = w2s(F, (b.minX + b.maxX) / 2, b.maxY - Iso.view().hy);
     const rx = (b.maxX - b.minX) * 0.55 * F.zoom, ry = rx * 0.32;
     const g = c.createRadialGradient(p.x, p.y, 0, p.x, p.y, rx);
     g.addColorStop(0, 'rgba(0,0,0,0.5)'); g.addColorStop(0.6, 'rgba(0,0,0,0.25)'); g.addColorStop(1, 'rgba(0,0,0,0)');
@@ -3681,7 +4275,11 @@
     titleBark.until = time + 3.4;
   }
 
+  /** The title diorama is always seen from the classic view. */
   function drawTitleScene(c, dt) {
+    return Iso.withYaw(0, function () { return drawTitleSceneAt0(c, dt); });
+  }
+  function drawTitleSceneAt0(c, dt) {
     const st = titleDiorama();
     const b = mapBounds(st);
     const zoom = clamp(Math.min(W * 0.52 / (b.maxX - b.minX), H * 0.55 / (b.maxY - b.minY)), 0.55, 2.6);
@@ -3736,18 +4334,22 @@
     return tiles.map(function (t, i) { return t ? Object.assign({ x: i % grid.w, y: Math.floor(i / grid.w) }, t) : null; });
   }
 
+  /** World-px box of a board at the current view: rotated tile quads, wall tops (+30 px for sprites) to the slab. */
   function mapBounds(st) {
     const g = st.grid, tiles = (g && g.tiles) || [];
+    const V = Iso.view();
+    const BF = { theme: st.theme, gw: (g && g.w) | 0, gh: (g && g.h) | 0 };
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
     for (let i = 0; i < tiles.length; i++) {
-      const t = tiles[i];
+      let t = tiles[i];
       if (!t) continue;
-      const x = t.x !== undefined ? t.x : i % g.w, y = t.y !== undefined ? t.y : Math.floor(i / g.w);
-      const w = Iso.toWorld(x, y, (t.h || 0) + terrainStyle(t.t, st.theme).levels);
-      if (w.x - HW < minX) minX = w.x - HW;
-      if (w.x + HW > maxX) maxX = w.x + HW;
-      if (w.y - HH - 30 < minY) minY = w.y - HH - 30;
-      const bot = Iso.toWorld(x, y, -SLAB).y + HH;
+      if (t.x === undefined || t.y === undefined) t = { x: i % g.w, y: Math.floor(i / g.w), h: t.h, t: t.t };
+      const x = t.x, y = t.y;
+      const w = Iso.toWorld(x, y, topLevel(BF, t));
+      if (w.x - V.hx < minX) minX = w.x - V.hx;
+      if (w.x + V.hx > maxX) maxX = w.x + V.hx;
+      if (w.y - V.hy - 30 < minY) minY = w.y - V.hy - 30;
+      const bot = Iso.toWorld(x, y, -SLAB).y + V.hy;
       if (bot > maxY) maxY = bot;
     }
     if (!isFinite(minX)) return { minX: -100, maxX: 100, minY: -60, maxY: 60 };
@@ -3776,6 +4378,7 @@
   }
 
   function makeView(F) {
+    const V = Iso.view();
     return {
       ctx: F.ctx, zoom: F.zoom, t: time, dt: F.dt, width: W, height: H, dpr: DPR,
       camera: F.cam, state: F.st, scene: scene, shake: F.shake,
@@ -3790,13 +4393,20 @@
       toWorld: function (x, y, h) { return Iso.toWorld(x, y, h); },
       /** unit id → its laid-out HP widget box { x0, x1, y0, y1 } in screen px (filled once widgets are drawn). */
       widgets: null,
+      /** the view yaw (deg), its ground -> px offset (grid units, world px at zoom 1) and matrix, for FX painters */
+      yaw: V.yaw,
+      local: function (u, v) { return Iso.local(u, v); },
+      axes: { ax: V.ax, bx: V.bx, ay: V.ay, by: V.by },
     };
   }
 
-  /** Painter's pass: per diagonal, all tile blocks, then objects + surface volumes, then units (by height). */
+  /**
+   * Painter's pass by depth groups (an x + y diagonal at yaw 0): per group all tile blocks, then objects + surface
+   * volumes, then the units bucketed into it (by height, then screen x).
+   */
   function drawWorld(F) {
     const c = F.ctx;
-    const maxD = F.gw + F.gh - 2;
+    const o = orderOf(F);
     const buckets = [];
     for (let i = 0; i < F.unitDraws.length; i++) {
       const d = F.unitDraws[i];
@@ -3804,23 +4414,23 @@
     }
     const prof = R.profile && typeof R.profile === 'object' ? R.profile : null;
     let tA = 0;
-    for (let dg = 0; dg <= maxD; dg++) {
-      const x0 = Math.max(0, dg - (F.gh - 1)), x1 = Math.min(F.gw - 1, dg);
+    for (let gi = 0; gi < o.groups.length; gi++) {
+      const grp = o.groups[gi];
       if (prof) tA = performance.now();
-      for (let x = x0; x <= x1; x++) {
-        const t = F.tiles[(dg - x) * F.gw + x];
+      for (let k = 0; k < grp.length; k++) {
+        const t = F.tiles[grp[k]];
         if (t) drawTile(F, c, t);
       }
       if (prof) { const n = performance.now(); prof['w.tiles'] = (prof['w.tiles'] || 0) + n - tA; tA = n; }
-      for (let x = x0; x <= x1; x++) {
-        const t = F.tiles[(dg - x) * F.gw + x];
+      for (let k = 0; k < grp.length; k++) {
+        const t = F.tiles[grp[k]];
         if (!t || (!t.obj && !t.surface)) continue;
         const w = Iso.toWorld(t.x, t.y, topLevel(F, t));
         if (t.obj) drawObject(F, c, t, w.x, w.y);
         if (t.surface) drawSurfaceVolume(F, c, t, w.x, w.y);
       }
       if (prof) { const n = performance.now(); prof['w.objects'] = (prof['w.objects'] || 0) + n - tA; tA = n; }
-      const b = buckets[dg];
+      const b = buckets[gi];
       if (b) for (let i = 0; i < b.length; i++) drawUnitBody(F, c, b[i]);
       if (prof) prof['w.units'] = (prof['w.units'] || 0) + performance.now() - tA;
     }
@@ -3904,9 +4514,10 @@
   // Camera
   // ======================================================================================================
   const lastCam = { x: 0, y: 0, zoom: 1 };
-  let boundsMemo = { st: null, version: -1, b: null };
+  let boundsMemo = { st: null, version: -1, view: null, b: null };
   function stateBounds(st) {
-    if (boundsMemo.st !== st || boundsMemo.version !== stateVersion || !boundsMemo.b) boundsMemo = { st: st, version: stateVersion, b: mapBounds(st) };
+    const V = Iso.view();
+    if (boundsMemo.st !== st || boundsMemo.version !== stateVersion || boundsMemo.view !== V.key || !boundsMemo.b) boundsMemo = { st: st, version: stateVersion, view: V.key, b: mapBounds(st) };
     return boundsMemo.b;
   }
   /**
@@ -3972,7 +4583,11 @@
     const k = 1 - Math.exp(-Math.max(0, dt) / (camEase ? camEase.tau : 85));
     camera.zoom += (camTarget.zoom - camera.zoom) * k;
     if (Math.abs(camTarget.zoom - camera.zoom) < 1e-4) camera.zoom = camTarget.zoom;
-    if (zoomAnchor) {
+    if (yawPivot) {
+      // the view is turning: its pivot holds the board-area centre (a zoom meanwhile zooms around it; no clamp)
+      zoomAnchor = null;
+      placePivot();
+    } else if (zoomAnchor) {
       camera.x = zoomAnchor.wx - (zoomAnchor.sx - W / 2) / camera.zoom;
       camera.y = zoomAnchor.wy - (zoomAnchor.sy - H / 2) / camera.zoom;
       camTarget.x = zoomAnchor.wx - (zoomAnchor.sx - W / 2) / camTarget.zoom;
@@ -4020,6 +4635,190 @@
   }
 
   // ======================================================================================================
+  // View yaw: map rotation (rotation plan §1.11, §2.2, §4). Purely visual: game logic never sees it.
+  // ======================================================================================================
+  const YAW_SETTLE_S = 0.15;      // a view counts as moving this long after its last change
+  const VIEW_EVT_S = 0.066;       // render:view { moving: true } at most this often
+  const ROT_DEG_PER_PX = 0.35;    // rotate drag: degrees per CSS px of horizontal motion (≈ 257 px per quarter turn)
+  const SNAP_DEG = 4;             // a rotate drag released this close to a classic view lands on it
+  const TURN_S = 0.25;            // Q / R / Home / rotateBy: ease-in-out over this long (renderer clock, not FX speed)
+  const SNAP_S = 0.12;            // a released drag eases onto the classic view it snapped to
+  let yawTarget = 0;              // where the view is heading, [0, 360): the next turn() / rotateBy() starts here
+  let yawAnim = null;             // { from, to (unwrapped deg), t0, dur (s), persist, fit }: a running turn animation
+  let yawPivot = null;            // { gx, gy, h, sx, sy }: the ground point held on screen during a gesture (§1.11)
+  let yawChangedAt = -1e9;        // renderer time (s) of the last applied yaw change
+  let rotDragging = false;        // beginRotate .. endRotate
+  let viewSettlePending = false;  // a change went out as moving: announce the settle exactly once
+  let viewEvtAt = -1e9;
+  let persistWanted = false, persistTimer = 0;
+  let yawInitDone = false;
+  let fitWhenStill = null;        // a fitMap asked for while the view turned: 'smooth' | 'instant', run once it stops
+  let simLoop = false;            // tests: animate and settle as under the live loop, stepped by _rot.step(ms)
+
+  /** Turns animate and settle on the renderer clock only while it ticks (the live loop, or a test's stepped clock). */
+  function loopOn() { return running || simLoop; }
+  /** A drag is active, an animation runs, or the yaw changed under 150 ms ago (live loop only). */
+  function isViewMoving() { return rotDragging || !!yawAnim || (loopOn() && time - yawChangedAt < YAW_SETTLE_S); }
+  function easeInOut(k) { return k < 0.5 ? 4 * k * k * k : 1 - Math.pow(2 - 2 * k, 3) / 2; }
+  /** The animated yaw at the current time (unwrapped, in the animation's frame), or the live yaw. */
+  function animYaw() {
+    const A = yawAnim;
+    if (!A) return liveYaw;
+    const k = A.dur > 0 ? clamp((time - A.t0) / A.dur, 0, 1) : 1;
+    return A.from + (A.to - A.from) * easeInOut(k);
+  }
+  /** Where the view is heading, unwrapped (a running animation's end, else the live yaw). */
+  function targetU() { return yawAnim ? yawAnim.to : liveYaw; }
+  /** The short signed way from yaw a to yaw b, in [-180, 180). */
+  function shortWay(a, b) { return ((((b - a) % 360) + 540) % 360) - 180; }
+
+  function emitView(moving) {
+    viewEvtAt = time;
+    if (DD.Events) DD.Events.emit('render:view', { yaw: liveYaw, moving: moving });
+  }
+  function settleView() {
+    viewSettlePending = false;
+    emitView(false);
+    if (persistWanted) { persistWanted = false; schedulePersist(); }
+  }
+  /** Remember the angle (settings.viewYaw, 0.1 deg) half a second after the view settles from a player gesture. */
+  function schedulePersist() {
+    if (persistTimer) clearTimeout(persistTimer);
+    persistTimer = setTimeout(function () {
+      persistTimer = 0;
+      const v = Iso.normYaw(Math.round(liveYaw * 10) / 10);
+      if (!DD.Meta || typeof DD.Meta.setSetting !== 'function' || !DD.Meta.data) return;
+      if ((+settings().viewYaw || 0) !== v) DD.safe('Render: remember the view yaw', DD.Meta.setSetting, DD.Meta, ['viewYaw', v]);
+    }, 500);
+  }
+
+  /**
+   * §1.11: hold the ground point under the board-area centre (HUD margins aside) in place while the view turns. The
+   * zoom ease and zoom anchor are settled first, so the camera follows the pivot alone.
+   */
+  function capturePivot() {
+    yawPivot = null;
+    const st = currentState();
+    if (scene !== 'combat' || !st) return;
+    const m = hudMargins(W, H);
+    let sx = m.left + (W - m.left - m.right) / 2, sy = m.top + (H - m.top - m.bottom) / 2;
+    const wp = R.screenToWorld(sx, sy), hit = R.screenToTile(sx, sy);
+    let h = hit ? R.tileTop(hit.x, hit.y, true) : 0;
+    let g = Iso.fromWorld(wp.x, wp.y, h);
+    // off the board (empty space past an edge, or the floor behind a tall border wall): hold the board's nearest point
+    // where it is on screen now instead, so a turn swings the board around its own edge, never out of view around a void
+    const F = pickFrame(st);
+    if (F.gw && F.gh) {
+      const x = clamp(g.x, -0.5, F.gw - 0.5), y = clamp(g.y, -0.5, F.gh - 0.5);
+      if (x !== g.x || y !== g.y) {
+        const t = gridTile(F, clamp(Math.round(x), 0, F.gw - 1), clamp(Math.round(y), 0, F.gh - 1));
+        h = t ? (t.h || 0) : 0;
+        g = { x: x, y: y };
+        const w = Iso.toWorld(x, y, h);
+        sx = (w.x - camera.x) * camera.zoom + W / 2;
+        sy = (w.y - camera.y) * camera.zoom + H / 2;
+      }
+    }
+    zoomAnchor = null;
+    camEase = null;
+    camera.zoom = camTarget.zoom;
+    yawPivot = { gx: g.x, gy: g.y, h: h, sx: sx, sy: sy };
+  }
+  /** Put the pivot back under its screen point at the current view (camera and target, no ease). */
+  function placePivot() {
+    const P = yawPivot;
+    if (!P) return;
+    const w = Iso.toWorld(P.gx, P.gy, P.h);
+    camera.x = camTarget.x = w.x - (P.sx - W / 2) / camera.zoom;
+    camera.y = camTarget.y = w.y - (P.sy - H / 2) / camera.zoom;
+    lastCam.x = camera.x; lastCam.y = camera.y; lastCam.zoom = camera.zoom;
+  }
+  /**
+   * Make `deg` the live yaw now (the battlefield view, the pivot, the moving / settled announcement). Applied at once, not
+   * per frame, so HUD worldToScreen calls between frames see the new view. persist: a player gesture (remembered).
+   */
+  function applyYaw(deg, persist) {
+    const y = Iso.normYaw(deg);
+    if (persist) persistWanted = true;
+    if (y === liveYaw) return false;
+    liveYaw = y;
+    if (scene === 'combat') { Iso.setYaw(y); placePivot(); }
+    yawChangedAt = time;
+    if (isViewMoving()) {
+      viewSettlePending = true;
+      if (!loopOn() || time - viewEvtAt >= VIEW_EVT_S) emitView(true);
+    } else settleView();
+    return true;
+  }
+  /**
+   * Head for the unwrapped yaw toU: eased over `dur` seconds while the clock ticks on the battlefield, instant otherwise
+   * (and during a rotate drag, which owns the view). A running animation is retargeted from where it is now, so a
+   * double tap of R turns 180°; the gesture's pivot is kept throughout. persist: a player gesture (remembered on
+   * settle). fit: fitMap once it lands. Returns the target yaw, [0, 360).
+   */
+  function headTo(toU, dur, persist, fit) {
+    const y = Iso.normYaw(toU);
+    applySceneView();
+    const from = animYaw();
+    if (!(dur > 0) || !loopOn() || scene !== 'combat' || rotDragging || Math.abs(toU - from) < 1e-6) {
+      yawAnim = null;
+      if (!yawPivot) capturePivot();
+      yawTarget = y;
+      applyYaw(y, persist);
+      if (!rotDragging) yawPivot = null;
+      if (fit) R.fitMap();
+      stillNow();
+      return y;
+    }
+    if (!yawPivot) capturePivot();
+    yawAnim = { from: from, to: toU, t0: time, dur: dur, persist: !!persist || !!(yawAnim && yawAnim.persist), fit: !!fit || !!(yawAnim && yawAnim.fit) };
+    yawTarget = y;
+    viewSettlePending = true;
+    return y;
+  }
+  /** Once nothing turns the view any more: run a fitMap that was asked for meanwhile. */
+  function stillNow() {
+    if (!fitWhenStill || yawAnim || rotDragging) return;
+    const how = fitWhenStill;
+    fitWhenStill = null;
+    R.fitMap({ instant: how === 'instant' });
+  }
+  /** Per frame (before input and camera): step a turn animation; announce the settle once the view rests. */
+  function updateYaw() {
+    const A = yawAnim;
+    if (A) {
+      if (time - A.t0 >= A.dur) {
+        yawAnim = null;
+        applyYaw(A.to, A.persist);
+        yawPivot = null;
+        if (A.fit) R.fitMap();
+        stillNow();
+      } else applyYaw(animYaw(), A.persist);
+    }
+    if (viewSettlePending && !isViewMoving()) settleView();
+  }
+  /**
+   * The starting angle: the debug param rot=<deg> (applied as is, never remembered) or the remembered
+   * settings.viewYaw. Called by init (Meta is loaded by then); retried on the first live frame otherwise.
+   */
+  function initYaw() {
+    const p = DD.params ? DD.params.rot : undefined;
+    let y = null;
+    if (p !== undefined && p !== null && String(p).trim() !== '' && isFinite(+p)) y = +p;
+    else if (DD.Meta && DD.Meta.data) {
+      const v = settings().viewYaw;
+      if (v !== undefined && v !== null && v !== '' && isFinite(+v)) y = +v;
+    }
+    yawInitDone = y !== null || !!(DD.Meta && DD.Meta.data);
+    if (y === null) return liveYaw;
+    persistWanted = false;
+    if (persistTimer) { clearTimeout(persistTimer); persistTimer = 0; }
+    yawTarget = Iso.normYaw(y);
+    applyYaw(y, false);
+    return liveYaw;
+  }
+
+  // ======================================================================================================
   // Loop
   // ======================================================================================================
   let lastDpr = 1, fpsAcc = 0, fpsN = 0;
@@ -4043,8 +4842,14 @@
     for (let i = 0; i < F.queue.length; i++) fix(F.queue[i], false);
   }
 
+  /** The live view: the combat yaw on the battlefield, the classic view everywhere else (title, gallery, custom). */
+  function applySceneView() { Iso.setYaw(scene === 'combat' ? liveYaw : 0); }
+
   function frame(dt) {
+    if (!yawInitDone && running) initYaw();
+    applySceneView();
     time += dt / 1000;
+    updateYaw();
     if (DD.FX && typeof DD.FX.update === 'function') {
       try { guardFx(); DD.FX.update(dt); } catch (e) { renderError('DD.FX.update', e); }
     }
@@ -4069,6 +4874,8 @@
 
   function draw(dt) {
     if (!ctx) return;
+    applySceneView();
+    resetBakeBudget(TEX_BUDGET_MS);
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'source-over';
@@ -4142,6 +4949,7 @@
       if (!canvas || !canvas.getContext) { DD.warn('DD.Render.init: no canvas'); canvas = null; return false; }
       ctx = canvas.getContext('2d');
       bindEvents();
+      if (!yawInitDone) initYaw();
       R.resize();
       return true;
     },
@@ -4179,6 +4987,7 @@
       const prev = sceneHandlers[scene];
       if (prev && typeof prev.leave === 'function') DD.safe('scene leave ' + scene, prev.leave, prev);
       scene = id;
+      applySceneView();
       if (id === 'combat') { lastStateRef = null; userMoved = false; }
       if (id === 'title') { titleBark.at = time + 3; titleBark.unitId = null; }
       const next = sceneHandlers[id];
@@ -4200,6 +5009,15 @@
       const w = Iso.toWorld(x, y, hgt);
       const z = camTarget.zoom, m = opts.ignoreHud ? { left: 0, right: 0, top: 0, bottom: 0 } : hudMargins(W, H);
       const acx = m.left + (W - m.left - m.right) / 2, acy = m.top + (H - m.top - m.bottom) / 2;
+      if (yawPivot && isFinite(x) && isFinite(y)) {
+        // the view is turning around a pivot: make the tile the pivot (it stays there while the turn goes on)
+        yawPivot = { gx: x, gy: y, h: hgt, sx: acx, sy: acy + 16 * camera.zoom };
+        placePivot();
+        zoomAnchor = null;
+        camEase = null;
+        userMoved = true;
+        return;
+      }
       camTarget.x = w.x - (acx - W / 2) / z;
       camTarget.y = w.y - 16 - (acy - H / 2) / z;
       zoomAnchor = null;
@@ -4217,6 +5035,7 @@
       opts = opts || {};
       const st = currentState();
       if (!st || !isFinite(x) || !isFinite(y)) return false;
+      if (isViewMoving()) return false;   // it would fight the turning view's pivot
       const F = pickFrame(st);
       const t = gridTile(F, Math.round(x), Math.round(y));
       const w = Iso.toWorld(x, y, t ? (t.h || 0) : 0);
@@ -4243,6 +5062,11 @@
     fitMap: function (opts) {
       const st = currentState();
       if (!st) return false;
+      if (yawAnim || rotDragging) {
+        // the turning view holds its pivot on screen: fit at the angle it comes to rest at
+        fitWhenStill = (opts && opts.instant) || fitWhenStill === 'instant' ? 'instant' : 'smooth';
+        return true;
+      }
       const f = computeFit(st, W, H);
       camTarget.x = f.x; camTarget.y = f.y; camTarget.zoom = f.zoom;
       zoomAnchor = null;
@@ -4261,19 +5085,24 @@
     screenToWorld: function (sx, sy) {
       return { x: (sx - W / 2) / camera.zoom + camera.x, y: (sy - H / 2) / camera.zoom + camera.y };
     },
-    /** Frontmost tile (top face or side face) under a screen point, or null. */
+    /**
+     * Frontmost tile (top face or side face) under a screen point, or null: depth groups front to back, the first
+     * column (slab .. visual top) the view ray passes through (exact at any yaw, any heights).
+     */
     screenToTile: function (sx, sy) {
       const st = currentState();
       if (!st) return null;
       const F = pickFrame(st);
       const p = R.screenToWorld(sx, sy);
-      for (let d = F.gw + F.gh - 2; d >= 0; d--) {
-        const x0 = Math.max(0, d - (F.gh - 1)), x1 = Math.min(F.gw - 1, d);
-        for (let x = x0; x <= x1; x++) {
-          const y = d - x, t = F.tiles[y * F.gw + x];
+      const o = orderOf(F), V = Iso.view();
+      for (let g = o.groups.length - 1; g >= 0; g--) {
+        const grp = o.groups[g];
+        for (let k = 0; k < grp.length; k++) {
+          const i = grp[k], t = F.tiles[i];
           if (!t) continue;
-          const top = topLevel(F, t), w = Iso.toWorld(x, y, top);
-          if (Iso.inColumn(p.x, p.y, w.x, w.y, HW, HH, (top + SLAB) * STEP)) return { x: x, y: y };
+          const x = i % F.gw, y = (i - x) / F.gw;
+          if (Math.abs(Iso.toWorld(x, y, 0).x - p.x) > V.hx + 1) continue;   // screen x does not depend on height
+          if (Iso.rayHitsColumn(p.x, p.y, x, y, -SLAB, topLevel(F, t))) return { x: x, y: y };
         }
       }
       return null;
@@ -4304,6 +5133,7 @@
       return ground ? (t.h || 0) : topLevel(F, t);
     },
     panBy: function (dx, dy) {
+      if (yawPivot) { yawPivot.sx += dx; yawPivot.sy += dy; }   // panning while it turns moves the pivot along
       camera.x -= dx / camera.zoom; camera.y -= dy / camera.zoom;
       camTarget.x = camera.x; camTarget.y = camera.y;
       lastCam.x = camera.x; lastCam.y = camera.y;
@@ -4328,6 +5158,7 @@
         camTarget.x = camera.x; camTarget.y = camera.y;
         lastCam.x = camera.x; lastCam.y = camera.y; lastCam.zoom = z;
         zoomAnchor = null;
+        placePivot();   // a turning view zooms around its pivot
       }
     },
     resetOverlay: function () { R.overlay = defaultOverlay(); },
@@ -4336,32 +5167,42 @@
     /** Run one full frame (FX update + draw) on the main canvas — tests / manual stepping. */
     drawFrame: function (dt) { frame(dt === undefined ? 16 : dt); },
     /**
-     * Render into another canvas: opts { state, scene: 'combat'|'title'|'none', width, height, dpr, camera, dt }.
-     * Returns { units, objects, lights, telegraphs, widgets, silhouettes } for the drawn frame (null for empty scenes);
-     * `widgets` are the laid-out HP widget boxes { id, x0, x1, y0, y1, dy } in screen px, `silhouettes` the units drawn
-     * see-through { id, geometry (occluding tiles/objects), units (ids of the units in front hiding it) }.
+     * Render into another canvas: opts { state, scene: 'combat'|'title'|'none', width, height, dpr, camera, dt, yaw }.
+     * `yaw` (degrees) renders the battlefield from that view (default: the live yaw; the title is always yaw 0); the
+     * live view is untouched. Returns { units, objects, lights, telegraphs, widgets, silhouettes } for the drawn frame
+     * (null for empty scenes); `widgets` are the laid-out HP widget boxes { id, x0, x1, y0, y1, dy } in screen px,
+     * `silhouettes` the units drawn see-through { id, geometry (occluding tiles/objects), units (ids of the units in
+     * front hiding it) }, `silScale` the silhouette resolution used (0.5 while the view turns, live frames only).
+     * Offscreen renders draw at full detail; `live: true` draws like a live frame (moving-view LOD, bake budget).
      */
     renderTo: function (cv, opts) {
       opts = opts || {};
-      const saved = { W: W, H: H, DPR: DPR };
+      const sc = opts.scene || 'combat';
+      const yaw = isFinite(+opts.yaw) && opts.yaw !== null && opts.yaw !== '' ? +opts.yaw : sc === 'combat' ? liveYaw : 0;
+      const saved = { W: W, H: H, DPR: DPR, budget: texBudget, baked: frameBakeMs, lod: lodOff };
       try {
+        // offscreen renders draw at full detail and bake every texture they need at once; opts.live (tests, perf
+        // pages) draws like a live frame instead: the moving-view LOD and the per-frame bake budget
+        lodOff = !opts.live;
         DPR = opts.dpr || 1;
         W = opts.width || Math.round(cv.width / DPR);
         H = opts.height || Math.round(cv.height / DPR);
+        resetBakeBudget(opts.live ? TEX_BUDGET_MS : Infinity);
         if (cv.width !== Math.round(W * DPR)) cv.width = Math.round(W * DPR);
         if (cv.height !== Math.round(H * DPR)) cv.height = Math.round(H * DPR);
         const c = cv.getContext('2d');
         c.setTransform(1, 0, 0, 1, 0, 0);
         c.globalAlpha = 1;
         c.globalCompositeOperation = 'source-over';
-        const sc = opts.scene || 'combat';
-        let F = null;
-        if (sc === 'title') F = drawTitleScene(c, opts.dt || 16);
-        else if (sc === 'combat') {
-          const st = opts.state || currentState();
-          if (st) F = drawCombatScene(c, opts.dt || 16, st, opts.camera || computeFit(st, W, H));
-          else drawEmptyScene(c);
-        } else drawEmptyScene(c);
+        const F = Iso.withYaw(yaw, function () {
+          if (sc === 'title') return drawTitleScene(c, opts.dt || 16);
+          if (sc === 'combat') {
+            const st = opts.state || currentState();
+            if (st) return drawCombatScene(c, opts.dt || 16, st, opts.camera || computeFit(st, W, H));
+          }
+          drawEmptyScene(c);
+          return null;
+        });
         return F ? {
           units: F.unitDraws.length, objects: F.objList.length, lights: F.lights.length, telegraphs: F.teleRaw.length,
           // v2: drawn wind-ups (ids), their ⏳ badges, threat-shaded tiles, the inspected enemy's reach tiles
@@ -4371,14 +5212,15 @@
           reachTiles: F.ov && F.ov.reach ? F.ov.reach.reduce(function (a, v) { return a + v; }, 0) : 0,
           widgets: (F.widgetBoxes || []).map(function (b) { return Object.assign({}, b); }),
           silhouettes: (F.silhouettes || []).map(function (s) { return { id: s.id, geometry: s.geometry, units: s.units.slice() }; }),
+          silScale: F.silScale === undefined ? 1 : F.silScale,
         } : null;
       } finally {
-        W = saved.W; H = saved.H; DPR = saved.DPR;
+        W = saved.W; H = saved.H; DPR = saved.DPR; texBudget = saved.budget; frameBakeMs = saved.baked; lodOff = saved.lod;
       }
     },
     /**
      * Paint one terrain block (optionally with a surface and an object on it) into any context, top-face center at
-     * (sx, sy) in that context's current units: for galleries, codex entries and tooltips.
+     * (sx, sy) in that context's current units: for galleries, codex entries and tooltips. Always the classic view.
      * opts: { h = 1 (block height in levels), theme, surface: id, obj: id|instance, t, dpr }.
      */
     drawTileAt: function (c, terrainId, sx, sy, zoom, opts) {
@@ -4386,38 +5228,176 @@
       const h = opts.h === undefined ? 1 : Math.max(0, +opts.h || 0);
       const tile = { x: 0, y: 0, h: h, t: terrainId || 'stone', surface: opts.surface ? { id: opts.surface, turns: 2, data: {} } : null, obj: null, zone: null, tag: null };
       if (opts.obj) tile.obj = typeof opts.obj === 'object' ? opts.obj : { id: opts.obj, hp: 0, maxHp: 0, data: {} };
-      const F = isolatedFrame(c, tile, zoom, opts);
-      const top = topLevel(F, tile);
-      c.save();
-      c.translate(sx, sy);
-      c.scale(zoom || 1, zoom || 1);
-      c.translate(0, top * STEP);
-      try {
-        drawTile(F, c, tile);
-        if (tile.obj || tile.surface) {
-          const w = Iso.toWorld(0, 0, top);
-          if (tile.obj) drawObject(F, c, tile, w.x, w.y);
-          if (tile.surface) drawSurfaceVolume(F, c, tile, w.x, w.y);
-        }
-      } finally { c.restore(); }
+      Iso.withYaw(0, function () {
+        const F = isolatedFrame(c, tile, zoom, opts);
+        const top = topLevel(F, tile);
+        c.save();
+        c.translate(sx, sy);
+        c.scale(zoom || 1, zoom || 1);
+        c.translate(0, top * STEP);
+        try {
+          drawTile(F, c, tile);
+          if (tile.obj || tile.surface) {
+            const w = Iso.toWorld(0, 0, top);
+            if (tile.obj) drawObject(F, c, tile, w.x, w.y);
+            if (tile.surface) drawSurfaceVolume(F, c, tile, w.x, w.y);
+          }
+        } finally { c.restore(); }
+      });
     },
-    /** Paint an object (id or instance) standing at (sx, sy) with the world painters (def.draw honoured). */
+    /** Paint an object (id or instance) standing at (sx, sy) with the world painters (def.draw honoured; classic view). */
     drawObjectAt: function (c, objOrId, sx, sy, zoom, opts) {
       opts = opts || {};
       const obj = typeof objOrId === 'object' && objOrId ? objOrId : { id: String(objOrId), hp: 0, maxHp: 0, data: {} };
       if (!obj.data) obj.data = {};
       const tile = { x: 0, y: 0, h: 0, t: 'stone', surface: null, obj: obj, zone: null, tag: null };
-      const F = isolatedFrame(c, tile, zoom, opts);
-      c.save();
-      c.translate(sx, sy);
-      c.scale(zoom || 1, zoom || 1);
-      try { drawObject(F, c, tile, 0, 0); } finally { c.restore(); }
+      Iso.withYaw(0, function () {
+        const F = isolatedFrame(c, tile, zoom, opts);
+        c.save();
+        c.translate(sx, sy);
+        c.scale(zoom || 1, zoom || 1);
+        try { drawObject(F, c, tile, 0, 0); } finally { c.restore(); }
+      });
     },
-    /** Drop cached textures/styles (e.g. after registering terrain at runtime). */
+    /** Drop cached textures/styles/faces/orders (e.g. after registering terrain at runtime). */
     invalidate: function () {
-      styleCache.clear(); texCache.clear(); glyphs.clear();
+      styleCache.clear(); texCache.clear(); texYaws.clear(); faceCache.clear(); glyphs.clear(); orderMemo.clear();
+      silPool.clear(); silPoolBytes = 0;
       teleCache.st = null; boundsMemo.st = null; titleState = null;
       stateVersion++;
+    },
+
+    // ---- map rotation (rotation plan §2.2). The battlefield only: title, gallery and painters stay at yaw 0. ----
+    /** The live (battlefield) view yaw in degrees, [0, 360); 0 = the classic view. Positive = clockwise on screen. */
+    getYaw: function () { return liveYaw; },
+    /**
+     * Turn the battlefield to `deg`. opts: keepFocus (default true: the ground point at the board-area centre stays
+     * put), persist (default false: remember it in settings.viewYaw once the view settles), animate (default false:
+     * ease there the short way over 250 ms while the loop runs; instant otherwise), instant (never animate). Emits
+     * 'render:view'. Returns the target yaw.
+     */
+    setYaw: function (deg, opts) {
+      opts = opts || {};
+      if (deg === null || deg === '' || !isFinite(+deg)) return yawTarget;
+      const y = Iso.normYaw(+deg);
+      if (opts.animate && !opts.instant && opts.keepFocus !== false) {
+        const tu = targetU();
+        return headTo(tu + shortWay(tu, y), TURN_S, !!opts.persist, false);
+      }
+      applySceneView();
+      yawAnim = null;
+      if (opts.keepFocus === false) { if (!rotDragging) yawPivot = null; }
+      else if (!yawPivot) capturePivot();
+      yawTarget = y;
+      applyYaw(y, !!opts.persist);
+      if (!rotDragging) yawPivot = null;
+      stillNow();
+      return yawTarget;
+    },
+    /**
+     * Turn by deltaDeg (that way round, any size) from the current target: a player gesture, remembered. Animated
+     * unless opts.animate === false. Returns the target yaw.
+     */
+    rotateBy: function (deltaDeg, opts) {
+      if (!isFinite(+deltaDeg)) return yawTarget;
+      return headTo(targetU() + (+deltaDeg), opts && opts.animate === false ? 0 : TURN_S, true, false);
+    },
+    /**
+     * Q / R: the next classic view (0 / 90 / 180 / 270) clockwise (dir > 0) or counter-clockwise (dir < 0) from the
+     * current target; from within 1 deg of a classic view that is the following one. Eased over 250 ms from where the
+     * view is; pressing again mid-turn goes on from the target (a double tap turns 180°). Returns the target yaw.
+     */
+    turn: function (dir) {
+      const from = yawTarget;
+      const to = dir < 0 ? 90 * Math.ceil((from - 1) / 90) - 90 : 90 * Math.floor((from + 1) / 90) + 90;
+      const d = dir < 0 ? -((((from - to) % 360) + 360) % 360) : (((to - from) % 360) + 360) % 360;
+      return headTo(targetU() + d, TURN_S, true, false);
+    },
+    /** Home / the compass: back to the classic view the short way, then fit the board. Returns 0. */
+    resetView: function () {
+      const tu = targetU();
+      headTo(tu + shortWay(tu, 0), TURN_S, true, true);
+      return 0;
+    },
+    /**
+     * A rotate drag (DD.Input: the middle button, a horizontal wheel): begin, then horizontal CSS px deltas, then end.
+     * Beginning cancels a running turn animation; the drag goes on from the animated yaw with the same pivot.
+     */
+    beginRotate: function () {
+      if (scene !== 'combat') return false;
+      applySceneView();
+      yawAnim = null;
+      if (!yawPivot) capturePivot();
+      rotDragging = true;
+      yawTarget = liveYaw;
+      return true;
+    },
+    /** Dragging right moves the board's near edge right (turntable): yaw -= 0.35 deg per px. Returns the yaw. */
+    rotateDrag: function (dxCssPx) {
+      if (!rotDragging || !isFinite(+dxCssPx)) return liveYaw;
+      yawTarget = Iso.normYaw(yawTarget - ROT_DEG_PER_PX * dxCssPx);
+      applyYaw(yawTarget, true);
+      return liveYaw;
+    },
+    /**
+     * End a rotate drag. opts.snap (default true; settings.rotSnap === false turns it off): within 4 deg of a classic
+     * view it eases there (120 ms; instant without the loop); any other angle stays exactly where it was left.
+     * Returns the yaw it rests at (or is easing to).
+     */
+    endRotate: function (opts) {
+      if (!rotDragging) return liveYaw;
+      const snap = (!opts || opts.snap !== false) && settings().rotSnap !== false;
+      const q = Math.round(liveYaw / 90) * 90;
+      rotDragging = false;
+      if (snap && yawGap(liveYaw, q) <= SNAP_DEG && yawGap(liveYaw, q) > 1e-9) return headTo(liveYaw + shortWay(liveYaw, q), SNAP_S, true, false);
+      yawPivot = null;
+      if (viewSettlePending && !isViewMoving()) settleView();
+      stillNow();
+      return liveYaw;
+    },
+    /** A rotate drag is active, a turn animates, or the yaw changed in the last 150 ms (render:view moving: true). */
+    isViewMoving: function () { return isViewMoving(); },
+    /**
+     * Rotation internals for tests and perf runs: counters (warpDraws = residual / face / content-warp transforms; 0 at
+     * yaw 0), cache sizes, and the painter's order of a board at the current view.
+     */
+    _rot: {
+      stats: ROT,
+      reset: function () { Object.keys(ROT).forEach(function (k) { ROT[k] = 0; }); },
+      caches: function () {
+        return { tex: texCache.size, texBytes: texCache.bytes, faces: faceCache.size, faceBytes: faceCache.bytes, orders: orderMemo.size,
+          sil: silPool.size, silBytes: silPoolBytes };
+      },
+      order: function (gw, gh) { return depthOrder(gw, gh); },
+      /** Where the next turn starts from (the live yaw unless an animation runs). */
+      yawTarget: function () { return yawTarget; },
+      /** Re-read rot= / settings.viewYaw as at boot (tests). */
+      initYaw: initYaw,
+      /** Baked top-texture yaws per terrain style: { styleKey: [yaw, …] } (sorted, distinct). */
+      baked: function () {
+        const out = {};
+        texYaws.forEach(function (set, base) {
+          const k = base.slice(0, base.indexOf('#'));
+          const a = out[k] || (out[k] = []);
+          set.forEach(function (y) { if (a.indexOf(y) < 0) a.push(y); });
+        });
+        Object.keys(out).forEach(function (k) { out[k].sort(function (a, b) { return a - b; }); });
+        return out;
+      },
+      /** The running turn animation { from, to (unwrapped deg), dur (s) } or null. */
+      anim: function () { return yawAnim ? { from: yawAnim.from, to: yawAnim.to, dur: yawAnim.dur } : null; },
+      /**
+       * Tests: sim(true) makes turns animate and settle as under the live loop, on a clock stepped by step(ms) (renderer
+       * time + the per-frame yaw update, no drawing); sim(false) lands a running animation and settles at once.
+       */
+      sim: function (on) {
+        simLoop = !!on;
+        if (!simLoop && yawAnim) { time += yawAnim.dur; updateYaw(); }
+        if (!simLoop && viewSettlePending && !isViewMoving()) settleView();
+      },
+      step: function (ms) { time += (+ms || 0) / 1000; applySceneView(); updateYaw(); },
+      /** Tests: time texture bakes with fn() (ms) instead of performance.now; null restores it. */
+      clock: function (fn) { bakeClock = typeof fn === 'function' ? fn : function () { return performance.now(); }; },
     },
     /** Ids with dedicated painters (used by tests and the gallery). */
     painters: {

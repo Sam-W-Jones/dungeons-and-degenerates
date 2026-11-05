@@ -1,18 +1,22 @@
 /* Dungeons and Degenerates — js/data/bosses/grimble.js
  * Act 1 boss: GRIMBLE, THE GOBLIN TAX COLLECTOR (enemy 'grimble', encounter 'boss_grimble', a tax office arena).
- * Every round (custom planner): Levy (tracking shot on the biggest spender: damage, steals party gold, buys Block) and
- * a fresh Audit (delayed paperwork barrage down a whole row or column), plus a Rubber Stamp shockwave when a hero is
- * next to him; then alternately Red Tape (tracking root: a rooted hero can't walk out of the next audit) or Hire
- * Intern (capped goblin interns). In phase 1 he never leaves the striped DROP ZONE in front of his vault.
- * Ill-Gotten Gains (soft timer): every 10 gold he holds adds +1 damage to all his attacks (max +8).
- * Phase 2 at 50% HP, "Hostile Takeover": audits come in crossing pairs, interns arrive two at a time and Hasted, the
- * Levy becomes Garnish Wages (no line of sight needed) and he leaves his desk to stamp people (walking back to it
- * whenever he hires).
+ * v2 (initiative, no telegraphs): Grimble takes TWO turns a round (two initiative entries; one turn gave a solo boss
+ * too few actions to matter against four heroes). Each turn he walks (phase 1: never out of the striped DROP ZONE in
+ * front of his vault) and does ONE thing — a Rubber Stamp shockwave if a hero is next to him, otherwise the next step
+ * of his docket (Levy, Red Tape, Levy, Hire Intern) — then, if none is pending, winds up an AUDIT: a paperwork barrage
+ * down a hero's row or column that lands one round later, at the start of the same turn of his (every unit, so every
+ * hero, gets one turn to step out first; stun him to cancel it). Red Tape roots a hero anywhere, preferably one standing
+ * in the Audit's lane. The Levy needs line of sight (filing cabinets are cover); his picks are "the biggest spender"
+ * (most damage dealt). Ill-Gotten Gains (soft timer): every 10 gold he holds adds +1 damage to his attacks but the
+ * Audit (max +8).
+ * Phase 2 at 50% HP, or from round 10 when the fiscal quarter ends (so a hero can't stall him from cover forever),
+ * "Hostile Takeover": two Hasted interns at once, the Audit comes as a crossing row + column, the Levy becomes Garnish
+ * Wages (no line of sight needed) and he leaves his desk to stamp people (walking back to it on hiring turns).
  * Puzzle: three Tax Loophole levers. Exploit all three and the vault door drops on the DROP ZONE: everyone there loses
- * all Block, takes 36 damage and is Stunned (which cancels Grimble's telegraphs, delayed audits included); Grimble is
- * also Vulnerable and every coin he holds spills back to the party (the gains reset). Goblin interns walk over to
- * close exploited loopholes. After a drop the loopholes are "under review" (3 rounds, +2 per later drop), then the
- * interns winch the door back up and it can be done again.
+ * all Block, takes 36 damage and is Stunned (Grimble for both of his next turns, his pending Audit cancelled); Grimble
+ * is also Vulnerable and every coin he holds spills back to the party. He starts with two interns; Goblin interns walk
+ * over and close exploited loopholes on their turn. After a drop the loopholes are "under review" (3 rounds, +2 per
+ * later drop), then the door goes back up.
  * Puzzle state lives in state.data.grim and in object data (both copied by previews and deploy rewinds).
  */
 (function () {
@@ -25,13 +29,22 @@
   const GAIN_PER = 10;            // Ill-Gotten Gains: +1 damage on all his attacks per 10 gold he holds...
   const GAIN_MAX = 8;             // ...up to +8
   const PHASE2_AT = 0.5;
+  const QUARTER_END = 10;         // ...or from this round on: the fiscal quarter ends (no stalling him from cover)
+  const PHASE2_MOV = 2;           // he leaves his desk: +2 move in phase 2
+  const VAULT_STUN = 2;           // the vault door costs him both of his next turns (a round)
   const LOOPHOLE_NAMES = ['Offshore Account', 'Charitable Write-Off', 'Creative Accounting'];
   const INTERN_NAMES = ['Gary', 'Brenda', 'Kevin', 'Snig', 'Doug', 'Moira', 'Pip', 'Todd', 'Gristle', 'Becky'];
-  // every round: Levy + a fresh Audit (+ Rubber Stamp when a hero is adjacent), then alternately Red Tape / Hire Intern
-  const P1 = ['tape', 'hire'];
-  const P2 = ['tape', 'hire'];
+  // his docket: one step per turn (a hero next to him gets the Rubber Stamp instead)
+  const P1 = ['levy', 'tape', 'levy', 'hire'];
+  const P2 = ['levy', 'hire', 'levy', 'tape'];
   // balance knobs (tests may tweak them for sims)
-  const GCFG = { noHint: false, gainPer: GAIN_PER, gainMax: GAIN_MAX };
+  const GCFG = { noHint: false, gainPer: GAIN_PER, gainMax: GAIN_MAX, p1: null, p2: null, vaultStun: VAULT_STUN, quarterEnd: QUARTER_END };
+  /** The docket of a phase (balance sims may set GCFG.p1 / p2 to 'tape+levy+...'). */
+  function docketOf(phase) {
+    const c = phase === 2 ? GCFG.p2 : GCFG.p1;
+    if (typeof c === 'string' && c) return c.split(/[+/ ]+/).filter(Boolean);
+    return phase === 2 ? P2 : P1;
+  }
 
   // ---- small helpers ------------------------------------------------------------------------------------
   function S() { return DD.Combat && DD.Combat.state; }
@@ -41,6 +54,7 @@
   function dist(a, b) { return Math.abs(a.x - b.x) + Math.abs(a.y - b.y); }
   function plural(n, w) { return n + ' ' + (n === 1 ? w : w + 's'); }
   function nearestDist(p, list) { let d = Infinity; list.forEach(function (q) { d = Math.min(d, dist(p, q)); }); return d; }
+  function out(u) { return !active(u) || DD.Act.isStunned(u) || DD.Act.hasStatus(u, 'sheep'); }
 
   const NO_DATA = { pulls: 0, drops: 0, hits: 0, refiles: 0, jam: 0, jamTick: -1 };
   /** Puzzle bookkeeping (created on first write; reads never mutate the state). */
@@ -53,10 +67,10 @@
   function gread(s) { s = s || S(); return (s && s.data && s.data.grim) || NO_DATA; }
 
   function tilesWhere(s, fn) {
-    const out = [];
-    if (!s || !s.grid) return out;
-    s.grid.tiles.forEach(function (t) { if (fn(t)) out.push(t); });
-    return out;
+    const res = [];
+    if (!s || !s.grid) return res;
+    s.grid.tiles.forEach(function (t) { if (fn(t)) res.push(t); });
+    return res;
   }
   function zoneTiles(s) { return tilesWhere(s || S(), function (t) { return t.t === 'grim_dropzone'; }).map(function (t) { return { x: t.x, y: t.y }; }); }
   function inZone(p) { const t = G().tile(p.x, p.y); return !!t && t.t === 'grim_dropzone'; }
@@ -103,37 +117,45 @@
   DD.registerStatus({
     id: 'grim_takeover', name: 'Hostile Takeover', icon: '📈', color: '#7fd36b', type: 'buff', stacking: 'none', maxStacks: 1,
     decay: 'never', defaultTurns: -1,
-    desc: function () { return 'Phase 2: audits come in crossing pairs, interns arrive two at a time and Hasted, and Grimble leaves his desk (he walks back to it to file each hiring form).'; },
+    desc: function () { return 'Phase 2: the Audit comes as a crossing row + column, interns arrive two at a time and Hasted, he Garnishes Wages (no line of sight needed) and leaves his desk to stamp people (+' + PHASE2_MOV + ' move).'; },
   });
-  /** Ill-Gotten Gains: +1 damage per GAIN_PER gold he holds (max GAIN_MAX). Stacks = gold held. */
+  /**
+   * Ill-Gotten Gains: +1 damage per GAIN_PER gold he holds (max GAIN_MAX) on his at-once attacks. Stacks = gold held.
+   * Not on the Audit: a Levy on his other turn could otherwise raise a pending Audit after the heroes' last look at it.
+   */
   function gainsOf(stacks) { return Math.min(GCFG.gainMax, Math.floor((stacks || 0) / GCFG.gainPer)); }
+  function gainsNow(u) { const st = u && DD.Act.getStatus(u, 'grim_ledger'); return st ? gainsOf(st.stacks) : 0; }
   DD.registerStatus({
     id: 'grim_ledger', name: 'Ill-Gotten Gains', icon: '💰', color: '#ffd23f', type: 'buff', stacking: 'stack', maxStacks: 999,
     decay: 'never', defaultTurns: -1,
     desc: function (st) {
-      return 'Grimble is holding ' + st.stacks + ' of your gold: +' + gainsOf(st.stacks) + ' damage on all of his attacks (+1 per ' + GAIN_PER + ' gold, up to +' + GAIN_MAX +
+      return 'Grimble is holding ' + st.stacks + ' of your gold: +' + gainsOf(st.stacks) + ' damage on every attack but the Audit (+1 per ' + GAIN_PER + ' gold, up to +' + GAIN_MAX +
         '). The vault door knocks it all loose (refunded); the rest is refunded when he falls.';
     },
     telegraphFlat: function (st) { return gainsOf(st.stacks); },
     hooks: {
-      modifyOutgoingDamage: function (d, st) { if (d.cause === 'skill' && d.source && d.source.defId === 'grimble') d.flat += gainsOf(st.stacks); },
+      modifyOutgoingDamage: function (d, st) {
+        if (d.cause === 'skill' && d.source && d.source.defId === 'grimble' && !(d.skill && d.skill.id === 'grim_audit')) d.flat += gainsOf(st.stacks);
+      },
     },
   });
-  // stun guard (like the act 2 and 3 bosses): no stun-locking the taxman; the vault door always lands
-  const GUARDED = { stun: 1, sleep: 1, frozen: 1, charmed: 1 };
+  // stun guard (like the act 2 and 3 bosses): a stun costs him one turn, then he appeals; while the appeal is pending a
+  // stun no longer costs him a turn but still interrupts his Audit (stun = THE wind-up counter); the vault always lands
+  // guarded: every stun-like status (stun, sleep, frozen, a banana peel...) and charm
+  function stunLike(id) { return !!(DD.Act && DD.Act.isStunLike(id)); }
+  function guarded(id) { return id === 'charmed' || stunLike(id); }
+  const GUARD_TURNS = 3;          // the turn he loses + his next two
   let puzzleStun = false;
   DD.registerStatus({
     id: 'grim_appeal', name: 'Appeal Pending', icon: '📎', color: '#d9c38a', type: 'buff', stacking: 'refresh', maxStacks: 1,
-    decay: 'turnEnd', defaultTurns: 2,
+    decay: 'turnEnd', defaultTurns: GUARD_TURNS,
     desc: function (st) {
-      return 'He filed an appeal against the last stun: can\'t be Stunned, put to Sleep, Frozen or Charmed again until the end of next round (the vault door still knocks him flat).' +
-        (st && st.turns > 0 ? ' (' + plural(st.turns, 'turn') + ' left)' : '');
+      return 'He appealed the last stun: stuns (sleep, freezes, banana peels...) and Charm don\'t land on him (a stun still cancels his Audit; the vault door still knocks him flat).' +
+        (st && st.turns > 0 ? ' (' + plural(st.turns, 'turn') + ' of his left)' : '');
     },
   });
 
   // ---- painters (world objects / terrain; origin at the tile centre, +y down) -------------------------------------
-  function isoDiamond(c, cx, cy, hw, hh) { c.moveTo(cx, cy - hh); c.lineTo(cx + hw, cy); c.lineTo(cx, cy + hh); c.lineTo(cx - hw, cy); c.closePath(); }
-
   /** Striped hazard border on the edges that face non-zone tiles, plus a faint painted X. */
   function drawDropZone(g, tile) {
     const c = g.ctx;
@@ -152,6 +174,34 @@
     });
     c.restore();
   }
+
+  // ---- map rotation: the office furniture turns with the board (def.yawAware: g.box / g.diamond stand on the view's
+  // ground quad). Details keep their classic yaw-0 coordinates and are moved onto the view: the very same pixels at the
+  // default view, the same spot of the same physical side (or of the top) at any other; a side facing away hides its
+  // details. Billboards near a block's middle (tags, stamps, levers, glows) stay billboards.
+  function classic() { return DD.Iso.view().legacy; }
+  /** The visible face of a block on (cx, cy, hw, hh) on physical side dir ('N' | 'E' | 'S' | 'W'), or null (facing away). */
+  function sideFace(g, dir, cx, cy, hw, hh) {
+    const fs = g.faces(cx, cy, hw, hh);
+    for (let i = 0; i < fs.length; i++) if (fs[i].dir === dir) return fs[i];
+    return null;
+  }
+  /**
+   * A point drawn at yaw 0 on a block's left ('L': its S side) or right ('R': its E side) face, put on the visible face f
+   * at the same spot (exactly [px, py] at the default view).
+   */
+  function onFace(f, side, cx, cy, hw, hh, px, py) {
+    if (classic()) return [px, py];
+    const s = (side === 'L' ? px - cx + hw : px - cx) / hw;
+    return f.at(s, cy + hh * (side === 'L' ? s : 1 - s) - py);
+  }
+  /** A point drawn at yaw 0 `h` px above the square (cx, cy, hw, hh) (on a block's top), in the current view. */
+  function onTop(g, cx, cy, hw, hh, h, px, py) {
+    if (classic()) return [px, py];
+    const a = (px - cx) / hw, b = (py + h - cy) / hh;
+    return g.on(cx, cy, hw, hh, (a + b) / 2, (b - a) / 2, h);
+  }
+  function quadPoly(c, q) { c.beginPath(); c.moveTo(q[0][0], q[0][1]); c.lineTo(q[1][0], q[1][1]); c.lineTo(q[2][0], q[2][1]); c.lineTo(q[3][0], q[3][1]); c.closePath(); }
 
   function drawLoophole(g, obj) {
     const c = g.ctx, d = obj.data || {}, t = g.t || 0;
@@ -187,25 +237,12 @@
   function drawVault(g, obj) {
     const c = g.ctx, d = obj.data || {}, t = g.t || 0;
     const down = !!d.down;
-    g.ellipse(0, 2, 22, 11, 'rgba(0,0,0,0.35)');
-    g.box(0, 0, 18, 9, 54, { top: '#7c838c', left: '#5d636b', right: '#474c53' }, true);
-    // the opening on the camera-facing (south) face, with gold inside
-    c.save();
-    c.beginPath(); c.moveTo(-15, -8); c.lineTo(-3, -2); c.lineTo(-3, -36); c.lineTo(-15, -42); c.closePath();
-    c.fillStyle = '#1c1612'; c.fill(); c.strokeStyle = '#1a1014'; c.lineWidth = 1.2; c.stroke();
-    c.clip();
-    for (let i = 0; i < 9; i++) {
-      const gx = -14 + (i % 3) * 4.2, gy = -10 - Math.floor(i / 3) * 3 + (i % 2);
-      g.ellipse(gx, gy, 2.6, 1.3, '#f0c040', 'rgba(110,70,10,0.9)');
-    }
-    g.glow(-9, -14, 12, '#ffd23f', 0.35);
-    c.restore();
-    // rivets
-    for (let i = 0; i < 4; i++) { g.circle(4 + i * 3.5, -44 + i * 1.75, 0.9, '#c9ced6'); g.circle(4 + i * 3.5, -6 + i * 1.75, 0.9, '#c9ced6'); }
-    if (!down) {
-      // the hoisted door: a fat round slab hanging from a frayed rope, over the drop zone
+    // the hoisted door: a fat round slab hanging from a frayed rope over the drop zone; it turns with the board, and is
+    // drawn behind the vault while it hangs on the far side
+    const hang = onTop(g, 0, 0, 18, 9, 50, -22, -50);
+    const door = function () {
       const sw = Math.sin(t * 1.3) * 1.5;
-      c.save(); c.translate(-22 + sw, -50);
+      c.save(); c.translate(hang[0] + sw, hang[1]);
       g.line(0, -30, 0, -11, '#8a6a3a', 2.2);
       g.line(-0.8, -24, 0.9, -22, '#c9a36a', 1);
       g.ellipse(0, 4, 14, 15, '#9aa2ab', true);
@@ -214,6 +251,37 @@
       g.circle(0, 4, 4, '#d4af37', true);
       for (let i = 0; i < 4; i++) { const an = i * TAU / 4 + t; g.line(0, 4, Math.cos(an) * 6.5, 4 + Math.sin(an) * 6.5, '#7d6420', 1.3); }
       c.restore();
+    };
+    const doorBehind = !down && hang[1] + 50 < -0.5;
+    g.ellipse(0, 2, 22, 11, 'rgba(0,0,0,0.35)');
+    if (doorBehind) door();
+    g.box(0, 0, 18, 9, 54, { top: '#7c838c', left: '#5d636b', right: '#474c53' }, true);
+    // the opening on the south face (toward the drop zone; the camera-facing left face by default), with gold inside
+    const south = sideFace(g, 'S', 0, 0, 18, 9);
+    if (south) {
+      const P = function (x, y) { return onFace(south, 'L', 0, 0, 18, 9, x, y); };
+      c.save();
+      quadPoly(c, [P(-15, -8), P(-3, -2), P(-3, -36), P(-15, -42)]);
+      c.fillStyle = '#1c1612'; c.fill(); c.strokeStyle = '#1a1014'; c.lineWidth = 1.2; c.stroke();
+      c.clip();
+      for (let i = 0; i < 9; i++) {
+        const p = P(-14 + (i % 3) * 4.2, -10 - Math.floor(i / 3) * 3 + (i % 2));
+        g.ellipse(p[0], p[1], 2.6, 1.3, '#f0c040', 'rgba(110,70,10,0.9)');
+      }
+      const gl = P(-9, -14);
+      g.glow(gl[0], gl[1], 12, '#ffd23f', 0.35);
+      c.restore();
+    }
+    // rivets on the plain steel sides
+    g.faces(0, 0, 18, 9).forEach(function (f) {
+      if (f.dir === 'S') return;
+      for (let i = 0; i < 4; i++) {
+        const a = onFace(f, 'R', 0, 0, 18, 9, 4 + i * 3.5, -44 + i * 1.75), b = onFace(f, 'R', 0, 0, 18, 9, 4 + i * 3.5, -6 + i * 1.75);
+        g.circle(a[0], a[1], 0.9, '#c9ced6'); g.circle(b[0], b[1], 0.9, '#c9ced6');
+      }
+    });
+    if (!down) {
+      if (!doorBehind) door();
     } else {
       c.save(); c.translate(8, -30); c.rotate(-0.15);
       g.rect(-9, -4, 18, 8, '#f3ecd6', true, 1);
@@ -223,46 +291,56 @@
   }
 
   function drawDesk(g) {
-    const c = g.ctx, t = g.t || 0;
+    const t = g.t || 0;
     g.ellipse(0, 2, 17, 8.5, 'rgba(0,0,0,0.3)');
     g.box(0, 0, 15, 7.5, 15, { top: '#8e5f36', left: '#6f4828', right: '#5a3a20' }, true);
-    // paper towers, a quill, a rubber stamp
-    const stack = function (x, y, n) { for (let i = 0; i < n; i++) g.box(x + (i % 2 ? 0.6 : -0.4), y - i * 2.1, 5.5, 2.7, 2.1, { top: '#f6f1e2', left: '#d9d2bd', right: '#c4bca5' }, 'rgba(60,40,30,0.6)'); };
-    stack(-6, -15, 5); stack(4, -16, 3);
-    g.line(6, -22, 10, -30 + Math.sin(t * 2) * 0.6, '#f2f2f2', 2.2);
-    g.line(6, -22, 10, -30 + Math.sin(t * 2) * 0.6, '#3a3a3a', 0.6);
-    g.rect(-1.5, -20, 3.4, 4, '#b8322a', true, 0.8);
+    // paper towers, a quill, a rubber stamp (standing on the top: they turn with the board)
+    const on = function (x, y) { return onTop(g, 0, 0, 15, 7.5, 15, x, y); };
+    const stack = function (p, n) { for (let i = 0; i < n; i++) g.box(p[0] + (i % 2 ? 0.6 : -0.4), p[1] - i * 2.1, 5.5, 2.7, 2.1, { top: '#f6f1e2', left: '#d9d2bd', right: '#c4bca5' }, 'rgba(60,40,30,0.6)'); };
+    const q = on(4, -16);
+    stack(on(-6, -15), 5); stack(q, 3);
+    g.line(q[0] + 2, q[1] - 6, q[0] + 6, q[1] - 14 + Math.sin(t * 2) * 0.6, '#f2f2f2', 2.2);
+    g.line(q[0] + 2, q[1] - 6, q[0] + 6, q[1] - 14 + Math.sin(t * 2) * 0.6, '#3a3a3a', 0.6);
+    const sp = on(0.2, -16);
+    g.rect(sp[0] - 1.7, sp[1] - 4, 3.4, 4, '#b8322a', true, 0.8);
   }
 
   function drawCabinet(g, obj) {
     const c = g.ctx;
     g.ellipse(0, 2, 14, 7, 'rgba(0,0,0,0.3)');
     g.box(0, 0, 11, 5.5, 36, { top: '#9aa0a8', left: '#7b828b', right: '#636970' }, true);
+    // drawer seams round every side; handles, the escaping paperwork (south) and the dent (east) on their own sides
+    const fs = g.faces(0, 0, 11, 5.5);
     for (let k = 1; k < 3; k++) {
       const h = k * 12;
-      g.line(-11, -h, 0, 5.5 - h, '#4e5359', 1);
-      g.line(0, 5.5 - h, 11, -h, '#4e5359', 1);
+      fs.forEach(function (f) { g.line(f.x0, f.y0 - h, f.x1, f.y1 - h, '#4e5359', 1); });
     }
-    for (let k = 0; k < 3; k++) g.rect(-6.8, 1.4 - k * 12 - 7, 3.4, 1.6, '#d4af37', null);
-    // paperwork escaping from the top drawer
-    c.save(); c.translate(-5, -31); c.rotate(-0.4);
-    g.rect(-2.5, -3, 5, 4, '#f6f1e2', 'rgba(60,40,30,0.6)');
-    c.restore();
-    if (obj && obj.maxHp > 0 && obj.hp < obj.maxHp) g.line(2, -30, 7, -22, '#2a2d31', 1.2);
+    const south = sideFace(g, 'S', 0, 0, 11, 5.5), east = sideFace(g, 'E', 0, 0, 11, 5.5);
+    if (south) {
+      for (let k = 0; k < 3; k++) { const p = onFace(south, 'L', 0, 0, 11, 5.5, -6.8, 1.4 - k * 12 - 7); g.rect(p[0], p[1], 3.4, 1.6, '#d4af37', null); }
+      const p = onFace(south, 'L', 0, 0, 11, 5.5, -5, -31);
+      c.save(); c.translate(p[0], p[1]); c.rotate(-0.4);
+      g.rect(-2.5, -3, 5, 4, '#f6f1e2', 'rgba(60,40,30,0.6)');
+      c.restore();
+    }
+    if (east && obj && obj.maxHp > 0 && obj.hp < obj.maxHp) {
+      const a = onFace(east, 'R', 0, 0, 11, 5.5, 2, -30), b = onFace(east, 'R', 0, 0, 11, 5.5, 7, -22);
+      g.line(a[0], a[1], b[0], b[1], '#2a2d31', 1.2);
+    }
   }
 
   // ---- terrain & objects ------------------------------------------------------------------------------------
   DD.registerTerrain({
     id: 'grim_dropzone', name: 'DROP ZONE', walkable: true, cost: 1, blocksLos: false,
     colors: { top: '#c9c2b4', left: '#a59e90', right: '#8d877b' },
-    desc: 'Directly under the hoisted vault door. When all three Tax Loopholes are exploited, everyone here loses all Block, takes ' + VAULT_DMG + ' damage and is Stunned (Grimble also drops all the gold he stole). Grimble works here.',
+    desc: 'Directly under the hoisted vault door. When all three Tax Loopholes are exploited, everyone here loses all Block, takes ' + VAULT_DMG + ' damage and is Stunned (Grimble for both of his next turns, and he drops all the gold he stole). Grimble works here.',
     draw: drawDropZone,
   });
 
   DD.registerObject({
-    id: 'grim_loophole', name: 'Tax Loophole', blocksMove: true, blocksLos: false, hp: 0, height: 1, color: '#c9a227',
-    desc: 'Interact (1 AP): exploit it. Exploit all three and the vault door drops on the striped DROP ZONE (everyone there: all Block lost, ' + VAULT_DMG +
-      ' damage, Stunned; Grimble is also Vulnerable and every coin he stole spills back to you). Goblin interns close exploited loopholes. After a drop they are under review for ' + REVIEW_ROUNDS + ' rounds (2 more after each later drop).',
+    id: 'grim_loophole', name: 'Tax Loophole', blocksMove: true, blocksLos: false, hp: 0, height: 1, color: '#c9a227', yawAware: true,
+    desc: 'Interact (1 AP): exploit it. All three exploited: the vault door drops on the striped DROP ZONE — everyone there loses all Block, takes ' + VAULT_DMG +
+      ' damage and is Stunned (Grimble for his next 2 turns; he is also Vulnerable and every coin he stole spills back to you). Interns close exploited loopholes. After a drop they are under review for ' + REVIEW_ROUNDS + ' rounds (+2 per later drop).',
     available: function (o) { return !(o.data && o.data.on) && !(gread().jam > 0); },
     interact: { ap: 1, label: 'Exploit Loophole', fn: function (unit, o, tile) { return exploit(unit, o, tile); } },
     autoplay: function (unit, o, tile, s) { return loopholeValue(unit, o, s); },
@@ -271,21 +349,21 @@
   });
 
   DD.registerObject({
-    id: 'grim_vault', name: 'The Vault', blocksMove: true, blocksLos: true, hp: 0, height: 2.2, color: '#7c838c', dmg: VAULT_DMG,
+    id: 'grim_vault', name: 'The Vault', blocksMove: true, blocksLos: true, hp: 0, height: 2.2, color: '#7c838c', dmg: VAULT_DMG, yawAware: true,
     desc: 'Grimble\'s vault. Its door hangs from one frayed rope above the striped DROP ZONE. Three Tax Loopholes would cut it.',
     onRoundEnd: function (o, tile, s) { tickReview(s); },
     draw: drawVault,
   });
 
   DD.registerObject({
-    id: 'grim_desk', name: 'Grimble\'s Desk', blocksMove: true, blocksLos: false, hp: 0, height: 0.7, color: '#8e5f36',
+    id: 'grim_desk', name: 'Grimble\'s Desk', blocksMove: true, blocksLos: false, hp: 0, height: 0.7, color: '#8e5f36', yawAware: true,
     desc: 'Blocks movement. The paperwork on it is load-bearing.',
     draw: drawDesk,
   });
 
   DD.registerObject({
-    id: 'grim_cabinet', name: 'Filing Cabinet', blocksMove: true, blocksLos: true, hp: 6, height: 1.2, color: '#7b828b',
-    desc: 'Blocks movement and line of sight (good cover from a Levy). 6 HP: when destroyed it releases a blizzard of receipts (smoke in radius 1 for 2 rounds).',
+    id: 'grim_cabinet', name: 'Filing Cabinet', blocksMove: true, blocksLos: true, hp: 6, height: 1.2, color: '#7b828b', yawAware: true,
+    desc: 'Blocks movement and line of sight (cover from his Levy; Red Tape and Garnish Wages need none). 6 HP: when destroyed it releases a blizzard of receipts (smoke in radius 1 for 2 rounds).',
     onDestroyed: function (o, tile) {
       DD.FX.particles(tile, { kind: 'feathers', color: '#f6f1e2', count: 16 });
       G().shape('circle', { x: tile.x, y: tile.y }, null, 1).forEach(function (p) { A().setSurface(p.x, p.y, 'smoke', 2); });
@@ -444,10 +522,11 @@
         A().log(u.name + ' is flattened by the vault door: ' + dealt + ' damage.', u.side === 'hero' ? 'enemy' : 'dmg');
         if (u.defId === 'grimble') hitBoss = true;
         if (!active(u)) return;
+        const taxman = u.defId === 'grimble';
         puzzleStun = true;
-        try { A().addStatus(u, 'stun', { turns: 1 }, src || null); } finally { puzzleStun = false; }
-        if (u.defId === 'grimble' && active(u)) {
-          A().addStatus(u, 'vulnerable', { turns: 2 }, src || null);
+        try { A().addStatus(u, 'stun', { turns: taxman ? GCFG.vaultStun || VAULT_STUN : 1 }, src || null); } finally { puzzleStun = false; }
+        if (taxman && active(u)) {
+          A().addStatus(u, 'vulnerable', { turns: 2 * (GCFG.vaultStun || VAULT_STUN) }, src || null);
           A().bark(u, 'vault');
           refund(u, 'The vault door knocks ');
         }
@@ -463,16 +542,23 @@
     relabel(s);
   }
 
-  /** An intern is about to close this loophole (standing next to it, or telegraphing Close Loophole on it). */
+  /** An intern that can stand next to loophole l on its next turn (it would close it at once). */
   function threatened(l, s) {
     return interns(s).some(function (i) {
-      return dist(i, l) === 1 || (i.intents || []).some(function (it) { return it.skillId === 'grim_refile' && it.abs && it.abs.x === l.x && it.abs.y === l.y; });
+      if (out(i)) return false;
+      if (dist(i, l) === 1) return true;
+      const mov = DD.Act.cantMove(i) ? 0 : DD.Combat.effectiveMov(i);
+      if (!mov || dist(i, l) > mov + 1) return false;
+      let near = false;
+      G().reachable(i, mov).forEach(function (e) { if (!near && dist(e, l) === 1 && !G().unitAt(e.x, e.y)) near = true; });
+      return near;
     });
   }
 
   /**
-   * AutoPlay hint: progress pulls are worth a solid attack, unless an intern is about to undo the work (then deal with
-   * the intern first); the last pull is worth what the drop hits right now.
+   * AutoPlay hint: progress pulls are worth a solid attack, unless an intern can get to an exploited loophole (this
+   * one included) on its next turn and undo the work (then deal with the intern first); the last pull is worth what
+   * the drop hits right now.
    */
   function loopholeValue(unit, o, s) {
     s = s || S();
@@ -500,8 +586,7 @@
   // ---- skills -------------------------------------------------------------------------------------------------
   function eskill(def) { def.owner = 'enemy'; def.ap = 0; def.cooldown = def.cooldown || 0; return DD.registerSkill(def); }
 
-  const GAINS_TEXT = 'He gains 1 Block per 2 gold stolen (rounded up, until his next turn) and +1 damage on all his attacks per ' + GAIN_PER + ' gold he holds (up to +' + GAIN_MAX + '). ';
-  /** Levy / Garnish Wages: hit the tracked hero, then pocket the party's gold (Block now, Ill-Gotten Gains for later). */
+  /** Levy / Garnish Wages: hit the hero, then pocket the party's gold (Block now, Ill-Gotten Gains for later). */
   function levyExecute(ctx) {
     const u = ctx.user, L = ctx.L;
     ctx.foes.forEach(function (f) {
@@ -525,8 +610,8 @@
     levels: [{ dmg: 11, gold: 10 }],
     target: { type: 'unit', range: [1, 7], los: true, filter: 'enemy' },
     desc: function (L) {
-      return 'Tracks the biggest spender in sight (the hero who has dealt the most damage): deal ' + L.dmg + ' damage and steal up to ' + L.gold + ' party gold. ' + GAINS_TEXT +
-        'Fizzles if the hero breaks line of sight or gets more than 7 tiles away.';
+      return 'Deal ' + L.dmg + ' damage to the biggest spender in sight (the hero who has dealt the most damage, up to 7 tiles away) and steal up to ' + L.gold +
+        ' party gold. He gains Block equal to half the gold stolen (rounded up).';
     },
     flavor: 'Taxes are the price of living in a dungeon.',
     execute: levyExecute,
@@ -537,8 +622,8 @@
     levels: [{ dmg: 13, gold: 15 }],
     target: { type: 'unit', range: [1, 30], los: false, filter: 'enemy' },
     desc: function (L) {
-      return 'Phase 2 Levy. Tracks the biggest spender anywhere in the office (no line of sight needed, no hiding from the taxman): deal ' + L.dmg +
-        ' damage and steal up to ' + L.gold + ' party gold. ' + GAINS_TEXT;
+      return 'Phase 2 Levy: deal ' + L.dmg + ' damage to the biggest spender anywhere in the office (no line of sight needed) and steal up to ' + L.gold +
+        ' party gold. He gains Block equal to half the gold stolen (rounded up).';
     },
     flavor: 'Death and taxes. He handles both.',
     execute: levyExecute,
@@ -546,11 +631,9 @@
 
   eskill({
     id: 'grim_redtape', name: 'Red Tape', icon: '🎀', kind: 'attack', tags: ['ranged', 'root'], anchor: 'unit',
-    levels: [{ dmg: 4, turns: 2 }],
-    target: { type: 'unit', range: [1, 7], los: true, filter: 'enemy' },
-    desc: function (L) {
-      return 'Tracks a hero: deal ' + L.dmg + ' damage and Root them for ' + L.turns + ' turns (they can still be pushed, pulled or swapped). Fizzles if the hero breaks line of sight or gets more than 7 tiles away.';
-    },
+    levels: [{ dmg: 3, turns: 1 }],
+    target: { type: 'unit', range: [1, 30], los: false, filter: 'enemy' },
+    desc: function (L) { return 'Deal ' + L.dmg + ' damage to any hero in the office (no line of sight needed) and Root them for ' + plural(L.turns, 'turn') + '.'; },
     flavor: 'Please hold. Your adventure is important to us.',
     execute: function (ctx) {
       ctx.foes.forEach(function (f) {
@@ -562,13 +645,16 @@
     },
   });
 
+  // wind-up only (DD.AI.windUp): not in his skill list, so threat shading and AutoPlay never read it as a strike now
   eskill({
-    id: 'grim_audit', name: 'Audit', icon: '📑', kind: 'attack', tags: ['aoe', 'delayed'], anchor: 'ground',
-    levels: [{ dmg: 20 }],
+    id: 'grim_audit', name: 'Audit', icon: '📑', kind: 'attack', tags: ['aoe', 'windup'], anchor: 'ground',
+    levels: [{ dmg: 18 }],
     target: { type: 'tile', range: [0, 40], los: false, filter: 'any' },
     area: { shape: 'custom', fn: function (ctx) { return ctx && ctx.target ? lane('row', ctx.target.y) : []; } },
-    desc: function (L) { return 'After the countdown, deal ' + L.dmg + ' damage to every hero in the marked row or column. Itemized, notarized, inevitable.'; },
+    desc: function (L) { return 'Wind-up (lands one round later): deal ' + L.dmg + ' damage to every hero in the marked row or column.'; },
     flavor: 'Form 27-B, in triplicate, at terminal velocity.',
+    // Ill-Gotten Gains don't apply to the Audit: cancel the status flat the engine adds to wind-up numbers
+    telegraphFlat: function (unit) { return -gainsNow(unit); },
     execute: function (ctx) {
       const u = ctx.user, L = ctx.L;
       DD.FX.sound('arrow');
@@ -578,11 +664,12 @@
     },
   });
 
+  // cooldown 1: never two of his turns in a row (melee heroes can stay on him between stamps)
   eskill({
-    id: 'grim_stamp', name: 'Rubber Stamp of Denial', icon: '🔨', kind: 'attack', tags: ['melee', 'push'], anchor: 'self',
-    levels: [{ dmg: 14, push: 2 }],
+    id: 'grim_stamp', name: 'Rubber Stamp of Denial', icon: '🔨', kind: 'attack', tags: ['melee', 'push'], anchor: 'self', cooldown: 1,
+    levels: [{ dmg: 11, push: 2 }],
     target: { type: 'self' }, area: { shape: 'adjacent' },
-    desc: function (L) { return 'Slam the stamp down: deal ' + L.dmg + ' damage to every hero on the 4 adjacent tiles and push them ' + L.push + ' tiles away. DENIED.'; },
+    desc: function (L) { return 'Deal ' + L.dmg + ' damage to every hero on the 4 tiles next to him and push them ' + L.push + ' tiles away.'; },
     flavor: 'Request: denied. Appeal: denied. Face: stamped.',
     execute: function (ctx) {
       const u = ctx.user, L = ctx.L;
@@ -599,7 +686,7 @@
 
   eskill({
     id: 'grim_hire', name: 'Hire Intern', icon: '📋', kind: 'summon', tags: ['summon'], anchor: 'self',
-    levels: [{ n: 1, cap: 2 }, { n: 2, cap: 3, haste: true }],
+    levels: [{ n: 1, cap: 3 }, { n: 2, cap: 4, haste: true }],
     target: { type: 'self' },
     desc: function (L) {
       return 'Hire ' + L.n + ' Goblin Intern' + (L.n === 1 ? '' : 's') + (L.haste ? ' who arrive Hasted' : '') +
@@ -614,8 +701,8 @@
     id: 'grim_papercut', name: 'Paper Cut', icon: '📄', kind: 'attack', tags: ['melee'], anchor: 'self',
     levels: [{ dmg: 4, bleed: 1 }],
     target: { type: 'unit', range: [1, 1], filter: 'enemy' },
-    desc: function (L) { return 'Deal ' + L.dmg + ' damage to the adjacent tile and Bleed ' + L.bleed + '. The worst kind of cut.'; },
-    flavor: 'Weaponized stationery.',
+    desc: function (L) { return 'Deal ' + L.dmg + ' damage to an adjacent hero and Bleed ' + L.bleed + '.'; },
+    flavor: 'Weaponized stationery. The worst kind of cut.',
     execute: function (ctx) {
       if (ctx.target) DD.FX.lunge(ctx.user, ctx.target);
       ctx.foes.forEach(function (f) {
@@ -629,7 +716,7 @@
     id: 'grim_refile', name: 'Close Loophole', icon: '🗂️', kind: 'utility', tags: ['puzzle'], anchor: 'ground',
     levels: [{ n: 1 }],
     target: { type: 'tile', range: [1, 1], filter: 'object', los: false },
-    desc: function () { return 'Close the marked exploited Tax Loophole. Only works if the intern is still standing next to it.'; },
+    desc: function () { return 'Close an adjacent exploited Tax Loophole.'; },
     flavor: '"Is this for credit?"',
     aiScore: function () { return 0; },
     execute: function (ctx) {
@@ -637,11 +724,7 @@
       const t = p ? G().tile(p.x, p.y) : null;
       const o = t && t.obj;
       if (!o || o.id !== 'grim_loophole' || !o.data || !o.data.on) { DD.FX.text(u, 'Nothing to file.', { color: '#d0d0d0', size: 13 }); return; }
-      if (dist(u, p) !== 1) {
-        DD.FX.text(u, 'Can\'t reach the paperwork!', { color: '#d0d0d0', size: 13 });
-        A().log(u.name + ' can\'t reach the ' + o.data.name + ' loophole any more.', 'enemy');
-        return;
-      }
+      if (dist(u, p) !== 1) { DD.FX.text(u, 'Can\'t reach the paperwork!', { color: '#d0d0d0', size: 13 }); return; }
       o.data.on = false;
       gdata().refiles++;
       relabel();
@@ -659,8 +742,8 @@
     if (!s || !boss) return [];
     const room = Math.max(0, cap - interns(s).length);
     const want = Math.min(n, room);
-    const out = [];
-    if (want <= 0) { DD.FX.text(boss, 'Hiring freeze!', { color: '#d0d0d0', size: 14 }); return out; }
+    const hired = [];
+    if (want <= 0) { DD.FX.text(boss, 'Hiring freeze!', { color: '#d0d0d0', size: 14 }); return hired; }
     const doors = tilesWhere(s, function (t) { return t.tag === 'grim_door'; }).filter(function (t) { return G().isFree(t.x, t.y) && !G().isDrop(t.x, t.y); });
     const near = G().emptyTilesNear(boss.x, boss.y, 3).filter(function (p) { return !G().isDrop(p.x, p.y) && !inZone(p); });
     const spots = doors.map(function (t) { return { x: t.x, y: t.y }; }).concat(near);
@@ -672,19 +755,16 @@
       if (haste) A().addStatus(u, 'haste', { turns: 2 }, boss);
       A().log('Grimble hires ' + u.name + '. Unpaid. "For the exposure."', 'enemy');
       A().maybeBark(u, 'spawn', 0.6);
-      out.push(u);
+      hired.push(u);
     }
-    return out;
+    return hired;
   }
 
-  /** The exploited loophole this intern should go and close (nearest, not already claimed by another intern). */
+  /** The exploited loophole this intern goes and closes: the nearest one no other intern has claimed (unit.data.claim). */
   function claimLoophole(unit, s) {
     if (gread(s).jam > 0) return null;
     const claimed = {};
-    interns(s).forEach(function (o) {
-      if (o === unit) return;
-      (o.intents || []).forEach(function (it) { if (it.skillId === 'grim_refile' && it.abs) claimed[it.abs.x + ',' + it.abs.y] = 1; });
-    });
+    interns(s).forEach(function (o) { if (o !== unit && o.data && o.data.claim) claimed[o.data.claim] = 1; });
     let best = null, bd = Infinity;
     loopholes(s).forEach(function (l) {
       if (!l.obj.data.on || claimed[l.x + ',' + l.y]) return;
@@ -694,35 +774,38 @@
     return best;
   }
 
+  /** Intern turn: walk to an exploited loophole and close it (at once if it gets next to it); otherwise a plain turn. */
   function internPlan(unit, api) {
     const s = api.state;
     const lever = claimLoophole(unit, s);
-    if (lever && api.canUse(unit, 'grim_refile')) {
-      if (api.dist(unit, lever) !== 1) {
-        let best = null, bestSc = Infinity;
-        api.reachable(unit).forEach(function (e) {
-          const sc = dist(e, lever) * 10 + e.cost * 0.1 + (e.hazard ? 6 : 0);
-          if (sc < bestSc) { bestSc = sc; best = e; }
-        });
-        if (best && dist(best, lever) < api.dist(unit, lever)) api.moveTo(unit, best.x, best.y);
-      }
-      if (active(unit) && api.dist(unit, lever) === 1) {
-        api.addIntent(unit, 'grim_refile', { x: lever.x, y: lever.y }, { anchor: 'ground', label: 'Close Loophole' });
-        return;
-      }
-      // still on the way: poke anyone in the way
-      const hit = api.bestAttack(unit, { skills: ['grim_papercut'], noMove: true });
-      if (hit) api.addIntent(unit, 'grim_papercut', hit.target, {});
+    unit.data.claim = lever ? lever.x + ',' + lever.y : null;
+    if (!lever) { api.defaultTurn(unit); return; }
+    if (api.dist(unit, lever) !== 1) {
+      let best = null, bestSc = Infinity;
+      api.reachable(unit).forEach(function (e) {
+        const aoo = api.aooCost(unit, e);
+        if (aoo === Infinity || G().unitAt(e.x, e.y)) return;
+        const sc = dist(e, lever) * 10 + e.cost * 0.1 + (e.hazard ? 6 : 0) + aoo;
+        if (sc < bestSc) { bestSc = sc; best = e; }
+      });
+      if (best && dist(best, lever) < api.dist(unit, lever)) api.moveTo(unit, best.x, best.y);
+    }
+    if (out(unit)) return;
+    if (api.dist(unit, lever) === 1) {
+      api.act(unit, 'grim_refile', { x: lever.x, y: lever.y }, {});
+      unit.data.claim = null;
       return;
     }
-    api.defaultPlan(unit);
+    // still on the way: poke whoever is next to it
+    const hit = api.bestAttack(unit, { skills: ['grim_papercut'], noMove: true });
+    if (hit) api.act(unit, 'grim_papercut', hit.target, {});
   }
 
-  // ---- Grimble's planner ----------------------------------------------------------------------------------------
+  // ---- Grimble's planner (v2: walk, ONE action, then wind up the next Audit) ---------------------------------
   function lane(kind, idx) {
     const s = S();
-    const out = [];
-    if (!s || !s.grid) return out;
+    const res = [];
+    if (!s || !s.grid) return res;
     const n = kind === 'row' ? s.grid.w : s.grid.h;
     for (let i = 0; i < n; i++) {
       const x = kind === 'row' ? i : idx, y = kind === 'row' ? idx : i;
@@ -730,14 +813,14 @@
       if (!t) continue;
       const td = G().terrain(t);
       if (td.walkable === false && !td.pit && !td.liquid) continue;
-      out.push({ x: x, y: y });
+      res.push({ x: x, y: y });
     }
-    return out;
+    return res;
   }
   function laneKey(kind, idx) { return kind + ':' + idx; }
   function pendingAudits(unit) { return (unit.intents || []).filter(function (it) { return it.skillId === 'grim_audit'; }); }
 
-  /** The best rows/columns to audit: most heroes caught (healthy ones count a little more). */
+  /** The best rows/columns to audit: most heroes caught (healthy ones count a little more, a rooted one a lot more). */
   function bestLanes(unit, foes, count) {
     const taken = {};
     pendingAudits(unit).forEach(function (it) { if (it.data && it.data.lane) taken[it.data.lane] = 1; });
@@ -761,23 +844,49 @@
     return [row, col].filter(Boolean).slice(0, count);
   }
 
-  /** New audits this round: 1 lane (phase 1) or a row + a column (phase 2); at most 2 / 4 lanes on the board. */
+  /** How many turns a round he takes (his initiative entries; the def's turnsPerRound before initiative). */
+  function turnsPerRound(unit) {
+    const s = S();
+    const n = s && s.order ? s.order.filter(function (e) { return e.unitId === unit.id; }).length : 0;
+    return Math.max(1, n || Math.round(+(DD.getEnemy(unit.defId) || {}).turnsPerRound || 1));
+  }
+  /**
+   * A wind-up that lands ONE ROUND later, at the start of this same turn of his (his other turn of the round counts it
+   * down): every unit in the order, so every hero, gets exactly one turn first. The engine's hero-window rule
+   * (ai.js heroWindow) is switched off for it (window 0): it would add a second round when his two turns are back to
+   * back, and the round already gives everyone their turn.
+   */
+  function windUpRound(api, unit, skillId, target, opts) {
+    opts = Object.assign({ turns: turnsPerRound(unit), noCooldown: true }, opts);
+    opts.data = Object.assign({ oneRound: true }, opts.data);
+    const it = api.windUp(unit, skillId, target, opts);
+    if (it) it.window = 0;
+    return it;
+  }
+  /** Turn start (before due wind-ups resolve): his one-round wind-ups ignore the hero window (see windUpRound). */
+  function openWindow(unit) { (unit.intents || []).forEach(function (it) { if (it.data && it.data.oneRound) it.window = 0; }); }
+
+  /** Wind up an Audit when none is pending: one lane through the heroes (phase 2: a crossing row + column). */
   function planAudits(unit, api, foes) {
-    const d = unit.data;
-    const per = d.phase === 2 ? 2 : 1;
-    const room = per * 2 - pendingAudits(unit).length;
-    if (room <= 0) return false;
-    const lanes = bestLanes(unit, foes, Math.min(room, per));
-    if (!lanes.length) return false;
-    lanes.forEach(function (l) {
-      api.addIntent(unit, 'grim_audit', l.anchor, { anchor: 'ground', tiles: lane(l.kind, l.idx), delay: 1, label: l.kind === 'row' ? 'Audit (row)' : 'Audit (column)', data: { lane: l.key }, noCooldown: true });
+    if (pendingAudits(unit).length || !foes.length) return 0;
+    const per = unit.data.phase === 2 ? 2 : 1;
+    const lanes = bestLanes(unit, foes, per);
+    lanes.forEach(function (l, i) {
+      windUpRound(api, unit, 'grim_audit', l.anchor, { tiles: lane(l.kind, l.idx), label: l.kind === 'row' ? 'Audit (row)' : 'Audit (column)', data: { lane: l.key },
+        banner: i === 0 ? (per > 1 ? 'Grimble audits a row AND a column!' : 'Grimble audits a ' + (l.kind === 'row' ? 'row' : 'column') + '!') : false });
     });
-    return true;
+    return lanes.length;
+  }
+  /** Lanes (rows / columns) of the Audits he has pending. */
+  function auditLanes(unit) {
+    const res = {};
+    pendingAudits(unit).forEach(function (it) { if (it.data && it.data.lane) res[it.data.lane] = 1; });
+    return res;
   }
 
   /** Damage a unit has dealt this fight (the fight's own stats). */
   function spent(u) { const s = S(); const st = s && s.stats && s.stats.units && s.stats.units[u.id]; return st ? st.dmg || 0 : 0; }
-  /** Levy audits the biggest spender in sight: the hero who has dealt the most damage this fight (ties: the most hurt). */
+  /** The biggest spender in reach of skillId from `from`: the hero who has dealt the most damage (ties: the most hurt). */
   function levyTarget(unit, from, foes, skillId) {
     const tg = (DD.getSkill(skillId || 'grim_levy') || {}).target || {};
     const rg = tg.range || [1, 7];
@@ -791,85 +900,131 @@
     });
     return best;
   }
+  function levyId(unit) { return unit.data.phase === 2 ? 'grim_garnish' : 'grim_levy'; }
 
-  /** atDesk: stay in (or walk back to) the DROP ZONE; otherwise (phase 2) go and stamp somebody. */
-  function positionGrimble(unit, api, atDesk, foes) {
+  /** His next docket step (the inspect panel names it). */
+  function nextStep(unit) {
+    const pat = docketOf((unit && unit.data && unit.data.phase) || 1);
+    return pat[((unit && unit.data && unit.data.step) || 0) % pat.length];
+  }
+  function stepName(step, phase) {
+    if (step === 'levy') return phase === 2 ? 'Garnish Wages' : 'Levy';
+    if (step === 'hire') return phase === 2 ? 'Hire Interns' : 'Hire Intern';
+    return step === 'tape' ? 'Red Tape' : step === 'stamp' ? 'Rubber Stamp' : String(step);
+  }
+  function stampSlot(unit) { return DD.Combat.slotsOf(unit).filter(function (sl) { return sl.id === 'grim_stamp'; })[0] || null; }
+  function stampReady(unit) { const sl = stampSlot(unit); return !!sl && !(sl.cd > 0); }
+
+  /**
+   * Where he stands this turn. atDesk: in (or back to) the DROP ZONE; otherwise (phase 2, Stamp ready) he goes and
+   * stamps somebody. Walks are priced with the attacks of opportunity they provoke.
+   */
+  function positionGrimble(unit, api, atDesk, foes, step, stamp) {
     const zone = zoneTiles(api.state);
-    const roam = !atDesk;
     const homebound = zone.length > 0 && atDesk;
-    const opts = [{ x: unit.x, y: unit.y, cost: 0, path: [] }];
+    const opts = [{ x: unit.x, y: unit.y, cost: 0, path: [], here: true }];
     api.reachable(unit).forEach(function (e) { opts.push(e); });
+    const shot = step === 'tape' ? 'grim_redtape' : levyId(unit);
     let best = null, bestSc = -Infinity;
     opts.forEach(function (p) {
-      let sc = 0;
       const risk = DD.AI.pathRisk ? DD.AI.pathRisk(unit, p) : { lethal: false, penalty: 0 };
       if (risk.lethal) return;
-      sc -= risk.penalty;
+      const aoo = p.here ? 0 : api.aooCost(unit, p);
+      if (aoo === Infinity) return;
+      let sc = -risk.penalty - aoo - (p.cost || 0) * 0.1;
       if (homebound && !inZone(p)) sc -= 100 + nearestDist(p, zone) * 5;
       const adj = foes.filter(function (f) { return dist(f, p) === 1; }).length;
       const near = nearestDist(p, foes);
-      if (roam) sc += adj ? 14 : -near * 2;
-      else if (zone.length) sc += adj ? 4 : 0;
-      else sc += adj ? 4 : near < 3 ? -(3 - near) * 3 : -(near - 3) * 0.3;
-      if (levyTarget(unit, p, foes)) sc += 6;
-      sc -= (p.cost || 0) * 0.1;
+      // next to heroes only when the Stamp is ready (otherwise a little room to work)
+      if (!atDesk) sc += adj ? 14 + adj * 2 : -near * 2;
+      else if (zone.length) sc += stamp ? (adj ? 4 : 0) : -adj * 2;
+      else sc += stamp && adj ? 4 : near < 3 ? -(3 - near) * 3 : -(near - 3) * 0.3;
+      if (step !== 'hire' && levyTarget(unit, p, foes, shot)) sc += 6;
       if (sc > bestSc) { bestSc = sc; best = p; }
     });
-    if (best && (best.x !== unit.x || best.y !== unit.y)) api.moveTo(unit, best.x, best.y);
+    if (best && !best.here) api.moveTo(unit, best.x, best.y);
   }
 
-  function hostileTakeover(unit) {
+  /**
+   * One docket step now ('levy' / 'tape' / 'hire'). The Levy needs a hero in sight (hide behind a cabinet and that step
+   * is wasted: cover is the counterplay; the fiscal-quarter takeover keeps that from stalling the fight); Red Tape
+   * reaches anyone (if everyone is already Rooted he levies instead); a hiring step with a full payroll levies (else
+   * tapes). He never hires just because he can't see anyone.
+   */
+  function docketStep(unit, api, step) {
+    const order = { levy: ['levy'], tape: ['tape', 'levy'], hire: ['hire', 'levy', 'tape'] }[step] || ['levy'];
+    for (let i = 0; i < order.length; i++) {
+      const foes = api.foes(unit);
+      const k = order[i];
+      if (k === 'levy') {
+        const id = levyId(unit);
+        const tgt = levyTarget(unit, unit, foes, id);
+        if (tgt && api.act(unit, id, tgt, { noCooldown: true })) return k;
+      } else if (k === 'tape') {
+        // Red Tape goes for a hero standing in a pending Audit lane (rooted, they can't walk out of it)
+        const lanes = auditLanes(unit);
+        const free = foes.filter(function (f) { return !DD.Act.hasStatus(f, 'root'); });
+        const stuck = free.filter(function (f) { return lanes[laneKey('row', f.y)] || lanes[laneKey('col', f.x)]; });
+        const tgt = levyTarget(unit, unit, stuck, 'grim_redtape') || levyTarget(unit, unit, free, 'grim_redtape');
+        if (tgt && api.act(unit, 'grim_redtape', tgt, { noCooldown: true })) return k;
+      } else if (k === 'hire') {
+        const sl = api.slot(unit, 'grim_hire');
+        const H = sl ? DD.skillLevel(DD.getSkill('grim_hire'), sl.level) : null;
+        if (H && interns(api.state).length < H.cap && api.act(unit, 'grim_hire', unit, { noCooldown: true })) return k;
+      }
+    }
+    return null;
+  }
+
+  /** Phase 2. quarterEnd: it came from the round count (the fiscal quarter ended), not from his HP. */
+  function hostileTakeover(unit, quarterEnd) {
     const d = unit.data;
     d.phase = 2;
-    d.patIdx = 0;
-    // phase 2 hiring numbers live in level 2 of Hire Intern (telegraph, desc and execution all read the slot level);
-    // the Levy becomes Garnish Wages (its own skill: no line of sight needed)
-    DD.Combat.slotsOf(unit).forEach(function (sl) { if (sl.id === 'grim_hire') sl.level = 2; });
+    d.step = 0;
+    // phase 2 hiring numbers live in level 2 of Hire Intern (desc and execution read the slot level); the Levy slot
+    // becomes Garnish Wages (its own skill: no line of sight needed)
+    DD.Combat.slotsOf(unit).forEach(function (sl) {
+      if (sl.id === 'grim_hire') sl.level = 2;
+      if (sl.id === 'grim_levy') { sl.id = 'grim_garnish'; sl.level = 1; }
+    });
+    unit.mov = (unit.mov || 0) + PHASE2_MOV;
     A().addStatus(unit, 'grim_takeover', { turns: -1, silent: true }, unit);
-    DD.FX.banner('HOSTILE TAKEOVER', { sub: 'Double audits. Faster interns. Grimble leaves his desk.', color: '#7fd36b', ms: 1200 });
+    DD.FX.banner('HOSTILE TAKEOVER', { sub: (quarterEnd ? 'The fiscal quarter is over! ' : '') + 'Double audits. Faster interns. Grimble leaves his desk.', color: '#7fd36b', ms: 1200 });
     DD.FX.particles(unit, { kind: 'coins', count: 18 });
-    A().log('Grimble initiates a HOSTILE TAKEOVER: double audits, faster interns, and he is coming out from behind the desk!', 'enemy');
+    A().log((quarterEnd ? 'The fiscal quarter ends. ' : '') + 'Grimble initiates a HOSTILE TAKEOVER: double audits, faster interns, and he is coming out from behind the desk!', 'enemy');
     A().narrate('grim_takeover', { enemy: unit.name });
     A().bark(unit, 'phase');
-    hireInterns(unit, 2, 3, true);
+    hireInterns(unit, 2, 4, true);
   }
 
+  /**
+   * His turn: walk (phase 1: never out of the DROP ZONE), then ONE action — the Rubber Stamp if a hero stands next to
+   * him and it is ready (cooldown 1: not two turns in a row), else the next docket step (Levy, Red Tape, Levy, Hire
+   * Intern; phase 2: Garnish Wages, Hire, Garnish, Red Tape; a Stamp turn keeps the docket where it is) — then wind up
+   * the next Audit if none is pending.
+   */
   function grimblePlan(unit, api) {
     const d = unit.data;
     if (!d.phase) d.phase = 1;
-    if (d.phase === 1 && unit.hp <= unit.maxHp * PHASE2_AT) hostileTakeover(unit);
+    if (d.phase === 1 && unit.hp <= unit.maxHp * PHASE2_AT) hostileTakeover(unit, false);
+    else if (d.phase === 1 && api.round >= (GCFG.quarterEnd || QUARTER_END)) hostileTakeover(unit, true);
     if (!active(unit)) return;
+    if (!api.foes(unit).length) return;
+    const step = nextStep(unit);
+    const stamp = stampReady(unit);
+    // phase 2: out from behind the desk to stamp somebody when the Stamp is ready, back to the desk otherwise
+    positionGrimble(unit, api, d.phase === 1 || step === 'hire' || !stamp, api.foes(unit), step, stamp);
+    if (out(unit)) return;
     const foes = api.foes(unit);
-    if (!foes.length) return;
-    const pat = d.phase === 2 ? P2 : P1;
-    const act = pat[(d.patIdx || 0) % pat.length];
-    d.patIdx = (d.patIdx || 0) + 1;
-    d.lastAct = act;
-    // phase 1 he never leaves his desk; phase 2 he goes stamping, but files every hiring form from his desk
-    positionGrimble(unit, api, d.phase === 1 || act === 'hire', foes);
-    if (!active(unit)) return;
-    // Rubber Stamp shockwave on all 4 adjacent tiles (anchored to Grimble: push him and it moves with him)
-    if (foes.some(function (f) { return dist(f, unit) === 1; })) api.addIntent(unit, 'grim_stamp', unit, { noCooldown: true });
-    // the tax never sleeps: Levy the biggest spender in sight every round (phase 2: Garnish Wages, anywhere)
-    const levy = d.phase === 2 ? 'grim_garnish' : 'grim_levy';
-    const tgt = levyTarget(unit, unit, foes, levy);
-    // a fresh Audit every round (capped; it loves a hero stuck in Red Tape)
-    planAudits(unit, api, foes);
-    // then alternate: Red Tape on another spender / hire interns
-    if (act === 'tape') {
-      const others = foes.filter(function (f) { return f !== tgt && !DD.Act.hasStatus(f, 'root'); });
-      const tape = levyTarget(unit, unit, others, 'grim_redtape') || levyTarget(unit, unit, foes.filter(function (f) { return !DD.Act.hasStatus(f, 'root'); }), 'grim_redtape');
-      if (tape) api.addIntent(unit, 'grim_redtape', tape, { noCooldown: true });
-    } else {
-      const hire = api.slot(unit, 'grim_hire');
-      const H = hire ? DD.skillLevel(DD.getSkill('grim_hire'), hire.level) : null;
-      if (H && interns(api.state).length < H.cap) {
-        api.addIntent(unit, 'grim_hire', unit, { tiles: [], noCooldown: true, label: H.n > 1 ? 'Hire Interns' : 'Hire Intern' });
-      }
+    d.lastAct = null;
+    if (stamp && foes.some(function (f) { return dist(f, unit) === 1; }) && api.act(unit, 'grim_stamp', unit, {})) d.lastAct = 'stamp';
+    else {
+      d.step = (d.step || 0) + 1;
+      d.lastStep = step;
+      d.lastAct = docketStep(unit, api, step);
     }
-    // the Levy goes last: the gold it pockets raises Ill-Gotten Gains, so every attack before it hits for exactly what
-    // its telegraph says (a Red Tape after the Levy used to hit 1 harder than shown)
-    if (tgt) api.addIntent(unit, levy, tgt, { noCooldown: true });
+    if (out(unit)) return;
+    planAudits(unit, api, api.foes(unit));
   }
 
   // ---- enemies ----------------------------------------------------------------------------------------------------
@@ -897,7 +1052,7 @@
 
   DD.registerEnemy({
     id: 'grim_intern', name: 'Goblin Intern', act: 1, tier: 'minion',
-    hp: 6, mov: 4, armor: 0, tags: ['goblin', 'intern'],
+    hp: 7, mov: 4, armor: 0, tags: ['goblin', 'intern'],
     flags: {}, resist: {},
     sprite: {
       base: 'humanoid', scale: 0.78, build: 'tiny', outfit: 'tunic',
@@ -907,19 +1062,20 @@
       overlay: internOverlay,
     },
     skills: ['grim_papercut', 'grim_refile'],
-    ai: internPlan, xp: 1, gold: [0, 1],
+    ai: internPlan, aiStyle: 'melee', xp: 1, gold: [0, 1],
+    passive: { name: 'Eager to Please', icon: '🗂️', desc: 'On its turn it walks over to an exploited Tax Loophole and closes it the moment it stands next to one; otherwise it paper-cuts the nearest hero.' },
     barks: {
       spawn: ['Is this for credit?', 'I\'m learning SO much!', 'Day one! Where\'s the coffee?', 'My mom says this is a real job.'],
       attack: ['Per my last email!', 'Paper cut! Sorry! Not sorry!', 'Synergy!'],
       hurt: ['Is this covered by insurance?', 'HR! HR!!', 'Ow, my career!'],
       death: ['Tell my mom... it was unpaid...', 'Can I put this on my resume?', 'I quit!'],
     },
-    desc: 'An unpaid goblin intern. Walks over to close exploited Tax Loopholes; kill, stun or shove it away first. Paid in exposure, and exposure kills.',
+    desc: 'An unpaid goblin intern. Walks over to close exploited Tax Loopholes; kill it, stun it or shove it away first. Paid in exposure, and exposure kills.',
   });
 
   const GRIMBLE_DEF = DD.registerEnemy({
     id: 'grimble', name: 'Grimble', act: 1, tier: 'boss',
-    hp: 150, mov: 3, armor: 0, tags: ['goblin', 'boss', 'bureaucrat'],
+    hp: 160, mov: 1, armor: 0, init: 2, turnsPerRound: 2, tags: ['goblin', 'boss', 'bureaucrat'],
     flags: { large: true }, resist: { fire: 1.25 },
     sprite: {
       base: 'humanoid', scale: 1.9, build: 'stocky', outfit: 'coat',
@@ -929,18 +1085,33 @@
       aura: { kind: 'sparkles', color: '#ffd23f' },
       overlay: grimbleOverlay,
     },
-    skills: ['grim_levy', 'grim_garnish', 'grim_audit', 'grim_stamp', 'grim_hire', 'grim_redtape'],
-    ai: grimblePlan, xp: 40, gold: [30, 40],
+    skills: ['grim_levy', 'grim_stamp', 'grim_redtape', 'grim_hire'],
+    ai: grimblePlan, aiStyle: 'ranged', xp: 40, gold: [30, 40],
+    passive: {
+      name: 'Double Shift', icon: '⏳',
+      desc: function (u) {
+        const ph = u && u.data && u.data.phase === 2 ? 2 : 1;
+        const AU = DD.skillLevel(DD.getSkill('grim_audit'), 1);
+        const doc = docketOf(ph).map(function (k) { return stepName(k, ph); }).join(', ');
+        return 'Two turns a round. Each turn: a Rubber Stamp if a hero is next to him (never two turns in a row), otherwise his docket: ' + doc +
+          (u && u.data ? ' (next: ' + stepName(nextStep(u), ph) + ')' : '') + '. He keeps an Audit wound up: ' + AU.dmg + ' damage to every hero in ' +
+          (ph === 2 ? 'a row and a column' : 'a row or column') + ', landing one round later (a stun cancels it). ' +
+          (ph === 2 ? 'He leaves his desk to stamp people and walks back to hire.' : 'He never leaves the DROP ZONE (until Hostile Takeover: half HP, or round ' + (GCFG.quarterEnd || QUARTER_END) + ' when the fiscal quarter ends).');
+      },
+    },
     hooks: {
       onCombatStart: function (u) { if (!u.data.phase) u.data.phase = 1; u.data.stolen = u.data.stolen || 0; },
-      // stun guard: after a stun (or charm) he can't be stunned or charmed again until the end of next round
+      onTurnStart: function (u) { openWindow(u); },
+      // stun guard: after a stun (or sleep / freeze / charm) none of them lands for his next GUARD_TURNS turns, but a
+      // stun-like still interrupts his pending Audit
       modifyStatus: function (m) {
-        if (!GUARDED[m.id] || puzzleStun || !m.unit || !DD.Act.hasStatus(m.unit, 'grim_appeal')) return;
+        if (!guarded(m.id) || puzzleStun || !m.unit || !DD.Act.hasStatus(m.unit, 'grim_appeal')) return;
         m.cancel = true;
-        DD.FX.text(m.unit, '📎 Appeal pending: no effect', { color: '#e8d9a8', size: 13 });
+        const cut = stunLike(m.id) && (m.unit.intents || []).length ? DD.AI.cancelIntents(m.unit, 'Objection! Audit called off') : 0;
+        if (!cut) DD.FX.text(m.unit, '📎 Appeal pending: no effect', { color: '#e8d9a8', size: 13 });
       },
       onStatusApplied: function (u, st) {
-        if (st && GUARDED[st.id] && active(u)) A().addStatus(u, 'grim_appeal', { turns: st.fresh ? 3 : 2, silent: true }, u);
+        if (st && guarded(st.id) && active(u)) A().addStatus(u, 'grim_appeal', { turns: GCFG.guard || GUARD_TURNS, silent: true }, u);
       },
       onDeath: function (u) {
         const n = refund(u, 'His ledger bursts open: ');
@@ -955,7 +1126,7 @@
       phase: ['HOSTILE TAKEOVER!', 'I\'m restructuring. YOU are the cuts!', 'Interns! Overtime! Unpaid!'],
       vault: ['MY VAULT!', 'That loophole was... technically legal...', 'Ow. Deductible, though.'],
     },
-    desc: 'Steals your gold (Block now, extra damage while he holds it), Audits whole rows and columns, hires interns; below half HP he Garnishes Wages through walls. Weak to fire (paperwork). Appeals every stun (no second stun next round). Word is his vault door hangs by a thread: three Tax Loopholes and one frayed rope.',
+    desc: 'Works double shifts (two turns a round). Steals your gold (Block now, extra damage while he holds it), ties you up in Red Tape, winds up Audits down whole rows and columns, hires interns and stamps anyone who crowds his desk; below half HP (or once the fiscal quarter ends, round 10) he Garnishes Wages through walls. Weak to fire (paperwork). Appeals every stun (no second one for a while, though a stun always cancels his Audit). Word is his vault door hangs by a thread: three Tax Loopholes and one frayed rope.',
     boss: { title: 'The Goblin Tax Collector', intro: 'Grimble adjusts his visor. "Under the Goblin Revenue Code, all loot is taxable. All of it."', music: null },
   });
 
@@ -1013,7 +1184,7 @@
     intro: 'Behind a mountain of paperwork, a goblin in an accountant\'s visor looks up. "You\'re late. And you owe."',
     weight: 1, minDepth: 0,
     map: { theme: 'cellar', layout: LAYOUT, heights: HEIGHTS, legend: LEGEND },
-    enemies: [{ id: 'grimble', n: 1 }],
+    enemies: [{ id: 'grimble', n: 1 }, { id: 'grim_intern', n: 2, mark: 'grim_door' }],
     objective: { type: 'boss' },
     reward: { goldMult: 1, itemRarity: 'legendary' },
     onStart: function (s) {
@@ -1052,6 +1223,8 @@
 
   // test hooks (read-only helpers for tests/content/bosses_act1.js)
   DD.GrimbleBoss = { def: GRIMBLE_DEF, zoneTiles: zoneTiles, loopholes: loopholes, vaultTile: vaultTile, lane: lane, data: gread, dropVault: dropVault,
+    threatened: threatened, levyTarget: levyTarget,
     fx: { door: drawFallingDoor, paper: drawPaperRain },
-    VAULT_DMG: VAULT_DMG, GAIN_PER: GAIN_PER, GAIN_MAX: GAIN_MAX, REVIEW_ROUNDS: REVIEW_ROUNDS, reviewRounds: reviewRounds, PHASE2_AT: PHASE2_AT, P1: P1.slice(), P2: P2.slice(), cfg: GCFG };
+    VAULT_DMG: VAULT_DMG, GAIN_PER: GAIN_PER, GAIN_MAX: GAIN_MAX, REVIEW_ROUNDS: REVIEW_ROUNDS, reviewRounds: reviewRounds, PHASE2_AT: PHASE2_AT, QUARTER_END: QUARTER_END, PHASE2_MOV: PHASE2_MOV,
+    GUARD_TURNS: GUARD_TURNS, P1: P1.slice(), P2: P2.slice(), cfg: GCFG };
 })();

@@ -1,12 +1,15 @@
 /* Dungeons and Degenerates — js/data/items.js
- * The shared item pool (ARCHITECTURE §3.4, DESIGN §7): 49 items with no hero restriction — 16 weapons (damage
- * riders), 16 armor (HP / armor / Block / retaliation / resistances / second winds) and 17 trinkets (Hype, gold,
- * summons, surfaces, wild magic, AP tricks, consumable synergy): 18 common, 16 rare, 7 legendary, 8 cursed.
- * Numbers the engine applies live in `stats` (hp ap mov armor dmg heal range block hype); the rest are §5.3 hooks.
- * Item hooks get the item def as their LAST argument; per-fight state lives on unit.data['item_<id>'] (previews and
- * the deployment snapshot copy it, so dry runs never leak). "Skill" riders ignore consumables, status ticks, bumps,
- * explosions and reflected damage. Also registers Steve the Torchbearer (summon steve_torchbearer + 2 skills) for
- * the Hireling Contract, and the DD.Items helpers (docs/notes/items.md).
+ * The shared item pool (ARCHITECTURE §3.4, DESIGN §7): 50 items with no hero restriction — 17 weapons (damage
+ * riders, attacks of opportunity), 16 armor (HP / armor / retaliation / resistances / second winds) and 17 trinkets
+ * (Hype, gold, summons, surfaces, wild magic, AP tricks, consumable synergy): 19 common, 16 rare, 7 legendary, 8 cursed.
+ * v2 (initiative, no Guard, no starting shield): one clear effect per item (cursed: one upside, one funny downside);
+ * no item grants Block at the start of a fight, "per turn" means each unit's own turn (state.turn), and attacks of
+ * opportunity are free reactions: they count as skill hits for damage riders but not as "using a skill".
+ * Numbers the engine applies live in `stats` (hp ap mov armor dmg heal range hype init); the rest are §5.3 hooks.
+ * Item hooks get the item def as their LAST argument; per-fight state lives on unit.data['item_<id>'] (previews copy
+ * it, so dry runs never leak). "Skill" riders ignore consumables, status ticks, bumps, explosions and reflected damage.
+ * Also registers Steve the Torchbearer (summon steve_torchbearer + 2 skills) for the Hireling Contract, and the
+ * DD.Items helpers (docs/notes/items.md).
  */
 (function () {
   'use strict';
@@ -23,9 +26,10 @@
   function hostile(a, b) { return !!a && !!b && a !== b && DD.Grid.hostile(a, b); }
   function dist(a, b) { return Math.abs(a.x - b.x) + Math.abs(a.y - b.y); }
   function heightOf(u) { const t = DD.Grid.tile(u.x, u.y); return t ? t.h || 0 : 0; }
-  function phaseIs(p) { const s = S(); return !!s && s.phase === p; }
-  /** "Each turn" = one side turn of one round. */
-  function turnKey() { const s = S(); return s ? s.round + ':' + s.phase : ''; }
+  /** "Each turn" (v2): every unit's turn is its own, so the key is the fight's turn counter (state.turn). */
+  function turnKey() { const s = S(); return s ? s.turn || 0 : -1; }
+  /** It is u's own turn (u is the current unit, or acts on its owner's turn). */
+  function ownTurn(u) { return !!(u && DD.Combat && DD.Combat.isTurnOf && DD.Combat.isTurnOf(u)); }
   function rng() { const s = S(); return s && s.rng ? s.rng : DD.rng; }
   /** Per-fight scratch state of an item on a unit (created on first write; use peek() in pure hooks). */
   function mem(unit, it) {
@@ -34,10 +38,13 @@
     return unit.data[k] || (unit.data[k] = {});
   }
   function peek(unit, it) { return (unit && unit.data && unit.data['item_' + it.id]) || null; }
+  function wears(u, it) { return !!u && Array.isArray(u.items) && u.items.indexOf(it.id) >= 0; }
   function isConsumable(def) { return !!def && !!def.id && DD.getConsumable(def.id) === def; }
-  /** A free re-resolution of a skill that was already used (the random passive Echo Chamber passes extra.rpEcho):
-   *  not a new use for "whenever you use a skill" triggers. */
-  function isEcho(ctx) { return !!ctx && !!ctx.rpEcho; }
+  /**
+   * Not a new use of a skill for "whenever you use a skill" triggers: a free re-resolution (the random passive Echo
+   * Chamber passes extra.rpEcho) or an attack of opportunity (v2: a free reaction, ctx.opportunity).
+   */
+  function notAUse(ctx) { return !!ctx && (!!ctx.rpEcho || !!ctx.opportunity); }
   /** Damage dealt by a skill (not a consumable, status tick, bump, fall, explosion or reflection). */
   function bySkill(d) { return d.cause === 'skill' && !!d.skill && !isConsumable(d.skill); }
   /** The item's owner (d.source) landed a skill hit on a foe (the foe may be dropping from it). */
@@ -71,7 +78,7 @@
   /** Cosmetic: the unit's current sprite (unit.sprite override, §7.3) plus three party balloons tied to its hand.
    *  drawUnit already hovers units with unit.flags.flying. Content that swaps the sprite (Ellaria's Wild Shape sets
    *  or deletes unit.sprite) loses the balloons, so the item calls this again after skills and at turn boundaries;
-   *  the itemBalloons mark (a plain key: the deploy snapshot and previews copy it) keeps it from wrapping twice. */
+   *  the itemBalloons mark (a plain key: previews copy it) keeps it from wrapping twice. */
   function balloonSprite(unit) {
     if (!unit || unit.dead || !DD.Sprites || typeof DD.Sprites.specFor !== 'function' || typeof DD.Sprites.metrics !== 'function') return;
     const base = DD.Sprites.specFor(unit);
@@ -152,6 +159,25 @@
       },
     },
   });
+  // v2 attacks of opportunity (Sentinel, but rude): the hit ends the foe's walk on the tile it was leaving, so a melee
+  // wearer holds the line against divers and archers stepping back. (A "+4 damage on reactions" version measured zero:
+  // the AI prices damage bonuses and just never leaves. It does not foresee the stop, so the stop happens in play.)
+  // Only heroes with a melee basic attack make attacks of opportunity (DESIGN §4.2): the desc says so, or it reads as
+  // broken on half the roster (Zarathor, Syllamin, Corelos, Josiah...).
+  item({
+    id: 'passive_aggressive_polearm', name: 'Polearm of Passive Aggression', slot: 'weapon', rarity: 'common', icon: '🍢',
+    desc: 'A foe you damage with an attack of opportunity (melee basic attacks only) stops right there: its walk ends.',
+    flavor: 'Oh, you\'re leaving? No, no, that\'s fine. Totally fine. *stab*',
+    hooks: {
+      onOpportunityAttack: function (o, it) {
+        const m = o && o.mover;
+        // the hook also fires on the mover's own items: only the wearer's reactions stop anyone (never his own walk)
+        if (!m || !wears(o.attacker, it) || !(o.dealt > 0) || !active(m)) return;
+        proc(m, it, 'Not so fast!');
+        A().stopMove(m);
+      },
+    },
+  });
   item({
     id: 'flametongue_knockoff', name: 'Flametongue (Knockoff)', slot: 'weapon', rarity: 'rare', icon: '🗡️',
     desc: 'Whenever you damage a foe with a skill, it gains 2 Burn.',
@@ -169,13 +195,13 @@
     },
   });
   item({
+    // v2 simplicity: one effect (it no longer also climbs 2 levels per step)
     id: 'high_horse_lance', name: 'Lance of the High Horse', slot: 'weapon', rarity: 'rare', icon: '🐴',
-    desc: 'Your skills deal +3 damage to foes standing lower than you, and you can climb 2 levels per step.',
+    desc: 'Your skills deal +4 damage to foes standing lower than you.',
     flavor: 'Moral superiority, weaponised. The horse is also judging you.',
     hooks: {
-      onCombatStart: function (unit) { unit.flags = unit.flags || {}; unit.flags.hop = true; },
       modifyOutgoingDamage: function (d) {
-        if (bySkill(d) && hostile(d.source, d.target) && heightOf(d.source) > heightOf(d.target)) d.flat += 3;
+        if (bySkill(d) && hostile(d.source, d.target) && heightOf(d.source) > heightOf(d.target)) d.flat += 4;
       },
     },
   });
@@ -256,7 +282,8 @@
     hooks: {
       onDealDamage: function (d, it) {
         const u = d.source;
-        if (!skillHitFoe(d) || !oncePerSkill(u, it)) return;
+        // an attack of opportunity is a free reaction, not a skill you use: no backswing
+        if (!skillHitFoe(d) || d.opportunity || !oncePerSkill(u, it)) return;
         const allies = S().units.filter(function (o) { return active(o) && o !== u && !hostile(u, o) && dist(o, u) === 1; });
         if (!allies.length) return;
         proc(u, it, 'Backswing!', BAD);
@@ -269,9 +296,10 @@
   item({
     id: 'sentient_sword', name: 'Sentient Sword (Won\'t Shut Up)', slot: 'weapon', rarity: 'cursed', icon: '🗣️',
     stats: { dmg: 0.35 },
-    desc: '+35% damage. At the start of your turn it insults every foe within 3 tiles: they are Inspired (+25% damage) until the end of their turn.',
+    desc: '+35% damage. At the start of your turn it insults every foe within 3 tiles: they are Inspired (+25% damage) through their next turn.',
     flavor: 'It has opinions about everyone\'s mother. It shares them. Loudly. Mid-ambush.',
     hooks: {
+      // applied on the wearer's turn, so turns: 1 covers each foe's next turn (v2 durations count the owner's turns)
       onTurnStart: function (unit, it) {
         const foes = foesWithin(unit, 3);
         if (!foes.length) return;
@@ -282,7 +310,7 @@
   });
 
   // ======================================================================================================
-  // ARMOR — HP, armor, Block, retaliation, resistances, second winds
+  // ARMOR — HP, armor, retaliation, resistances, second winds (v2: no Block at the start of a fight)
   // ======================================================================================================
   item({
     id: 'chainmail_bikini', name: 'Chainmail Bikini', slot: 'armor', rarity: 'common', icon: '👙',
@@ -328,6 +356,8 @@
     },
   });
   item({
+    // v2: Block gained at the end of your turn lasts through every enemy turn until your next turn starts. Earned by
+    // standing still, never a starting shield (enemies acting before your first turn find you without it).
     id: 'turtle_shell', name: 'Turtle Shell (Previous Tenant Evicted)', slot: 'armor', rarity: 'common', icon: '🐢',
     desc: 'At the end of your turn, if you\'re on the tile where you started it, gain 4 Block.',
     flavor: 'The previous tenant left a one-star review and no forwarding address.',
@@ -342,10 +372,15 @@
     },
   });
   item({
+    // v2: its 4 Block at the start of combat is gone (no starting shield); the hobbit's shirt lets you slip away instead
     id: 'mithril_shirt', name: 'Mithril Shirt (Pre-Owned)', slot: 'armor', rarity: 'rare', icon: '👕',
-    stats: { hp: 6, armor: 1, block: 4 },
-    desc: '+6 max HP, +1 armor and 4 Block at the start of combat.',
+    stats: { armor: 1 },
+    desc: '+1 armor. You never provoke attacks of opportunity.',
     flavor: 'The previous owner was three feet tall and asked for it back. We said no.',
+    hooks: {
+      // pure (paths, the HUD's move preview and the AI ask it): the wearer is the one walking away
+      modifyOpportunity: function (o, it) { if (o && wears(o.mover, it)) o.cancel = true; },
+    },
   });
   item({
     id: 'undying_undies', name: 'Undying Undies', slot: 'armor', rarity: 'rare', icon: '🩳',
@@ -409,6 +444,8 @@
         if (m.used) return;
         m.used = true;
         if (!A().revive(unit, 0.5)) return;
+        // downed mid-walk (an attack of opportunity, a trap): the walk still ends where he fell (DESIGN §4.2)
+        A().stopMove(unit);
         proc(unit, it, 'FROM THE ASHES!', '#ffb04a', 17);
         A().log(unit.name + ' rises from the ashes in a very puffy jacket.', 'heal');
         DD.FX.explosion(unit, { radius: 1, color: '#ff8a1a' });
@@ -417,21 +454,28 @@
       },
     },
   });
+  const GILDED_STEP = 40, GILDED_MAX = 3;
   item({
+    // v2: it used to give up to 12 Block at every turn start (a permanent starting shield); now the gold buys armor
+    // once, when the fight starts (unit.armor, so the HUD, previews and the AI's estimates all see it)
     id: 'gilded_breastplate', name: 'Gilded Breastplate of Conspicuous Wealth', slot: 'armor', rarity: 'legendary', icon: '💰',
-    desc: 'At the start of your turn, gain 1 Block per 10 gold the party holds (up to 12).',
+    desc: 'When a fight starts, gain +1 armor for every ' + GILDED_STEP + ' gold the party holds (up to +' + GILDED_MAX + ').',
     flavor: 'Insured for more than you are. Stopping arrows technically voids the warranty.',
     hooks: {
-      onTurnStart: function (unit, it) {
-        const n = Math.min(12, Math.floor(A().gold() / 10));
-        if (n > 0) A().addBlock(unit, n);
+      onCombatStart: function (unit, it) {
+        const n = Math.min(GILDED_MAX, Math.floor(A().gold() / GILDED_STEP));
+        if (n <= 0) return;
+        mem(unit, it).armor = n;
+        unit.armor = (unit.armor || 0) + n;
+        proc(unit, it, '+' + n + ' armor (conspicuously)');
       },
     },
   });
   item({
+    // v2 simplicity: one downside (it no longer also costs 1 Move)
     id: 'barrel_armor', name: 'Barrel Armor (Still Has Ale In It)', slot: 'armor', rarity: 'cursed', icon: '🛢️',
-    stats: { hp: 15, armor: 2, mov: -1 },
-    desc: '+15 max HP, +2 armor, −1 Move. When something pushes you away, you roll 2 tiles further.',
+    stats: { hp: 15, armor: 2 },
+    desc: '+15 max HP, +2 armor. When something pushes you away, you roll 2 tiles further.',
     flavor: 'You don\'t walk anymore. You roll. Downhill. Into things.',
     hooks: {
       modifyPush: function (p, it) {
@@ -514,15 +558,15 @@
     hooks: { onSkillUsed: function (ctx) { if (isConsumable(ctx.skill) && active(ctx.user)) A().heal(null, ctx.user, 4); } },
   });
   item({
+    // v2 simplicity: one effect (the 2 Block every turn are gone; the heal is bigger)
     id: 'dog_treat_bandolier', name: 'Bandolier of Dog Treats', slot: 'trinket', rarity: 'common', icon: '🦴',
-    desc: 'At the start of your turn, each of your summons heals 2 HP and gains 2 Block.',
+    desc: 'At the start of your turn, each of your summons heals 3 HP.',
     flavor: 'Every corgi within five miles just sat down very politely.',
     hooks: {
       onTurnStart: function (unit) {
         S().units.forEach(function (o) {
           if (!active(o) || o.kind !== 'summon' || o.ownerId !== unit.id) return;
-          A().heal(null, o, 2);
-          A().addBlock(o, 2);
+          A().heal(null, o, 3);
         });
       },
     },
@@ -543,7 +587,7 @@
   });
   item({
     id: 'scented_candle', name: 'Scented Candle of Sanctity', slot: 'trinket', rarity: 'rare', icon: '🕯️',
-    desc: 'At the end of your turn, your tile becomes Holy Ground for 2 rounds (heroes who end a turn there heal 3; undead take 3 damage).',
+    desc: 'At the end of your turn, your tile becomes Holy Ground for 2 rounds (grounded units ending a turn there: heroes heal 3, undead take 3 damage).',
     flavor: 'Notes of clean linen and righteous smiting. The undead hate it. So does Josiah\'s beak.',
     hooks: {
       onTurnEnd: function (unit) {
@@ -552,13 +596,15 @@
     },
   });
   item({
+    // v2: "during your turn" = the wearer's own turn (a kill on someone else's turn would only bank AP for later)
     id: 'adrenaline_jar', name: 'Jar of Questionable Adrenaline', slot: 'trinket', rarity: 'rare', icon: '🫙',
-    desc: 'Once per turn, when you defeat a foe during your turn, gain 1 AP.',
+    stats: { init: 2 },
+    desc: '+2 initiative. Once per turn, when you defeat a foe during your turn, gain 1 AP.',
     flavor: 'Harvested from a very surprised badger. Do not ask how. Do not ask the badger.',
     hooks: {
       onKill: function (d, it) {
         const u = d.credit;
-        if (!foeKill(d) || !active(u) || u.side !== 'hero' || !phaseIs('player')) return;
+        if (!foeKill(d) || !active(u) || u.side !== 'hero' || !ownTurn(u)) return;
         const m = mem(u, it);
         if (m.turn === turnKey()) return;
         m.turn = turnKey();
@@ -614,7 +660,7 @@
     hooks: {
       onSkillUsed: function (ctx, it) {
         const u = ctx.user;
-        if (!active(u) || !ctx.skill || isConsumable(ctx.skill) || isEcho(ctx) || !DD.WildMagic) return;
+        if (!active(u) || !ctx.skill || isConsumable(ctx.skill) || notAUse(ctx) || !DD.WildMagic) return;
         if (rng().chance(0.25)) DD.WildMagic.surge(u, { good: true, source: it.id });
       },
     },
@@ -623,7 +669,8 @@
     // rare, not legendary: flight is pure mobility and measured no stronger than a rare (docs/notes/items.md Review)
     id: 'party_balloons', name: 'Bundle of Party Balloons', slot: 'trinket', rarity: 'rare', icon: '🎈',
     stats: { mov: 1 },
-    desc: '+1 Move. You fly: you float over height, pits and liquids (lava included) and ignore terrain costs.',
+    // v2 request: flyers ignore everything on the floor (terrain, surfaces, traps, plates); clouds and blasts still reach them
+    desc: '+1 Move. You fly: you float over height, pits, liquids and everything on the floor (fire, puddles, traps) and ignore terrain costs.',
     flavor: 'You float. Everyone else floats some follow-up questions.',
     hooks: {
       onCombatStart: function (unit, it) {
@@ -643,7 +690,7 @@
   // `pricing` blocks re-entry while it prices a skill without itself; `quotes[unit|skill|uses]` is the latest discounted
   // quote for that skill at that use count. pay() quotes, then counts the use, so onSkillUsed finds the price that use
   // paid under the count before it. Keyed by the count, a later query (a skill that re-prices itself mid-execute, like
-  // Power Nap) or a free re-use (Delegate, an echo) can neither overwrite nor reuse that quote.
+  // Power Nap) or a free re-use (Delegate, an echo, an attack of opportunity) can neither overwrite nor reuse that quote.
   const HOURGLASS = { pricing: false, quotes: {} };
   function slotFor(unit, skill) { return DD.Combat.slotsOf(unit).filter(function (sl) { return sl.id === skill.id; })[0] || null; }
   function quoteKey(unit, skill, uses) { return unit.id + '|' + skill.id + '|' + uses; }
@@ -653,14 +700,15 @@
     flavor: 'Borrowed time at a very reasonable rate. Do not read the rate.',
     hooks: {
       onCombatStart: function () { HOURGLASS.quotes = {}; },   // drop last fight's unit references
-      // pure (the HUD asks every hover): it only prices; onSkillUsed spends the discount
+      // pure (the HUD asks every hover): it only prices; onSkillUsed spends the discount. v2: only on the wearer's own
+      // turn (AP is only spent then; on other turns the HUD shows the full price)
       modifyCost: function (c, it) {
         const u = c.unit;
         if (HOURGLASS.pricing || !u || !c.skill) return;
         const sl = slotFor(u, c.skill);
         const key = quoteKey(u, c.skill, sl ? sl.uses || 0 : -1);
         delete HOURGLASS.quotes[key];   // the newest price for this use count wins (pay() asks last)
-        if (isConsumable(c.skill) || !phaseIs('player') || !(c.ap > 0)) return;
+        if (isConsumable(c.skill) || !ownTurn(u) || !(c.ap > 0)) return;
         const m = peek(u, it);
         if (m && m.turn === turnKey()) return;
         // the price every other source settles on without the Hourglass: a later one (a random passive, a rule) may
@@ -675,13 +723,14 @@
       onSkillUsed: function (ctx, it) {
         const u = ctx.user;
         if (!u || !ctx.skill || !ctx.slot) return;
-        // a paid use: pay() quoted at count n, then counted it (n + 1). A free use (Delegate, an echo) was not
-        // counted, and the quote under its count − 1 was already consumed by the paid use that made that count.
+        // a paid use: pay() quoted at count n, then counted it (n + 1). A free use (Delegate, an echo, an attack of
+        // opportunity) was not counted, and the quote under its count − 1 was already consumed by the paid use that
+        // made that count.
         const key = quoteKey(u, ctx.skill, (ctx.slot.uses || 0) - 1);
         const q = HOURGLASS.quotes[key];
         delete HOURGLASS.quotes[key];
         // spent only when the discount lowered the price that use paid
-        if (!q || !phaseIs('player') || !(q.ap < q.itemHourglass.full)) return;
+        if (!q || !ownTurn(u) || !(q.ap < q.itemHourglass.full)) return;
         mem(u, it).turn = turnKey();
       },
     },
@@ -707,7 +756,8 @@
     hooks: {
       onSkillUsed: function (ctx, it) {
         const u = ctx.user;
-        if (!active(u) || !ctx.skill || isConsumable(ctx.skill) || isEcho(ctx)) return;
+        // attacks of opportunity are free reactions (DESIGN §4.2), echoes free re-runs: no microtransaction
+        if (!active(u) || !ctx.skill || isConsumable(ctx.skill) || notAUse(ctx)) return;
         if (A().spendGold(1)) { DD.FX.particles(u, { kind: 'coins', count: 3 }); return; }
         proc(u, it, 'Insufficient funds!', BAD);
         selfHarm(u, 3, 'microtransactions');

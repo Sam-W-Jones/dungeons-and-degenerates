@@ -2,8 +2,11 @@
  * Suites "hero_basanos: …" for js/data/heroes/basanos.js (owner: hero-basanos): the hero def, the two forms (Transform,
  * form gates, move bonus, basic attack swap, sprite override), the Hair Trigger passive, every skill at every level in
  * v2 sandbox fights (desc == effect), the signature, the 3 items, HUD previews, v2 edge cases (stun / silence / sheep /
- * charm, deaths mid-skill, pits / lava / water / walls / edges, AP, own-turn durations) and AutoPlay battles of
- * ['basanos', 'test_knight', 'test_cleric', 'test_mage'] against the fixture encounters at levels 1 / 3 / 5.
+ * charm, deaths mid-skill, pits / lava / water / walls / edges, AP, own-turn durations), AutoPlay battles of
+ * ['basanos', 'test_knight', 'test_cleric', 'test_mage'] against the fixture encounters at levels 1 / 3 / 5, attacks of
+ * opportunity (his reactions in both forms; leaps, swaps and shoves never provoke), the form following bas_wolf
+ * (dispels, the Blood Moon look, other content wrapping his sprite) and the review (v2) regressions (the basic slot's
+ * use count across form swaps, Hair Trigger after a refused down, the reaction of his real form after a bare dispel).
  * Run: bash tools/test.sh "suite=hero_basanos&isolate=heroes/basanos,hero_basanos"
  */
 (function () {
@@ -200,7 +203,7 @@
     t.eq(u.mov, 6, '+2 move');
     t.ok(DD.Combat.reachable(u).size > reach0, 'he reaches more tiles');
     t.ok(u.basic.id === 'bas_claw' && u.basic.level === 1, 'basic attack is Claw (Transform level 1)');
-    t.ok(u.sprite === Bz().WOLF_SPRITE && u.vis && u.vis.sprite === Bz().WOLF_SPRITE, 'sprite override: unit.sprite and (after playback) unit.vis.sprite are the werewolf');
+    t.ok(u.sprite === Bz().WOLF_SPRITE && u.vis && !u.vis.sprite, 'sprite override: unit.sprite is the werewolf; the on-screen pin is released once playback caught up');
     t.ok(DD.Sprites && DD.Sprites.specFor ? DD.Sprites.specFor(u) === Bz().WOLF_SPRITE : true, 'the renderer draws the werewolf');
     t.eq(DD.Combat.canUse(u, slash), HUMAN_GATE, 'human skills are locked in werewolf form');
     t.eq(DD.Combat.canUse(u, rend), true, 'wolf skills are ready');
@@ -209,7 +212,7 @@
     DD.Combat.endTurn();
     t.ok(DD.Combat.current() === u && wolf(u) && u.mov === 6 && u.ap === 3, 'still the werewolf on his next turn (no duration)');
     t.ok(use(t, u, tr, u.x, u.y, 'Transform back'), 'Transform back');
-    t.ok(!wolf(u) && u.mov === 4 && u.basic.id === 'bas_sword' && !u.sprite && u.vis.sprite === Bz().HUMAN_SPRITE, 'human again: move 4, sword, human sprite');
+    t.ok(!wolf(u) && u.mov === 4 && u.basic.id === 'bas_sword' && !u.sprite && (!DD.Sprites || DD.Sprites.specFor(u) === Bz().HUMAN_SPRITE), 'human again: move 4, sword, human sprite');
     t.ok(use(t, u, tr, u.x, u.y, 'Transform a third time') && use(t, u, tr, u.x, u.y, 'and a fourth'), 'cooldown 0: he can swap again the same turn');
     t.eq(u.ap, 0, 'each swap costs 1 AP');
     t.eq(DD.Combat.canUse(u, tr), 'Not enough AP.', 'no AP, no swap');
@@ -334,7 +337,7 @@
       t.ok(seen.slice(0, L.turns).every(function (x) { return x.v; }), 'L' + lv + ': Vulnerable during its next ' + plural(L.turns, 'turn') + ' ' + JSON.stringify(seen));
       t.ok(!has(f, 'vulnerable'), 'L' + lv + ': gone after them');
     });
-    [{ dmg: 4, push: 1 }, { dmg: 5, push: 1 }, { dmg: 6, push: 2 }].forEach(function (L, i) {
+    [{ dmg: 5, push: 1 }, { dmg: 6, push: 1 }, { dmg: 7, push: 2 }].forEach(function (L, i) {
       const lv = i + 1;
       fight({ heroes: [{ x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
       const u = B(), f = foes()[0];
@@ -359,7 +362,7 @@
     sl = give(u, 'bas_shoulder_check', 1);
     let h0 = f.hp;
     use(t, u, sl, 3, 4, 'Shoulder Check into lava');
-    t.ok(f.x === 4 && h0 - f.hp === 4 + 8 && has(f, 'burn'), 'lava: pushed in, burned (' + (h0 - f.hp) + ' damage, Burn)');
+    t.ok(f.x === 4 && h0 - f.hp === 5 + 8 && has(f, 'burn'), 'lava: pushed in, burned (' + (h0 - f.hp) + ' damage, Burn)');
     // into water: Wet (lightning combos)
     fight({ heroes: [{ x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }], terrain: function (tl) { if (tl.x === 4 && tl.y === 4) tl.t = 'water'; } });
     u = B(); f = foes()[0];
@@ -369,36 +372,36 @@
     fight({ heroes: [{ x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }], terrain: function (tl) { if (tl.x === 4 && tl.y === 4) tl.t = 'wall'; } });
     u = B(); f = foes()[0]; h0 = f.hp;
     use(t, u, give(u, 'bas_shoulder_check', 1), 3, 4, 'Shoulder Check into a wall');
-    t.ok(f.x === 3 && h0 - f.hp === 4 + 3, 'wall: stays, 4 + 3 bump damage (' + (h0 - f.hp) + ')');
+    t.ok(f.x === 3 && h0 - f.hp === 5 + 3, 'wall: stays, 5 + 3 bump damage (' + (h0 - f.hp) + ')');
     fight({ heroes: [{ x: 7, y: 4 }], enemies: [{ id: 'test_grunt', x: 8, y: 4 }] });
     u = B(); f = foes()[0]; h0 = f.hp;
     use(t, u, give(u, 'bas_shoulder_check', 3), 8, 4, 'Shoulder Check at the map edge');
-    t.ok(f.x === 8 && h0 - f.hp === 6 + 3, 'edge: stays, 6 + 3 bump damage (' + (h0 - f.hp) + ')');
+    t.ok(f.x === 8 && h0 - f.hp === 7 + 3, 'edge: stays, 7 + 3 bump damage (' + (h0 - f.hp) + ')');
     fight({ heroes: [{ x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }, { id: 'test_grunt', x: 4, y: 4 }] });
     u = B();
     const a = at(3, 4), b = at(4, 4), ha = a.hp, hb = b.hp;
     use(t, u, give(u, 'bas_shoulder_check', 1), 3, 4, 'Shoulder Check into a friend of his');
-    t.ok(ha - a.hp === 7 && hb - b.hp === 3, 'both foes bonk (7 / 3)');
+    t.ok(ha - a.hp === 8 && hb - b.hp === 3, 'both foes bonk (5 + 3 / 3)');
     // combo: Bleed ticks on the push
     fight({ heroes: [{ x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
     u = B(); f = foes()[0];
     A().addStatus(f, 'bleed', { stacks: 3 }, u);
     h0 = f.hp;
     use(t, u, give(u, 'bas_shoulder_check', 1), 3, 4, 'Shoulder Check a bleeding foe');
-    t.eq(h0 - f.hp, 4 + 3, 'Bleed ticks on the push (+3)');
+    t.eq(h0 - f.hp, 5 + 3, 'Bleed ticks on the push (+3)');
   });
 
   T.suite('hero_basanos: Hold the Line and Step In at every level (taunt, Block until his next turn)', function (t) {
-    [{ r: 1, block: 4 }, { r: 1, block: 6 }, { r: 2, block: 6 }].forEach(function (L, i) {
+    [{ r: 2, block: 4 }, { r: 2, block: 5 }, { r: 3, block: 6 }].forEach(function (L, i) {
       const lv = i + 1;
-      fight({ heroes: [{ x: 3, y: 4 }], enemies: [{ id: 'test_grunt', x: 4, y: 4 }, { id: 'test_grunt', x: 3, y: 2 }, { id: 'test_grunt', x: 6, y: 4 }] });
+      fight({ heroes: [{ x: 3, y: 4 }], enemies: [{ id: 'test_grunt', x: 4, y: 4 }, { id: 'test_grunt', x: 3, y: 2 }, { id: 'test_grunt', x: 6, y: 4 }, { id: 'test_grunt', x: 3, y: 8 }] });
       const u = B();
-      const near = at(4, 4), two = at(3, 2), far = at(6, 4);
+      const near = at(4, 4), two = at(3, 2), three = at(6, 4), far = at(3, 8);
       const sl = give(u, 'bas_hold_the_line', lv);
       t.ok(desc('bas_hold_the_line', lv).indexOf('within ' + plural(L.r, 'tile')) >= 0 && desc('bas_hold_the_line', lv).indexOf('gain ' + L.block + ' Block') >= 0, 'Hold the Line L' + lv + ' desc');
       use(t, u, sl, u.x, u.y, 'Hold the Line L' + lv);
       t.eq(u.block, L.block, 'L' + lv + ': ' + L.block + ' Block');
-      t.ok(has(near, 'taunt') && has(two, 'taunt') === (L.r >= 2) && !has(far, 'taunt'), 'L' + lv + ': taunts foes within ' + L.r);
+      t.ok(has(near, 'taunt') && has(two, 'taunt') && has(three, 'taunt') === (L.r >= 3) && !has(far, 'taunt'), 'L' + lv + ': taunts foes within ' + L.r + ' (not 4 away)');
       t.eq(st(near, 'taunt').source, u.id, 'L' + lv + ': taunted onto him');
       t.eq(DD.Combat.canUse(u, sl), 'On cooldown (2).', 'L' + lv + ': cooldown 2');
     });
@@ -739,12 +742,12 @@
     fight({ heroes: [{ x: 2, y: 4 }], enemies: [{ id: 'test_brute', x: 3, y: 4 }] });
     u = B(); g = foes()[0]; h0 = g.hp;
     use(t, u, give(u, 'bas_shoulder_check', 3), 3, 4, 'Shoulder Check an immovable brute');
-    t.ok(g.x === 3 && h0 - g.hp === 6 - 1, 'immovable: 6 damage (− 1 armor), not pushed');
+    t.ok(g.x === 3 && h0 - g.hp === 7 - 1, 'immovable: 7 damage (− 1 armor), not pushed');
     // a Shoulder Check that pushes a bleeding foe to death
     fight({ heroes: [{ x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
-    u = B(); g = foes()[0]; g.hp = 6;
+    u = B(); g = foes()[0]; g.hp = 7;
     A().addStatus(g, 'bleed', { stacks: 3 }, u);
-    use(t, u, give(u, 'bas_shoulder_check', 1), 3, 4, 'Shoulder Check: 4 + Bleed 3 on 6 HP');
+    use(t, u, give(u, 'bas_shoulder_check', 1), 3, 4, 'Shoulder Check: 5 + Bleed 3 on 7 HP');
     t.ok(g.dead, 'the Bleed tick on the push finishes it');
     // odd targets through the raw resolver (null, empty tile, himself) never throw
     fight({ heroes: [{ x: 2, y: 4 }, { id: 'test_knight', x: 2, y: 5 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
@@ -762,7 +765,7 @@
     u.skills.forEach(function (sl) { t.tryRun(sl.id + ' targets in the corner', function () { DD.Targeting.validTargets(u, sl); }); });
     h0 = at(1, 0).hp;
     use(t, u, u.skills[3], 1, 0, 'Shoulder Check along the top edge');
-    t.ok(at(2, 0) && h0 - at(2, 0).hp === 4, 'pushed along the edge');
+    t.ok(at(2, 0) && h0 - at(2, 0).hp === 5, 'pushed along the edge');
   });
 
   // ---- 11. AutoPlay -------------------------------------------------------------------------------------------
@@ -841,13 +844,16 @@
       { enc: 'test_a1_normal', level: 3, skills: ['bas_transform', 'bas_shoulder_check', 'bas_pounce'] },
       { enc: 'test_a2_normal', level: 3, skills: ['bas_transform', 'bas_silver_slash', 'bas_rend'] },
       { enc: 'test_a1_boss', level: 3, skills: ['bas_transform', 'bas_hold_the_line', 'bas_savage_bite'] },
+      // the swordsman: no Transform socketed, so he stays a man unless Hair Trigger lets the wolf out
+      { enc: 'test_a2_elite', level: 3, skills: ['bas_shoulder_check', 'bas_silver_slash', 'bas_hold_the_line'] },
     ]);
     t.log('totals: ' + JSON.stringify(res.totals) + ' · wins ' + res.wins + '/' + res.fought + ' · turns as a wolf ' + res.wolfTurns + ', as a man ' + res.manTurns);
     t.ok(res.acted >= res.fought - 1, 'Basanos acts in (nearly) every fight (' + res.acted + '/' + res.fought + ')');
     t.ok(res.uses >= 5, 'Basanos uses his skills, not just his basic attacks (' + res.uses + ')');
     t.ok(Object.keys(res.totals).length >= 4, 'several different skills used (' + Object.keys(res.totals).length + ')');
     t.ok(res.wolfTurns > 0 && res.manTurns > 0, 'he fights in both forms');
-    t.ok(res.wins >= 3, 'the party mostly wins (' + res.wins + '/' + res.fought + ')');
+    t.ok(['bas_silver_slash', 'bas_shoulder_check', 'bas_hold_the_line', 'bas_step_in'].some(function (k) { return res.totals[k] > 0; }), 'the swordsman\'s skills get used too');
+    t.ok(res.wins >= 4, 'the party mostly wins (' + res.wins + '/' + res.fought + ')');
   });
 
   T.suite('hero_basanos: AutoPlay battles, level 5 (fixture party, items)', function (t) {
@@ -865,34 +871,286 @@
     t.ok(res.wins >= 2, 'the party wins most of these (' + res.wins + '/' + res.fought + ')');
   });
 
-  // TEMP DEBUG (removed before hand-off)
-  if (T.params.basdbg === '1') T.suite('hero_basanos_dbg: trace', function (t) {
-    const enc = DD.getEncounter(T.params.enc || 'test_a3_elite');
-    const lvl = +(T.params.lvl || 5), sl = Math.min(3, 1 + Math.floor((lvl - 1) / 2));
-    const sk = String(T.params.sk || 'bas_shoulder_check,bas_hold_the_line,bas_rend,bas_savage_bite').split(',');
-    const party = ['basanos', 'test_knight', 'test_cleric', 'test_mage'].map(function (id) {
-      if (id === 'basanos') return DD.Combat.makeRunHero({ id: id, level: lvl, items: T.params.items ? T.params.items.split(',') : [], skills: sk.map(function (s) { return { id: s, level: sl }; }) });
-      return DD.Combat.makeRunHero({ id: id, level: lvl, skills: DD.getHero(id).startingSkills.map(function (s) { return { id: s, level: sl }; }) });
+  // ---- 12. attacks of opportunity ------------------------------------------------------------------------------
+  /** Attacks of opportunity made while fn runs: [{ attacker, mover, skillId }] (def ids). */
+  function aoos(fn) {
+    const list = [];
+    const off = DD.Events.on('opportunity:attack', function (e) {
+      list.push({ attacker: e.attacker && e.attacker.defId, mover: e.mover && e.mover.defId, skillId: e.skillId });
     });
-    const i = +(T.params.i || 3);
-    A().addRule({ id: 'bas_dbg_probe', name: 'dbg', hooks: { onSkillUsed: function (ctx) {
-      if (A().simulating || !ctx.user || ctx.user.defId !== 'basanos') return;
-      t.log('   uses ' + ctx.skill.id + ' @' + (ctx.target ? ctx.target.x + ',' + ctx.target.y : '-') + ' → wolf ' + DD.Basanos.isWolf(ctx.user) + ' ap ' + ctx.user.ap + ' hp ' + ctx.user.hp);
-    } } });
-    const setup = DD.Encounter.build(enc, party, { rng: DD.RNG('bas-ap-' + i + ':' + t.seed), difficulty: 'normal', act: enc.act });
-    DD.Combat.start(setup, { seed: 700 + i, headless: true, difficulty: 'normal', kind: enc.kind });
-    const s = DD.Combat.state;
-    const off = DD.Events.on('turn:start', function (e) {
-      const u = e.unit;
-      if (u.defId !== 'basanos') return;
-      const fs = DD.Combat.enemies().map(function (f) { return f.defId + '@' + f.x + ',' + f.y + ' hp' + f.hp; }).join(' ');
-      t.log('R' + e.round + ' basanos @' + u.x + ',' + u.y + ' hp ' + u.hp + ' wolf ' + DD.Basanos.isWolf(u) + ' | ' + fs);
+    try { fn(); } finally { off(); }
+    return list;
+  }
+
+  T.suite('hero_basanos: attacks of opportunity (both forms hold the line; leaps, swaps and shoves never provoke)', function (t) {
+    // a foe walking away from the swordsman: one free Silvered Sword, and it walks on
+    fight({ heroes: [{ x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
+    let u = B(), g = foes()[0], h0 = g.hp;
+    t.ok(DD.Act.opportunitySlot(u) === u.basic && u.basic.id === 'bas_sword', 'human: the Silvered Sword is his attack of opportunity');
+    let seen = aoos(function () { DD.AI.moveTo(g, 6, 4); });
+    t.ok(seen.length === 1 && seen[0].attacker === 'basanos' && seen[0].skillId === 'bas_sword', 'the grunt walked off: he struck ' + JSON.stringify(seen));
+    t.ok(h0 - g.hp === 5 && g.x > 3, 'Silvered Sword: 5 damage; it walked on to ' + g.x + ',' + g.y);
+    // at most once a round
+    fight({ heroes: [{ x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }, { id: 'test_grunt', x: 2, y: 3 }] });
+    u = B();
+    const g1 = at(3, 4), g2 = at(2, 3), h1 = g1.hp, h2 = g2.hp;
+    seen = aoos(function () { DD.AI.moveTo(g1, 6, 4); DD.AI.moveTo(g2, 2, 0); });
+    t.ok(seen.length === 1 && h1 - g1.hp === 5 && g2.hp === h2, 'one a round: the first leaver is hit, the second walks off free');
+    t.eq(u.oppRound, DD.Combat.state.round, 'his reaction of this round is spent');
+    // the werewolf's Claw: the fresh Bleed bites at the end of the fleeing foe's walk
+    fight({ heroes: [{ x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
+    u = B(); g = foes()[0];
+    form(u, true);
+    h0 = g.hp;
+    seen = aoos(function () { DD.AI.moveTo(g, 6, 4); });
+    t.ok(seen.length === 1 && seen[0].skillId === 'bas_claw', 'werewolf: the Claw is his attack of opportunity');
+    t.eq(h0 - g.hp, 4 + 1, 'Claw 4, then the Bleed it left bites once the walk ends (+1)');
+    t.ok(st(g, 'bleed') && st(g, 'bleed').stacks === 1 && tile(g.x, g.y).surface && tile(g.x, g.y).surface.id === 'blood', 'still Bleeding 1, and it left a blood trail');
+    // he provokes too when he walks off; the move preview says so
+    fight({ heroes: [{ x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
+    u = B(); g = foes()[0];
+    const pv = DD.Combat.provokes(u, 0, 4);
+    t.ok(pv.length === 1 && pv[0].unitId === g.id && pv[0].dmg === 4, 'move preview: walking off provokes the grunt (4) ' + JSON.stringify(pv));
+    h0 = u.hp;
+    seen = aoos(function () { t.ok(DD.Combat.move(u, 0, 4), 'he walks off'); });
+    t.ok(seen.length === 1 && seen[0].attacker === 'test_grunt' && u.hp === h0 - 4 && u.x === 0, 'stabbed on the way out (4), he walks on');
+    // ... and if that stab puts him below half, the wolf gets out mid-stride (not an interrupt: he walks on)
+    fight({ heroes: [{ x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
+    u = B();
+    u.hp = 15;
+    DD.Combat.move(u, 0, 4);
+    t.ok(u.hp === 11 && wolf(u) && u.x === 0 && u.y === 4, 'Hair Trigger on an attack of opportunity: a wolf by the end of the walk (' + u.x + ',' + u.y + ')');
+    t.ok(u.mov === 6 && u.basic.id === 'bas_claw', 'with +2 move and the Claw for the rest of his turn');
+    // leaps, swaps and shoves never provoke
+    fight({ heroes: [{ x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }, { id: 'test_grunt', x: 2, y: 7 }] });
+    u = B();
+    let sl = give(u, 'bas_pounce', 1);
+    h0 = u.hp;
+    seen = aoos(function () { use(t, u, sl, 2, 7, 'Pounce away from an adjacent grunt'); });
+    t.ok(seen.length === 0 && u.hp === h0 && u.y > 4 && DD.Grid.dist(u, at(2, 7)) === 1, 'Pounce is a leap: no attack of opportunity (landed at ' + u.x + ',' + u.y + ')');
+    fight({ heroes: [{ x: 2, y: 6 }, { id: 'test_mage', x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
+    u = B();
+    const mg = hero('test_mage'), mh = mg.hp;
+    seen = aoos(function () { use(t, u, give(u, 'bas_step_in', 1), 2, 4, 'Step In for the mage next to the grunt'); });
+    t.ok(seen.length === 0 && u.x === 2 && u.y === 4 && mg.y === 6 && mg.hp === mh, 'Step In is a swap: the mage leaves the grunt\'s side for free');
+    fight({ heroes: [{ x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
+    u = B(); g = foes()[0]; h0 = g.hp;
+    seen = aoos(function () { use(t, u, give(u, 'bas_shoulder_check', 1), 3, 4, 'Shoulder Check'); });
+    t.ok(seen.length === 0 && h0 - g.hp === 5 && u.oppRound !== DD.Combat.state.round, 'a shove is forced movement: no attack of opportunity on top (5 damage only)');
+    // he can't strike while stunned, a sheep, charmed by the leaver, or downed
+    ['stun', 'sheep', 'charmed'].forEach(function (id) {
+      fight({ heroes: [{ x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
+      const v = B(), gr = foes()[0], gh = gr.hp;
+      A().addStatus(v, id, { turns: 1 }, gr);
+      const s2 = aoos(function () { DD.AI.moveTo(gr, 6, 4); });
+      t.ok(s2.length === 0 && gr.hp === gh && gr.x > 3, id + ': the grunt walks off unpunished');
     });
-    const offE = DD.Events.on('turn:end', function (e) { if (e.unit.defId === 'basanos') t.log('   end @' + e.unit.x + ',' + e.unit.y + ' ap ' + e.unit.ap); });
-    DD.AutoPlay.runBattle(30);
-    off(); offE();
-    t.log('result ' + s.result + ' round ' + s.round);
-    s.log.filter(function (l) { return /Basanos/.test(l.text); }).slice(0, 40).forEach(function (l) { t.log('R' + l.round + ': ' + l.text); });
-    t.fail('debug');
+    fight({ heroes: [{ x: 2, y: 4 }, { id: 'test_knight', x: 0, y: 8 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
+    u = B(); g = foes()[0];
+    A().damage(g, u, 99, { cause: 'other' });
+    seen = aoos(function () { DD.AI.moveTo(g, 6, 4); });
+    t.ok(u.downed && seen.length === 0, 'downed: no attack of opportunity');
+    // combo: Hold the Line taunts the grunt onto him, so it can't strike his friends: the mage disengages for free
+    [false, true].forEach(function (taunt) {
+      fight({ heroes: [{ x: 2, y: 4, skills: ['bas_hold_the_line'] }, { id: 'test_mage', x: 4, y: 5 }], enemies: [{ id: 'test_grunt', x: 3, y: 5 }] });
+      const v = B(), m = hero('test_mage');
+      if (taunt) use(t, v, v.skills[0], v.x, v.y, 'Hold the Line');
+      DD.Combat.endTurn();
+      t.ok(DD.Combat.current() === m, 'the mage\'s turn');
+      const p2 = DD.Combat.provokes(m, 7, 5), m0 = m.hp;
+      const s2 = aoos(function () { DD.Combat.move(m, 7, 5); });
+      if (taunt) t.ok(p2.length === 0 && s2.length === 0 && m.hp === m0 && m.x === 7, 'taunted onto Basanos, the grunt can\'t strike the mage: walking off is free');
+      else t.ok(p2.length === 1 && s2.length === 1 && m.hp === m0 - 4, 'control: without Hold the Line the mage is stabbed walking off');
+    });
+    // the AI respects the line: the grunt next to him keeps stabbing him instead of strolling to the wounded mage
+    fight({ heroes: [{ x: 2, y: 4 }, { id: 'test_mage', x: 5, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }], enemyAi: true });
+    u = B();
+    const m3 = hero('test_mage');
+    m3.hp = 8;
+    h0 = u.hp;
+    DD.Combat.endRound();
+    t.ok(u.hp < h0 && m3.hp === 8 && at(3, 4) && at(3, 4).defId === 'test_grunt', 'engaged with Basanos, the grunt stayed and stabbed him (' + h0 + ' → ' + u.hp + '), the mage untouched');
+  });
+
+  // ---- 13. the form follows its status ------------------------------------------------------------------------
+  T.suite('hero_basanos: the form follows bas_wolf (dispels, the Blood Moon look, other content wrapping the sprite)', function (t) {
+    // a dispel ("OBJECTION!": every buff removed, then Silenced) turns him human at once
+    fight({ heroes: [{ x: 2, y: 4, skills: ['bas_transform'] }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
+    let u = B();
+    const g = foes()[0];
+    use(t, u, u.skills[0], u.x, u.y, 'Transform');
+    t.ok(wolf(u) && u.mov === 6, 'a werewolf');
+    A().cleanse(u, 'buff');
+    A().addStatus(u, 'silenced', { turns: 1 }, g);
+    t.ok(!wolf(u) && u.mov === 4 && u.basic.id === 'bas_sword' && !u.sprite, 'dispelled, then Silenced: human again at once (move 4, sword, human sprite)');
+    // a dispel then a hit: synced before Hair Trigger looks at his HP
+    use(t, u, u.skills[0], u.x, u.y, 'Transform again');
+    A().cleanse(u, 'buff');
+    A().damage(g, u, 2, { cause: 'other' });
+    t.ok(!wolf(u) && u.mov === 4 && u.basic.id === 'bas_sword', 'dispelled, then hit above half HP: human, bookkeeping synced');
+    u.hp = 14;
+    A().damage(g, u, 1, { cause: 'other' });
+    t.ok(wolf(u) && u.mov === 6 && u.basic.id === 'bas_claw', 'and the next hit below half lets the wolf out again (no double move bonus)');
+    // Blood Moon: the huge dire-wolf look lasts the rest of that turn; he stays a werewolf
+    fight({ heroes: [{ x: 4, y: 4 }], enemies: [{ id: 'test_brute', x: 5, y: 4 }] });
+    u = B();
+    DD.Combat.state.hype = 100;
+    use(t, u, u.signature, u.x, u.y, 'Blood Moon');
+    t.ok(wolf(u) && u.sprite === Bz().DIRE_SPRITE, 'Blood Moon: the dire-wolf look');
+    DD.Combat.endTurn();
+    t.ok(DD.Combat.current() === u && wolf(u) && u.sprite === Bz().WOLF_SPRITE && u.mov === 6, 'his next turn: the normal werewolf (still +2 move)');
+    // other content that wraps his sprite (the Party Balloons item re-ties balloons after skills and at turn ends)
+    if (DD.getItem('party_balloons') && DD.Sprites && DD.Sprites.metrics) {
+      fight({ heroes: [{ x: 4, y: 4, items: ['party_balloons'], skills: ['bas_transform'] }], enemies: [{ id: 'test_brute', x: 5, y: 4 }] });
+      const b = B();
+      const shown = function () { return DD.Sprites.specFor(b); }, mov0 = b.mov;
+      t.ok(shown().itemBalloons && shown().scale === Bz().HUMAN_SPRITE.scale, 'balloons on the man');
+      use(t, b, b.skills[0], b.x, b.y, 'Transform with balloons');
+      t.ok(wolf(b) && shown().itemBalloons && shown().scale === Bz().WOLF_SPRITE.scale, 'the werewolf keeps his balloons');
+      DD.Combat.state.hype = 100;
+      use(t, b, b.signature, b.x, b.y, 'Blood Moon with balloons');
+      t.ok(shown().itemBalloons && shown().scale === Bz().DIRE_SPRITE.scale, 'so does the dire wolf');
+      DD.Combat.endTurn();
+      t.ok(wolf(b) && shown().itemBalloons && shown().scale === Bz().WOLF_SPRITE.scale, 'the dire look fades at his turn end, balloons and all');
+      use(t, b, b.skills[0], b.x, b.y, 'Transform back with balloons');
+      t.ok(!wolf(b) && shown().itemBalloons && shown().scale === Bz().HUMAN_SPRITE.scale && b.mov === mov0, 'a man with balloons again (move ' + b.mov + ')');
+    } else t.log('party_balloons not loaded (isolated run): sprite-wrapping check skipped');
+    // previews never touch the real sprite or the on-screen pin
+    fight({ heroes: [{ x: 2, y: 4, skills: ['bas_transform'] }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
+    u = B();
+    u.vis = u.vis || {};
+    const pin = u.vis.sprite;
+    DD.Combat.preview(u, u.skills[0], u.x, u.y);
+    t.ok(!u.sprite && u.vis.sprite === pin && !wolf(u), 'a Transform preview leaves him (and his look) alone');
+  });
+
+  // ---- 14. review (v2) ------------------------------------------------------------------------------------------
+  /** Skill ids Basanos used (not reactions) while fn runs. */
+  function usedBy(u, fn) {
+    const list = [];
+    A().addRule({ id: 'bas_review_uses', name: 'Basanos review probe', hooks: {
+      onSkillUsed: function (ctx) { if (!A().simulating && ctx.user === u && !ctx.opportunity && ctx.skill) list.push(ctx.skill.id); },
+    } });
+    try { fn(); } finally { A().removeRule('bas_review_uses'); }
+    return list;
+  }
+
+  T.suite('hero_basanos: review (v2) — a form swap keeps the basic slot\'s bookkeeping (no phantom refunds for AutoPlay)', function (t) {
+    fight({ heroes: [{ x: 2, y: 4, skills: ['bas_transform'] }], enemies: [{ id: 'test_brute', x: 3, y: 4, hpMult: 5 }] });
+    const u = B(), g = foes()[0];
+    use(t, u, u.basic, g.x, g.y, 'sword 1');
+    use(t, u, u.basic, g.x, g.y, 'sword 2');
+    use(t, u, u.skills[0], u.x, u.y, 'Transform');
+    t.ok(u.basic.id === 'bas_claw' && u.basic.uses === 2 && u.basic.usedThisTurn === true,
+      'the Claw takes over the slot\'s count (2 uses) and "used this turn" (' + u.basic.uses + ')');
+    DD.Combat.endTurn();
+    use(t, u, u.basic, g.x, g.y, 'claw');
+    use(t, u, u.skills[0], u.x, u.y, 'Transform back');
+    t.ok(u.basic.id === 'bas_sword' && u.basic.uses === 3 && u.basic.cd === 0, 'and back: still one slot, 3 basic attacks so far (' + u.basic.uses + ')');
+    // a fresh slot (uses 0) read as refunded uses to AutoPlay (+2 each): a werewolf who had clawed a lot transformed
+    // there and back for nothing, or into a man next to the foe he was mauling
+    [{ x: 3, label: 'next to him' }, { x: 8, label: 'a walk away' }].forEach(function (p) {
+      fight({ heroes: [{ x: 2, y: 4, level: 3, skills: ['bas_transform', 'bas_shoulder_check'] }], enemies: [{ id: 'test_grunt', x: p.x, y: 4, hpMult: 4 }] });
+      const v = B(), gr = foes()[0], h0 = gr.hp;
+      form(v, true);
+      v.basic.uses = 6;
+      let seq = [];
+      t.tryRun('AutoPlay turn (' + p.label + ')', function () { seq = usedBy(v, function () { DD.AutoPlay.takeTurn(); }); });
+      t.ok(seq.indexOf('bas_transform') < 0 && wolf(v) && gr.hp < h0,
+        'AutoPlay: a werewolf after 6 Claws, grunt ' + p.label + ': he stays a wolf and mauls it (' + seq.join(', ') + ')');
+    });
+  });
+
+  T.suite('hero_basanos: review (v2) — Hair Trigger after a refused down (Plot Armor: "stay up at 1 HP")', function (t) {
+    // the engine asks onTakeDamage before it decides the down: at that moment he is at 0 HP, so the wolf has to wait for
+    // the next thing that happens to him (here: the end of the stab, his turn start, the attack of opportunity)
+    const real = !!(DD.getPassive && DD.getPassive('rp_plot_armor'));
+    t.log(real ? 'with the real Plot Armor Blessing' : 'rp_plot_armor not loaded (isolated run): a fight rule refuses the down');
+    /** Plot Armor on him (the real Blessing when loaded, else an equivalent once-a-fight rule). */
+    function armored(cfg) {
+      if (real) cfg.heroes[0].passives = [{ id: 'rp_plot_armor', level: 1 }];
+      fight(cfg);
+      if (!real) {
+        A().addRule({ id: 'bas_review_plot', name: 'Plot armor (test)', hooks: { preventDeath: function (unit) {
+          if (!unit || unit.defId !== 'basanos' || unit.data.basReviewPlot) return false;
+          unit.data.basReviewPlot = true;
+          unit.hp = 1;
+          A().touch();
+          return true;
+        } } });
+      }
+      return B();
+    }
+    // on the grunt's turn: stabbed "to death" at 3 HP, he stays up at 1 HP; his next turn starts as the werewolf (free)
+    const u = armored({ heroes: [{ x: 2, y: 4, skills: ['bas_transform'] }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }], enemyAi: true });
+    u.hp = 3;
+    let triggers = 0;
+    const origLog = A().log;
+    A().log = function (msg) { if (/Hair Trigger/.test(String(msg))) triggers++; return origLog.apply(this, arguments); };
+    let seen = [];
+    try {
+      seen = atTurnStarts(u, function () { return { wolf: wolf(u), hp: u.hp, basic: u.basic.id, mov: u.mov, downed: u.downed }; }, function () { DD.Combat.endTurn(); });
+    } finally { A().log = origLog; }
+    t.ok(seen.length === 1 && !seen[0].downed && seen[0].hp === 1, 'the stab would have downed him: he is still up at 1 HP ' + JSON.stringify(seen));
+    t.ok(seen.length === 1 && seen[0].wolf && seen[0].basic === 'bas_claw' && seen[0].mov === 6 && u.ap === 3,
+      'his turn starts as the werewolf: Claw, +2 move, all 3 AP');
+    t.eq(triggers, 1, 'Hair Trigger fired once');
+    // on his own walk: a lethal attack of opportunity, refused: the wolf gets out right there and he walks on
+    const v = armored({ heroes: [{ x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
+    v.hp = 3;
+    t.ok(DD.Combat.move(v, 0, 4), 'he walks away from the grunt');
+    t.ok(!v.downed && v.hp === 1 && wolf(v) && v.mov === 6 && v.x === 0, 'stabbed on the way out, Plot Armor holds: a 1-HP werewolf at the end of the walk (' + v.x + ',' + v.y + ')');
+    // a lethal hit that is NOT refused leaves nothing pending: Help Up brings back the man
+    fight({ heroes: [{ x: 2, y: 4 }, { id: 'test_knight', x: 1, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
+    const w = B();
+    A().damage(foes()[0], w, 99, { cause: 'other' });
+    A().revive(w, 0.25);
+    DD.Combat.endRound();
+    t.ok(DD.Combat.current() === w && !wolf(w) && w.basic.id === 'bas_sword' && w.hp * 2 < w.maxHp, 'downed for real, helped up at 25%: still a man on his next turn (the next hit sets him off)');
+  });
+
+  T.suite('hero_basanos: review (v2) — his attack of opportunity is the basic of his real form (a dispel with nothing after it)', function (t) {
+    fight({ heroes: [{ x: 2, y: 4, skills: ['bas_transform'] }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
+    const u = B(), g = foes()[0];
+    use(t, u, u.skills[0], u.x, u.y, 'Transform');
+    DD.Combat.endTurn();
+    A().cleanse(u, 'buff');
+    t.ok(!wolf(u) && u.basic.id === 'bas_claw', 'dispelled with no hook after it: the slot is still the Claw until something re-syncs him');
+    const o = DD.Act.opportunityOf(u, g, null, { x: 4, y: 4 });
+    t.ok(!!o && o.skill.id === 'bas_sword' && o.level === 1, 'the reaction the move preview and the AI see is the Silvered Sword (' + (o && o.skill.id) + ')');
+    const pv = DD.Combat.provokes(g, 6, 4);
+    t.ok(pv.length === 1 && pv[0].skillId === 'bas_sword' && pv[0].dmg === 5, 'the grunt\'s move preview: the sword, 5 ' + JSON.stringify(pv));
+    const h0 = g.hp;
+    const seen = aoos(function () { DD.AI.moveTo(g, 6, 4); });
+    t.ok(seen.length === 1 && seen[0].skillId === 'bas_sword' && h0 - g.hp === 5 && !has(g, 'bleed'), 'a man swings a sword: 5 damage, no Bleed ' + JSON.stringify(seen));
+    t.ok(u.basic.id === 'bas_sword' && u.mov === 4 && !u.sprite, 'the reaction re-synced him: sword slot, move 4, human look');
+    // in his true form nothing changes: the werewolf still claws
+    fight({ heroes: [{ x: 2, y: 4, skills: ['bas_transform'] }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
+    const w = B(), g2 = foes()[0];
+    use(t, w, w.skills[0], w.x, w.y, 'Transform');
+    const o2 = DD.Act.opportunityOf(w, g2, null, { x: 4, y: 4 });
+    t.ok(!!o2 && o2.skill.id === 'bas_claw' && o2.slot === w.basic, 'a werewolf reacts with his own Claw slot');
+  });
+
+  // ---- v2 requests (Nov 3): barrels ----------------------------------------------------------------------------------
+  T.suite('hero_basanos: v2 requests — Silvered Sword and Claw set off an explosive barrel; Pounce leaps at foes, never at a barrel', function (t) {
+    function arena() {
+      return fight({ objects: [{ x: 3, y: 4, id: 'barrel_explosive' }, { x: 2, y: 7, id: 'barrel_explosive' }],
+        enemies: [{ id: 'test_grunt', x: 4, y: 4, hpMult: 3 }, { id: 'test_grunt', x: 8, y: 8 }] });
+    }
+    arena();
+    let u = B();
+    const pl = give(u, 'bas_pounce', 3);
+    t.eq(DD.Targeting.validTargets(u, pl).filter(function (q) { return !!q.obj; }).length, 0, 'Pounce never lists a barrel');
+    t.ok(!valid(u, pl, 2, 7) && !valid(u, pl, 3, 4), '...and isValidTarget agrees');
+    ['bas_sword', 'bas_claw'].forEach(function (id) {
+      arena();
+      u = B();
+      const sl = give(u, id, 1), g = at(4, 4), g0 = g.hp;
+      t.ok(DD.Targeting.validTargets(u, sl).some(function (q) { return q.obj === 'barrel_explosive' && q.x === 3 && q.y === 4; }), id + ': can be aimed at the adjacent barrel');
+      t.eq(DD.Combat.preview(u, sl, 3, 4).detonates, 'barrel_explosive', id + ': the preview detonates it');
+      previewMatches(t, u, sl, 3, 4, id + ' at a barrel');
+      t.ok(!tile(3, 4).obj && g.hp < g0 && !st(g, 'bleed'), id + ': it went off; the grunt next to it takes the blast (no Bleed: the claw hit a barrel)');
+    });
   });
 })();

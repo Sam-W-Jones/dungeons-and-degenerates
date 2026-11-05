@@ -1,8 +1,10 @@
 /* Dungeons and Degenerates — js/data/heroes/josiah.js
  * Josiah the Medically Dubious — plague doctor: Poison that spreads, potions that (mostly) heal, a flammable Plague
- * Miasma and a raven he never leaves home without. v2 kit (DESIGN §6 "Simplicity"): one verb per skill; the power is in
- * the combinations — Poison + Contagion, Quarantine's Rooted / Vulnerable, the raven's Marked, a cloud any fire ignites,
- * a bomb that blasts foes into pits.
+ * Miasma and Onyx, a raven he never leaves home without. v2 kit (DESIGN §6 "Simplicity"): one verb per skill; the power is in
+ * the combinations — Poison + Contagion, Quarantine's Rooted / Vulnerable, the raven's Marked, a cloud other heroes'
+ * fire ignites, a bomb that blasts foes into pits, traps and his own cloud.
+ * Attacks of opportunity: his cane reaches 2 tiles and flags.noOpportunity keeps it that way (he never makes them, even
+ * Dazzled); the raven's Peck is melee, so the raven does. Raven Dive moves the raven by teleport (never provokes).
  * Passive "Unlicensed Apothecary": his raven (summon jos_raven) at combat start, contagious Poison (combat rule
  * jos_contagion) and +1 consumable slot (hero def consumableSlots, read by DD.Run).
  * Registers: hero josiah, 14 skills (jos_*: basic, signature, 10 pool, 2 raven), status jos_vaccinated, surface
@@ -107,11 +109,11 @@
     });
     return best;
   }
-  /** Raven skills: true, or why not ('Needs your raven.' only when the skill can't call a new one). */
+  /** Raven skills: true, or why not ('Needs Onyx.' only when the skill can't call a new one). */
   function ravenProblem(user, needsOne) {
     const r = ravenOf(user);
-    if (!r) return needsOne ? 'Needs your raven.' : true;
-    return knocked(r) ? 'Your raven is indisposed.' : true;
+    if (!r) return needsOne ? 'Needs Onyx.' : true;
+    return knocked(r) ? 'Onyx is indisposed.' : true;
   }
 
   // ---- passive: Unlicensed Apothecary -------------------------------------------------------------------
@@ -147,7 +149,7 @@
 
   const PASSIVE = {
     name: 'Unlicensed Apothecary',
-    desc: 'Starts each fight with his raven. Poison is contagious: when a Poisoned foe dies, adjacent foes catch all of its ' +
+    desc: 'Starts each fight with Onyx, his raven. Poison is contagious: when a Poisoned foe dies, adjacent foes catch all of its ' +
       'Poison. +1 consumable slot.',
     hooks: {
       onCombatStart: function (unit) {
@@ -211,11 +213,13 @@
   }
   DD.registerSurface({
     id: 'jos_miasma', name: 'Plague Miasma', color: 'rgba(120,170,60,0.5)', turns: 2, airborne: true,
-    desc: 'Foes of its brewer that enter it are Poisoned. Flammable: fire turns the whole cloud into flames.',
+    desc: 'Foes of its brewer are Poisoned on each Miasma tile they enter. Flammable: fire turns the whole cloud into flames.',
     react: { fire: { surface: 'fire', turns: 2, spread: true } },
     // only its brewer's foes see a hazard (AI paths avoid it; the brewer's side walks through freely)
     hazard: function (unit, tile) { return !unit || miasmaFoe(unit, tile); },
     hazardDmg: 3,
+    // what it does: Poison only, so poison-proof foes (slimes, skeletons, constructs...) see no hazard
+    hazardStatus: 'poison',
     onEnter: function (unit, tile) {
       const sf = tile && tile.surface;
       if (!active(unit) || !sf || sf.id !== 'jos_miasma' || !miasmaFoe(unit, tile)) return;
@@ -277,8 +281,9 @@
   });
 
   // ---- basic & signature --------------------------------------------------------------------------------
+  // tagged 'reach', not 'melee': tooltips show the tags, and in v2 "melee" reads as "holds the line" (it never does)
   DD.registerSkill({
-    id: 'jos_cane', name: 'House Call', owner: 'josiah', icon: '🩺', kind: 'attack', tags: ['melee'], ap: 1,
+    id: 'jos_cane', name: 'House Call', owner: 'josiah', icon: '🩺', kind: 'attack', tags: ['reach'], ap: 1,
     levels: [{ dmg: 4, sick: 6 }],
     target: { type: 'unit', range: [1, 2], filter: 'enemy', los: true },
     desc: function (L) { return 'Poke a foe up to 2 tiles away with your cane: ' + L.dmg + ' damage, ' + L.sick + ' if it is Poisoned.'; },
@@ -356,10 +361,10 @@
     levels: [{ dmg: 4 }, { dmg: 5 }, { dmg: 6, dazzle: 1 }],
     target: { type: 'unit', range: [1, 5], filter: 'enemy', los: false },
     desc: function (L) {
-      return 'Your raven swoops next to a foe within 5 and pecks it for ' + L.dmg + ' damage' + (L.dazzle ? ' and Dazzles it' : '') +
-        '. No raven? A new one answers.';
+      return 'Onyx (called back if gone) swoops next to a foe within 5 and pecks it for ' + L.dmg + ' damage' +
+        (L.dazzle ? ' and Dazzles it' : '') + '.';
     },
-    flavor: 'Ravens go for the eyes. This one also goes for the snacks.',
+    flavor: 'Ravens go for the eyes. Onyx also goes for the snacks.',
     canUse: function (ctx) { return ravenProblem(ctx.user, false); },
     execute: function (ctx) {
       const user = ctx.user, u = ctx.targetUnit;
@@ -406,9 +411,10 @@
     ap: 2, cooldown: 3,
     levels: [{ poison: 2, turns: 2 }, { poison: 3, turns: 2 }, { poison: 3, turns: 3 }],
     target: { type: 'tile', range: [1, 4], filter: 'any', los: false }, area: { shape: 'circle', size: 1 },
+    // every Miasma tile a foe enters doses it (a surface's onEnter runs per tile): shoving a foe through the cloud stacks up
     desc: function (L, user) {
-      return 'Fill radius 1 with Plague Miasma for ' + L.turns + ' rounds: foes in it or entering it are Poisoned ' + pz(L.poison, user) +
-        '. Flammable.';
+      return 'Fill radius 1 with Plague Miasma for ' + L.turns + ' rounds: foes inside are Poisoned ' + pz(L.poison, user) +
+        ', and again on each Miasma tile they enter. Flammable.';
     },
     flavor: 'Bad air is a legitimate medical theory. Josiah is making it a legitimate weapon.',
     execute: function (ctx) {
@@ -460,7 +466,7 @@
       return 'Cure an ally within 3 (or yourself) of all debuffs; it is immune to new ones for ' + L.turns + ' ' + plural(L.turns, 'turn') +
         (L.block ? ' and gains ' + L.block + ' Block' : '') + '.';
     },
-    flavor: 'Mild soreness at the injection site is normal. So is the raven watching.',
+    flavor: 'Mild soreness at the injection site is normal. So is Onyx watching.',
     execute: function (ctx) {
       const u = ctx.targetUnit;
       if (!u) return;
@@ -484,7 +490,7 @@
     target: { type: 'tile', range: [2, 4], filter: 'any', los: true }, area: { shape: 'circle', size: 1 },
     desc: function (L) {
       return 'Lob a bomb: every unit in radius 1 takes ' + L.dmg + ' fire damage (allies too) and is pushed ' + L.push + ' ' +
-        plural(L.push, 'tile') + ' outward. Ignites oil and Miasma.';
+        plural(L.push, 'tile') + ' outward.';
     },
     flavor: 'The label says DO NOT SHAKE. Josiah has never been good with labels.',
     execute: function (ctx) {
@@ -494,8 +500,7 @@
       DD.FX.shake(6, 300);
       const victims = ctx.units.slice();
       victims.forEach(function (v) { if (active(v)) A().damage(user, v, ctx.L.dmg, { element: 'fire' }); });
-      // the blast's fire reacts with the tiles: oil and Miasma go up (the whole slick / cloud), barrels go off
-      ctx.tiles.forEach(function (p) { A().applyElement(p.x, p.y, 'fire', user, { noUnits: true }); });
+      // v2 (one rider: the push): the blast no longer ignites the ground; lighting his cloud is other heroes' job
       // outer ring first, so the blast scatters the crowd instead of bonking it together
       victims.slice().sort(function (a, b) { return G().dist(b, c) - G().dist(a, c); }).forEach(function (v) {
         if (!active(v)) return;
@@ -512,11 +517,11 @@
   }
   DD.registerSkill({
     id: 'jos_murder', name: 'Murder of Crows', owner: 'josiah', icon: '🪶', kind: 'spell', tags: ['aoe', 'raven'], ap: 3, cooldown: 3,
-    levels: [{ dmg: 5 }, { dmg: 6 }, { dmg: 7, mark: 3 }],
+    levels: [{ dmg: 7 }, { dmg: 9 }, { dmg: 10, mark: 3 }],
     target: { type: 'self' }, area: { shape: 'custom', fn: murderTiles },
     desc: function (L) {
-      return 'Your raven calls the flock: every foe within 2 tiles of it takes ' + L.dmg + ' damage' +
-        (L.mark ? ' and is Marked (+' + L.mark + ' to the next hit)' : '') + '.';
+      return 'Onyx calls the flock: every foe within 2 tiles of him takes ' + L.dmg + ' damage' +
+        (L.mark ? ' and is Marked ' + L.mark : '') + '.';
     },
     flavor: 'A group of crows is a murder. A group of Josiah\'s crows is a malpractice suit.',
     canUse: function (ctx) { return ravenProblem(ctx.user, true); },
@@ -575,8 +580,9 @@
     id: 'jos_omen', name: 'Ill Omen', owner: 'summon', icon: '👁️', kind: 'spell', tags: ['ranged', 'mark'], ap: 1, cooldown: 1,
     levels: [{ mark: 3 }, { mark: 4 }, { mark: 5 }],
     target: { type: 'unit', range: [1, 4], filter: 'enemy', los: true },
-    desc: function (L) { return 'Caw ominously at a foe within 4: it is Marked (+' + L.mark + ' damage from the next hit).'; },
-    flavor: 'Nobody likes it when the raven stares. Least of all the one it stares at.',
+    // Marked: the next damage of any kind, a Poison tick included (statuses.js), so the desc says "damage", not "hit"
+    desc: function (L) { return 'Caw ominously at a foe within 4: it is Marked, so the next damage it takes is +' + L.mark + '.'; },
+    flavor: 'Nobody likes it when Onyx stares. Least of all the one he stares at.',
     execute: function (ctx) {
       const u = ctx.targetUnit;
       if (!u) return;
@@ -589,7 +595,8 @@
 
   DD.registerSummon({
     id: RAVEN, name: 'Raven', hp: 10, mov: 5, ap: 2, armor: 0, tags: ['beast', 'bird'], flags: { flying: true },
-    names: ['Nevermore', 'Edgar', 'Mortimer', 'Quoth', 'Sir Caws-a-Lot', 'Lenore', 'Beakley'],
+    // always Onyx, re-summoned or not (he always comes back; ravens are like that); one name keeps the one RNG draw
+    names: ['Onyx'],
     sprite: {
       base: 'flyer', scale: 0.85,
       palette: { skin: '#3d3b57', eye: '#a6ff6a', beak: '#a19cb0', accent: '#7be04a', outline: '#0b0a10', metal: '#d8b25a', scarf: '#7be04a' },
@@ -600,12 +607,12 @@
       onDeath: function (unit) { const o = ownerOf(unit); if (active(o)) A().bark(o, 'raven_down'); },
     },
     barks: {
-      spawn: ['Caw.', 'Nevermore.', '*judgmental head tilt*', 'CAW. (Translation: you again?)'],
+      spawn: ['Caw.', 'Onyx is back. Onyx is always back.', '*judgmental head tilt*', 'CAW. (Translation: you again?)'],
       attack: ['CAW!', '*aggressive pecking*', 'Shiny eye. Mine.'],
       hurt: ['SQUAWK!', 'Caw?!'],
-      death: ['Nevermore...', '*one dramatic feather*'],
+      death: ['Nevermore... (for now)', '*one dramatic feather*'],
     },
-    desc: 'Josiah\'s raven: flies, acts on his turn, 10 HP (+10% per Josiah level). Pecks eyes, delivers omens and silently ' +
+    desc: 'Onyx, Josiah\'s raven: flies, acts on his turn, 10 HP (+10% per Josiah level). Pecks eyes, delivers omens and silently ' +
       'judges every one of his prescriptions.',
   });
 
@@ -617,12 +624,12 @@
   });
   DD.registerItem({
     id: TREATS, name: 'Suspicious Raven Treats', slot: 'trinket', rarity: 'rare', icon: '🐛', hero: 'josiah', stats: {},
-    desc: 'Josiah\'s raven has double max HP.',
-    flavor: 'Do not ask what is in them. The raven asked once. The raven is now enormous.',
+    desc: 'Onyx, Josiah\'s raven, has double max HP.',
+    flavor: 'Do not ask what is in them. Onyx asked once. Onyx is now enormous.',
   });
   DD.registerItem({
     id: ALEMBIC, name: 'Portable Alembic', slot: 'trinket', rarity: 'rare', icon: '🫧', hero: 'josiah', stats: {},
-    desc: 'After every won fight, 50% chance that Josiah brews a random potion for the party.',
+    desc: 'After every won fight, 50% chance that Josiah brews a random potion for the party (if the bag has room).',
     flavor: 'It bubbles in his coat pocket all day. The coat has started bubbling too.',
     hooks: { onCombatEnd: function (unit, result) { brew(unit, result); } },
   });
@@ -647,14 +654,15 @@
   DD.registerHero({
     id: 'josiah', name: 'Josiah', epithet: 'the Medically Dubious', race: 'Human', cls: 'Plague Doctor',
     role: 'Poison healer & raven wrangler', complexity: 2,
-    blurb: 'A plague doctor with a beak full of herbs, a coat full of unlabeled vials and a raven that is smarter than he is. ' +
+    blurb: 'A plague doctor with a beak full of herbs, a coat full of unlabeled vials and a raven named Onyx who is smarter than he is. ' +
       'His cures are only slightly worse than the disease, and his diseases are contagious. Nobody has ever seen his medical ' +
       'license, and he would like to keep it that way.',
     color: '#86b84a',
     unlock: null, // all heroes are available from the start (user request; was: clear act 1)
     stats: { hp: 26, ap: 3, mov: 4, armor: 0, init: 0 },
     growth: { hp: 4 },
-    flags: {},
+    // he never makes attacks of opportunity, even when Dazzle or a house rule shrinks his cane's reach to 1 (melee)
+    flags: { noOpportunity: true },
     consumableSlots: 1,
     sprite: {
       base: 'humanoid', scale: 1, build: 'slim', outfit: 'coat',
@@ -675,19 +683,21 @@
     summons: [RAVEN],
     barks: {
       select: ['The doctor is in. The beak is on.', 'Say "ahh". No, from over there.', 'I have a potion for that. I have a potion for everything.',
-        'Who needs a second opinion? It is still plague.', 'Bring out your wounded. Or your dead. I am flexible.'],
-      start: ['Everyone stay back. I am about to practice medicine.', 'Remember: if it bubbles, don\'t drink it. If it glows, ask first.',
-        'I have diagnosed the problem. It is them.', 'Raven, take notes. Mostly on their weak spots.', 'Masks on, everyone! Oh, it\'s just me? Typical.',
+        'Who needs a second opinion? It is still plague.', 'Bring out your wounded. Or your dead. I am flexible.',
+        'Valdris, forge me a smaller beak. This one whistles.'],
+      start: ['Everyone stay back. I am about to practice medicine.', 'Roll for initiative? I roll for infection.',
+        'I have diagnosed the problem. It is them.', 'Onyx, take notes. Mostly on their weak spots.', 'Masks on, everyone! Oh, it\'s just me? Typical.',
         'Kiri, if you see a ghost, ask about its symptoms.'],
       move: ['Making a house call.', 'Keep your distance. Medically.', 'Coming through! Doctor! Mostly!', 'Mind the miasma. It bites.',
-        'The cane goes first. Then me.'],
+        'The cane goes first. Then me.', 'Pebbles, heel! Not through the miasma! You are ON FIRE!'],
       kill: ['Time of death: just now.', 'Patient discharged. Permanently.', 'The treatment worked. The patient didn\'t.',
         'Should have taken the leeches.', 'I\'ll mark that down as "cured".'],
       hurt: ['Ow! That\'s a billable injury!', 'Not the beak! It\'s load-bearing!', 'I\'ll need a doctor. Oh. Right.',
-        'That will unbalance my humours.', 'Medically speaking: ow.'],
-      lowhp: ['I\'m prescribing myself... everything.', 'My humours are... very unbalanced...', 'Raven! The big bottle! The BIG one!',
-        'This is fine. I have seen worse. Mostly on corpses.', 'Somebody pass me a potion. Not that one. That one!'],
-      downed: ['Tell my raven... he was right...', 'I diagnose myself... with floor.', 'Bring out... your... me...',
+        'That will unbalance my humours.', 'Medically speaking: ow.', 'Ow! Hjalmar, was that one of YOUR traps?!'],
+      lowhp: ['I\'m prescribing myself... everything.', 'My humours are... very unbalanced...', 'Onyx! The big bottle! The BIG one!',
+        'This is fine. I have seen worse. Mostly on corpses.', 'Somebody pass me a potion. Not that one. That one!',
+        'Pebbles, stop licking my wound! You are cauterising it!'],
+      downed: ['Tell Onyx... he was right...', 'I diagnose myself... with floor.', 'Bring out... your... me...',
         'Self-medication... has failed...', 'Don\'t let the corgis lick the wound...'],
       revive: ['I\'m not dead yet! Medically, I\'m thriving!', 'Ah, smelling salts. My own recipe, too.', 'Back on my feet. Mostly on my cane.',
         'Death was a second opinion I didn\'t ask for.', 'The doctor is back in. Sorry for the wait.'],
@@ -695,16 +705,17 @@
         'Marwyn, stop flexing over the body and HELP!', 'Don\'t die! The paperwork is horrendous!', 'Hold still, I\'m coming! Not THAT still!',
         'Basanos, I am a doctor, not a vet! ...Fine. I am both.'],
       levelup: ['My medical license would be so proud. If I had one.', 'New techniques! Some of them are even legal!',
-        'Level up! The raven remains unimpressed.', 'I have learned so much from my malpractice.', 'Experience is the best medicine. Then leeches.'],
+        'Level up! Onyx remains unimpressed.', 'I have learned so much from my malpractice.', 'Experience is the best medicine. Then leeches.'],
       victory: ['Take two of these and call me in the morning.', 'Another successful outbreak. Of victory!',
-        'Raven, collect samples. Not the shiny ones. Samples!', 'Syllamin, that was not "murder". It was a cure.', 'Let\'s loot the bodies. For science.'],
+        'Onyx, collect samples. Not the shiny ones. Samples!', 'Syllamin, that was not "murder". It was a cure.', 'Let\'s loot the bodies. For science.',
+        'Hjalmar, give Onyx his buttons back. Both of you. Now.'],
       idle: ['*ominous bubbling from a coat pocket*', 'Has anyone seen my leeches? Any of them?', 'Zarathor, stop polishing your rings in my miasma.',
-        'The raven says we\'re doing great. He\'s lying.', 'Marbles, that\'s not a nap, that\'s a coma. I\'d know.',
+        'Onyx says we\'re doing great. He\'s lying.', 'Marbles, that\'s not a nap, that\'s a coma. I\'d know.',
         'Betty, the medicine is not a snack. Put it down.'],
       signature: ['Oops. Wrong jar.', 'Wash your hands! WASH YOUR HANDS!', 'Jar Number Seven! Stand well back!', 'I call this one: The Common Everything.',
         'Pandemic! Everyone but us! Probably!'],
-      raven_down: ['My raven! Who is going to judge me now?', 'NEVERMORE?! ...that is not funny.', 'I\'ll bring you back! With science! And seeds!',
-        'No! He still owes me three shiny buttons!'],
+      raven_down: ['Onyx! Who is going to judge me now?', 'NEVERMORE?! ...that is not funny.', 'I\'ll bring you back! With science! And seeds!',
+        'No! He still owes me three shiny buttons!', 'Don\'t worry. Onyx always comes back. Ravens are like that.'],
     },
   });
 })();

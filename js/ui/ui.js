@@ -22,6 +22,17 @@
   let inited = false;
   let cur = null; // { id, def, root, params }
   let updating = false;
+  // A key or click that changed the screen (or opened a modal) must not also act on what appears: Space / Enter and
+  // clicks are swallowed this long after a screen / modal shows (real input only; headless tests act at once).
+  const SHOW_GUARD_MS = 320;
+  let shownAt = -Infinity;
+  let realInputHeadless = false;
+  function clock() { return window.performance && performance.now ? performance.now() : Date.now(); }
+  function noteShown() { shownAt = clock(); }
+  /** True while fresh screen / modal input is being swallowed (see SHOW_GUARD_MS). */
+  UI.inShowGuard = function () { return (!DD.headless || realInputHeadless) && clock() - shownAt < SHOW_GUARD_MS; };
+  /** Tests: apply the show guard headless too (like DD.HUD.realInput). */
+  UI.realInput = function (on) { realInputHeadless = on !== false; };
 
   UI.root = null;
   UI.current = null;
@@ -56,9 +67,8 @@
     cursed: { name: 'Cursed', color: '#c06cff' },
   };
   UI.SLOTS = { weapon: { name: 'Weapon', icon: '🗡️' }, armor: { name: 'Armor', icon: '🛡️' }, trinket: { name: 'Trinket', icon: '💍' } };
-  UI.HERO_ORDER = ['zarathor', 'syllamin', 'marbles', 'marwyn', 'ellaria', 'josiah', 'buga', 'sparrow', 'slate', 'corelos'];
-  // v1 XP table (cumulative XP to reach levels 2..10), only for the deprecated UI.xpForLevel below.
-  const XP_FALLBACK = [10, 25, 45, 70, 100, 140, 185, 235, 290];
+  UI.HERO_ORDER = ['zarathor', 'syllamin', 'marbles', 'marwyn', 'ellaria', 'josiah', 'buga', 'sparrow', 'slate', 'corelos',
+    'kiri', 'betty', 'basanos', 'valdris', 'hjalmar', 'pebbles'];
   const MAX_LEVEL = 10;
 
   // ---- tiny utils -------------------------------------------------------------------------------------------------
@@ -174,6 +184,12 @@
         e.preventDefault();
       });
       document.addEventListener('mousemove', onMouseMove, { passive: true, capture: true });
+      // the second click of a double click that changed the screen (or opened a modal) lands on nothing
+      document.addEventListener('click', function (e) {
+        if (!e.isTrusted || !UI.inShowGuard()) return;
+        const t = e.target;
+        if (t && t.closest && t.closest('#ui') && !(t.closest('input, textarea, select'))) { e.preventDefault(); e.stopImmediatePropagation(); }
+      }, true);
       document.addEventListener('mousedown', function () { if (tipAnchor && tipAnchor._ddTip && tipAnchor._ddTip.opts.hideOnClick !== false) hideTip(); }, true);
       window.addEventListener('resize', function () { hideTip(); });
       if (DD.Events) {
@@ -219,6 +235,7 @@
     const root = el('div.screen.screen-' + id);
     if (def.cls) applyAttrs(root, { class: def.cls });
     layers.screens.appendChild(root);
+    noteShown();
     const me = { id: id, def: def, root: root, params: params || {} };
     cur = me;
     UI.current = id;
@@ -362,6 +379,8 @@
     }
     if (typing && key !== 'Escape') { if (top) e.stopImmediatePropagation(); return; }
     if (e.ctrlKey || e.metaKey || e.altKey) return;
+    // the press that changed the screen (or a quick second one) never also fires the new screen's Space / Enter
+    if ((key === ' ' || key === 'Enter') && UI.inShowGuard()) { consume(e); return; }
     const btn = findHotkey(key, top);
     if (btn) { consume(e); if (!e.repeat) btn.click(); return; }
     if (top) {
@@ -419,7 +438,8 @@
     backdrop.appendChild(box);
     const backdropClose = opts.backdropClose !== undefined ? opts.backdropClose : closable;
     backdrop.addEventListener('mousedown', function (e) {
-      if (e.target === backdrop && backdropClose) handle.close('backdrop');
+      // (the second press of the double click that opened it does not close it again)
+      if (e.target === backdrop && backdropClose && !(e.isTrusted && UI.inShowGuard())) handle.close('backdrop');
     });
     handle.close = function (reason) {
       if (handle.closed) return;
@@ -434,6 +454,7 @@
     hideTip();
     layers.modals.appendChild(backdrop);
     modalStack.push(handle);
+    noteShown();
     return handle;
   };
 
@@ -451,11 +472,11 @@
    * choice({ title, text, icon, options: [{ label, desc, icon, content, badge, tooltip, onPick, disabled, reason, cls,
    *          style, hotkey }], cancelLabel, onCancel, closable = false, size }) → modal handle.
    * Options are big cards with hotkeys 1-9, 0, then a, b, c… (UI.PICK_KEYS; `hotkey` overrides). The modal closes
-   * before onPick runs.
+   * before onPick runs. Long lists (7+ options, e.g. the tavern's twelve recruits) use four compact columns.
    */
   UI.choice = function (opts) {
     opts = opts || {};
-    const list = el('div.choice-list');
+    const list = el('div.choice-list' + ((opts.options || []).filter(Boolean).length > 6 ? '.many' : ''));
     const bodyKids = [];
     if (opts.text) bodyKids.push(isNode(opts.text) ? opts.text : el('div.choice-text', { html: String(opts.text) }));
     bodyKids.push(list);
@@ -695,13 +716,6 @@
     return s;
   };
 
-  /** Deprecated (v2 has no XP; nothing in the game shows or uses it): the v1 cumulative XP to reach `level`, kept
-   *  so older debug callers (js/main.js) keep working until they move to DD.Run.levelUp. */
-  UI.xpForLevel = function (level) {
-    if (level <= 1) return 0;
-    if (level > MAX_LEVEL) return Infinity;
-    return level - 2 < XP_FALLBACK.length ? XP_FALLBACK[level - 2] : Infinity;
-  };
   UI.MAX_LEVEL = MAX_LEVEL;
 
   // ---- v2 leveling: no XP — one hero levels up per won fight, drawn among the lowest levels (DD.Run) ------------
@@ -1109,6 +1123,7 @@
     if (notes.length) h += '<div class="tt-costnote">' + esc(notes.join(' · ')) + (live ? '' : ' (its cost at the start of a turn)') + '</div>';
     if (opts.paidBy) h += '<div class="tt-costnote">🩸 ' + esc(opts.paidBy) + ' pays the ' + info.baseHp + ' HP instead' + (opts.paidWhy ? ' (' + esc(opts.paidWhy) + ')' : '') + '.</div>';
     h += '<div class="tt-target">🎯 ' + esc(tgt.join(' · ')) + '</div>';
+    UI.aimNotes(info.def, info.user).forEach(function (n) { h += '<div class="tt-target tt-aimnote">' + esc(n) + '</div>'; });
     if (slot && info.charges) h += '<div class="tt-target">Uses left this fight: ' + Math.max(0, info.charges - num(slot.uses)) + '</div>';
     h += '<div class="tt-desc">' + esc(info.desc || 'No description.') + '</div>';
     if (opts.showNext && info.next) h += '<div class="tt-next"><span>Level ' + U.roman(info.level + 1) + ':</span> ' + esc(info.next) + '</div>';
@@ -1257,6 +1272,25 @@
     return card;
   };
 
+  /**
+   * v2 (user requests): what else a hero's skill / consumable can be aimed at (DD.Targeting.aimsAtObjects /
+   * revivesWith) — an explosive object (it goes off; the skill's own effects don't happen) or a downed ally (it gets back
+   * up with the healed HP). `unit`: the hero using it (its basic attack counts), or nothing (a stand-in hero). → [lines]
+   */
+  UI.aimNotes = function (def, unit) {
+    const T = DD.Targeting;
+    if (!def || !T) return [];
+    const user = unit && unit.kind ? unit : { kind: 'hero', side: 'hero', id: '_aimNotes' };
+    const out = [];
+    if (typeof T.aimsAtObjects === 'function' && DD.safe('Targeting.aimsAtObjects', T.aimsAtObjects, T, [user, def])) {
+      out.push('💥 Can also be aimed at an explosive barrel (anything volatile) in range to set it off: the blast happens instead of its usual effect.');
+    }
+    if (typeof T.revivesWith === 'function' && DD.safe('Targeting.revivesWith', T.revivesWith, T, [user, def])) {
+      out.push('🆘 Aimed at a downed ally, it gets that ally back up with the healed HP.');
+    }
+    return out;
+  };
+
   function consumableTargetLabel(d) {
     const tg = d.target || {};
     if (tg.type === 'self') return 'Self';
@@ -1276,6 +1310,7 @@
     h += '<div class="tt-sub"><span class="rarity-text">' + esc(UI.rarityName(d.rarity)) + '</span> Consumable</div></div></div>';
     h += '<div class="tt-costs"><span class="pill ap">' + num(d.ap, 1) + ' AP</span><span class="pill">Single use</span></div>';
     h += '<div class="tt-target">🎯 ' + esc(consumableTargetLabel(d)) + '</div>';
+    UI.aimNotes(d, null).forEach(function (n) { h += '<div class="tt-target tt-aimnote">' + esc(n) + '</div>'; });
     if (d.desc) h += '<div class="tt-desc">' + esc(d.desc) + '</div>';
     if (d.flavor) h += '<div class="tt-flavor">“' + esc(d.flavor) + '”</div>';
     if (opts.price !== undefined && opts.price !== null) h += '<div class="tt-foot">Price: ' + UI.goldHtml(opts.price) + '</div>';
@@ -1507,6 +1542,7 @@
     h += '<div class="tt-sub">' + esc([d.race, d.cls].filter(Boolean).join(' ')) + (d.role ? ' · ' + esc(d.role) : '') + '</div></div></div>';
     h += '<div class="tt-costs"><span class="pill">❤ ' + num(st.hp) + ' HP</span><span class="pill ap">' + num(st.ap, 3) + ' AP</span><span class="pill">👣 ' + num(st.mov) + ' Move</span>' + (num(st.armor) ? '<span class="pill">🛡 ' + num(st.armor) + ' Armor</span>' : '') +
       '<span class="pill" title="Initiative modifier: added to the d20 when a fight starts">🎲 Init ' + initText(st.init) + '</span></div>';
+    if (d.flags && d.flags.flying) h += '<div class="tt-target">' + esc(UI.flyLine(d.name)) + '</div>';
     if (d.passive) h += '<div class="tt-desc"><b>' + esc(d.passive.name || 'Passive') + ':</b> ' + esc(d.passive.desc || '') + '</div>';
     if (opts.locked) h += '<div class="tt-foot">🔒 ' + esc(UI.unlockHint(d)) + '</div>';
     h += '</div>';
@@ -1517,6 +1553,8 @@
   function initText(v) { const n = Math.round(num(v)); return (n < 0 ? '−' : '+') + Math.abs(n); }
   UI.initText = initText;
 
+  /** v2 (user request): what flying means, wherever a flyer is described outside a fight. */
+  UI.flyLine = function (who) { return '🪽 Flying: ignores floor effects — lava, fire, puddles, traps and pressure plates. Clouds and gases still reach ' + (who || 'it') + '.'; };
   const TIER_LABEL = { minion: 'Minion', normal: 'Enemy', elite: 'Elite', boss: 'Boss' };
   UI.enemyTooltipHtml = function (enemyId) {
     const d = DD.getEnemy(enemyId) || DD.getSummon(enemyId);
@@ -1532,6 +1570,7 @@
     const res = d.resist || {};
     const rl = Object.keys(res).map(function (k) { const v = num(res[k], 1); return v === 0 ? 'Immune to ' + k : v < 1 ? 'Resists ' + k : v > 1 ? 'Weak to ' + k : ''; }).filter(Boolean);
     if (rl.length) h += '<div class="tt-target">' + esc(rl.join(' · ')) + '</div>';
+    if (d.flags && d.flags.flying) h += '<div class="tt-target">' + esc(UI.flyLine()) + '</div>';
     const sk = (d.skills || []).map(function (id) { const s = DD.getSkill(id); return s ? (s.icon || '') + ' ' + s.name : null; }).filter(Boolean);
     if (sk.length) h += '<div class="tt-target">Moves: ' + esc(sk.join(', ')) + '</div>';
     if (d.desc) h += '<div class="tt-flavor">' + esc(d.desc) + '</div>';
@@ -1886,6 +1925,9 @@
       if (landed || m.closed) return;
       landed = true;
       clearTimeout(timer);
+      // the choices just appeared: the Enter / Space / click that skipped the roll (or a quick second one) must not
+      // also keep a Blessing nobody has read yet
+      noteShown();
       die.num.textContent = String(roll.d100);
       die.el.classList.remove('rolling');
       die.el.classList.add('landed');

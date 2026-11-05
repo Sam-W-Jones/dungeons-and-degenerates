@@ -1,16 +1,19 @@
 /* Dungeons and Degenerates — js/data/heroes/betty.js
- * Hero: Betty (goatfolk warrior, he/him, starter) — frontline charger / knockback / taunts. Owner: hero-betty.
+ * Hero: Betty (goatfolk warrior, he/him, starter) — frontline charger / knockback / holds the line. Owner: hero-betty.
  * v2-simple kit (DESIGN §6 "Simplicity"): one verb per skill and at most one rider; the power is in the combos
  * (rams into pits / lava / water / runes / fire, Stuns and Taunts before the enemy's turn, Vulnerable foes tossed into
  * the party, Kick 'Em on whatever the party Stunned or Rooted). Goats climb: flags.hop (up 2 levels per step).
+ * Attacks of opportunity: his hammer is melee, so foes that walk away from him get hit; You Shall Not Pasture! makes
+ * those hits bigger and Roots the walker, while his charges, leaps and flips never provoke anything.
  * Passive Eats Anything: Betty heals 4 HP for every foe he kills and every object one of his skills breaks.
- * Registers: hero betty, 11 skills (bet_*), 3 hero items. No custom statuses or summons.
+ * Registers: hero betty, 12 skills (bet_*), 1 status (bet_pasture), 3 hero items. No summons.
  */
 (function () {
   'use strict';
   const DD = window.DD;
 
   const EAT_HEAL = 4;                       // Eats Anything
+  const PASTURE = 'bet_pasture';            // You Shall Not Pasture! (skill and status)
   const MALLET = 'bet_grandmas_mallet';
   const PLATE = 'bet_name_plate';
   const COWBELL = 'bet_cowbell';
@@ -58,6 +61,12 @@
     if (o) for (const k in o) n += o[k] || 0;
     return n;
   }
+  /** Bookmark the fight's broken-object count on Betty (and the turn it was taken in). */
+  function bookmark(u) {
+    const d = dataOf(u), s = DD.Combat.state;
+    d.betObjects = objectsBroken();
+    d.betTurn = s ? s.turn : 0;
+  }
   /** Betty eats something: +4 HP (a cosmetic "Nom!" either way). */
   function eat(u, what) {
     if (!active(u)) return 0;
@@ -70,13 +79,16 @@
     name: 'Eats Anything',
     desc: 'Whenever Betty kills a foe or one of his skills breaks an object, he eats it and heals ' + EAT_HEAL + ' HP. Don\'t ask.',
     hooks: {
-      // the paid use (ctx.paid of this very skill) remembers how many objects were broken before it resolved
-      onCostPaid: function (p) { if (p) p.betObjects = objectsBroken(); },
+      // Objects (the engine has no "object broken by" hook): bookmark the count when he pays for a skill (not a
+      // consumable) and after each skill; a skill's breaks = what it added. A free re-use in the same turn (an Echo
+      // Chamber echo) counts from the last bookmark; a free swing on someone else's turn (Delegate) has none.
+      onCostPaid: function (p) { if (p && !p.consumable && active(p.unit)) bookmark(p.unit); },
       onSkillUsed: function (ctx) {
-        const u = ctx && ctx.user, p = ctx && ctx.paid;
-        if (!active(u) || !p || typeof p.betObjects !== 'number') return;
-        const n = objectsBroken() - p.betObjects;
-        p.betObjects = objectsBroken();
+        const u = ctx && ctx.user, d = u && u.data, s = DD.Combat.state;
+        if (!active(u) || !d || typeof d.betObjects !== 'number' || !s || d.betTurn !== s.turn) return;
+        if (ctx.paid && ctx.paid.consumable) return;
+        const n = objectsBroken() - d.betObjects;
+        bookmark(u);
         for (let i = 0; i < n && active(u); i++) eat(u, 'object');
       },
       onKill: function (d) {
@@ -165,6 +177,17 @@
     return null;
   }
 
+  /** AI hint: would pushing `foe` n tiles along dir drop it into a pit / deep water or onto a hazard (lava, fire...)? */
+  function pushHazard(foe, dir, n) {
+    for (let k = 1; k <= n; k++) {
+      const x = foe.x + dir.x * k, y = foe.y + dir.y * k;
+      if (!G().inBounds(x, y)) return false;
+      if ((G().isDrop(x, y) && !G().isFlying(foe)) || G().hazardAt(x, y, foe)) return true;
+      if (G().unitAt(x, y) || !G().isWalkable(x, y, foe)) return false;
+    }
+    return false;
+  }
+
   /** Kick 'Em While They're Down: Stunned-like (stun, sleep, frozen...) or Rooted-like (root, holds). */
   function helpless(u) { return !!u && (DD.Act.isStunned(u) || DD.Act.cantMove(u)); }
 
@@ -185,6 +208,7 @@
       const u = ctx.user, k = hammerTarget(u, ctx.target);
       if (!k) return;
       DD.FX.lunge(u, ctx.target);
+      if (ctx.opportunity) DD.Act.maybeBark(u, 'opportunity', 0.5);   // cosmetic: a foe tried to walk away from him
       if (k.foe) DD.Act.damage(u, k.foe, ctx.L.dmg, { tags: ['melee'] });
       else DD.Act.damageObject(u, ctx.target.x, ctx.target.y, ctx.L.dmg);
     },
@@ -216,7 +240,8 @@
     flavor: 'Horns first, questions never.',
     aiScore: function (ctx) {
       const plan = ctx.user && ctx.target && chargePlan(ctx.user, ctx.target, rangeOf(ctx.user, ctx.skill, ctx.level, ctx.L.range));
-      return plan && plan.foe && G().isEdge(plan.foe.x, plan.foe.y) ? 6 : 0;
+      const n = ctx.L.push + (hasItem(ctx.user, MALLET) ? 1 : 0);
+      return plan && plan.foe && pushHazard(plan.foe, plan.dir, n) ? 6 : 0;
     },
     execute: function (ctx) {
       const u = ctx.user;
@@ -248,14 +273,14 @@
       if (!active(t) || t === u) return;
       DD.FX.lunge(u, t, { ms: 110 });
       DD.FX.shake(5, 220);
-      DD.FX.text(t, 'BONK!', { color: '#ffe08a', size: 20 });
+      DD.FX.text(t, 'BAAA-BONK!', { color: '#ffe08a', size: 20 });
       DD.Act.damage(u, t, ctx.L.dmg, { tags: ['melee'] });
       if (active(t)) DD.Act.addStatus(t, 'stun', { turns: ctx.L.stun || 1 }, u);
     },
   });
 
   skill({
-    id: 'bet_horn_toss', name: 'Head Over Heels', icon: '🤸', kind: 'utility', tags: ['melee', 'throw', 'vulnerable'],
+    id: 'bet_horn_toss', name: 'Head Over Heels', icon: '⤴️', kind: 'utility', tags: ['melee', 'throw', 'vulnerable'],
     ap: 1, cooldown: 2,
     levels: [{ turns: 1 }, { turns: 2 }, { turns: 2, dmg: 5 }],
     target: {
@@ -425,6 +450,61 @@
     },
   });
 
+  // ---- You Shall Not Pasture!: his attacks of opportunity hit harder and pin the walker next to him ----------
+  /** The status instance st sits on unit u (status hooks fire for the attacker's and the mover's sources alike). */
+  function holds(u, st) { return !!u && !!st && Array.isArray(u.statuses) && u.statuses.indexOf(st) >= 0; }
+  DD.registerStatus({
+    id: PASTURE, name: 'Territorial', icon: '🚧', color: '#d8b46a', type: 'buff', stacking: 'refresh', maxStacks: 99,
+    decay: 'turnStart', defaultTurns: 1,
+    desc: function (st) {
+      return 'You Shall Not Pasture!: attacks of opportunity deal +' + ((st && st.stacks) || 0) + ' damage and Root the foe where it stands. ' +
+        'Lasts until his next turn.';
+    },
+    hooks: {
+      // pure (the HUD's move preview, paths and the AI's attack-of-opportunity estimate read it)
+      modifyOpportunity: function (o, st) { if (o && holds(o.attacker, st)) o.flat += st.stacks || 0; },
+      onOpportunityAttack: function (o, st) {
+        const a = o && o.attacker, m = o && o.mover;
+        if (!holds(a, st) || !active(a) || !active(m)) return;
+        DD.FX.text(m, 'Not so fast!', { color: '#ffd28a', size: 15 });
+        DD.Act.maybeBark(a, 'pasture', 0.4);
+        DD.Act.addStatus(m, 'root', { turns: 1 }, a);   // the engine ends a walk once the walker is rooted
+      },
+    },
+  });
+
+  skill({
+    id: PASTURE, name: 'You Shall Not Pasture!', icon: '🚧', kind: 'buff', tags: ['buff', 'opportunity', 'root'],
+    ap: 1, cooldown: 1,
+    levels: [{ aoo: 3 }, { aoo: 5 }, { aoo: 7 }],
+    target: { type: 'self' },
+    desc: function (L) { return 'Until his next turn, Betty\'s attacks of opportunity deal +' + L.aoo + ' damage and Root the foe where it stands.'; },
+    flavor: 'Three Billy Goats Gruff got past the troll. Nobody gets past Betty.',
+    // worth it next to foes that want to leave: divers after the squishies, archers and casters stepping back to shoot.
+    // With nobody next to him it is worth less than nothing (AutoPlay's flat value for a buff would otherwise make it
+    // plant his hooves instead of walking to the fight).
+    aiScore: function (ctx) {
+      const u = ctx.user;
+      if (!active(u) || DD.Act.hasStatus(u, PASTURE)) return -3;
+      let v = 0, n = 0;
+      DD.Combat.foesOf(u).forEach(function (f) {
+        if (!active(f) || G().dist(u, f) !== 1 || DD.Act.cantMove(f) || DD.Act.isStunned(f)) return;
+        const style = (DD.AI.styleOf(f) || {}).style;
+        n++;
+        v += DD.AI.isDiver(f) ? 6 : style === 'ranged' || style === 'coward' || style === 'summoner' || style === 'support' ? 4 : 0.5;
+      });
+      return n ? Math.min(10, v) : -3;
+    },
+    execute: function (ctx) {
+      const u = ctx.user;
+      if (!active(u)) return;
+      DD.FX.text(u, 'You shall not PASTURE!', { color: '#ffe9b0', size: 16 });
+      DD.FX.particles(u, { kind: 'dust', count: 8 });
+      DD.Act.maybeBark(u, 'pasture', 0.5);
+      DD.Act.addStatus(u, PASTURE, { stacks: ctx.L.aoo, turns: 1 }, u);
+    },
+  });
+
   skill({
     id: 'bet_goat', name: 'G.O.A.T.', icon: '🏆', kind: 'attack', tags: ['melee', 'aoe', 'dash', 'stun'],
     ap: 2, hype: 100,
@@ -492,7 +572,7 @@
   DD.registerItem({
     id: COWBELL, name: 'Championship Cowbell', slot: 'trinket', rarity: 'legendary', icon: '🔔', hero: 'betty',
     stats: {},
-    desc: 'Once per turn, when Betty kills a foe, he gains 1 AP.',
+    desc: 'Once per turn, when Betty kills a foe, he gains 1 AP (a kill outside his turn: +1 AP on his next turn).',
     flavor: 'The DM said the fight needed more cowbell. The DM was right.',
     hooks: {
       onKill: function (d) {
@@ -527,7 +607,7 @@
       c.quadraticCurveTo(-5.8, (shY + hipY) / 2, -5.2, shY + 2.4);
       c.closePath();
     }, PLATE_COL, { dx: 1.2, dy: -1, hl: [1.8, shY + 4, 2.4, 1.1, -0.3] });
-    g.text('BETTY', 0, (shY + hipY) / 2 - 0.6, 3.1, '#5a4632', null);
+    g.text('BETTY', 0, (shY + hipY) / 2 + 0.9, 2.8, '#5a4632', null);   // below the goatee's tip
     // hooves: a split down the front of each foot
     const walk = o && typeof o.walk === 'number' ? Math.sin(o.walk * Math.PI * 2) : 0;
     for (let i = 0; i < 2; i++) {
@@ -541,11 +621,11 @@
     g.ellipse(mx + r * 0.13, my - r * 0.1, r * 0.07, r * 0.05, '#4a2f22', null);
     if (!lying && (g.pose === 'attack' || g.pose === 'hurt')) g.ellipse(mx, my + r * 0.12, r * 0.12, r * 0.1, '#3a0f17', null);
     else g.arc(mx, my + r * 0.02, r * 0.14, 0.2 * Math.PI, 0.8 * Math.PI, '#4a2f22', Math.max(0.7, r * 0.07));
-    // goatee: a tapered white tuft off the chin
+    // goatee: a tapered white tuft off the chin (it ends above the name on the breastplate)
     g.path(function (c) {
       c.moveTo(mx - r * 0.2, my + r * 0.24);
-      c.quadraticCurveTo(mx - r * 0.2, my + r * 0.8, mx + r * 0.02, my + r * 1.05);
-      c.quadraticCurveTo(mx + r * 0.16, my + r * 0.7, mx + r * 0.2, my + r * 0.24);
+      c.quadraticCurveTo(mx - r * 0.2, my + r * 0.62, mx + r * 0.02, my + r * 0.8);
+      c.quadraticCurveTo(mx + r * 0.16, my + r * 0.55, mx + r * 0.2, my + r * 0.24);
       c.closePath();
     }, WHITE, g.outline, g.lw * 0.7);
     // goat eyes: horizontal bar pupils (not while blinking, wincing or knocked out)
@@ -574,9 +654,10 @@
   // ---- the hero ------------------------------------------------------------------------------------------
   DD.registerHero({
     id: 'betty', name: 'Betty', epithet: 'the G.O.A.T.', race: 'Goatfolk', cls: 'Warrior',
-    role: 'Frontline charger / knockback / taunts', complexity: 1,
+    role: 'Frontline charger / knockback / holds the line', complexity: 1,
     blurb: 'A big goatfolk warrior named Betty. It\'s a family name. He rams, headbutts and flips anything in his way, ' +
-      'climbs anything taller than him, then eats whatever is left: crates, loot, the map, the DM\'s notes. Calls everyone "kid".',
+      'climbs anything taller than him and never lets a foe just walk away. Then he eats whatever is left: crates, loot, ' +
+      'the map, the DM\'s notes. Calls everyone "kid".',
     color: BROWN,
     unlock: null,
     stats: { hp: 32, ap: 3, mov: 4, armor: 0, init: 1 },
@@ -588,7 +669,7 @@
     passive: PASSIVE,
     startingSkills: ['bet_ram', 'bet_headbutt'],
     skillPool: ['bet_ram', 'bet_headbutt', 'bet_horn_toss', 'bet_bleat', 'bet_stomp', 'bet_goat_yoga', 'bet_snack',
-      'bet_mountain_goat', 'bet_kick'],
+      'bet_mountain_goat', 'bet_kick', PASTURE],
     summons: [],
     barks: {
       select: [
@@ -604,6 +685,7 @@
         'I charge, you lot do the thinking. Deal?',
         'Is that a crate? I\'m eating that crate after.',
         'Somebody hold the map. Wait. I ate the map.',
+        'Pebbles, sit. Good boy. Stop toasting my beard.',
       ],
       move: [
         'Hoof it.',
@@ -615,12 +697,12 @@
         'Down you go, kid.',
         'That\'s what you get for butting in.',
         'Mm. Lunch.',
-        'Next!',
+        'Next! Form an orderly line, kids.',
         'Never mess with the horns.',
       ],
       hurt: [
         'BAAAH! That stung.',
-        'Ow. Rude.',
+        'Hey! Not the horns!',
         'That all you got, kid?',
         'Hit me again. See what happens.',
       ],
@@ -629,6 +711,7 @@
         'Josiah, got anything I can eat? Potions count.',
         'Not now. I\'m busy being stubborn.',
         'I\'ve had worse. I\'ve EATEN worse.',
+        'Valdris! Forge me a new hoof. Or a sandwich.',
       ],
       downed: [
         'Tell Grandpa Betty... I tried...',
@@ -666,6 +749,7 @@
         'Corelos, can I eat this contract? Too late, sorry.',
         'Slate, you look delicious. In a rock way.',
         'Marbles, wake up. You\'re drooling on my hoof.',
+        'Hjalmar, if that\'s another banana peel, I\'m eating it.',
       ],
       signature: [
         'Greatest! Of! All! TIIIME!',
@@ -684,11 +768,13 @@
         'Up and over!',
         'Head over heels, kid!',
         'Wheee! For you. Not for me.',
+        'Hold onto your lunch, kid. Actually, give it here.',
       ],
       bleat: [
         'BAAAH! Over here!',
         'Come get some, kids!',
         'Who wants a piece of the goat?',
+        'Oi! Eyes on the goat! BAAAH!',
       ],
       eat: [
         'Mm. Crunchy.',
@@ -696,12 +782,25 @@
         'Don\'t tell the DM.',
         'That was load-bearing? Oops.',
       ],
+      // his hammer on a foe that walked away from him, and You Shall Not Pasture!
+      opportunity: [
+        'Turning your back on a goat? Bold, kid.',
+        'Where d\'you think you\'re GOAT-ing, kid?',
+        'Leaving so soon? Have a hammer.',
+        'BAAAck here, kid!',
+      ],
+      pasture: [
+        'You shall not PASTURE!',
+        'This is my tile now, kid.',
+        'Nobody gets past the goat.',
+        'Hooves planted. Come and try it.',
+      ],
     },
   });
 
   /** Small public surface for tests and other content. */
   DD.Betty = {
-    EAT_HEAL: EAT_HEAL, hasItem: hasItem, chargePlan: chargePlan, tossLanding: tossLanding, tramplePlan: tramplePlan,
+    EAT_HEAL: EAT_HEAL, PASTURE: PASTURE, hasItem: hasItem, chargePlan: chargePlan, tossLanding: tossLanding, tramplePlan: tramplePlan,
     trampleEnd: trampleEnd, hammerTarget: hammerTarget, helpless: helpless, objectsBroken: objectsBroken,
   };
 })();

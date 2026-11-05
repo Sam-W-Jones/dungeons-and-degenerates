@@ -1,9 +1,11 @@
 /* Dungeons and Degenerates — js/data/narrator.js
- * The DM's voice (ARCHITECTURE §3.10, DESIGN §2 / §11): narration lines for every engine / run / UI key plus the
- * loading-screen tips. The DM is snarky, sleep-deprived, secretly proud of the party, fudges dice, eats Cheetos and
- * threatens "rocks fall". Tokens are used only where every caller fills them (DD.Narrator.TOKENS); DD.narrate leaves
- * an unfilled token in the text, so keys with any token-less caller use none. Tips are mechanically true (each one
- * was checked against the engine, and tests/content/narrative.js re-checks the numbers).
+ * The DM's voice (ARCHITECTURE §3.10, DESIGN §2 / §11): narration lines for every engine / run / UI key (plus the v2
+ * engine key `initiative`, and `objective_failed` for a lost objective while heroes stand) and the loading-screen tips. The DM is snarky, sleep-deprived, secretly proud of the
+ * party, fudges dice, eats Cheetos and threatens "rocks fall". v2: initiative order, one turn per unit, enemies that act
+ * without warning, boss wind-ups, attacks of opportunity, no Guard, slow shared leveling. Tokens are used only where
+ * every caller fills them (DD.Narrator.TOKENS): DD.narrate leaves an unfilled token in the text, so keys with any
+ * token-less caller use none. Lines that name a hero never use a pronoun for them (the caller only passes a name).
+ * Tips are mechanically true in v2 (each one was checked against the engine; tests/content/narrative.js re-checks them).
  */
 (function () {
   'use strict';
@@ -11,10 +13,10 @@
 
   /** Tokens each key's callers fill (the intersection over every call site). */
   const TOKENS = {
-    combat_start: [], elite_start: [], boss_start: [], victory: [], defeat: [],
+    combat_start: [], elite_start: [], boss_start: [], victory: [], defeat: [], objective_failed: [],
     kill: ['hero', 'enemy'], env_kill: ['hero', 'enemy'], overkill: ['hero', 'enemy', 'n'], multi_kill: ['hero', 'n'],
     hero_downed: ['hero', 'enemy'], hero_revived: ['hero'], hero_death: [], level_up: [], signature: ['hero'],
-    round_start: ['n'], enemy_turn: [],
+    round_start: ['n'], enemy_turn: [], initiative: ['hero'],
     shop_greet: [], shop_buy: [], shop_broke: [], shop_leave: [], tavern_greet: [], rest: [], recruit: ['hero', 'name'],
     map_enter: [], act_intro_1: [], act_intro_2: [], act_intro_3: [], act_clear: [], treasure: [], tips: [],
     gameover_title: [], victory_title: [], run_start: [], idle_dm: [],
@@ -23,15 +25,15 @@
   const LINES = {
     // ---- combat (DD.Act.narrate → combat log + the HUD's DM caption) ----------------------------------------
     combat_start: [
-      'Roll for initiative. Actually, don\'t. The DM already rolled. You lost.',
+      'Places, everyone. Deploy in the green, then the d20 decides who gets to panic first.',
       'The DM rubs his hands together. "Okay. Fair fight. Totally fair."',
       'Monsters! In a dungeon! Who could possibly have predicted this.',
       'The DM puts on his monster voice. It is his normal voice, but louder.',
       'Combat! The DM shuffles the minis around for dramatic effect. One of them falls over.',
-      'Read the red tiles. Ignore them at your peril. The DM is counting on it.',
+      'No warnings tonight. The monsters will simply do things, the way monsters do.',
       'The DM crunches a Cheeto ominously. Things are about to happen.',
       'The DM consults a table labelled "Encounters (Mean)" and smiles.',
-      'Everyone gets one turn of being clever. Then the monsters get theirs.',
+      'Everyone gets one turn per round, monsters included. The dice pick the order. The DM picks the mood.',
       'Somewhere, a bard has already started your eulogy. Make him rewrite it.',
     ],
     elite_start: [
@@ -50,15 +52,16 @@
       'The DM unfolds a second, taller screen. He means business.',
       'A boss appears. Its stat block is laminated. Nobody laminates a stat block they expect to lose.',
       'The DM rolls his biggest dice. They are novelty dice. They are still scary.',
-      'Phases, telegraphs, puzzles: the DM has waited all week for you to ruin his plan.',
+      'Phases, wind-ups, puzzles: the DM has waited all week for you to ruin his plan.',
       'The DM whispers "finally," and nobody likes the way he said it.',
       'Everything this act has been building to. No pressure. Rocks could fall at any moment.',
+      'When this boss starts winding up, the floor turns red and an hourglass appears. The DM is not bluffing.',
     ],
     victory: [
       'Victory! The DM sighs and opens the loot table he was hoping not to use.',
       'The last enemy falls. The DM writes "they cheated" in his notes.',
       'You win! The DM insists this was the plan all along.',
-      'The dust settles. The DM grudgingly hands out experience points.',
+      'The dust settles. The DM rolls to see who levels up and glares at the die.',
       'Another encounter survived. The DM takes a long, sad sip of soda.',
       'Victory, with only a little property damage. Okay, a lot of property damage.',
       'The monsters are defeated. Their families will be notified by goblin post.',
@@ -74,6 +77,17 @@
       'Your adventure ends here. The bards will sing of it, mostly as a warning.',
       'Everybody is down. The DM checks twice. Yep. Everybody.',
       'The dice have spoken, and they said some really hurtful things.',
+    ],
+    // a lost protect objective while heroes still stand (the run goes on): requested from combat.js, see notes
+    objective_failed: [
+      'Objective failed. Everyone is still standing, which is more than can be said for the thing you were guarding.',
+      'The DM marks the objective as lost and draws a sad little face next to it.',
+      'Nobody died. The objective did. The DM calls it a teachable moment.',
+      'You beat up plenty of monsters and protected absolutely nothing. Mixed reviews.',
+      'The heroes live. The thing they were meant to protect has been written out of the campaign.',
+      'The DM is very sorry for your loss. He is not sorry at all. He is drafting an invoice.',
+      'Well, you protected yourselves beautifully. Just not the one thing you were asked to.',
+      'Mission failed, party intact. The bards will call it a draw. The DM will not.',
     ],
     kill: [
       '{hero} drops {enemy}. The DM crosses a name off his list, sadly.',
@@ -123,13 +137,13 @@
       'Down goes {hero}, courtesy of {enemy}. The DM writes that one down.',
       '{hero} takes an unscheduled nap, sponsored by {enemy}. An adjacent friend can Help Up for 2 AP.',
       '{hero} goes down to {enemy}. The DM is pretending not to celebrate.',
-      '{hero} is down! Help them up before the fight is won, or they wake up with a Scar.',
+      '{hero} is down! Get {hero} up before the fight is won, or there will be a Scar.',
       '{hero} has fallen and can\'t get up. Do not expect any help from {enemy}.',
       'Everyone gasps as {hero} goes down. Over in the corner, {enemy} does a little dance.',
     ],
     hero_revived: [
-      '{hero} is back on their feet, a little dizzy and very annoyed.',
-      '{hero} rises! The DM sighs and un-crumples their character sheet.',
+      '{hero} is back up, a little dizzy and very annoyed.',
+      '{hero} rises! The DM sighs and un-crumples a character sheet.',
       'Back from the floor: {hero}. Not even a scar. Yet.',
       '{hero} gets up, dusts off and pretends that never happened.',
       'A helping hand, and {hero} is back in the fight.',
@@ -140,9 +154,9 @@
     hero_death: [
       'Written out of the campaign. The DM slides a character sheet into the drawer of the fallen.',
       'Three downs was one too many. The DM lights a candle on the snack table.',
-      'A hero has died. The party will remember them at every tavern, and every trap.',
+      'A hero has died. The party will raise a glass at every tavern, and at every trap.',
       'Gone, but not forgotten. Mostly not forgotten. The tavern has openings.',
-      'The DM reads a short eulogy. It includes the phrase "should have helped them up."',
+      'The DM reads a short eulogy. It includes the phrase "should have used Help Up."',
       'Rest in peace. The bards will exaggerate everything, as is tradition.',
       'The campaign goes on, one chair emptier. The DM fills the chair with snacks.',
       'Some heroes ride off into the sunset. This one rode off into a pit.',
@@ -150,12 +164,13 @@
     level_up: [
       'Level up! More HP, a roll on the Table of Questionable Blessings and a choice to make.',
       'Ding! The DM reluctantly hands over the next page of your character sheet.',
-      'Somebody leveled up. The DM is already rebalancing the next fight.',
+      'One level-up per won fight, and the DM rolls to see who. The lowest level always goes first.',
       'More levels! Remember: four skill sockets, and forgetting is forever.',
       'Level up! The party gets stronger. The goblins stay exactly the same.',
       'Growth! Character development! Actual numbers going up!',
-      'The DM mutters "power creep" and turns the page.',
+      'The DM mutters "power creep" and turns the page. Slowly. Very slowly.',
       'Level up. Do not ask the DM how many levels the boss has.',
+      'Slow and steady: the DM levels this party one hero at a time. He calls it fair. The barbarian calls it a conspiracy.',
     ],
     signature: [
       '{hero} unleashes a signature move! The DM starts taking notes for the sequel.',
@@ -170,22 +185,37 @@
     round_start: [
       'Round {n}. Everyone still alive? Good. For now.',
       'Round {n}. The DM checks his notes and frowns at them.',
-      'Round {n}! Read the telegraphs. Then read them again.',
+      'Round {n}! The initiative order has not changed. Neither has the goblins\' attitude.',
       'Round {n}. Fight!',
       'It is round {n}. The DM refills his soda for the long haul.',
       'Round {n}. The monsters are adapting. Allegedly.',
       'Round {n}: same dungeon, new mistakes.',
-      'On to round {n}. Somebody please remember to Guard.',
+      'On to round {n}. Unused AP is still not a savings account.',
+      'Round {n}. Every melee fighter gets a fresh attack of opportunity. Spend it on a goblin.',
     ],
+    // once per run of monster turns (combat.js, 10%)
     enemy_turn: [
       'The enemies take their turn. The DM rubs his hands together.',
       'Monster time! The DM narrates every attack with sound effects.',
-      'Enemy turn. Time to find out how well you read those red tiles.',
+      'Monster turn. No warning, no countdown, just a goblin with a plan.',
       'The DM moves the minis with suspicious enthusiasm.',
-      'Here come the telegraphed attacks. They were very clearly telegraphed.',
+      'The monsters act the moment their turn comes up. The DM calls it "improv."',
       'The monsters act. The DM does the voices. All of the voices.',
       'Brace yourselves. The DM just said "okay, so..." in that tone.',
       'The enemies go. The DM rolls behind the screen and does not show you.',
+      'Initiative says it is the monsters\' turn. The DM agrees with initiative.',
+    ],
+    // the initiative roll (combat.js + the HUD's dice tray): {hero} = the first hero in the order, else 'the party'
+    initiative: [
+      'Roll for initiative! The DM rolls behind the screen and refuses to elaborate.',
+      'Everybody roll a d20. The order holds for the whole fight, so complain to the dice.',
+      'Initiative is rolled. The first hero up is {hero}. No pressure.',
+      'Dice everywhere. One rolls under the couch. The DM rules it a natural 1 and moves on.',
+      'Initiative! Quick little things go first. Golems go eventually.',
+      'The DM reads out the turn order like a wedding seating chart. Nobody likes their table.',
+      'Roll for initiative! Anything that beat {hero} to it will not be sending a warning first.',
+      'The d20s have spoken. The order is final, and the DM will eat Cheetos through every single turn of it.',
+      'Initiative order locked in. Somebody write it on a napkin. The napkin is now canon.',
     ],
 
     // ---- run & screens (shopkeeper, barkeep, map, act screens) -------------------------------------------------
@@ -250,13 +280,13 @@
       'The party rests up. Somewhere in the dungeon, a monster does the same.',
     ],
     recruit: [
-      'A new face at the table: {hero} pulls up a chair and asks what they missed.',
+      'A new face at the table: {hero} pulls up a chair and asks what the party has been up to.',
       '{hero} has been waiting at the bar all campaign for someone to ask.',
       'The DM hands {hero} a fresh character sheet. It is already a little stained.',
       'Fresh blood! {hero} signs the waiver without reading it.',
       '{hero} joins up, mostly for the dental plan.',
       'The party gains a member. {hero} already has opinions about the marching order.',
-      '{hero} rolls up to the table, rolls for stats and rolls their eyes.',
+      '{hero} rolls up to the table, rolls for stats and rolls both eyes.',
       'Everyone welcome {hero}! Please don\'t get attached. Kidding. Mostly.',
     ],
     map_enter: [
@@ -323,7 +353,7 @@
       'The Party That Tripped Over Its Own Ambition',
       'Rocks Fell. Everyone Died.',
       'A Cautionary Tale, Probably',
-      'They Did Not Read the Red Tiles',
+      'They Rolled a 1 for Initiative',
       'Roll Up New Characters',
       'The Campaign That Wasn\'t',
       'Natural 1s All the Way Down',
@@ -353,64 +383,96 @@
       'The DM drums his fingers on the table. Take your time. No, really. He has all night.',
       'The DM opens a fresh bag of Cheetos. The crunching is deafening.',
       'The DM checks his phone, then pointedly checks it again.',
-      'Take your time. The monsters are planning too. Out loud.',
+      'Take your time. The goblins are using it to stretch.',
       'The DM starts building a tower out of his dice. It is getting tall.',
       'Somewhere in the dungeon, a goblin taps its foot.',
-      'The DM wonders aloud whether anyone remembered to read the red tiles.',
+      'The DM mentions, to nobody in particular, that holding Alt shows what the monsters can reach.',
       'The DM hums the hold music from the Infernal DMV. Badly.',
+      'The DM tilts his head sideways to read the board. Somebody tell him about the Q and R keys.',
     ],
 
-    // ---- loading-screen tips (title screen). Every tip is true; numbers are the engine's. ---------------------
+    // ---- loading-screen tips (title screen). Every tip is true in v2; numbers are the engine's. -----------------
     tips: [
-      'Every enemy shows its next attack as red tiles. Standing in them is a lifestyle choice.',
-      'Unused AP turns into Guard at the end of your turn: +2 Block for every AP left.',
-      'Block soaks damage before HP does, and it wears off at the start of your next turn.',
-      'Attacks anchored to an enemy move with it: push the goblin and its stab swings at the new spot.',
-      'Not every attack follows its owner: ground-targeted ones stay on their red tiles when you push the attacker. Walk out.',
-      'Tracking shots follow their target, but fizzle if it is out of range or line of sight when they fire.',
-      'Stunning an enemy on your turn cancels its telegraphed attacks at once (unless it is stun-immune).',
+      // initiative & turns
+      'Every fight opens with a roll for initiative: d20 plus each unit\'s modifier. The order holds for the whole fight.',
+      'Initiative ties go to the higher modifier, then to the heroes. The monsters have filed a complaint.',
+      'Before the initiative roll, place and swap heroes anywhere in the green deployment zone for free.',
+      'Everyone takes one turn per round in initiative order (a few bosses take two). Summons act on their owner\'s turn: corgis move with Ellaria.',
+      'Unused AP is lost when a turn ends. There is no Guard: spend it or lose it.',
+      'Nobody starts a fight with Block. You earn it mid-fight, and it lasts until the start of its owner\'s next turn.',
+      'Monsters act the moment their turn comes up, without warning. Only bosses and a few elites wind up their big moves first.',
+      'Hold Alt (or press T) for threat shading: every tile an enemy could hit before this hero\'s next turn.',
+      'The initiative tracker shows who acts next. Hover a portrait to light that unit up on the board.',
+      'Inspect an enemy to see its move, reach, initiative and abilities. Knowing beats guessing.',
+      'AP you give an ally outside their turn is banked: they get it at the start of their next turn.',
+      'Monsters that appear mid-round roll initiative on arrival and act from the next round.',
+      // control
+      'A debuff you apply on your turn covers the enemy\'s next turn: Root the charger, Silence the caster, Taunt the brute.',
+      'A Stunned enemy skips its whole next turn. So does a Frozen one.',
+      'Sleeping units wake up when damaged. Stunned ones do not get that luxury.',
+      'A Taunted enemy must attack its taunter if it can reach it, and walks toward it if it can\'t.',
+      'A Charmed enemy fights for your side on its next turn. Point it at its friends.',
+      'A Dazzled enemy\'s attack lands 1 tile off in a random direction. A Confused one may turn and hit its friends.',
+      // wind-ups (bosses, and a few elites' signature moves)
+      'Wind-ups mark their tiles in red with a ⏳ and land at the start of their owner\'s next turn (⏳2: the one after). Get clear!',
+      'Stun, Sleep or Freeze whoever is winding up and the wind-up is interrupted on the spot, if it sticks. Bosses can\'t be sheeped.',
+      'Wind-ups aimed at the floor stay put. Ones aimed from the monster itself move with it when you shove it.',
+      'A wind-up that tracks a hero can fizzle: get out of its range, out of its sight or into stealth before it lands.',
+      // attacks of opportunity
+      'Walking away from a melee foe gives it a free attack of opportunity. Each unit makes at most one per round.',
+      'Pushes, pulls, teleports, swaps, jumps and dashing skills never provoke attacks of opportunity. Only walking does.',
+      'Melee heroes hold the line: an enemy next to one would rather keep swinging than walk past and eat a free hit.',
+      'It works both ways: an enemy that walks away from your melee heroes eats a free hit too. Pin the archers.',
+      'Stunned, sleeping, frozen and sheeped units make no attacks of opportunity, and stealthed units provoke none.',
+      'Sneaky enemies dive the weakest hero. Everything else hits what it can reach, starting with whoever is next to it.',
+      'Paths dodge attacks of opportunity when they can. Hover a tile first: a red path with ⚔ marks shows who still gets a free hit.',
+      'Bad move? Press Z to undo it, as long as nothing else happened since and it provoked no attack of opportunity.',
+      'Space rolls initiative and ends turns, 1-6 pick skills, 7-0 use consumables, E interacts and Tab cycles summons.',
+      'Can\'t see a tile? Hold the mouse wheel and drag to turn the map. Q and R turn it 90 degrees, Home puts it back.',
+      // battlefield
       'Non-boss enemies pushed into a pit or deep water are gone for good (unless they fly). YEET.',
       'Heroes and bosses who fall into a pit lose 25% of their max HP, then climb out somewhere safe.',
       'A blocked push deals bump damage (usually 3) to the unit pushed, and to any unit it slams into.',
       'Lava deals 8 fire damage and Burn 2 to anyone who walks in or ends a turn there. Flyers float over it.',
       'Water puts out Burn and makes units Wet. Wet units can\'t Burn and take 50% more lightning damage.',
       'Lightning in water shocks the whole pool: 4 lightning damage (6 if Wet) and a Stun to everyone in it. Flyers just watch.',
-      'Fire boils water into steam, which blocks line of sight for a round.',
+      'Fire boils water into steam, which blocks line of sight until the end of the round.',
       'Frost freezes water into ice, and pushed units slide one extra tile on ice.',
       'Fire ignites oil, and the flames race along the entire slick.',
       'Explosive barrels blow up when destroyed or set alight: 8 fire damage to everything next to them.',
+      'Shoot the barrel: aim any single-target attack at an explosive barrel in range and it goes off. Blast kills are environmental: +20 Hype.',
       'Webs root whoever walks into them. Fire burns them away.',
       'Skills used from higher ground deal 25% more damage.',
       'Climbing costs 1 extra move per level, and most heroes step up only 1 level at a time. Flyers ignore height, pits, liquids and mud.',
+      'Professor Marbles, Betty and Hjalmar hop up 2 levels in a single step. Rabbits, goats and monkeys: born climbers.',
+      'Flyers ignore everything on the floor, good and bad: fire, puddles, traps, plates, holy ground. Clouds and explosions still get them.',
+      'Adjacent heroes can Smash objective objects like totems: 1 AP for 5 damage.',
+      'Fountains heal 10 HP for 1 AP. One sip per fight: it is a small fountain.',
+      // damage & Hype
       'Kills give +8 Hype. Environmental kills (pits, hazards, bumps, explosions) give +20 instead.',
       'One of your skills hitting 2 or more foes gives +4 Hype. Line them up.',
       'Signatures cost 100 Hype. Hype starts every fight at 0 (plus bonuses from gear and Blessings), so spend it.',
-      'An adjacent ally can Help Up a downed hero for 2 AP. They return with 25% of their max HP.',
-      'Heroes still down when a fight is won get up at 1 HP with a Scar. Help them up before the fight ends.',
-      'Each won fight a hero ends downed counts as a down. The third one writes them out of the campaign.',
-      'Heroes who end a fight downed only get half XP.',
-      'Before your first action, you can swap heroes around the green deployment zone for free.',
-      'Bad move? Press Z to undo it, as long as nothing else has happened since.',
-      'Space ends the turn, Tab cycles heroes, 1-6 pick skills, 7-0 use consumables and E interacts.',
-      'Poison ignores Block. Burn does not. Guard accordingly.',
+      'Poison ignores Block. Burn does not. Plan your shields accordingly.',
       'Bleeding units take damage every time they move or get pushed. Shove them around.',
       'A Marked unit takes extra damage from the next hit, equal to its Mark stacks.',
-      'Sleeping units wake up when damaged. Stunned ones do not get that luxury.',
       'Frozen units take 50% more physical damage, but fire thaws them out.',
-      'Taunted enemies swing at the taunter if they can, or not at all.',
-      'A Dazzled enemy\'s attack lands 1 tile off in a random direction. A Confused one may turn and hit its friends.',
-      'Adjacent heroes can Smash objective objects like totems: 1 AP for 5 damage.',
-      'Heroes socket 4 skills. Learning a fifth means forgetting one forever, or skipping the new one.',
+      'Armor reduces each attack by its value, down to a minimum of 1. Burn, poison and falls ignore armor.',
+      // downs & the run
+      'An adjacent ally can Help Up a downed hero for 2 AP. They get up with 25% of their max HP and act on their next turn.',
+      'Aim a single-target heal at a downed ally and they get up with the healed HP. Help Up is for people who forgot to pack a Red Drink.',
+      'Heroes still down when a fight is won get up at 1 HP with a Scar. Help them up before the fight ends.',
+      'Each won fight a hero ends downed counts as a down. The third one writes them out of the campaign.',
+      'After every won fight the DM rolls to see who levels up. The lowest-level heroes always go first.',
+      'Leveling is slow: one hero per won fight, so in a party of four each hero levels about once every four fights.',
+      'Recruits join at the lowest level among the heroes who stay, and the level-up roll treats them like everyone else.',
       'Each level-up rolls on the Table of Questionable Blessings, then you pick 1 of 3: new skills, upgrades or perks.',
+      'Heroes socket 4 skills. Learning a fifth means forgetting one forever, or skipping the new one.',
       'Heroes hold up to 4 Blessings. Rolling one you already own upgrades it instead.',
       'At a tavern, pick one: rest (35% heal for everyone and one scar treated), train (upgrade a skill) or recruit.',
       'The party shares 3 consumable pockets, and Josiah adds a fourth. Only heroes can drink potions: corgis lack thumbs.',
       'Summoned allies vanish when the fight ends. Do not get attached to the corgis. (You will.)',
-      'Armor reduces each attack by its value, down to a minimum of 1. Burn, poison and falls ignore armor.',
       'Brutal: enemies get 25% more HP and 20% more damage, and normal fights bring an extra enemy.',
       'Clearing an act heals every hero for 50% of their max HP.',
-      'Fountains heal 10 HP for 1 AP. One sip per fight: it is a small fountain.',
-      'Professor Marbles can hop up 2 levels in a single step. Respect your elders.',
     ],
   };
 

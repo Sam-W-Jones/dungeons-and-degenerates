@@ -5,9 +5,12 @@
  * piercing beams with friendly fire and the overtime nap, dispel + silence, d20 tables, shield wall until each ally's
  * turn, hoard guarding + Block at the end of the dragon's turns / thieves / stolen gold, the three wind-ups and their
  * counterplay, monologue interrupt + yank-and-swing + intermission, compounding debt per own turn), every enemy's turns
- * (it acts, uses its gimmick, damage only inside its areas, no wind-ups for non-elites), previews vs reality, odd
- * conditions (no swallowed warnings), encounter objectives under initiative, no one-shots at the act's level band, and
- * AutoPlay sims with the fixture party at levels 4-6 (results logged with verbose=1; more seeds with sims=N).
+ * (it acts, uses its gimmick, damage only inside its areas, no wind-ups for non-elites), v2 targeting and attacks of
+ * opportunity (styles, who strikes a hero walking away and for how much, brutes stick / the imp dives / ranged back off,
+ * custom planners price the reactions; the inspect-panel lines say all of it), previews vs reality, odd conditions (no
+ * swallowed warnings), encounter objectives under initiative, no one-shots at the act's level band, and AutoPlay sims
+ * with the fixture party at levels 4-6 (soft "winnable / it hurts" bands on the totals; per-encounter win rates and HP
+ * lost logged with verbose=1; more seeds with sims=N).
  */
 (function () {
   'use strict';
@@ -440,6 +443,17 @@
     off();
     t.eq(during, L('a3_kobold_wall').block, 'the hound still had the Block when its turn began');
     t.eq(h2.block, 0, 'and lost it at its turn start');
+    // review (v2): so the kobold only counts an ally whose Block will meet a hero turn (23% of the allies' Shield Wall
+    // Block in real-hero fights was wiped at the ally's own turn start before any hero acted)
+    quiet({ heroes: [H('test_mage', 8, 8)], enemies: [E('a3_kobold_shield', 3, 3), E('a3_red_dragon', 4, 3)] });
+    const s3 = DD.Combat.state, kob3 = one('a3_kobold_shield'), wall = DD.getSkill('a3_kobold_wall');
+    const wallScore = function (order) {
+      DD.Combat.setOrder(order);
+      s3.turnIndex = DD.Combat.order().map(function (e) { return e.unitId; }).indexOf(kob3.id);   // the kobold's turn
+      return wall.aiScore(DD.Targeting.buildCtx(kob3, kob3.skillSlots[0], kob3));
+    };
+    t.eq(wallScore(['test_mage', 'a3_kobold_shield', 'a3_red_dragon']), 0, 'the dragon acts right after the kobold: its Block would be gone before the mage acts (worth nothing)');
+    t.eq(wallScore(['test_mage', 'a3_red_dragon', 'a3_kobold_shield']), 9, 'the dragon already acted: the Block holds through the mage\'s next turn (worth 9)');
   });
 
   // =========================================================================================================
@@ -449,7 +463,8 @@
       return { g: one('a3_nat1_golem'), h: DD.Combat.heroes()[0] };
     }
     const Lr = L('a3_golem_roll');
-    [[1, 0], [5, Lr.low], [9, Lr.low], [10, Lr.dmg], [19, Lr.dmg], [20, Lr.crit]].forEach(function (c) {
+    t.ok(Lr.crit === 2 * Lr.dmg && !Lr.low, 'three outcomes (v2 simplicity): 1 backfires, 2-19 hit for ' + Lr.dmg + ', 20 doubles it');
+    [[1, 0], [2, Lr.dmg], [9, Lr.dmg], [10, Lr.dmg], [19, Lr.dmg], [20, Lr.crit]].forEach(function (c) {
       const f = golemFight();
       t.ok(rig(function (r) { return r.int(1, 20) === c[0]; }), 'rigged a ' + c[0]);
       const hp = f.h.hp, ghp = f.g.hp;
@@ -508,6 +523,127 @@
     A().addStatus(imp2, 'root', { turns: 1 });
     DD.AI.act(imp2);
     t.ok(imp2.x === 9 && imp2.y === 5, 'rooted imps can\'t blink');
+  });
+
+  // =========================================================================================================
+  // v2 targeting (DESIGN §8): brutes stick to the hero next to them, ranged units keep their distance, the imp dives the
+  // weak; attacks of opportunity: each enemy's first melee skill, and its inspect-panel line says which.
+  const STYLE = { a3_imp_influencer: 'assassin', a3_mind_flayer: 'ranged', a3_eyeball_intern: 'ranged', a3_succubus_coach: 'ranged' };
+  const AOO = { a3_hell_hound: 'a3_hound_bite', a3_rules_lawyer: 'a3_lawyer_motion', a3_nat1_golem: 'a3_golem_roll', a3_kobold_shield: 'a3_kobold_spear',
+    a3_death_knight: 'a3_dk_cleave', a3_pit_fiend: 'a3_fiend_smack' };
+  function passiveText(id, u) { const p = DD.getEnemy(id).passive; return p ? (typeof p.desc === 'function' ? p.desc(u || null) : p.desc) : ''; }
+
+  T.suite('enemies_act3: targeting styles, attacks of opportunity and what the inspect panel says', function (t) {
+    ENEMIES.forEach(function (id) {
+      quiet({ w: 9, h: 9, heroes: [H('test_mage', 1, 1)], enemies: [E(id, 5, 5)] });
+      const u = one(id), want = STYLE[id] || 'melee';
+      t.eq(DD.AI.styleOf(u).style, want, id + ': targeting style ' + want);
+      t.eq(DD.AI.isDiver(u), want === 'assassin', id + (want === 'assassin' ? ': a diver (goes for the weak)' : ': not a diver'));
+      const sl = DD.Act.opportunitySlot(u);
+      t.eq(sl ? sl.id : null, AOO[id] || null, id + ': attack of opportunity = ' + (AOO[id] || 'none'));
+      const pd = passiveText(id, u);
+      t.ok(pd.length > 60 && !/undefined|NaN/.test(pd), id + ': an inspect-panel line for its turn: ' + pd.slice(0, 60) + '…');
+      t.eq(/\(attack of opportunity\)/.test(pd), !!AOO[id], id + ': the line says whether walking away from it provokes');
+      const how = want === 'assassin' ? /weakest/ : want === 'ranged' ? /keeps \d tiles from the heroes/ : /stick/;
+      t.ok(how.test(pd), id + ': the line says how it picks its target (' + how + ')');
+      t.ok(!/telegraph/i.test(pd), id + ': no telegraph wording');
+    });
+    t.ok(DD.getEnemy('a3_imp_influencer').flags.noProvoke, 'imps blink (never provoke): flags.noProvoke says so');
+
+    // each attack of opportunity hits for its desc number when a hero walks away (test_mage: armor 0)
+    Object.keys(AOO).forEach(function (id) {
+      quiet({ w: 9, h: 9, heroes: [H('test_mage', 4, 5)], enemies: [E(id, 4, 4)] });
+      const u = one(id), m = DD.Combat.heroes()[0];
+      if (id === 'a3_nat1_golem') rig(function (r) { const v = r.int(1, 20); return v > 1 && v < 20; });
+      const pv = DD.Combat.provokes(m, 4, 8);
+      t.ok(pv.length === 1 && pv[0].unitId === u.id && pv[0].skillId === AOO[id], id + ': the move preview names it (' + JSON.stringify(pv.map(function (p) { return p.skillId; })) + ')');
+      const want = L(AOO[id]).dmg;
+      t.eq(pv[0] && pv[0].dmg, want, id + ': the preview says ' + want);
+      let seen = null;
+      const off = DD.Events.on('opportunity:attack', function (e) { if (e.mover === m) seen = e; });
+      const hp = m.hp;
+      t.ok(DD.Combat.move(m, 4, 8), id + ': the mage walks away');
+      off();
+      t.ok(!!seen && seen.attacker === u && seen.skillId === AOO[id], id + ': it strikes as she leaves (' + (seen && seen.skillId) + ')');
+      t.eq(hp - m.hp, want, id + ': for ' + want + ' (the desc number)');
+      if (id === 'a3_rules_lawyer') t.ok(m.y === 7, 'the Motion shoves her 2 tiles and her walk ends there (at y ' + m.y + ')');
+      if (id === 'a3_pit_fiend') t.ok(has(m, 'a3_debt'), 'the smack adds its Debt too');
+    });
+    // nobody without a melee skill strikes: the dragon swoops, the dancer shimmies, the casters keep their distance
+    ENEMIES.filter(function (id) { return !AOO[id]; }).forEach(function (id) {
+      quiet({ w: 9, h: 9, heroes: [H('test_mage', 4, 5)], enemies: [E(id, 4, 4)] });
+      const m = DD.Combat.heroes()[0], hp = m.hp;
+      t.ok(DD.Combat.provokes(m, 4, 8).length === 0 && DD.Combat.move(m, 4, 8) && m.hp === hp && m.y === 8, id + ': walking away from it is free');
+    });
+
+    // brutes stick: a hound next to the knight bites him, not the wounded mage it could pounce on
+    quiet({ w: 11, h: 9, heroes: [H('test_knight', 3, 4), H('test_mage', 6, 6)], enemies: [E('a3_hell_hound', 4, 4)] });
+    let [kn, mg] = DD.Combat.heroes();
+    mg.hp = Math.ceil(mg.maxHp * 0.6);
+    let hp0 = [kn.hp, mg.hp];
+    let did = used(one('a3_hell_hound'), function () { DD.AI.act(one('a3_hell_hound')); });
+    t.ok(kn.hp < hp0[0] && mg.hp === hp0[1], 'the hound sticks to the knight next to it (' + did.join(', ') + '), the wounded mage is left alone');
+    // ...unless the mage is a sure kill
+    quiet({ w: 11, h: 9, heroes: [H('test_knight', 3, 4), H('test_mage', 6, 6)], enemies: [E('a3_hell_hound', 4, 4)] });
+    [kn, mg] = DD.Combat.heroes();
+    mg.hp = L('a3_hound_pounce').dmg - 2;
+    DD.AI.act(one('a3_hell_hound'));
+    t.ok(mg.downed, 'a sure kill still tempts it: it pounces on the mage');
+    // the imp dives: a full-HP knight right in front of it, a wounded mage further off → the mage
+    quiet({ w: 11, h: 11, heroes: [H('test_knight', 5, 6), H('test_mage', 2, 9)], enemies: [E('a3_imp_influencer', 5, 3)] });
+    [kn, mg] = DD.Combat.heroes();
+    mg.hp = Math.ceil(mg.maxHp * 0.6);
+    hp0 = [kn.hp, mg.hp];
+    DD.AI.act(one('a3_imp_influencer'));
+    t.ok(mg.hp < hp0[1] && kn.hp === hp0[0], 'the imp goes for the weakest hero it can reach (mage ' + hp0[1] + ' → ' + mg.hp + ', knight untouched)');
+    t.ok(DD.Combat.heroes().every(function (h) { return DD.Grid.dist(h, one('a3_imp_influencer')) >= 2; }), '...from a spot out of melee reach');
+    // ranged units keep their distance: the eyeball next to the mage (no melee basic: free to leave) backs off, then stares
+    quiet({ w: 11, h: 9, heroes: [H('test_mage', 3, 4)], enemies: [E('a3_eyeball_intern', 4, 4)] });
+    mg = DD.Combat.heroes()[0];
+    const eye = one('a3_eyeball_intern');
+    DD.AI.act(eye);
+    t.ok(DD.Grid.dist(eye, mg) >= 2 && mg.hp < mg.maxHp, 'the eyeball steps back to ' + DD.Grid.dist(eye, mg) + ' tiles, then stares');
+
+    // custom planners price the attacks of opportunity too: a nearly dead Death Knight next to the knight never walks
+    // to the better monologue spot through the knight's lethal reaction; he swings at the knight instead
+    quiet({ w: 11, h: 9, heroes: [H('test_knight', 5, 6), H('test_mage', 8, 5), H('test_rogue', 8, 4)], enemies: [E('a3_death_knight', 5, 5)] });
+    const dk = one('a3_death_knight');
+    kn = DD.Combat.heroes()[0];
+    dk.hp = Math.max(1, DD.AI.opportunityDmg(kn, dk));
+    const at = key(dk);
+    did = used(dk, function () { DD.AI.act(dk); });
+    t.ok(key(dk) === at && !dk.dead && !windup(dk, 'a3_dk_monologue'), 'a lethal attack of opportunity on the way: he stays put (no monologue walk)');
+    t.ok(did.join(',') === 'a3_dk_cleave' && kn.hp < kn.maxHp, '...and swings at the knight next to him (' + did.join(', ') + ')');
+    // ...and so do their approach walks: a 2-HP golem next to a stealthed knight (whom it ignores) won't walk off toward
+    // the far mage through the knight's lethal reaction
+    quiet({ w: 11, h: 11, heroes: [H('test_knight', 5, 6), H('test_mage', 1, 0)], enemies: [E('a3_nat1_golem', 5, 5)] });
+    const gol = one('a3_nat1_golem');
+    kn = DD.Combat.heroes()[0];
+    A().addStatus(kn, 'stealth', { turns: 2 });
+    gol.hp = Math.max(1, DD.AI.opportunityDmg(kn, gol));
+    const gat = key(gol);
+    DD.AI.act(gol);
+    t.ok(key(gol) === gat && !gol.dead, 'the approach walk prices the knight\'s attack of opportunity: it stays put (at ' + key(gol) + ')');
+    // the hoard-bound dragon (bestWithin) still sticks to the hero next to it, measured from where its turn began
+    quiet({ w: 11, h: 11, heroes: [H('test_knight', 5, 6), H('test_mage', 7, 4)], enemies: [E('a3_red_dragon', 5, 5)],
+      objects: [{ x: 5, y: 4, id: 'a3_hoard_pile' }, { x: 6, y: 5, id: 'a3_hoard_pile' }] });
+    const dr = one('a3_red_dragon');
+    [kn, mg] = DD.Combat.heroes();
+    kn.oppRound = DD.Combat.state.round;   // the knight's reaction is spent: only the engagement keeps it on him
+    A().setCooldown(dr, 'a3_dragon_breath', 2);
+    hp0 = [kn.hp, mg.hp];
+    did = used(dr, function () { DD.AI.act(dr); });
+    t.ok(kn.hp < hp0[0] && mg.hp === hp0[1], 'the dragon bites the knight it is engaged with, not the mage it could swoop on (' + did.join(', ') + ')');
+    // review (v2): the custom planners' approach walk goes round a downed hero lying in a doorway (it can't walk through
+    // the body; before, its distance field went through it and the golem parked next to the body for good)
+    quiet({ w: 11, h: 11, heroes: [H('test_mage', 2, 4), H('test_rogue', 5, 4)], enemies: [E('a3_nat1_golem', 7, 4)],
+      terrain: function (tl) { if (tl.x === 5 && tl.y !== 4 && tl.y !== 9) tl.t = 'wall'; } });
+    const g2 = one('a3_nat1_golem'), [, body] = DD.Combat.heroes();
+    A().damage(null, body, body.hp + 50, { cause: 'other' });
+    A().setCooldown(g2, 'a3_golem_toss', 2);
+    t.ok(body.downed && !body.dead, 'the rogue lies downed in the doorway at 5,4');
+    DD.AI.act(g2);
+    t.ok(g2.y > 4, 'the golem heads for the open doorway at 5,9 (now at ' + key(g2) + '), not to the body');
   });
 
   // =========================================================================================================
@@ -702,6 +838,21 @@
     t.ok(!windup(d5) && cancelled === 1 && has(d5, 'a3_unshakeable'), 'stunned: the breath is interrupted (windup:cancel) and it is Unshakeable');
     DD.Combat.endRound();
     t.eq(m5.hp, m5.maxHp, 'nothing lands');
+
+    // review (v2): the walk to its mark is stopped by an attack of opportunity (a rule that stops every mover it strikes):
+    // it does not wind up a breath at whatever is left in front of it (an Invulnerable knight), it strikes from there
+    quiet({ w: 11, h: 11, seed: 3, heroes: [H('test_knight', 5, 1)].concat(['test_cleric', 'test_mage', 'test_rogue'].map(function (h, i) { return H(h, 4 + i, 8); })),
+      enemies: [E('a3_red_dragon', 5, 2)] });
+    const d6 = one('a3_red_dragon'), kn6 = DD.Combat.heroes()[0];
+    A().addStatus(kn6, 'invulnerable', { turns: 2 });
+    let halted = 0;
+    DD.Act.addRule({ id: 'a3t_halt', name: 'Halt', hooks: { onOpportunityAttack: function (o) { if (o.mover === d6) { halted++; DD.Act.stopMove(d6); } } } });
+    const did6 = used(d6, function () { DD.AI.act(d6); });
+    DD.Act.removeRule('a3t_halt');
+    t.ok(halted === 1 && d6.x === 5 && d6.y === 2, 'it set off toward the party and the knight\'s reaction stopped it on its tile (halted ' + halted +
+      ', at ' + key(d6) + ', did ' + did6.join(',') + ', wind-up ' + (windup(d6) ? keys(windup(d6).tiles) : 'none') + ')');
+    t.ok(!windup(d6, 'a3_dragon_breath'), 'no breath wound up at a cone that is not worth it (the Invulnerable knight)');
+    t.ok(did6.length <= 1 && did6.every(function (sid) { return sid === 'a3_dragon_bite' || sid === 'a3_dragon_tail'; }), '...it strikes from where it is (' + (did6.join(', ') || 'nothing') + ')');
   });
 
   // =========================================================================================================
@@ -804,7 +955,22 @@
     const did = used(dk5, function () { DD.AI.act(dk5); });
     t.eq(did.join(','), 'a3_dk_grip,a3_dk_cleave', 'out of reach: chain then swing (' + did.join(', ') + ')');
     t.ok(h5 - m5.hp === L('a3_dk_grip').dmg + L('a3_dk_cleave').dmg && DD.Grid.dist(dk5, m5) <= 2, 'reeled in, then swung at: ' + (h5 - m5.hp) + ' damage');
+    // review (v2): an attack of opportunity that stops his walk to the stage (here: a rule that stops every mover it
+    // strikes) leaves him without an audience: no speech to an empty room, a plain swing at the knight instead, and he
+    // doesn't walk a second time
+    quiet({ w: 11, h: 9, heroes: [H('test_knight', 5, 6), H('test_mage', 8, 5), H('test_rogue', 8, 4)], enemies: [E('a3_death_knight', 5, 5)] });
+    const dk6 = one('a3_death_knight'), kn6 = DD.Combat.heroes()[0];
+    t.eq(audienceAt(dk6), 1, 'only the knight is within 2 of where he stands');
+    let stopped = 0;
+    DD.Act.addRule({ id: 'a3t_halt', name: 'Halt', hooks: { onOpportunityAttack: function (o) { if (o.mover === dk6) { stopped++; DD.Act.stopMove(dk6); } } } });
+    const at6 = key(dk6), kh6 = kn6.hp;
+    const did6 = used(dk6, function () { DD.AI.act(dk6); });
+    DD.Act.removeRule('a3t_halt');
+    t.ok(stopped === 1 && key(dk6) === at6, 'he set off for a better spot and the knight\'s reaction stopped him on his tile');
+    t.ok(!windup(dk6, 'a3_dk_monologue') && !has(dk6, 'a3_monologue'), 'no monologue with one hero in range');
+    t.ok(did6.join(',') === 'a3_dk_cleave' && kn6.hp < kh6, '...he swings at the knight next to him instead (' + did6.join(', ') + ')');
   });
+  function audienceAt(u) { return DD.Combat.foesOf(u).filter(function (f) { return DD.Grid.dist(f, u) <= 2; }).length; }
 
   // =========================================================================================================
   T.suite('enemies_act3: Pit Fiend Accountant compounds Infernal Debt', function (t) {
@@ -933,7 +1099,7 @@
       t.eq(e.blocked || 0, before.block - target.block, c.label + ': preview Block == reality');
       if (c.label === 'Debt payoff') t.eq((st(m, 'a3_debt') || { stacks: 0 }).stacks, before.debt - 2, c.label + ': the hit paid 2 Debt');
     });
-    // Spirit Fingers (a rule, not a status): the preview applies the −2 too (a real fight: the first hero acts first)
+    // Spirit Fingers (a rule, not a status): the preview applies the −1 too (a real fight: the first hero acts first)
     const setup = DD.Encounter.build('a3_kobold_pep_rally', ['test_mage', 'test_knight', 'test_cleric', 'test_rogue'], { seed: 'pep-preview', difficulty: 'normal', act: 3 });
     DD.Combat.start(setup, { seed: 5, headless: true, difficulty: 'normal', deploy: false, initiative: 'heroesFirst' });
     const mg = DD.Combat.current();
@@ -1037,16 +1203,26 @@
         if (id === 'a3_hoarders_lair') t.eq(setup.grid.tiles.filter(function (tl) { return tl.obj && tl.obj.id === 'a3_hoard_pile'; }).length, 5, label + ': 5 hoard piles');
       }
     });
-    // the Pep Rally rule: totems standing → enemies take 2 less
+    // the Pep Rally rule: totems standing → enemies take 1 less (the rule's desc says so)
     const setup = DD.Encounter.build('a3_kobold_pep_rally', TEAM, { seed: 'pep', difficulty: 'normal', act: 3 });
     DD.Combat.start(setup, { seed: 5, headless: true, difficulty: 'normal' });
     const k = DD.Combat.enemies()[0], h = DD.Combat.heroes()[0];
     k.block = 0;
     let hp = k.hp;
     A().damage(h, k, 6 + k.armor);
-    t.eq(hp - k.hp, 4, 'Spirit Fingers: 6 → 4 while a totem stands');
+    t.eq(hp - k.hp, 5, 'Spirit Fingers: 6 → 5 while a totem stands');
+    t.ok(/1 less damage/.test(DD.getEncounter('a3_kobold_pep_rally').rules[0].desc), 'and its desc says 1 less');
     t.ok(DD.Combat.state.grid.tiles.some(function (tl) { return tl.obj && tl.obj.label === 'Pep Rally Totem'; }), 'totems are labelled');
+    // review (v2): "every hit" — a Burn / Poison / Bleed tick or a hazard is not a hit (the desc says they are unaffected)
+    const ticks = function () {
+      return [['status', 'burn'], ['terrain', 'lava']].map(function (c) { const h0 = k.hp; A().damage(null, k, 3 + k.armor, { cause: c[0], tags: [c[1]] }); return h0 - k.hp; });
+    };
+    k.hp = k.maxHp;
+    const withTotems = ticks();
+    t.ok(/Burn, Poison, Bleed and hazard ticks are unaffected/.test(DD.getEncounter('a3_kobold_pep_rally').rules[0].desc), 'the desc says ticks are unaffected');
     DD.Combat.state.grid.tiles.forEach(function (tl) { if (tl.obj && tl.obj.id === 'totem') A().removeObject(tl.x, tl.y); });
+    k.hp = k.maxHp;
+    t.eq(withTotems.join(','), ticks().join(','), 'a status tick and a hazard deal the same with or without totems (' + withTotems.join(', ') + ')');
     hp = k.hp;
     A().damage(h, k, 6 + k.armor);
     t.eq(hp - k.hp, 6, 'no totems: full damage');
@@ -1105,8 +1281,12 @@
 
   // =========================================================================================================
   T.suite('enemies_act3: no enemy turn one-shots a fresh act-3 hero', function (t) {
-    // the frailest fixture hero at the bottom of the act-3 band (level 4) and the biggest single-turn hit of each enemy
-    const frail = Math.min.apply(null, TEAM.map(function (id) { const h = DD.getHero(id); return h.stats.hp + h.growth.hp * (BAND[0] - 1); }));
+    // the frailest registered hero (fixtures and real heroes: Syllamin is the frailest real one) at the bottom of the act-3
+    // band (level 4) and the biggest single-turn hit of each enemy
+    const frail = Math.min.apply(null, Object.keys(DD.defs.heroes).map(function (id) {
+      const h = DD.getHero(id);
+      return h.stats.hp + ((h.growth && h.growth.hp) || 0) * (BAND[0] - 1);
+    }));
     const top = function (sid) { const Lv = L(sid); return Math.max(Lv.dmg || 0, Lv.crit || 0, Lv.doubles || 0); };
     const turnMax = {
       a3_red_dragon: Math.max(top('a3_dragon_bite'), top('a3_dragon_tail')) + 4,              // one attack a turn (+4 on a Thief)
@@ -1149,7 +1329,7 @@
     return function (t) {
       const n = Math.max(1, +t.param('sims', 3));
       const rng = DD.RNG('a3-sims:' + kind + ':' + t.seed);
-      let wins = 0, total = 0;
+      let wins = 0, total = 0, hurt = 0, pool = 0;
       ENCOUNTERS.filter(function (id) { return DD.getEncounter(id).kind === kind; }).forEach(function (id) {
         let w = 0, rounds = 0, taken = 0, byEnemies = 0, downs = 0, maxHp = 0, objLost = 0, windups = 0;
         for (let i = 0; i < n; i++) {
@@ -1160,12 +1340,16 @@
           if (r.result === 'victory') w++;
           rounds += r.rounds; taken += r.taken; byEnemies += r.byEnemies; downs += r.downs; maxHp += r.maxHp; objLost += r.objLost; windups += r.windups;
         }
-        wins += w; total += n;
+        wins += w; total += n; hurt += taken; pool += maxHp;
         t.log(id + ': won ' + w + '/' + n + ', avg rounds ' + (rounds / n).toFixed(1) + ', avg damage taken ' + Math.round(taken / n) +
           ' (' + Math.round(100 * taken / maxHp) + '% of party HP; ' + Math.round(byEnemies / n) + ' dealt by enemies), downs ' + (downs / n).toFixed(1) +
           (windups ? ', wind-ups ' + (windups / n).toFixed(1) : '') + (objLost ? ', protected object lost ' + Math.round(objLost / n) + ' HP' : ''));
       });
-      t.log(kind + ' TOTAL (fixture party, levels ' + BAND.join('-') + '): won ' + wins + '/' + total);
+      t.log(kind + ' TOTAL (fixture party, levels ' + BAND.join('-') + '): won ' + wins + '/' + total + ', ' + Math.round(100 * hurt / Math.max(1, pool)) + '% of party HP lost');
+      // "hard but fair" (soft bands on the totals; the per-encounter numbers above are for the balance pass)
+      if (kind === 'normal') t.ok(wins >= 0.6 * total, 'normal fights are winnable: ' + wins + '/' + total + ' (≥ 60%)');
+      else t.ok(wins >= total / 3, 'elite fights are winnable: ' + wins + '/' + total + ' (≥ a third)');
+      t.ok(hurt >= 0.25 * pool, kind + ' fights hurt: the party lost ' + Math.round(100 * hurt / Math.max(1, pool)) + '% of its HP on average (≥ 25%)');
     };
   }
   T.suite('enemies_act3: AutoPlay sims — normal encounters (fixture party L4-6)', simSuite('normal'));
@@ -1232,4 +1416,49 @@
       Object.keys(byRound).forEach(function (r) { t.log('R' + r + ': ' + byRound[r].join(' ¦ ')); });
     });
   }
+
+  // =========================================================================================================
+  // v2 user requests (Nov 3): flyers ignore everything on the floor; heroes can aim attacks at explosive barrels
+  T.suite('enemies_act3: v2 requests (Nov 3) — hoards, webs under imps, lava that can\'t hurt, the volatile exhibits', function (t) {
+    const n0 = DD.problems.length;
+    // a hoard pile is pocketed by walking over it; a flyer floats over the gold (and the AutoPlay hint knows it)
+    [true, false].forEach(function (flying) {
+      const who = flying ? 'a flyer' : 'a walker';
+      quiet({ heroes: [H('test_mage', 3, 4)], enemies: [E('a3_kobold_shield', 8, 8)], objects: [{ x: 4, y: 4, id: 'a3_hoard_pile', data: { gold: 6 } }] });
+      const h = DD.Combat.heroes()[0], tl = DD.Grid.tile(4, 4);
+      h.flags.flying = flying;
+      const gold = A().gold();
+      t.eq(DD.getObject('a3_hoard_pile').autoplay(h, tl.obj, tl) > 0, !flying, who + ': the AutoPlay hint ' + (flying ? 'is 0' : 'says grab it'));
+      t.ok(DD.Combat.move(h, 5, 4) && h.x === 5, who + ' crosses the pile');
+      t.eq(!!(tl.obj && tl.obj.id === 'a3_hoard_pile'), flying, who + (flying ? ': the pile is still there' : ': the pile is pocketed'));
+      t.eq(A().gold() - gold, flying ? 0 : 6, who + ': gold +' + (A().gold() - gold));
+      t.eq(has(h, 'a3_thief'), !flying, who + (flying ? ': no Thief' : ': branded a Thief'));
+    });
+    t.ok(/Flyers can't reach down that far/.test(DD.getObject('a3_hoard_pile').desc), 'the pile says flyers can\'t reach it');
+    // the imp flies over webs: with webs on every tile it still blinks into position (and is not Rooted)
+    const webs = [];
+    for (let y = 0; y < 11; y++) for (let x = 0; x < 11; x++) if (!(x === 9 && y === 5) && !(x === 1 && y === 5)) webs.push({ x: x, y: y, id: 'web', turns: 4 });
+    quiet({ w: 11, h: 11, heroes: [H('test_knight', 1, 5)], enemies: [E('a3_imp_influencer', 9, 5)], surfaces: webs });
+    const imp = one('a3_imp_influencer');
+    DD.AI.act(imp);
+    t.ok((imp.x !== 9 || imp.y !== 5) && !has(imp, 'root'), 'the imp blinks onto a web (to ' + imp.x + ',' + imp.y + ') and is not Rooted');
+    // Motion to Dismiss values a shove into lava only when the lava can hurt the target (a fire-proof hero: nothing)
+    quiet({ heroes: [H('test_mage', 4, 4)], enemies: [E('a3_rules_lawyer', 3, 4)], terrain: function (tl) { if (tl.x === 5 && tl.y === 4) tl.t = 'lava'; } });
+    const m = DD.Combat.heroes()[0], motion = DD.getSkill('a3_lawyer_motion');
+    const sc = function () { return motion.aiScore({ user: one('a3_rules_lawyer'), targetUnit: m, dir: { x: 1, y: 0 }, L: L('a3_lawyer_motion'), skill: motion }); };
+    t.eq(sc(), 8, 'a shove into lava scores 8');
+    m.resist = Object.assign({}, m.resist, { fire: 0 });
+    t.eq(sc(), 0, 'not for a fire-proof hero (lava cannot hurt it)');
+    m.resist.fire = 1;
+    m.flags.flying = true;
+    t.eq(sc(), 0, 'nor for a flyer (it never lands in it)');
+    // the encounters' explosive props are volatile (heroes can shoot them): Exhibit B, the Industrial Shredder, the barrels
+    ['a3_trial_by_combat', 'a3_tax_season'].forEach(function (id) {
+      const enc = DD.getEncounter(id);
+      const leg = enc && enc.map && enc.map.legend ? enc.map.legend : {};
+      const props = Object.keys(leg).map(function (k) { return leg[k].obj; }).filter(function (o) { return o && (o.id || o) === 'barrel_explosive'; });
+      t.ok(props.length > 0 && props.every(function (o) { return DD.Act.isVolatile(typeof o === 'string' ? { id: o } : o); }), id + ': its explosive prop is volatile');
+    });
+    t.eq(warningsSince(n0).filter(function (p) { return /^Error in /.test(p); }).length, 0, 'no swallowed errors');
+  });
 })();

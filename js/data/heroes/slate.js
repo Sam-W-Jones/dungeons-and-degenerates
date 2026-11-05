@@ -3,9 +3,11 @@
  * Passive Short Fuse: +1 Rage (sla_rage, max 5) whenever someone else hits, heals or buffs him; at 3+ Rage his runes
  * flare and his skills deal +2 damage. Rage never drains; Blow a Gasket spends it, the signature maxes it.
  * Grappled (sla_grappled, on the victim, noMove): it can't move, and when Slate walks it is dragged into the tile he
- * left; it ends when its turns run out, when they are apart or when he can't hold on (stunned, sheep, downed).
+ * left (it gets no attack of opportunity on him); it ends when its turns run out, when they are apart or when he can't
+ * hold on (stunned, sheep, downed).
  * Throws lift an adjacent unit or object and land it up to N tiles away in a line, over units and low clutter: it and
- * the foe it hits take the damage, pits / lava / water do the rest, thrown objects shatter (barrels explode).
+ * the foe it hits take the damage, pits / lava / water do the rest, thrown objects shatter (barrels explode). Throws,
+ * slams, drags and pulls are forced movement: they never provoke attacks of opportunity (Air Mail is an escape hatch).
  * Registers the hero, 11 skills, 2 statuses, the Boulder object, 3 items and loading tips. All state lives on units /
  * statuses (previews are dry runs of the same code).
  */
@@ -182,8 +184,9 @@
 
   /**
    * Where something at `from` thrown along dir for up to n tiles comes down (pure query; mover = the thrown unit,
-   * null for an object): { end, land, k, wall, crash, crashObj, drop }. end = the tile it comes down on (short of a
-   * wall), land = where a thrown unit ends up (it bounces back short of a crash), drop = a pit / deep water at end.
+   * null for an object): { end, land, shatter, k, wall, crash, crashObj, drop }. end = the tile it comes down on
+   * (short of a wall), land = where a thrown unit ends up (it bounces back short of a crash), shatter = where a thrown
+   * object breaks (on the foe it hits, else short of anything in the way), drop = a pit / deep water at end.
    */
   function flight(from, dir, n, mover) {
     let k = 0, wall = false;
@@ -193,24 +196,27 @@
       k = i;
     }
     const end = step(from, dir, k);
-    const res = { end: end, land: end, k: k, wall: wall, crash: null, crashObj: false, drop: false };
-    if (k === 0) { res.land = { x: from.x, y: from.y }; return res; }
+    const res = { end: end, land: end, shatter: end, k: k, wall: wall, crash: null, crashObj: false, drop: false };
+    if (k === 0) { res.land = res.shatter = { x: from.x, y: from.y }; return res; }
     const occ = G().unitAt(end.x, end.y);
     const tl = G().tile(end.x, end.y);
-    const blocked = !!(occ && occ !== mover) || !!(tl.obj && G().objBlocksMove(tl.obj));
+    const objBlocks = !!(tl.obj && G().objBlocksMove(tl.obj));
+    // a thrown object can't come down on another object, not even a flat one (spikes, a rune): it lands short
+    const blocked = !!(occ && occ !== mover) || objBlocks || (!mover && !!tl.obj);
     const drop = G().isDrop(end.x, end.y) && !(mover && G().isFlying(mover));
     // odd unwalkable ground that is neither a wall nor a drop: it bounces off like a wall
     const unwalkable = !blocked && !drop && !!mover && !G().isWalkable(end.x, end.y, mover);
     if (blocked || unwalkable) {
       res.wall = res.wall || unwalkable;
       res.crash = occ && occ !== mover ? occ : null;
-      res.crashObj = !res.crash && !!(tl.obj && G().objBlocksMove(tl.obj));
+      res.crashObj = !res.crash && objBlocks;
       res.land = { x: from.x, y: from.y };
       for (let i = k - 1; i >= 1; i--) {
         const p = step(from, dir, i);
         const ok = mover ? G().isFree(p.x, p.y, mover) : !G().tile(p.x, p.y).obj && !G().isDrop(p.x, p.y);
         if (ok) { res.land = p; break; }
       }
+      res.shatter = res.crash && !tl.obj ? end : res.land;
       return res;
     }
     res.drop = drop;
@@ -274,13 +280,22 @@
     };
   }
 
-  /** The object breaks where it lands: placed (non-blocking, so it may share a unit's tile) and destroyed at once. */
-  function shatter(user, inst, x, y) {
-    const t = G().tile(x, y);
-    DD.FX.particles({ x: x, y: y }, { kind: 'dust', count: 14 });
-    if (!t || t.obj || G().isDrop(x, y)) return false;
-    const o = DD.Act.placeObject(x, y, inst.id, Object.assign({}, inst, { blocksMove: false }));
-    return o ? DD.Act.destroyObject(x, y, user) : false;
+  /**
+   * The object breaks where it lands: placed (non-blocking, so it may share a unit's tile) and destroyed at once. If
+   * something left an object there mid-throw (a foe that drops bones), it breaks on the nearest clear tile back toward
+   * Slate (its own tile is clear: it was just picked up).
+   */
+  function shatter(user, inst, at, dir, from) {
+    let p = at;
+    for (let i = 0; i < 8; i++) {
+      const t = G().tile(p.x, p.y);
+      if (t && !t.obj && !G().isDrop(p.x, p.y)) break;
+      if (p.x === from.x && p.y === from.y) return false;
+      p = { x: p.x - dir.x, y: p.y - dir.y };
+    }
+    DD.FX.particles(p, { kind: 'dust', count: 14 });
+    const o = DD.Act.placeObject(p.x, p.y, inst.id, Object.assign({}, inst, { blocksMove: false }));
+    return o ? DD.Act.destroyObject(p.x, p.y, user) : false;
   }
 
   /** Throw the object at `at` along dir for up to n tiles: the foe it hits takes dmg, then it shatters. */
@@ -290,7 +305,7 @@
     if (!inst) return false;
     DD.Act.removeObject(at.x, at.y);
     const f = flight(at, dir, n, null);
-    DD.FX.projectile(at, f.end, { kind: 'custom', arc: 22 + f.k * 8, ms: 260 + f.k * 50, sound: 'push', draw: objDrawer(inst.id) });
+    DD.FX.projectile(at, f.drop ? f.end : f.shatter, { kind: 'custom', arc: 22 + f.k * 8, ms: 260 + f.k * 50, sound: 'push', draw: objDrawer(inst.id) });
     DD.Act.withCredit(user, function () {
       if (f.drop) {
         DD.FX.particles(f.end, { kind: 'dust', count: 10 });
@@ -299,8 +314,7 @@
       }
       if (f.crash && active(f.crash) && G().hostile(user, f.crash)) DD.Act.damage(user, f.crash, crashDmg(user, dmg), { cause: 'bump', tags: ['throw', 'crash'] });
       if (f.crashObj) DD.Act.damageObject(user, f.end.x, f.end.y, dmg);
-      const spot = f.crashObj ? f.land : f.end;
-      shatter(user, inst, spot.x, spot.y);
+      shatter(user, inst, f.shatter, dir, at);
     });
     return true;
   }
@@ -320,7 +334,8 @@
     decay: 'turnEnd', defaultTurns: 1, noMove: true,
     desc: function (st) {
       const h = byId(st && st.source);
-      return 'Held by ' + (h ? h.name : 'Slate') + ': can\'t move, and is dragged along when he walks. Free once they are apart.' + left(st);
+      return 'Held by ' + (h ? h.name : 'Slate') + ': can\'t move, and is dragged along when he walks (no attack of opportunity ' +
+        'on him: they move together). Free once they are apart.' + left(st);
     },
     hooks: {
       // a hold that went stale (he was stunned, sheeped or downed, or they were moved apart) lets go
@@ -329,6 +344,8 @@
         const h = byId(st.source);
         if (!h || !active(h) || G().dist(h, unit) !== 1) release(unit, 'Slips free!');
       },
+      // fired for the held unit as attacker or mover (pure): it never swings at the golem walking off with it
+      modifyOpportunity: function (o, st) { if (o && o.mover && st && o.mover.id === st.source && o.attacker !== o.mover) o.cancel = true; },
     },
   });
 
@@ -375,7 +392,8 @@
   skill({
     id: 'sla_hold_still', name: 'Hold Still', icon: '🤼', kind: 'attack', tags: ['melee', 'grapple', 'root'], ap: 1, cooldown: 2,
     levels: [{ dmg: 4, turns: 1 }, { dmg: 5, turns: 1 }, { dmg: 6, turns: 2 }],
-    target: { type: 'unit', range: [1, 1], filter: 'enemy', canTarget: liftTarget },
+    // objects: false — he grapples foes, not barrels (Love Tap pops one; Personal Space throws it)
+    target: { type: 'unit', range: [1, 1], filter: 'enemy', canTarget: liftTarget, objects: false },
     desc: function (L) {
       return 'Grab an adjacent foe: ' + L.dmg + ' damage, and it is Grappled through its next ' + (L.turns === 1 ? 'turn' : L.turns + ' turns') +
         ' (can\'t move; dragged along when you walk).';
@@ -398,8 +416,10 @@
     if (!thing) return [tg];
     const at = step(u, d, 1);
     const f = flight(at, d, Math.max(0, G().dist(u, tg) - 1), thing.unit || null);
-    const out = [at, f.end];
-    if (thing.unit ? !f.drop : f.crashObj) out.push(f.land);
+    const out = [at];
+    [f.end, f.drop ? null : thing.unit ? f.land : f.shatter].forEach(function (p) {
+      if (p && !out.some(function (q) { return q.x === p.x && q.y === p.y; })) out.push(p);
+    });
     return out;
   }
 
@@ -416,8 +436,8 @@
     },
     area: { shape: 'custom', fn: throwArea },
     desc: function (L, user) {
-      return 'Throw the foe or object next to you up to ' + plural(throwRange(L, user), 'tile') + ' in a line. It and any foe it hits take ' +
-        L.dmg + ' damage (objects shatter).';
+      return 'Throw an adjacent foe or object up to ' + plural(throwRange(L, user), 'tile') + ': it and the foe it hits take ' + L.dmg +
+        ' damage. Objects shatter.';
     },
     flavor: 'He does not do hugs. He does trajectories.',
     execute: function (ctx) {
@@ -449,8 +469,8 @@
       },
     },
     desc: function (L) {
-      return 'Lob a boulder at a tile up to ' + L.range + ' away, no line of sight needed: ' + L.dmg + ' damage to the foe or object ' +
-        'there. On empty floor, the Boulder stays.';
+      return 'Lob a boulder up to ' + L.range + ' tiles, over walls: ' + L.dmg + ' damage to the foe or object there. On empty floor, ' +
+        'the Boulder stays.';
     },
     flavor: 'Someone asked him to pass the rock. He gave it a HARD pass.',
     execute: function (ctx) {
@@ -500,8 +520,8 @@
       return out;
     } },
     desc: function (L, user) {
-      return 'Throw the ally next to you up to ' + plural(throwRange(L, user), 'tile') + ' in a line onto a safe empty tile. Foes next to ' +
-        'where it lands take ' + L.thud + ' damage.';
+      return 'Throw an adjacent ally up to ' + plural(throwRange(L, user), 'tile') + ' onto a safe empty tile. Foes next to the landing take ' +
+        L.thud + ' damage.';
     },
     flavor: 'The party\'s fastest travel option. Also the most complained about.',
     execute: function (ctx) {
@@ -573,7 +593,8 @@
   skill({
     id: 'sla_rock_bottom', name: 'Rock Bottom', icon: '🙃', kind: 'attack', tags: ['melee', 'throw', 'stun'], ap: 2, cooldown: 2,
     levels: [{ dmg: 10 }, { dmg: 12 }, { dmg: 12, stun: 1 }],
-    target: { type: 'unit', range: [1, 1], filter: 'enemy', canTarget: liftTarget },
+    // objects: false — a slam over the shoulder is for foes (a barrel goes through Personal Space)
+    target: { type: 'unit', range: [1, 1], filter: 'enemy', canTarget: liftTarget, objects: false },
     area: { shape: 'custom', fn: function (ctx) {
       const u = ctx.user, tg = ctx.target;
       if (!u || !tg) return tg ? [tg] : [];
@@ -581,7 +602,7 @@
       return [tg, { x: u.x - d.x, y: u.y - d.y }];
     } },
     desc: function (L) {
-      return 'Lift an adjacent foe and slam it onto the tile behind you (if there\'s room): ' + L.dmg + ' damage' +
+      return 'Slam an adjacent foe onto the tile behind you (if there\'s room): ' + L.dmg + ' damage' +
         (L.stun ? ', and it is Stunned for its next turn' : '') + '.';
     },
     flavor: 'Where every foe ends up eventually. Usually face first.',
@@ -645,7 +666,7 @@
     levels: [{ dmg: 2, range: 4 }, { dmg: 3, range: 5 }, { dmg: 4, range: 6 }],
     target: { type: 'unit', filter: 'enemy', straight: true, los: true, range: function (L) { return [2, L.range]; } },
     desc: function (L) {
-      return 'Lash a rune-chain at a foe in a straight line up to ' + L.range + ' tiles away: ' + L.dmg + ' damage, and pull it next to you.';
+      return 'Rune-chain a foe up to ' + L.range + ' tiles away in a line: ' + L.dmg + ' damage, and pull it next to you.';
     },
     flavor: 'Runes: for writing, warding, and yanking people by the collar.',
     execute: function (ctx) {
@@ -882,9 +903,10 @@
   DD.registerHero({
     id: 'slate', name: 'Slate', epithet: 'the Unamused', race: 'Stone Golem', cls: 'Guardian (Retired)',
     role: 'Grappler / thrower / bruiser', complexity: 2,
-    blurb: 'Lich-tenstein\'s library golem, who quit on the spot after nine hundred years of shushing. Grabs whatever ' +
-      'comes near, throws whatever stays, and gets angrier every time anyone touches him (healing counts). Nothing ' +
-      'short of an earthquake moves him, and his runes glow when he\'s mad, so they are basically always on.',
+    // [review v2] trimmed to four lines in the party-select panel (the Immovable chip right below says the rest)
+    blurb: 'Lich-tenstein\'s library golem, who quit after nine centuries of shushing. Grabs whatever comes near, smacks ' +
+      'whatever walks away, throws whatever stays, and gets angrier whenever anyone touches him (healing counts). His ' +
+      'runes glow when he\'s mad. They glow a lot.',
     color: '#6fd3e6',
     unlock: null, // v2: every hero is available from the start (user request; was: beat Lich-tenstein)
     stats: { hp: 32, ap: 3, mov: 3, armor: 1, init: -2 },
@@ -910,7 +932,15 @@
           const def = DD.getStatus(st.id);
           if (def && def.type === 'buff') touched(unit, src);
         },
-        modifyOutgoingDamage: function (d) { if (skillHit(d) && flared(d.source)) d.flat += FLARE_DMG; },
+        // an attack of opportunity gets the flare through o.flat instead, so the AI's and the HUD's estimates see it
+        modifyOutgoingDamage: function (d) { if (skillHit(d) && !d.opportunity && flared(d.source)) d.flat += FLARE_DMG; },
+        // fired for the attacker and the mover alike (pure): o.slaFlare keeps it to once per attack
+        modifyOpportunity: function (o) {
+          const a = o && o.attacker;
+          if (!a || o.slaFlare || a.kind !== 'hero' || a.defId !== 'slate' || !flared(a)) return;
+          o.slaFlare = true;
+          o.flat += FLARE_DMG;
+        },
         onEnterTile: function (u, tile, cause) { dragStep(u, cause); },
         onMove: function (u) { afterWalk(u); },
         onDowned: function (u) { releaseAll(u, 'Dropped!'); },
@@ -924,13 +954,13 @@
       select: ['Hmph.', 'What. WHAT.', 'I was napping. For a century.', 'Don\'t touch me. Just point.', 'Fine. Who needs throwing?',
         'Kiri. Stop walking through me.'],
       start: ['Get off my lawn.', 'Fighting. Again. Wonderful.', 'Nine hundred years of shushing. No more whispering.',
-        'Everybody stay where I can throw you.', 'Let\'s get this over with.', 'Betty. Do NOT eat the map.'],
+        'Everybody stay where I can throw you.', 'Hjalmar. If I step on ONE banana peel...', 'Betty. Do NOT eat the map.'],
       move: ['My knees are gravel.', 'Walking. Hate it.', 'Coming through. Move or be moved.', 'One step at a time. Literally.',
         'Hmph. Stairs. Of course.'],
       kill: ['Stay down.', 'Hmph. Kids.', 'And STAY off my lawn.', 'That\'s what you get.', 'Next.', 'Basanos, drop it. That one\'s mine.'],
       hurt: ['OW. Rude.', 'That chipped me.', 'Now I\'m annoyed.', 'Hands OFF.', 'You\'ll regret that. Briefly.'],
       lowhp: ['I\'m... crumbling.', 'Need a chisel. And a nap.', 'It\'s just a stone wound.', 'This is why I hate adventuring.',
-        'Josiah. Rock glue. Now.'],
+        'Josiah. Rock glue. Now.', 'Valdris. Hammer me back together. GENTLY.'],
       downed: ['Rocks... fall...', 'Tell Kevin... I said... hmph.', 'Wake me... when it\'s quiet.', 'Finally. A nap.',
         'I\'m not crying. It\'s erosion.'],
       revive: ['Who woke me. WHO.', 'Did I ASK for help?', 'Ugh. Back to work.', 'I was enjoying that.', 'Fine. Up. Happy?'],
@@ -940,7 +970,7 @@
         'Don\'t throw me a party. I\'ll throw it back.'],
       victory: ['Finally. Quiet.', 'Everybody off my lawn.', 'Hmph. Adequate.', 'Can I go back to sleep now?',
         'Don\'t hug me. Marwyn. MARWYN.'],
-      idle: ['Somebody shelve these goblins. Alphabetically.', 'Zarathor, your bling is giving me a headache.', 'Syllamin. Indoor voice.',
+      idle: ['A fire dog named Pebbles. My cousins are OFFENDED.', 'Zarathor, your bling is giving me a headache.', 'Syllamin. Indoor voice.',
         'Marbles, you\'re asleep on my foot again.', 'Ellaria, if that corgi licks me one more time...',
         'Buga. Stop buttering my shoulder.'],
       signature: ['THAT\'S IT. EVERYBODY OUT.', 'I\'VE HAD IT UP TO HERE!', 'TANTRUM. TIME.', 'THE FLOOR GOES TOO!', 'GET. OFF. MY. LAWN!'],
@@ -970,10 +1000,12 @@
 
   // ---- loading-screen tips -------------------------------------------------------------------------------
   DD.registerNarration('tips', [
-    'Slate gains Rage whenever anyone hits, heals or buffs him. At 3 Rage his runes flare: +2 damage on his skills.',
+    'Slate gains Rage whenever someone else hits, heals or buffs him. At 3 Rage his runes flare: +2 damage on his skills.',
     'Heal Slate anyway. He hates it, and it makes him angrier. Everybody wins.',
     'A foe Slate is holding can\'t move, and it comes along when he walks. Drag it somewhere unpleasant, then throw it.',
     'Throw goblins at goblins. Throw them into pits. Throw them into water, then call someone with lightning.',
+    'Air Mail throws an ally out of a brawl without provoking a single attack of opportunity. The landing is their problem.',
+    'A foe Taunted by Get Off My Lawn only swings at Slate, so the wizard next to it can walk away without getting stabbed.',
   ]);
 
   // a tiny public surface for other content (bosses / items / events that want to poke Slate)

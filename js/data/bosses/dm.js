@@ -1,14 +1,20 @@
 /* Dungeons and Degenerates — js/data/bosses/dm.js
  * The final boss of Act 3: THE DUNGEON MASTER, fought on his actual table (theme dm_table, encounter 'boss_dm').
- *   Phase 1 "Session Zero": invulnerable behind a 3-panel DM Screen (smash the panels: the screen falls on him),
- *     a random House Rule every round (state.rules), Random Encounters (cameo minis of real enemies from every act,
- *     picked at runtime, falling back to the dm_cameo_* minis), Rocks Fall (delayed crosses), Fudged Rolls.
- *   Phase 2 "The Railroad" (2/3 HP): trains thunder down the pencilled lanes, telegraphed a round ahead; a Track
- *     Switch pulled while a train is due diverts it onto the DM's own row.
- *   Phase 3 "Rocks Fall, Everyone Dies" (1/3 HP): a 3-round countdown wipe. Cite all three Player's Handbooks (or
- *     stun him) to stop it. Crossing a threshold flips the phase at once; a second one in the same round hits Plot
- *     Armor (no skipping phases, no dying before phase 3).
- * Every bit of boss state lives in the DM unit's `data` (previews and deployment rewinds copy it).
+ * v2 (initiative): he takes one turn a round like everybody else. On his turn the wind-up from his last turn lands
+ * (engine), he does one thing at once (two in phase 3): a roll, or Get Off My Table when crowded, a Random Encounter
+ * now and then, a Plot Hook when he can see nobody. Then he winds up his next big attack (DD.AI.windUp: marked tiles
+ * + ⏳, lands at the start of his next turn; a stun interrupts it).
+ *   Phase 1 "Session Zero": invulnerable behind a 3-panel DM Screen (smash the panels: the screen falls on him), a
+ *     random House Rule every round (state.rules), Random Encounters (cameo minis of real enemies from every act,
+ *     picked at runtime, falling back to the dm_cameo_* minis), Rocks Fall wind-ups (crosses on the heroes).
+ *   Phase 2 "The Railroad" (2/3 HP): he winds up a train down a pencilled lane; a Track Switch pulled while it winds
+ *     up diverts it onto his own row (unstoppable from then on: it's the party's train).
+ *   Phase 3 "Rocks Fall, Everyone Dies" (1/3 HP): a countdown wipe over 3 of his turns (an unstoppable wind-up). Cite
+ *     all three Player's Handbooks to cancel it for good; each stun pushes it back a turn. Crossing a threshold flips
+ *     the phase at once; a second one in the same round hits Plot Armor (no skipping phases, no dying before phase 3).
+ * His wind-up skills are not skill slots (only his immediate attacks are), so the HUD's threat shading and AutoPlay's
+ * reach model see what he can really do on his turn; wind-ups show up as wind-ups. Every bit of boss state lives in
+ * the DM unit's `data` (previews and dry runs copy it).
  */
 (function () {
   'use strict';
@@ -18,23 +24,24 @@
   const DM_ID = 'dungeon_master';
   const PANEL = 'dm_screen_panel', SWITCH = 'dm_track_switch', BOOK = 'dm_handbook', TRACK = 'dm_track', STACK = 'dm_book_stack';
   const RULE_ID = 'dm_house_rule';
-  const STUN_LIKE = ['stun', 'sleep', 'frozen'];
   const OWN_CAMEOS = ['dm_cameo_goblin', 'dm_cameo_skeleton', 'dm_cameo_imp'];
   // other content that must never be picked as a cameo: tests, wild magic, synthetic, other bosses' adds, mine
   const NOT_CAMEO = /^(test_|wm_|mg_|mgt_|dm_|grim_|rat_|lich_|iris_)/;
   const SOUTH = { x: 0, y: 1 };
   const N = {
-    hp: 480, panelHp: 10, screenDrop: 60, divert: 40, lawyered: 55,
-    cameoAlive: 3, cameoPer: 2, cameoTotal: 6, cameoHp: 16, books: 3, doomRounds: 3,
+    hp: 400, panelHp: 10, screenDrop: 60, train: 24, lawyered: 55,
+    cameoAlive: 3, cameoPer: 2, cameoTotal: 6, cameoHp: 16, books: 3, doomTurns: 3,
     p2: 2 / 3, p3: 1 / 3,          // phase thresholds (fractions of max HP)
-    rolls1: 2, rolls2: 2, rolls3: 2,   // Fudged Rolls per round in each phase (phase 2: one fewer on Plot Hook rounds)
   };
+  // his immediate attacks (skill slots) by state; the wind-ups (Rocks Fall, The Railroad, the doom) are scripted
+  const KIT = { screen: ['dm_secret_roll'], 1: ['dm_fudged_roll', 'dm_plot_hook', 'dm_get_off'], 2: ['dm_fudged_roll', 'dm_plot_hook', 'dm_get_off'] };
 
   // ---- small helpers ----------------------------------------------------------------------------------------
   function S() { return DD.Combat && DD.Combat.state; }
   function active(u) { return !!u && !u.dead && !u.downed; }
   function has(u, id) { return DD.Act.hasStatus(u, id); }
-  function stunned(u) { for (let i = 0; i < STUN_LIKE.length; i++) if (has(u, STUN_LIKE[i])) return true; return false; }
+  /** Stun, sleep, frozen or any stunLike status: he loses his turn and his wind-ups are interrupted. */
+  function stunned(u) { return DD.Act.isStunned(u); }
   function isDM(u) { return !!u && u.defId === DM_ID; }
   function round() { const s = S(); return s ? s.round : 0; }
   function plural(n, w) { return n + ' ' + w + (n === 1 ? '' : 's'); }
@@ -51,8 +58,10 @@
     const d = u.data || (u.data = {});
     if (!d.phase) {
       d.phase = 1; d.screenDown = false; d.hadScreen = false; d.armored = false; d.ownInv = false;
-      d.p1 = 0; d.p2 = 0; d.p3 = 0; d.cameos = 0; d.books = 0; d.booksNeeded = N.books; d.doom = null; d.stunGuard = -1; d.divert = null;
-      d.stats = { panels: 0, screen: 0, rules: 0, cameos: 0, switches: 0, diverted: 0, books: 0, lawyered: 0, doomFired: 0, stuns: 0 };
+      d.p1 = 0; d.p2 = 0; d.p3 = 0; d.cameos = 0; d.books = 0; d.booksNeeded = N.books; d.doom = null;
+      d.guard = null; d.lostTurn = false; d.shoveAt = -9;
+      d.stats = { panels: 0, screen: 0, rules: 0, cameos: 0, switches: 0, diverted: 0, books: 0, lawyered: 0, doomFired: 0, stuns: 0,
+        refused: 0, pushed: 0, turns: 0, lost: 0, rolls: 0, hooks: 0, shoves: 0, rocks: 0, trains: 0 };
     }
     return d;
   }
@@ -72,7 +81,8 @@
     return st ? st.grid.tiles.map(function (t) { return { x: t.x, y: t.y }; }) : [];
   }
   function onTiles(list, p) { for (let i = 0; i < list.length; i++) if (list[i].x === p.x && list[i].y === p.y) return true; return false; }
-  function pending(u, skillId) { return (u.intents || []).some(function (i) { return i.skillId === skillId && (i.delay > 0 || i.pending); }); }
+  /** His pending wind-up of that skill (v2: every stored intent is a wind-up), or null. */
+  function windupOf(u, skillId) { return ((u && u.intents) || []).filter(function (i) { return i.skillId === skillId; })[0] || null; }
   function threshold(u, phase) { return Math.ceil(u.maxHp * (phase === 2 ? N.p2 : N.p3)); }
   /** HP the DM can't drop below in a phase (Plot Armor): the next phase's threshold, none in phase 3. */
   function floorOf(u, phase) { return phase === 1 ? threshold(u, 2) : phase === 2 ? threshold(u, 3) : 0; }
@@ -84,6 +94,18 @@
     let n = 0;
     U.DIRS.forEach(function (d) { const o = DD.Grid.unitAt(u.x + d.x, u.y + d.y); if (active(o) && DD.Grid.hostile(u, o)) n++; });
     return n >= 2;
+  }
+  /**
+   * Will this wind-up land before the round is over (at the start of the owner's turn still to come this round, or
+   * right now at its turn start)? Then it lands under this round's House Rule; otherwise under a later one.
+   */
+  function landsThisRound(u, it) {
+    const s = S();
+    if (!s || !s.order || !u || !it) return false;
+    if ((it.turnsLeft || it.delay || 1) > 1) return false;
+    if (s.current === u.id) return !s.turnLive;
+    for (let i = s.turnIndex + 1; i < s.order.length; i++) if (s.order[i].unitId === u.id) return true;
+    return false;
   }
 
   /** Train lanes: the pencilled tracks of the arena, else (sandboxes) full rows 2 and 4 tiles from the DM. */
@@ -99,6 +121,16 @@
     return out;
   }
 
+  // ---- his kit: immediate attacks only (screen up: the secret roll; then rolls with line of sight + extras) ----------
+  function kitOf(dm) { const d = boss(dm); return screened(dm) ? KIT.screen : d.phase >= 2 ? KIT[2] : KIT[1]; }
+  function syncKit(dm) {
+    const want = kitOf(dm);
+    const cur = dm.skillSlots || [];
+    if (cur.length === want.length && cur.every(function (sl, i) { return sl.id === want[i]; })) return;
+    dm.skillSlots = want.map(function (id) { return cur.filter(function (sl) { return sl.id === id; })[0] || DD.Act.makeSlot(id, 1); });
+    DD.Act.touch();
+  }
+
   // ---- the DM's dice (cosmetic: the giant d20s next to him show his "rolls") ----------------------------------
   function setDie(tag, value) {
     tiles().forEach(function (t) {
@@ -107,6 +139,7 @@
   }
 
   // ---- objective subtitle: the puzzle instructions on screen ------------------------------------------------------
+  function turnsText(n) { return n <= 1 ? 'his next turn' : n + ' of his turns'; }
   function updateFlavor(dm) {
     const s = S();
     if (!s || !s.objective || !dm) return;
@@ -116,12 +149,13 @@
     if (d.phase === 1 && !d.screenDown && left > 0) text = 'Smash the DM Screen (' + plural(left, 'panel') + ' left): he can\'t be hurt behind it.';
     else if (d.armored) text = 'PLOT ARMOR: he can\'t drop below ' + floorHp(dm) + ' HP this round. Next round, phase ' + (d.phase + 1) + '.';
     else if (d.phase === 1) text = 'Screen\'s down! Knock him to 2/3 HP before he finds his notes.';
-    else if (d.phase === 2) text = 'The Railroad: dodge the trains, or pull a Track Switch while one is due to divert it onto him.';
-    else if (d.doom && d.doom.active && !d.doom.solved) {
-      // same count as the telegraph (⏳N = fires at the end of round now+N)
-      const r = d.doom.at - s.round;
-      text = 'ROCKS FALL at the end of ' + (r > 0 ? 'round ' + d.doom.at + ' (⏳' + r + ')' : 'THIS round') + '! Cite all ' + d.booksNeeded +
-        ' Player\'s Handbooks (' + d.books + '/' + d.booksNeeded + '), or stun him to buy a round.';
+    else if (d.phase === 2) text = 'The Railroad: get off the red lane, or pull a Track Switch while a train winds up to divert it onto him.';
+    else if (doomOn(d)) {
+      // same count as the ⏳ on the wind-up (lands at the start of his n-th turn from now)
+      const w = windupOf(dm, 'dm_tpk');
+      const n = w ? (w.turnsLeft || 1) : N.doomTurns;
+      text = 'ROCKS FALL in ' + turnsText(n) + ' (⏳' + n + ')! Cite all ' + d.booksNeeded + ' Player\'s Handbooks (' + d.books + '/' +
+        d.booksNeeded + '), or stun him to buy a turn.';
     } else text = 'He\'s out of rules to bend. Finish him!';
     s.objective.flavor = text;
     DD.Act.touch();
@@ -131,13 +165,14 @@
   function syncShield(dm) {
     const d = boss(dm);
     if (d.hadScreen && !d.screenDown && panelsLeft() === 0) screenDown(dm, null);
-    const screened = d.hadScreen && !d.screenDown;
-    dm.flags.invulnerable = screened;
-    const want = screened || d.armored;
+    const scr = d.hadScreen && !d.screenDown;
+    dm.flags.invulnerable = scr;
+    const want = scr || d.armored;
     const hasInv = has(dm, 'invulnerable');
     if (want && !hasInv) DD.Act.addStatus(dm, 'invulnerable', { turns: -1, silent: true }, dm);
     else if (!want && hasInv && d.ownInv) DD.Act.removeStatus(dm, 'invulnerable', { silent: true });
     d.ownInv = want;
+    syncKit(dm);
   }
 
   /** The last panel falls: the screen collapses onto the DM (damage + stun + Exposed for the rest of phase 1). */
@@ -149,6 +184,7 @@
     dm.flags.invulnerable = false;
     if (has(dm, 'invulnerable')) DD.Act.removeStatus(dm, 'invulnerable', { text: 'Exposed!' });
     d.ownInv = false;
+    syncKit(dm);
     DD.FX.banner('SCREEN DOWN!', { sub: 'His notes, his snacks and his fudged dice are all exposed', color: '#ffd34d', ms: 1100 });
     DD.FX.shake(10, 420);
     DD.FX.particles(dm, { kind: 'dust', count: 22 });
@@ -156,6 +192,7 @@
     DD.Act.narrate('dm_screen', {});
     DD.Act.bark(dm, 'screen');
     DD.Act.withCredit(src || null, function () { DD.Act.damage(null, dm, N.screenDrop, { cause: 'other', tags: ['dm_screen'] }); });
+    // his own puzzle stun always lands: he loses his next turn and whatever he is winding up
     if (active(dm)) DD.Act.addStatus(dm, 'stun', { turns: 1 }, dm);
     if (active(dm) && boss(dm).phase === 1) DD.Act.addStatus(dm, 'dm_exposed', { turns: -1 }, src || null);
     updateFlavor(dm);
@@ -191,27 +228,32 @@
   }
 
   // ---- phase 2 puzzle: Track Switches -------------------------------------------------------------------------
-  /** The train due THIS enemy turn that has not been diverted yet (or null). */
+  /**
+   * The train he is winding up (it lands at the start of his next turn) and nobody has diverted yet, or null. v2: a
+   * pending wind-up has turnsLeft (= delay) 1 until it lands, so this is what the heroes can switch during their turns.
+   */
   function divertable(dm) {
     if (!dm || boss(dm).phase < 2) return null;
-    return (dm.intents || []).filter(function (i) { return i.skillId === 'dm_railroad' && !(i.delay > 0) && !(i.data && i.data.diverted); })[0] || null;
+    return (dm.intents || []).filter(function (i) {
+      return i.skillId === 'dm_railroad' && i.windup !== false && (i.turnsLeft || i.delay || 1) <= 1 && !(i.data && i.data.diverted);
+    })[0] || null;
   }
-  const DIVERTED = 'The Railroad: DIVERTED onto the DM!';
-  function copyTiles(list) { return list.map(function (p) { return { x: p.x, y: p.y }; }); }
-  function divertedIntent(dm) {
-    return (dm.intents || []).filter(function (i) { return i.skillId === 'dm_railroad' && i.data && i.data.diverted; })[0] || null;
-  }
+  const DIVERTED = 'Diverted onto the DM';
   function switchTracks(unit, o, tile) {
     const dm = findDM();
     const it = divertable(dm);
-    if (!it) { DD.FX.text(tile, 'No train due.', { color: '#d0d0d0', size: 14 }); return; }
-    it.tiles = rowTiles(dm.y);
+    if (!it) { DD.FX.text(tile, 'No train coming.', { color: '#d0d0d0', size: 14 }); return; }
+    // the wind-up now runs down his own row, and it is the party's train: unstoppable (his stun, taunt, dazzle, confusion
+    // or charm can't call it off or turn it; the engine keeps and lands unstoppable wind-ups)
+    it.anchor = 'ground';
     it.abs = { x: dm.x, y: dm.y };
+    it.tiles = rowTiles(dm.y);
     it.autoTiles = false;
+    it.unitId = null;
+    it.rel = null;
     it.data = Object.assign({}, it.data, { diverted: true, switcherId: unit.id, unstoppable: true });
     it.label = DIVERTED;
-    // from now on it is the party's train: recorded so his stun / taunt / dazzle can't call it off or turn it
-    boss(dm).divert = { round: round(), tiles: copyTiles(it.tiles), abs: { x: dm.x, y: dm.y }, lane: it.data.lane, dir: it.data.dir, switcherId: unit.id };
+    o.data = o.data || {};
     o.data.on = !o.data.on;
     o.data.used = (o.data.used || 0) + 1;
     boss(dm).stats.switches++;
@@ -221,38 +263,7 @@
     DD.Act.log(unit.name + ' throws the track switch: the incoming train is diverted onto the Dungeon Master\'s row!', 'hero');
     DD.Act.narrate('dm_switch', { hero: unit.name });
     DD.Act.bark(dm, 'diverted');
-    DD.Act.touch();
-  }
-  /**
-   * After any status lands on him: the engine has just cancelled (stun-likes) or re-aimed (taunt) his intents, so put
-   * the diverted train's telegraph back exactly where the switch sent it.
-   */
-  function pinDiverted(dm) {
-    const dv = boss(dm).divert;
-    if (!dv || dv.round !== round() || !active(dm)) return;
-    let it = divertedIntent(dm);
-    if (!it) {
-      it = DD.AI.makeIntent(dm, 'dm_railroad', dv.abs, { anchor: 'ground', tiles: dv.tiles, noCooldown: true, label: DIVERTED,
-        data: { lane: dv.lane, dir: dv.dir, diverted: true, switcherId: dv.switcherId } });
-      if (!it) return;
-    }
-    it.anchor = 'ground'; it.abs = { x: dv.abs.x, y: dv.abs.y }; it.tiles = copyTiles(dv.tiles); it.autoTiles = false;
-    it.delay = 0; it.pending = true; it.label = DIVERTED;
-    it.data.unstoppable = true;   // AI.describe: no "Incapacitated: this will not happen." on this one
-    DD.Act.touch();
-  }
-  /** Start of his turn: the diverted train runs first, stunned, taunted, dazzled or not (it isn't his attack any more). */
-  function runDiverted(dm) {
-    const d = boss(dm), dv = d.divert;
-    if (!dv || dv.round !== round() || !active(dm)) return;
-    d.divert = null;
-    let it = divertedIntent(dm);
-    if (it) dm.intents.splice(dm.intents.indexOf(it), 1);
-    else it = { skillId: 'dm_railroad', anchor: 'ground', abs: dv.abs, tiles: copyTiles(dv.tiles), delay: 0, level: 1, label: DIVERTED,
-      data: { lane: dv.lane, dir: dv.dir, diverted: true, switcherId: dv.switcherId } };
-    const slot = (dm.skillSlots || []).filter(function (sl) { return sl.id === 'dm_railroad'; })[0];
-    DD.Combat.resolveSkill(dm, slot || DD.getSkill('dm_railroad'), { x: dv.abs.x, y: dv.abs.y },
-      { extra: { isIntent: true, intent: it, tiles: copyTiles(dv.tiles), dir: { x: dv.dir < 0 ? -1 : 1, y: 0 } } });
+    updateFlavor(dm);
     DD.Act.touch();
   }
 
@@ -271,6 +282,7 @@
     const dm = findDM();
     if (!dm || !bookUsable(o)) { DD.FX.text(tile, 'Not now.', { color: '#d0d0d0', size: 14 }); return; }
     const d = boss(dm);
+    o.data = o.data || {};
     o.data.used = true;
     d.books++;
     d.stats.books++;
@@ -292,7 +304,10 @@
     d.doom.solved = true;
     d.doom.active = false;
     d.stats.lawyered = round();
-    dm.intents = dm.intents.filter(function (i) { return i.skillId !== 'dm_tpk'; });
+    if (windupOf(dm, 'dm_tpk')) {
+      dm.intents = dm.intents.filter(function (i) { return i.skillId !== 'dm_tpk'; });
+      DD.Act.emit('windup:cancel', { unit: dm, unitId: dm.id, reason: 'Rules-lawyered' });
+    }
     DD.Act.touch();
     DD.FX.banner('RULES-LAWYERED!', { sub: 'Page 143: the rocks fall on the DM instead', color: '#ffe680', ms: 1100 });
     DD.FX.shake(12, 450);
@@ -301,7 +316,7 @@
     DD.Act.narrate('dm_objection', { hero: hero ? hero.name : 'The party' });
     DD.Act.bark(dm, 'lawyered');
     DD.Act.withCredit(hero || null, function () { DD.Act.damage(null, dm, N.lawyered, { cause: 'other', tags: ['rocks'] }); });
-    if (active(dm)) DD.Act.addStatus(dm, 'stun', { turns: 1 }, dm);
+    // no stun: the rocks and being Exposed for good are the payoff (a stunned DM made phase 3 a formality)
     if (active(dm)) DD.Act.addStatus(dm, 'dm_exposed', { turns: -1 }, hero || null);
     updateFlavor(dm);
   }
@@ -311,9 +326,11 @@
     const free = function (p) { const t = DD.Grid.tile(p.x, p.y); return !!t && !t.obj && DD.Grid.isFree(p.x, p.y) && !DD.Grid.isDrop(p.x, p.y); };
     let cands = tagged('book').filter(free);
     if (cands.length < N.books) {
-      // fallback: free tiles near the party that someone can actually walk up to
+      // fallback: free tiles near the party that someone can actually walk up to (a walker: a book only a flyer can
+      // reach, past a pit, would leave the puzzle unsolvable once the flyer is down)
       const reach = {};
-      heroes.forEach(function (h) {
+      const walkers = heroes.filter(function (h) { return !DD.Grid.isFlying(h); });
+      (walkers.length ? walkers : heroes).forEach(function (h) {
         reach[h.x + ',' + h.y] = 1;
         DD.Grid.reachable(h, 40, { ignoreUnits: true }).forEach(function (e) { reach[e.x + ',' + e.y] = 1; });
       });
@@ -339,6 +356,15 @@
     });
     return picks.length;
   }
+  /** The countdown: an unstoppable wind-up over 3 of his turns (a stun pushes it back a turn instead of stopping it). */
+  function windDoom(dm, again) {
+    const d = boss(dm);
+    if (!doomOn(d) || windupOf(dm, 'dm_tpk') || !active(dm)) return null;
+    const it = DD.AI.windUp(dm, 'dm_tpk', { x: dm.x, y: dm.y }, { anchor: 'ground', tiles: allTiles(), turns: N.doomTurns, label: 'Everyone Dies',
+      data: { unstoppable: true }, banner: again ? 'He restarts the countdown: ' + N.doomTurns + ' of his turns.' : false });
+    updateFlavor(dm);
+    return it;
+  }
 
   // ---- house rules: rolled on the giant d20 every round (state.rules, one at a time) -----------------------------
   const HOUSE_RULES = [
@@ -353,7 +379,7 @@
       hooks: { modifyIncomingDamage: function (d) { if (d.cause === 'skill') d.flat -= 2; } } },
     { key: 'flank', lo: 12, hi: 13, good: 0, icon: '🎯', name: 'Flanking Rules', desc: 'A unit next to 2 or more of its foes takes +25% damage from attacks.',
       hooks: { modifyIncomingDamage: function (d) { if (d.cause === 'skill' && flanked(d.target)) d.mult *= 1.25; } } },
-    { key: 'cheeto', lo: 14, hi: 15, good: -1, icon: '🧀', name: 'Cheeto Fingers', desc: 'Every tile the DM\'s attacks hit gets Cheeto dust (Slowed on entry).', hooks: {} },
+    { key: 'cheeto', lo: 14, hi: 15, good: -1, icon: '🧀', name: 'Cheeto Fingers', desc: 'Every tile the DM\'s rolls, hooks, shoves, rocks and trains hit gets Cheeto dust (Slowed on entry; flyers float over it).', hooks: {} },
     { key: 'fiat', lo: 16, hi: 17, good: -1, icon: '😈', name: 'DM Fiat', desc: 'The DM\'s attacks deal +4 damage.',
       hooks: { modifyOutgoingDamage: function (d) { if (d.cause === 'skill' && isDM(d.source)) d.flat += 4; } } },
     { key: 'inspire', lo: 18, hi: 19, good: 1, icon: '🌟', name: 'Inspiration for Everyone', desc: 'Heroes start their turn Inspired (+25% damage).',
@@ -365,7 +391,7 @@
     for (let i = 0; i < HOUSE_RULES.length; i++) if (roll >= HOUSE_RULES[i].lo && roll <= HOUSE_RULES[i].hi) return HOUSE_RULES[i];
     return HOUSE_RULES[0];
   }
-  /** Same outgoing multiplier as the engine's telegraph (ai.js outMult). */
+  /** Same outgoing multiplier as the engine's wind-up number (ai.js outMult). */
   function outMult(u) {
     let m = 1;
     if (has(u, 'weak')) m *= 0.75;
@@ -375,14 +401,15 @@
     if (u.side === 'enemy') { const s = S(); m *= (s && s.difficulty && s.difficulty.dmg) || 1; }
     return m;
   }
+  /** The house rule counts for an action (it resolves now) and for a wind-up that lands this round. */
+  function ruleApplies(unit, intent) { return !intent || !intent.windup || landsThisRound(unit, intent); }
   /**
-   * Telegraph truth for every enemy, his cameos too: the engine adds a rule's telegraphFlat(unit, intent, rule) to each
-   * telegraph (phase 4; before, only his own skills showed the rule and the cameos lied). Exploding Dice +2, Armor
-   * Class Is Back −2, Flanking Rules' +25% on a tracked target that is flanked right now. A ⏳ intent fires under a
-   * later round's rule: base number. docs/notes/boss-dm.md
+   * Wind-up truth for every enemy, his cameos too (engine rule-level telegraphFlat(unit, intent, rule), added to each
+   * wind-up number): Exploding Dice +2, Armor Class Is Back −2, Flanking Rules' +25% on a tracked target that is
+   * flanked right now. A wind-up that lands next round lands under next round's rule: base number until then.
    */
   function ruleFlat(unit, intent, r) {
-    if (!r || !unit || (intent && intent.delay > 0)) return 0;
+    if (!r || !unit || !ruleApplies(unit, intent)) return 0;
     if (r.key === 'exploding') return 2;
     if (r.key === 'ac') return -2;
     if (r.key === 'flank' && intent && intent.anchor === 'unit') {
@@ -396,7 +423,7 @@
   function houseFlat(unit, intent) {
     const s = S();
     const r = s && s.rules.filter(function (x) { return x.id === RULE_ID; })[0];
-    if (!r || !unit || (intent && intent.delay > 0)) return 0;
+    if (!r || !unit || !ruleApplies(unit, intent)) return 0;
     return r.key === 'fiat' && isDM(unit) ? 4 : 0;
   }
   /** Rules Lawyering: a new house rule for this round. From phase 2 on he rerolls anything that helps you. */
@@ -417,8 +444,8 @@
     d.stats.rules++;
     d.lastRule = rule.key;
     DD.FX.text(dm, rule.icon + ' ' + rule.name + (fudged ? ' (re-rolled!)' : ''), { color: '#ffd34d', size: 15 });
-    // the chip, this floating text and the log already show the rule; the narrator caption sits over his intent
-    // bubbles for seconds at the start of the player phase, so it only introduces house rules (round 1), then now and then
+    // the chip, this floating text and the log already show the rule; the narrator caption sits over the board for
+    // seconds, so it only introduces house rules (round 1), then now and then
     if (fudged) DD.Act.log('The DM didn\'t like his first roll, so he rolls again. Behind no screen. In front of everyone.', 'narrator');
     else if (round() <= 1 || DD.rng.next() < 0.25) DD.Act.narrate('dm_rule', { name: rule.name, n: roll });
     DD.Act.maybeBark(dm, 'rule', 0.5);
@@ -495,7 +522,10 @@
       if (def && !u.sprite && OWN_CAMEOS.indexOf(def.id) < 0) u.sprite = unpainted(def.sprite);
     });
   }
-  /** Random Encounter: up to 2 cameo minis (3 alive at most, 6 per fight). Returns how many arrived. */
+  /**
+   * Random Encounter: up to 2 cameo minis (3 alive at most, 6 per fight). They roll initiative as they arrive and act
+   * from the next round. Returns how many arrived.
+   */
   function randomEncounter(dm) {
     const s = S();
     const d = boss(dm);
@@ -526,8 +556,7 @@
   }
 
   // ---- phases -----------------------------------------------------------------------------------------------------
-  /** midTurn: the threshold was crossed by a hit (not at round start), so the doom countdown gets a full 3 rounds. */
-  function enterPhase(dm, phase, midTurn) {
+  function enterPhase(dm, phase) {
     const d = boss(dm);
     d.phase = phase;
     d.phaseRound = round();
@@ -535,22 +564,24 @@
     d.stats['phase' + phase] = round();
     d.armored = false;
     if (has(dm, 'dm_exposed')) DD.Act.removeStatus(dm, 'dm_exposed', { text: 'Notes recovered' });
+    syncKit(dm);
     if (phase === 2) {
       DD.FX.banner('PHASE 2: THE RAILROAD', { sub: '"You WILL go where the story goes."', color: '#ffb347', ms: 1200 });
-      DD.Act.log('PHASE 2: The Railroad. Trains will thunder down the pencilled tracks, one lane per round.', 'enemy');
+      DD.Act.log('PHASE 2: The Railroad. Each turn he winds up a train down a pencilled track. A Track Switch can divert it onto him.', 'enemy');
       DD.Act.narrate('dm_phase2', {});
       DD.Act.bark(dm, 'phase2');
     } else if (phase === 3) {
-      d.doom = { active: true, solved: false, at: round() + N.doomRounds - (midTurn ? 0 : 1), fired: 0 };
+      d.doom = { active: true, solved: false, fired: 0 };
       d.books = 0;
       const placed = placeBooks(dm);
       // a crowded table may not fit all three: the ones that did appear are enough
       d.booksNeeded = Math.max(1, Math.min(N.books, placed));
       DD.FX.banner('PHASE 3: ROCKS FALL, EVERYONE DIES', { sub: 'Cite all ' + d.booksNeeded + ' Player\'s Handbooks before the countdown ends!', color: '#ff6b5a', ms: 1300 });
-      DD.Act.log('PHASE 3: Rocks Fall, Everyone Dies. In ' + N.doomRounds + ' rounds every hero takes ' + doomDmg() + ' damage, unless the party cites all ' +
-        d.booksNeeded + ' Player\'s Handbooks (' + placed + ' just appeared). Stunning him buys a round.', 'enemy');
+      DD.Act.log('PHASE 3: Rocks Fall, Everyone Dies. In ' + N.doomTurns + ' of his turns every hero takes ' + doomDmg() + ' damage, unless the party cites all ' +
+        d.booksNeeded + ' Player\'s Handbooks (' + placed + ' just appeared). Each stun pushes it back a turn. Desperate, he rolls two dice a turn now.', 'enemy');
       DD.Act.narrate('dm_phase3', {});
       DD.Act.bark(dm, 'phase3');
+      windDoom(dm, false);
     }
     DD.FX.shake(8, 380);
     updateFlavor(dm);
@@ -592,38 +623,48 @@
       else DD.Act.log('The DM is too dazed to invent a house rule this round. Freedom!', 'narrator');
       updateFlavor(unit);
     },
-    /** Stun guard: after a stun he can't be stunned again during the next round (his own puzzle stuns always land). */
+    /** Stun guard: once stunned he shrugs off stuns until he has played a turn again (his own puzzle stuns always land). */
     modifyStatus: function (m) {
-      if (!isDM(m.unit) || STUN_LIKE.indexOf(m.id) < 0 || m.src === m.unit) return;
+      if (!isDM(m.unit) || !DD.Act.isStunLike(m.id) || m.src === m.unit) return;
       const d = boss(m.unit);
-      if (round() <= d.stunGuard) {
+      if (d.guard) {
         m.cancel = true;
-        DD.FX.text(m.unit, 'Not again! (stun-proof)', { color: '#dddddd', size: 14 });
+        d.stats.refused++;
+        DD.FX.text(m.unit, 'Not again! (stun-proof until he has had a turn)', { color: '#dddddd', size: 14 });
       }
     },
-    /** His turn starts: a diverted train runs first, whatever state he is in (see runDiverted). */
-    onTurnStart: function (unit) { if (isDM(unit)) runDiverted(unit); },
+    onTurnStart: function (unit) { if (isDM(unit)) boss(unit).lostTurn = stunned(unit); },
+    onTurnEnd: function (unit) {
+      if (!isDM(unit)) return;
+      const d = boss(unit), s = S();
+      if (d.lostTurn) d.stats.lost++;
+      // the guard drops at the end of a turn he really played, armed before that turn began
+      else if (d.guard && s && s.turn > d.guard.turn) d.guard = null;
+      d.lostTurn = false;
+      updateFlavor(unit);
+    },
     onStatusApplied: function (unit, st) {
-      if (!isDM(unit) || !st) return;
-      pinDiverted(unit);   // a stun just cancelled (a taunt re-aimed) his intents: the diverted train stays put
-      if (STUN_LIKE.indexOf(st.id) < 0) return;
-      const d = boss(unit);
+      if (!isDM(unit) || !st || !DD.Act.isStunLike(st.id)) return;
+      const d = boss(unit), s = S();
       d.stats.stuns++;
-      d.stunGuard = round() + (st.fresh ? 2 : 1);
-      if (doomOn(d)) {
-        d.doom.at++;
-        DD.FX.text(unit, 'He lost his place in his notes! (+1 round)', { color: '#ffe680', size: 15 });
-        DD.Act.log('Stunned, the DM loses his place in his notes: Rocks Fall, Everyone Dies is pushed back a round.', 'hero');
+      d.guard = { turn: s ? s.turn : 0 };
+      // the countdown is unstoppable (the engine kept it): the stun only makes him lose his place in his notes
+      const w = windupOf(unit, 'dm_tpk');
+      if (w && doomOn(d)) {
+        w.turnsLeft = (w.turnsLeft || 1) + 1;
+        w.delay = w.turnsLeft;
+        d.stats.pushed++;
+        DD.FX.text(unit, 'He lost his place in his notes! (+1 turn)', { color: '#ffe680', size: 15 });
+        DD.Act.log('Stunned, the DM loses his place in his notes: Rocks Fall, Everyone Dies is pushed back a turn.', 'hero');
       }
       DD.Act.maybeBark(unit, 'stunned', 0.7);
       updateFlavor(unit);
     },
     /**
-     * [phase 4, engine modifyFinalDamage] Plot Armor clamps the hit itself (after armor, before Block) instead of
-     * healing him back after it: one hit carries him at most down to the floor that will hold (the next phase's floor
-     * when this hit turns the phase over, this phase's if it already turned this round). onTakeDamage below still turns
-     * the phase and raises the armor; its heal-back is only a safety net now. So lifesteal, damage stats, the log and
-     * the damage number all see the HP he really lost. docs/notes/boss-dm.md
+     * Plot Armor clamps the hit itself (engine modifyFinalDamage: after armor, before Block): one hit carries him at
+     * most down to the floor that will hold (the next phase's floor when this hit turns the phase over, this phase's if
+     * it already turned this round). onTakeDamage below turns the phase and raises the armor; its heal-back is a
+     * safety net. So lifesteal, damage stats, the log and the damage number all see the HP he really lost.
      */
     modifyFinalDamage: function (dd) {
       const u = dd.target;
@@ -646,7 +687,7 @@
       if (!isDM(u) || u.dead) return;
       const d = boss(u);
       if (floorHp(u) <= 0 || u.hp > floorHp(u)) return;
-      if (d.lastShift !== round()) enterPhase(u, d.phase + 1, true);
+      if (d.lastShift !== round()) enterPhase(u, d.phase + 1);
       const fl = floorHp(u);
       if (fl > 0 && u.hp <= fl) {
         if (u.hp < fl) DD.Act.heal(null, u, fl - u.hp, { silent: true, cause: 'status' });
@@ -670,7 +711,7 @@
     },
   };
 
-  // ---- the planner ------------------------------------------------------------------------------------------------
+  // ---- his turn ---------------------------------------------------------------------------------------------------
   function heroFirst(list) { const h = list.filter(function (u) { return u.kind === 'hero'; }); return h.length ? h : list; }
   function inReach(unit, api, skillId, f) {
     const def = DD.getSkill(skillId);
@@ -678,41 +719,73 @@
     const dd = api.dist(unit, f);
     return dd >= rg[0] && dd <= rg[1] && (def.target.los === false || api.los(unit, f));
   }
-  /** Fudged Rolls: tracking shots at the n weakest targets (heroes first). Behind his screen he needs no line of sight. */
-  function planRolls(unit, api, foes, n) {
+  /**
+   * A roll at the best target he can reach (the AI's own reach-aware scoring: what the HUD and AutoPlay expect).
+   * not: his second die of the turn (phase 3) goes to somebody else. Returns the unit he rolled at, or null.
+   */
+  function roll(unit, api, not) {
     const sid = screened(unit) ? 'dm_secret_roll' : 'dm_fudged_roll';
-    const list = foes.filter(function (f) { return inReach(unit, api, sid, f); });
-    list.sort(function (a, b) {
-      return (a.kind === 'hero' ? 0 : 1) - (b.kind === 'hero' ? 0 : 1) || (a.hp + (a.block || 0)) - (b.hp + (b.block || 0)) || api.dist(unit, a) - api.dist(unit, b);
-    });
-    list.slice(0, n).forEach(function (f) { api.addIntent(unit, sid, f, { anchor: 'unit' }); });
-    return Math.min(n, list.length);
+    let target = null;
+    if (!not) {
+      const best = api.bestAttack(unit, { skills: [sid], noMove: true });
+      const v = best ? DD.Grid.unitAt(best.target.x, best.target.y) : null;
+      target = active(v) ? v : null;
+    } else {
+      const L = DD.skillLevel(DD.getSkill(sid), 1);
+      let bestSc = -Infinity;
+      api.foes(unit).forEach(function (f) {
+        if (f === not || !inReach(unit, api, sid, f)) return;
+        const est = DD.AI.estimate(unit, f, L.dmg, null);
+        const sc = est + DD.AI.targetValue(unit, f, est, 'ranged');
+        if (sc > bestSc) { bestSc = sc; target = f; }
+      });
+    }
+    // nobody in sight at all (everyone hiding behind his soda cans): the plot comes for them instead; his second
+    // die (not) just finds nobody else to roll at
+    if (!target) return screened(unit) || not ? null : hook(unit, api, api.foes(unit), null);
+    if (!api.act(unit, sid, target, { anchor: 'unit' })) return null;
+    boss(unit).stats.rolls++;
+    return target;
   }
-  /** Rocks Fall: crosses around (up to) n heroes keeping their distance (the melee crowd gets shoved instead), next round. */
-  function planRocks(unit, api, foes, n) {
+  /**
+   * Plot Hook (needs no line of sight): reels in a hero hiding from him first, else the farthest one (pulls on
+   * purpose: the plot is THIS way). Returns the unit he hooked, or null.
+   */
+  function hook(unit, api, foes, not) {
+    const list = heroFirst(foes).filter(function (f) { return f !== not && inReach(unit, api, 'dm_plot_hook', f); });
+    const seen = function (u) { return api.los(unit, u) ? 1 : 0; };
+    list.sort(function (a, b) { return seen(a) - seen(b) || api.dist(unit, b) - api.dist(unit, a) || a.hp - b.hp; });
+    if (!list.length || !api.act(unit, 'dm_plot_hook', list[0], { anchor: 'unit' })) return null;
+    boss(unit).stats.hooks++;
+    return list[0];
+  }
+  /**
+   * Rocks Fall: crosses around (up to) n heroes, first the ones hiding from his rolls ("can't see your mini? rocks
+   * fall on it"), then those keeping their distance (the crowd next to him gets shoved instead).
+   */
+  function windRocks(unit, api, foes, n) {
     const pool = api.rng.shuffle(heroFirst(foes));
     const crowd = function (u) { return foes.filter(function (o) { return o !== u && api.dist(o, u) <= 2; }).length; };
     const near = function (u) { return api.dist(u, unit) <= 2 ? 1 : 0; };
-    pool.sort(function (a, b) { return near(a) - near(b) || crowd(b) - crowd(a); });
+    const seen = function (u) { return api.los(unit, u) ? 1 : 0; };
+    pool.sort(function (a, b) { return seen(a) - seen(b) || near(a) - near(b) || crowd(b) - crowd(a); });
     const centers = [];
     pool.forEach(function (f) { if (centers.length < n && !centers.some(function (c) { return api.dist(c, f) <= 2; })) centers.push({ x: f.x, y: f.y }); });
     if (!centers.length) return false;
     const out = [];
     centers.forEach(function (c) {
-      DD.Grid.shape('cross', c, null, 1).forEach(function (p) { if (!onTiles(out, p) && !(p.x === unit.x && p.y === unit.y)) out.push(p); });
+      DD.Grid.shape('cross', c, null, 1).forEach(function (p) { if (!onTiles(out, p) && !(p.x === unit.x && p.y === unit.y) && DD.Grid.inBounds(p.x, p.y)) out.push(p); });
     });
-    api.addIntent(unit, 'dm_rocks_fall', centers[0], { anchor: 'ground', tiles: out, delay: 1, data: { centers: centers } });
+    if (!api.windUp(unit, 'dm_rocks_fall', centers[0], { anchor: 'ground', tiles: out, label: 'Rocks Fall', data: { centers: centers } })) return false;
+    boss(unit).stats.rocks++;
     return true;
   }
-  /** The Railroad: the busiest lane without a train on it gets one next round. */
-  function planTrain(unit, api, foes) {
+  /** The Railroad: the busiest lane gets a train at the start of his next turn (lanes take turns on a tie). */
+  function windTrain(unit, api, foes) {
     const d = boss(unit);
     const ls = lanes(unit);
-    const busy = {};
-    (unit.intents || []).forEach(function (i) { if (i.skillId === 'dm_railroad' && i.data && i.data.lane !== undefined) busy[i.data.lane] = 1; });
     let best = -1, bestSc = -1;
     ls.forEach(function (lane, i) {
-      if (busy[i]) return;
       let sc = ((i + d.p2 + d.p3) % ls.length === 0) ? 0.5 : 0;
       foes.forEach(function (f) {
         if (onTiles(lane, f)) sc += f.kind === 'hero' ? 3 : 1;
@@ -722,95 +795,124 @@
     });
     if (best < 0) return false;
     const lane = ls[best];
-    api.addIntent(unit, 'dm_railroad', lane[Math.floor(lane.length / 2)], { anchor: 'ground', tiles: lane, delay: 1,
-      label: 'The Railroad (Track ' + (best + 1) + ')', data: { lane: best, dir: round() % 2 ? 1 : -1 } });
+    if (!api.windUp(unit, 'dm_railroad', lane[Math.floor(lane.length / 2)], { anchor: 'ground', tiles: lane,
+      label: 'Train (Track ' + (best + 1) + ')', data: { lane: best, dir: round() % 2 ? 1 : -1 } })) return false;
+    d.stats.trains++;
     return true;
-  }
-  function planHook(unit, api, foes) {
-    const list = heroFirst(foes).filter(function (f) { return inReach(unit, api, 'dm_plot_hook', f); });
-    list.sort(function (a, b) { return api.dist(unit, b) - api.dist(unit, a); });
-    if (!list.length) return false;
-    api.addIntent(unit, 'dm_plot_hook', list[0], { anchor: 'unit' });
-    return true;
-  }
-  function planDoom(unit, api) {
-    const d = boss(unit);
-    if (!doomOn(d) || pending(unit, 'dm_tpk')) return;
-    const delay = U.clamp(d.doom.at - api.state.round, 0, N.doomRounds - 1);
-    api.addIntent(unit, 'dm_tpk', { x: unit.x, y: unit.y }, { anchor: 'ground', tiles: allTiles(api.state), delay: delay });
   }
 
-  function dmPlan(unit, api) {
+  /**
+   * One thing at once: Get Off My Table when crowded, a Random Encounter now and then, else a roll (a Plot Hook when he
+   * can see nobody). k: which of this turn's actions (two in phase 3; the encounter only comes first).
+   */
+  function actNow(unit, api, foes, n, k, not) {
+    const d = boss(unit);
+    const close = foes.filter(function (f) { return api.dist(f, unit) === 1; }).length;
+    // only with the shove in his kit (screen down): behind the screen he rolls, as his slots and inspect line say
+    if (close >= 2 && kitOf(unit).indexOf('dm_get_off') >= 0 && d.stats.turns - d.shoveAt >= 2) {
+      d.shoveAt = d.stats.turns;
+      if (api.act(unit, 'dm_get_off', unit, { anchor: 'self' })) { d.stats.shoves++; return 'shove'; }
+    }
+    if (!k && (d.phase === 1 ? n % 3 === 1 : n % 3 === 0) && randomEncounter(unit)) return 'cameo';
+    return roll(unit, api, not);
+  }
+
+  function dmTurn(unit, api) {
     const d = boss(unit);
     syncPhase(unit);
     syncShield(unit);
-    const foes = api.foes(unit);
-    if (!foes.length) return;
-    if (d.phase === 1) {
-      d.p1++;
-      if (!(d.p1 % 3 === 1 && randomEncounter(unit)) && !pending(unit, 'dm_rocks_fall')) planRocks(unit, api, foes, 3);
-      planRolls(unit, api, foes, N.rolls1);
-    } else if (d.phase === 2) {
-      d.p2++;
-      planTrain(unit, api, foes);
-      if (d.p2 % 2 === 1) planHook(unit, api, foes);
-      planRolls(unit, api, foes, d.p2 % 2 === 1 ? N.rolls2 - 1 : N.rolls2);
-      if (d.p2 % 3 === 0) randomEncounter(unit);
-    } else {
-      d.p3++;
-      planDoom(unit, api);
-      if (d.p3 % 2 === 0) planTrain(unit, api, foes);
-      else if (!pending(unit, 'dm_rocks_fall')) planRocks(unit, api, foes, 3);
-      planRolls(unit, api, foes, N.rolls3);
-      if (d.p3 % 3 === 0) randomEncounter(unit);
+    d.stats.turns++;
+    const n = d.phase === 1 ? ++d.p1 : d.phase === 2 ? ++d.p2 : ++d.p3;
+    if (d.phase === 3) windDoom(unit, d.doom && d.doom.fired > 0);
+    // out of plot, he gets desperate: two things at once in phase 3 (two rolls go to two different targets)
+    const acts = d.phase === 3 ? 2 : 1;
+    let first = null;
+    for (let k = 0; k < acts && active(unit) && !api.state.result; k++) {
+      const foes = api.foes(unit);
+      if (!foes.length) break;
+      const r = actNow(unit, api, foes, n, k, first);
+      if (r && typeof r === 'object') first = r;
     }
-    // crowding him (2+ foes adjacent) gets everyone shoved off the table, at most every other round
-    const close = foes.filter(function (f) { return api.dist(f, unit) === 1; }).length;
-    if (close >= 2 && api.state.round - (d.lastShove || -9) >= 2) {
-      d.lastShove = api.state.round;
-      api.addIntent(unit, 'dm_get_off', unit, { anchor: 'self' });
+    // then his next big attack (from where everyone stands after his action); one regular wind-up at a time
+    const after = active(unit) && !api.state.result ? api.foes(unit) : [];
+    if (after.length && !windupOf(unit, 'dm_rocks_fall') && !windupOf(unit, 'dm_railroad')) {
+      if (d.phase === 1) windRocks(unit, api, after, 3);
+      else if (d.phase === 2 || d.p3 % 2 === 0) windTrain(unit, api, after);
+      else windRocks(unit, api, after, 3);
     }
     updateFlavor(unit);
   }
 
+  /** The inspect panel's line: what he does on his turn, by phase. */
+  function passiveText(u) {
+    const tail = ' Every round he rolls a new House Rule.';
+    if (!u || !u.data || !u.data.phase) return 'On his turn the attack he wound up last turn lands, he does one thing at once and winds up the next one.' + tail;
+    const d = u.data;
+    // what actNow really does: a roll, unless crowded (Get Off My Table) or it is encounter time (every third turn)
+    const instead = 'Get Off My Table if two foes crowd him, not two turns running; a Random Encounter every third turn';
+    if (d.phase === 1 && d.hadScreen && !d.screenDown) return 'Session Zero: can\'t be hurt while a DM Screen panel stands, and his rolls need no line of sight. ' +
+      'Each turn: one roll (a Random Encounter every third turn), then he winds up Rocks Fall.' + tail;
+    if (d.phase === 1) return 'Screen down: his rolls need line of sight now (soda cans and dice are cover), but if he can see nobody, his Plot Hook drags someone out. ' +
+      'Each turn: one roll (' + instead + '), then he winds up Rocks Fall (on whoever hides first).' + tail;
+    if (d.phase === 2) return 'The Railroad: each turn one roll (a Plot Hook if he can see nobody; ' + instead + '), then he winds up a train down the busiest lane. ' +
+      'Pull a Track Switch while it winds up and it runs him over instead.' + tail;
+    return 'Rocks Fall, Everyone Dies: cite all ' + (d.booksNeeded || N.books) + ' Player\'s Handbooks before his countdown ends; each stun pushes it back a turn. ' +
+      'Desperate, he rolls two dice a turn now (at two different heroes; Get Off My Table or a Random Encounter can take one\'s place), then winds up a train or rocks.' + tail;
+  }
+
   // ---- FX painters (visual only) --------------------------------------------------------------------------------
-  function isoPt(x, y, z, ax, ay, a, b, h) { return [x + (ax * a - 32 * b) * z, y + (ay * a + 16 * b) * z - h * z]; }
-  /** Iso block in a frame where a runs along the travel axis and b across it (toward +y). */
-  function isoBlock(c, x, y, z, dir, a0, a1, b0, b1, h, top, side, end) {
-    const ax = 32 * dir, ay = 16 * dir;
-    const P = function (a, b, hh) { return isoPt(x, y, z, ax, ay, a, b, hh); };
+  /**
+   * A grid offset (u tiles along +x, v along +y) in zoom-1 px of the CURRENT view: DD.Iso.local follows the map rotation
+   * (exactly the classic iso offset at the default view). Anything drawn along the grid goes through it.
+   */
+  function gridPx(u, v) {
+    if (DD.Iso && DD.Iso.local) return DD.Iso.local(u, v);
+    return { x: (u - v) * 32, y: (u + v) * 16 };
+  }
+  function isoPt(x, y, z, A, B, a, b, h) { return [x + (A.x * a + B.x * b) * z, y + (A.y * a + B.y * b) * z - h * z]; }
+  /**
+   * The train's frame in the current view: A = one tile along its travel (grid x × dir), B = one tile across it (+y);
+   * front = its nose (+a end) faces the viewer, side = the long side the viewer sees (+1: the +y one).
+   */
+  function trainFrame(dir) {
+    const A = gridPx(dir, 0), B = gridPx(0, 1);
+    return { A: A, B: B, front: A.y > 0, side: B.y > 0 ? 1 : -1 };
+  }
+  /** Iso block in a frame where a runs along the travel axis and b across it (toward +y): the faces the viewer sees. */
+  function isoBlock(c, x, y, z, F, a0, a1, b0, b1, h, top, side, end) {
+    const P = function (a, b, hh) { return isoPt(x, y, z, F.A, F.B, a, b, hh); };
     const face = function (pts, fill) {
       c.beginPath(); c.moveTo(pts[0][0], pts[0][1]);
       for (let i = 1; i < pts.length; i++) c.lineTo(pts[i][0], pts[i][1]);
       c.closePath(); c.fillStyle = fill; c.fill(); c.strokeStyle = '#1a1014'; c.lineWidth = 1.2 * z; c.stroke();
     };
-    const ea = dir > 0 ? a1 : a0;   // the end facing +x is the visible one
+    const ea = F.front ? a1 : a0, eb = F.side > 0 ? b1 : b0;   // the visible end and long side
     face([P(ea, b0, 0), P(ea, b1, 0), P(ea, b1, h), P(ea, b0, h)], end);
-    face([P(a0, b1, 0), P(a1, b1, 0), P(a1, b1, h), P(a0, b1, h)], side);
+    face([P(a0, eb, 0), P(a1, eb, 0), P(a1, eb, h), P(a0, eb, h)], side);
     face([P(a0, b0, h), P(a1, b0, h), P(a1, b1, h), P(a0, b1, h)], top);
   }
   function drawTrain(c, x, y, p, view, evt) {
     const z = view.zoom || 1, dir = evt.dirX < 0 ? -1 : 1;
-    const ax = 32 * dir, ay = 16 * dir;
-    const P = function (a, b, h) { return isoPt(x, y, z, ax, ay, a, b, h); };
+    const F = trainFrame(dir), sb = F.side;
+    const P = function (a, b, h) { return isoPt(x, y, z, F.A, F.B, a, b, h); };
     c.save();
     // smoke puffs trailing behind the chimney
     for (let k = 0; k < 5; k++) {
-      const q = P(-0.15 - k * 0.32, -0.05, 34 + k * 6);
+      const q = P(-0.15 - k * 0.32, -0.05 * sb, 34 + k * 6);
       c.fillStyle = 'rgba(235,235,240,' + (0.55 - k * 0.09) + ')';
       c.beginPath(); c.arc(q[0], q[1], (5 + k * 2.4) * z, 0, Math.PI * 2); c.fill();
     }
-    const coal = function () { isoBlock(c, x, y, z, dir, -2.1, -1.2, -0.26, 0.26, 16, '#c9a24f', '#8a5a2b', '#6a4520'); };
-    if (dir > 0) coal();                                                                          // behind: drawn first
-    isoBlock(c, x, y, z, dir, -1.1, 0.25, -0.28, 0.28, 18, '#3a3f4a', '#c0392b', '#7a1f2b');      // boiler
-    isoBlock(c, x, y, z, dir, -1.1, -0.55, -0.3, 0.3, 30, '#2a2e36', '#a8302a', '#6a1a1a');      // cab
-    isoBlock(c, x, y, z, dir, -0.15, 0.05, -0.08, 0.08, 30, '#222', '#333', '#111');             // chimney
-    if (dir < 0) coal();                                                                          // westbound: in front
-    const wheel = function (a) { const w = P(a, 0.3, 4); c.fillStyle = '#ffd34d'; c.strokeStyle = '#1a1014'; c.lineWidth = 1.2 * z; c.beginPath(); c.arc(w[0], w[1], 4.5 * z, 0, Math.PI * 2); c.fill(); c.stroke(); };
+    const coal = function () { isoBlock(c, x, y, z, F, -2.1, -1.2, -0.26, 0.26, 16, '#c9a24f', '#8a5a2b', '#6a4520'); };
+    if (F.front) coal();                                                                          // behind: drawn first
+    isoBlock(c, x, y, z, F, -1.1, 0.25, -0.28, 0.28, 18, '#3a3f4a', '#c0392b', '#7a1f2b');        // boiler
+    isoBlock(c, x, y, z, F, -1.1, -0.55, -0.3, 0.3, 30, '#2a2e36', '#a8302a', '#6a1a1a');        // cab
+    isoBlock(c, x, y, z, F, -0.15, 0.05, -0.08, 0.08, 30, '#222', '#333', '#111');               // chimney
+    if (!F.front) coal();                                                                         // heading away: in front
+    const wheel = function (a) { const w = P(a, 0.3 * sb, 4); c.fillStyle = '#ffd34d'; c.strokeStyle = '#1a1014'; c.lineWidth = 1.2 * z; c.beginPath(); c.arc(w[0], w[1], 4.5 * z, 0, Math.PI * 2); c.fill(); c.stroke(); };
     [-1.9, -1.4, -0.8, -0.3, 0.1].forEach(wheel);
-    const lamp = P(0.27, 0.1, 13);
+    const lamp = P(0.27, 0.1 * sb, 13);
     c.fillStyle = 'rgba(255,240,150,0.95)'; c.beginPath(); c.arc(lamp[0], lamp[1], 3.4 * z, 0, Math.PI * 2); c.fill();
-    const label = P(-0.45, 0.3, 11);
+    const label = P(-0.45, 0.3 * sb, 11);
     c.font = 'bold ' + Math.round(7 * z) + 'px "Trebuchet MS", sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle';
     c.fillStyle = '#ffe9a8'; c.fillText('PLOT', label[0], label[1]);
     c.restore();
@@ -857,20 +959,20 @@
     cheetoTrail(ctx.tiles);
   }
   eskill({ id: 'dm_fudged_roll', name: 'Fudged Roll', icon: '🎲', kind: 'attack', tags: ['ranged'], anchor: 'unit',
-    levels: [{ dmg: 15 }], target: { type: 'unit', range: [1, 14], filter: 'enemy', los: true },
-    desc: function (L) { return 'Deal ' + L.dmg + ' damage to the tracked target. Break line of sight (soda cans, dice) and it whiffs.'; },
+    levels: [{ dmg: 20 }], target: { type: 'unit', range: [1, 14], filter: 'enemy', los: true },
+    desc: function (L) { return 'Deal ' + L.dmg + ' damage to a target in line of sight. Hide behind soda cans and dice.'; },
     flavor: 'He rolled a 3. He says it was a 19. Now that the screen is gone, everyone saw it was a 3.',
     execute: rollExecute });
   eskill({ id: 'dm_secret_roll', name: 'Roll Behind the Screen', icon: '🎲', kind: 'attack', tags: ['ranged'], anchor: 'unit',
-    levels: [{ dmg: 15 }], target: { type: 'unit', range: [1, 14], filter: 'enemy', los: false },
-    desc: function (L) { return 'Deal ' + L.dmg + ' damage to the tracked target. Rolled behind the DM Screen, so it needs no line of sight. Break the screen!'; },
+    levels: [{ dmg: 20 }], target: { type: 'unit', range: [1, 14], filter: 'enemy', los: false },
+    desc: function (L) { return 'Deal ' + L.dmg + ' damage to a target anywhere on the table: rolled behind the DM Screen, it needs no line of sight.'; },
     flavor: '*clatter* "...Hm. Interesting." *writes something down*',
     execute: rollExecute });
 
   eskill({ id: 'dm_rocks_fall', name: 'Rocks Fall', icon: '🪨', kind: 'attack', tags: ['aoe'], anchor: 'ground',
     levels: [{ dmg: 26 }], target: { type: 'tile', range: [0, 40], filter: 'any', los: false }, area: { shape: 'cross', size: 1 },
     canUse: scripted,
-    desc: function (L) { return 'When the countdown ends, deal ' + L.dmg + ' damage to every unit on the marked tiles (his own minis too) and leave rubble.'; },
+    desc: function (L) { return 'Wind-up: deal ' + L.dmg + ' damage to every unit on the marked tiles (his own minis too) and leave rubble.'; },
     flavor: '"Rocks fall." He doesn\'t even look up from his phone.',
     execute: function (ctx) {
       const centers = (ctx.intent && ctx.intent.data && ctx.intent.data.centers) || (ctx.target ? [ctx.target] : []);
@@ -886,41 +988,44 @@
     } });
 
   eskill({ id: 'dm_railroad', name: 'The Railroad', icon: '🚂', kind: 'attack', tags: ['aoe', 'push'], anchor: 'ground',
-    levels: [{ dmg: 28, push: 1, self: N.divert }], target: { type: 'tile', range: [0, 40], filter: 'any', los: false },
+    levels: [{ dmg: N.train, push: 1 }], target: { type: 'tile', range: [0, 40], filter: 'any', los: false },
     area: { shape: 'custom', fn: function (ctx) { return ctx.target && ctx.state ? rowTiles(ctx.target.y, ctx.state.grid) : []; } },
     canUse: scripted,
     desc: function (L) {
-      return 'A train thunders down the marked lane: ' + L.dmg + ' damage to every unit on it (his minis too), knocked ' + L.push +
-        ' tile south. Pull a Track Switch while it is due to divert it onto the DM\'s row: ' + L.self + ' damage to him, and he is Vulnerable until the end of his next turn. ' +
-        'A diverted train runs even if he is stunned.';
+      return 'Wind-up: a train runs down the marked lane: ' + L.dmg + ' damage to every unit on it, knocked ' + L.push +
+        ' tile south. A Track Switch diverts it onto his own row: it runs him over too, and he is Vulnerable.';
     },
     flavor: 'The 4:15 Plot Express. It does not stop for side quests.',
     execute: function (ctx) {
       const u = ctx.user, L = ctx.L, it = ctx.intent;
       const dv = !!(it && it.data && it.data.diverted);
+      const hero = dv ? DD.Combat.byId(it.data.switcherId) : null;
       trainFx(ctx.tiles, it && it.data ? it.data.dir : 1);
       if (!dv) DD.Act.maybeBark(u, 'attack', 0.4);
+      // a diverted train runs down his row, so he is one of its victims (same hit as everyone: the badge is his number too)
       const victims = [];
-      ctx.tiles.forEach(function (p) { const v = DD.Grid.unitAt(p.x, p.y); if (active(v) && v !== u && victims.indexOf(v) < 0) victims.push(v); });
+      ctx.tiles.forEach(function (p) { const v = DD.Grid.unitAt(p.x, p.y); if (active(v) && (v !== u || dv) && victims.indexOf(v) < 0) victims.push(v); });
       victims.forEach(function (v) {
         if (!active(v)) return;
-        dmHit(ctx, v, L.dmg, ['train']);
-        if (active(v)) DD.Act.push(u, v, SOUTH, L.push);
-      });
-      if (dv && active(u) && onTiles(ctx.tiles, u)) {
-        const hero = DD.Combat.byId(it.data.switcherId);
+        if (v !== u) {
+          dmHit(ctx, v, L.dmg, ['train']);
+          if (active(v)) DD.Act.push(u, v, SOUTH, L.push);
+          return;
+        }
         boss(u).stats.diverted++;
         DD.FX.text(u, 'RUN OVER BY HIS OWN PLOT!', { color: '#ffb347', size: 17 });
         DD.Act.log('The Dungeon Master is flattened by his own railroad.', 'hero');
-        DD.Act.withCredit(hero || null, function () { DD.Act.damage(null, u, L.self, { cause: 'other', tags: ['train'] }); });
+        DD.Act.withCredit(hero || null, function () { dmHit(ctx, u, L.dmg, ['train']); });
+        // it lands at his turn start (statuses applied then count this turn): turns 2 = until the end of his NEXT turn,
+        // so the heroes get a whole round of hitting a Vulnerable DM
         if (active(u)) DD.Act.addStatus(u, 'vulnerable', { turns: 2 }, hero || null);
-      }
-      cheetoTrail(ctx.tiles);
+      });
+      if (!dv) cheetoTrail(ctx.tiles);
     } });
 
   eskill({ id: 'dm_plot_hook', name: 'Plot Hook', icon: '🪝', kind: 'attack', tags: ['ranged', 'pull'], anchor: 'unit',
-    levels: [{ dmg: 10, pull: 3 }], target: { type: 'unit', range: [2, 14], filter: 'enemy', los: true },
-    desc: function (L) { return 'Deal ' + L.dmg + ' damage to the tracked target and pull it ' + L.pull + ' tiles toward the DM. The plot is THIS way.'; },
+    levels: [{ dmg: 10, pull: 3 }], target: { type: 'unit', range: [2, 14], filter: 'enemy', los: false },
+    desc: function (L) { return 'Deal ' + L.dmg + ' damage to a target (no line of sight needed: the plot always finds you) and pull it ' + L.pull + ' tiles toward the DM.'; },
     flavor: 'You see a mysterious old man in a tavern. You are going to talk to him. You do not have a choice.',
     execute: function (ctx) {
       const v = ctx.targetUnit;
@@ -953,8 +1058,8 @@
     area: { shape: 'custom', fn: function (ctx) { return allTiles(ctx.state); } },
     canUse: scripted,
     desc: function (L) {
-      return 'When the countdown ends, deal ' + L.dmg + ' damage to every hero and summon on the table. Cite all ' + N.books +
-        ' Player\'s Handbooks (1 AP each) to cancel it for good; stunning the DM pushes it back 1 round.';
+      return 'Wind-up over ' + N.doomTurns + ' of his turns: deal ' + L.dmg + ' damage to every hero and summon on the table. Cite all ' + N.books +
+        ' Player\'s Handbooks to cancel it; each stun pushes it back a turn.';
     },
     flavor: 'The oldest rule in the book. He is not sorry.',
     execute: function (ctx) {
@@ -964,7 +1069,7 @@
       ctx.foes.forEach(function (f, i) { DD.FX.projectile({ x: f.x, y: f.y, h: 12 }, f, { kind: 'rock', arc: false, size: 2.6, ms: 280, parallel: i > 0 }); });
       ctx.foes.forEach(function (f) { if (active(f)) dmHit(ctx, f, ctx.L.dmg, ['rocks']); });
       d.stats.doomFired++;
-      if (d.doom) { d.doom.fired = (d.doom.fired || 0) + 1; d.doom.at = ctx.state.round + N.doomRounds; }
+      if (d.doom) d.doom.fired = (d.doom.fired || 0) + 1;
       // charmed, his "foes" are his own minis: the party is spared this time (the countdown restarts anyway)
       DD.Act.log(has(u, 'charmed') ? 'Charmed, the DM drops the rocks on his own minis instead. (He is already restarting the countdown.)'
         : 'Rocks fall. Everyone dies. (He is already restarting the countdown.)', 'enemy');
@@ -973,17 +1078,17 @@
   // cameo minis (fallback when no real act enemies are registered)
   eskill({ id: 'dm_cameo_stab', name: 'Generic Stab', icon: '🗡️', kind: 'attack', tags: ['melee'], anchor: 'self',
     levels: [{ dmg: 7 }], target: { type: 'unit', range: [1, 1], filter: 'enemy' },
-    desc: function (L) { return 'Deal ' + L.dmg + ' damage to the adjacent target.'; },
+    desc: function (L) { return 'Deal ' + L.dmg + ' damage to an adjacent target.'; },
     flavor: 'Stat block: "goblin, but angrier".',
     execute: function (ctx) { DD.Act.maybeBark(ctx.user, 'attack', 0.25); if (ctx.target) DD.FX.lunge(ctx.user, ctx.target); ctx.foes.forEach(function (f) { if (active(f)) DD.Act.damage(ctx.user, f, ctx.L.dmg); }); } });
   eskill({ id: 'dm_cameo_bone', name: 'Bone Toss', icon: '🦴', kind: 'attack', tags: ['ranged'], anchor: 'unit',
     levels: [{ dmg: 6 }], target: { type: 'unit', range: [2, 4], filter: 'enemy', los: true },
-    desc: function (L) { return 'Deal ' + L.dmg + ' damage to the tracked target.'; },
+    desc: function (L) { return 'Deal ' + L.dmg + ' damage to a target 2-4 tiles away in line of sight.'; },
     flavor: 'It throws its own femur. Some assembly required.',
     execute: function (ctx) { DD.Act.maybeBark(ctx.user, 'attack', 0.25); if (ctx.targetUnit) DD.FX.projectile(ctx.user, ctx.targetUnit, { kind: 'bone' }); ctx.foes.forEach(function (f) { if (active(f)) DD.Act.damage(ctx.user, f, ctx.L.dmg); }); } });
   eskill({ id: 'dm_cameo_ember', name: 'Blister-Pack Ember', icon: '🔥', kind: 'attack', tags: ['ranged', 'fire'], anchor: 'unit',
     levels: [{ dmg: 6 }], target: { type: 'unit', range: [1, 4], filter: 'enemy', los: true },
-    desc: function (L) { return 'Deal ' + L.dmg + ' fire damage to the tracked target.'; },
+    desc: function (L) { return 'Deal ' + L.dmg + ' fire damage to a target up to 4 tiles away in line of sight.'; },
     flavor: 'Fired straight through the plastic. Collectors weep.',
     execute: function (ctx) { DD.Act.maybeBark(ctx.user, 'attack', 0.25); if (ctx.targetUnit) DD.FX.projectile(ctx.user, ctx.targetUnit, { kind: 'fireball' }); ctx.foes.forEach(function (f) { if (active(f)) DD.Act.damage(ctx.user, f, ctx.L.dmg, { element: 'fire' }); }); } });
 
@@ -1002,18 +1107,27 @@
       c.restore();
     } });
 
-  function P(u, v, h) { return [32 * (u - v), 16 * (u + v) - (h || 0)]; }
+  /** A point inside the tile (grid offset u, v; height h px) in the current view (map rotation: see gridPx). */
+  function P(u, v, h) { const L = gridPx(u, v); return [L.x, L.y - (h || 0)]; }
+  /**
+   * A thin slab of screen lying along the grid x axis (the three panels stand in a row). It draws the end and the broad
+   * face the viewer sees at the current rotation (v1 = the visible face; at the default view the +y one, as before).
+   */
   function drawPanel(g, obj, t) {
-    const c = g.ctx, H = 32, v0 = -0.02, v1 = 0.07, A = -0.47, B = 0.47;
+    const c = g.ctx, H = 32, A = -0.47, B = 0.47;
+    const ex = gridPx(1, 0), front = gridPx(0, 1).y > 0;
+    const v0 = front ? -0.02 : 0.07, v1 = front ? 0.07 : -0.02, eu = ex.y > 0 ? B : A;
     g.ellipse(0, 3, 24, 9, 'rgba(0,0,0,0.28)');
     g.poly([P(A, v0, H), P(B, v0, H), P(B, v1, H), P(A, v1, H)], '#d8c9a8', true);
-    g.poly([P(B, v0), P(B, v1), P(B, v1, H), P(B, v0, H)], '#4a1019', true);
+    g.poly([P(eu, v0), P(eu, v1), P(eu, v1, H), P(eu, v0, H)], '#4a1019', true);
     g.poly([P(A, v1), P(B, v1), P(B, v1, H), P(A, v1, H)], '#7a1f2b', true);
     g.poly([P(A + 0.05, v1, 3), P(B - 0.05, v1, 3), P(B - 0.05, v1, H - 3), P(A + 0.05, v1, H - 3)], null, '#e8b84a');
     const m = P(0, v1, H / 2);
+    // the logo is painted along the visible face, reading left to right (its run along the grid x axis, mirrored to the right)
+    const rx = ex.x < 0 ? -ex.x : ex.x, ry = ex.x < 0 ? -ex.y : ex.y;
     c.save();
     c.translate(m[0], m[1]);
-    c.transform(1, 0.5, 0, 1, 0, 0);
+    c.transform(rx / 32, ry / 32, 0, 1, 0, 0);
     // a heroic (if wonky) dragon and the logo
     c.fillStyle = '#e8b84a';
     c.beginPath(); c.moveTo(-9, 3); c.quadraticCurveTo(-2, -9, 6, -4); c.lineTo(11, -9); c.lineTo(9, -1); c.quadraticCurveTo(2, 6, -9, 3); c.fill();
@@ -1038,12 +1152,25 @@
       g.text('PHB', 0, -9, 7, '#ffe9a8', { stroke: '#5a1010', strokeWidth: 2 });
       if (live) g.text('!', 0, -24 - 2 * Math.abs(Math.sin(t * 4)), 13, '#ffe680', { stroke: '#3a2a10', strokeWidth: 3 });
     } else {
-      g.poly([P(-0.3, -0.2, 3), P(0, -0.2, 6), P(0, 0.2, 6), P(-0.3, 0.2, 3)], '#f6efdc', true);
-      g.poly([P(0, -0.2, 6), P(0.3, -0.2, 3), P(0.3, 0.2, 3), P(0, 0.2, 6)], '#ece2c8', true);
+      // the open book's two pages, the far one first (it lies along the grid: map rotation)
+      const pages = [[[P(-0.3, -0.2, 3), P(0, -0.2, 6), P(0, 0.2, 6), P(-0.3, 0.2, 3)], '#f6efdc'],
+        [[P(0, -0.2, 6), P(0.3, -0.2, 3), P(0.3, 0.2, 3), P(0, 0.2, 6)], '#ece2c8']];
+      if (gridPx(1, 0).y < 0) pages.reverse();
+      pages.forEach(function (pg) { g.poly(pg[0], pg[1], true); });
       g.text('✔', 0, -14, 12, '#7be04a', { stroke: '#1a3a10', strokeWidth: 3 });
     }
   }
+  /**
+   * Map rotation, box props (def.yawAware: g.box / g.diamond stand on the view's ground quad): a point drawn at yaw 0 `h` px
+   * above the square (cx, cy, hw, hh), in the current view (exactly [px, py] at the default view).
+   */
+  function onTop(g, cx, cy, hw, hh, h, px, py) {
+    if (DD.Iso.view().legacy) return [px, py];
+    const a = (px - cx) / hw, b = (py + h - cy) / hh;
+    return g.on(cx, cy, hw, hh, (a + b) / 2, (b - a) / 2, h);
+  }
   function drawSwitch(g, obj, t) {
+    const c = g.ctx;
     const live = !!divertable(findDM());
     if (live) g.glow(0, -18, 30, '#ff5a3c', 0.25 + 0.2 * Math.sin(t * 6));
     g.ellipse(0, 3, 15, 7, 'rgba(0,0,0,0.28)');
@@ -1051,12 +1178,17 @@
     const on = !!(obj.data && obj.data.on);
     g.line(0, -5, on ? 9 : -9, -19, '#2a2a30', 3.2);
     g.circle(on ? 9 : -9, -19, 2.6, '#ff5a3c', true);
+    // the crossing sign's post stands at the base's back corner: it walks round the base as the map turns
+    const foot = onTop(g, 0, 0, 10, 5, 0, 6, -2);
+    c.save(); c.translate(foot[0] - 6, foot[1] + 2);
     g.line(6, -2, 6, -38, '#e8e2d0', 2.6);
     g.line(-2, -42, 14, -30, '#ffffff', 3.4);
     g.line(14, -42, -2, -30, '#ffffff', 3.4);
     g.line(-2, -42, 14, -30, '#c0392b', 1.2);
     g.line(14, -42, -2, -30, '#c0392b', 1.2);
     g.text('RR', 6, -23, 6, '#1a1014', { bold: true });
+    if (live) g.text('!', 6, -54 - 2 * Math.abs(Math.sin(t * 4)), 13, '#ff8a5c', { stroke: '#3a1a10', strokeWidth: 3 });
+    c.restore();
   }
 
   DD.registerObject({ id: PANEL, name: 'DM Screen Panel', blocksMove: true, blocksLos: false, hp: N.panelHp, height: 1.1, color: '#7a1f2b', smashable: true,
@@ -1070,34 +1202,43 @@
     const books = [['#2d4f8a', 7], ['#8e2b2b', 6], ['#3b6b3f', 7], ['#6a4a8c', 5]];
     const k = ((obj.data && obj.data.seed) || 0) % 2;
     g.ellipse(0, 3, 20, 9, 'rgba(0,0,0,0.28)');
+    const classic = DD.Iso.view().legacy;
     let y = 0;
     books.forEach(function (b, i) {
-      const off = ((i + k) % 2 ? 1.5 : -1.5);
-      g.box(off, y, 17 - i, 8.5 - i * 0.5, b[1], { top: g.shade(b[0], 0.15), left: '#efe6cf', right: g.shade(b[0], -0.2) }, true);
+      // each book sits a little askew along the grid (1.5 px sideways at the default view); it turns with the map
+      const off = ((i + k) % 2 ? 1.5 : -1.5), hw = 17 - i, hh = 8.5 - i * 0.5, p = onTop(g, 0, y, hw, hh, 0, off, y);
+      if (classic) g.box(p[0], p[1], hw, hh, b[1], { top: g.shade(b[0], 0.15), left: '#efe6cf', right: g.shade(b[0], -0.2) }, true);
+      else {
+        // the spine stays on the east side and the page edges on the other three, lit like the view's faces
+        g.faces(p[0], p[1], hw, hh).forEach(function (f) {
+          const col = f.dir === 'E' ? g.mix(b[0], g.shade(b[0], -0.2), f.shade) : g.mix('#efe6cf', g.shade('#efe6cf', -0.12), f.shade);
+          g.poly([[f.x0, f.y0], [f.x1, f.y1], [f.x1, f.y1 - b[1]], [f.x0, f.y0 - b[1]]], col, true);
+        });
+        g.diamond(p[0], p[1] - b[1], hw, hh, g.shade(b[0], 0.15), true);
+      }
       y -= b[1];
     });
     g.text('D&D', 1, y - 1, 5.5, '#ffe9a8', { stroke: '#2a1a10', strokeWidth: 1.6 });
   }
-  DD.registerObject({ id: STACK, name: 'Stack of Sourcebooks', blocksMove: true, blocksLos: false, hp: 0, height: 0.75, color: '#2d4f8a',
+  DD.registerObject({ id: STACK, name: 'Stack of Sourcebooks', blocksMove: true, blocksLos: false, hp: 0, height: 0.75, color: '#2d4f8a', yawAware: true,
     desc: 'Blocks movement but not sight: knee-high, alphabetised, never read. Guarding his side of the table.',
     draw: drawStack });
 
   DD.registerStatus({ id: 'dm_exposed', name: 'Exposed', icon: '📖', color: '#ffd34d', type: 'debuff', stacking: 'none', maxStacks: 1,
     decay: 'never', defaultTurns: -1,
     desc: function () { return 'Takes 50% more damage: his defences (and notes) are out in the open. Screen down: until Phase 2. Rules-lawyered: for good.'; },
-    // [phase 4] declared, not hooked: the engine applies it to all damage like the hook did, and DD.AI.estimate (enemy
-    // planning, AutoPlay's quick score) now sees it too. docs/notes/boss-dm.md
+    // declared, not hooked: the engine applies it to all damage, and DD.AI.estimate (AutoPlay's quick score) sees it too
     takenMult: 1.5 });
-  DD.registerObject({ id: SWITCH, name: 'Track Switch', blocksMove: true, blocksLos: false, hp: 0, height: 1.2, color: '#c0392b',
-    desc: 'Interact (1 AP) while a train is due THIS turn (red lane): it is diverted onto the DM\'s own row (' + N.divert + ' damage to him, Vulnerable). ' +
-      'Trains run from phase 2 on; it works whenever one is due.',
+  DD.registerObject({ id: SWITCH, name: 'Track Switch', blocksMove: true, blocksLos: false, hp: 0, height: 1.2, color: '#c0392b', yawAware: true,
+    desc: 'Interact (1 AP) while the DM winds up a train (red lane): it is diverted onto his own row and runs him over (' + N.train + ' damage to him and anyone on ' +
+      'his row; he is Vulnerable). Nothing he does can stop a diverted train.',
     available: function (o) { return !!divertable(findDM()); },
     interact: { ap: 1, label: 'Switch Tracks', fn: function (unit, o, tile) { switchTracks(unit, o, tile); } },
     autoplay: function () { return divertable(findDM()) ? 34 : 0; },
     draw: drawSwitch });
-  DD.registerObject({ id: BOOK, name: 'Player\'s Handbook', blocksMove: true, blocksLos: false, hp: 0, height: 0.6, color: '#b0302a',
+  DD.registerObject({ id: BOOK, name: 'Player\'s Handbook', blocksMove: true, blocksLos: false, hp: 0, height: 0.6, color: '#b0302a', yawAware: true,
     desc: 'Interact (1 AP): cite the rules. Cite all three while "Rocks Fall, Everyone Dies" counts down to cancel it: the rocks fall on the DM instead (' +
-      N.lawyered + ' damage, Stunned, Exposed for the rest of the fight).',
+      N.lawyered + ' damage, then Exposed for the rest of the fight).',
     available: function (o) { return bookUsable(o); },
     interact: { ap: 1, label: 'Cite the Rules', fn: function (unit, o, tile) { citeBook(unit, o, tile); } },
     autoplay: function (unit, o) { return bookUsable(o) ? 40 : 0; },
@@ -1137,33 +1278,36 @@
   }
 
   // ---- enemies ------------------------------------------------------------------------------------------------------
-  DD.registerEnemy({ id: 'dm_cameo_goblin', name: 'Unpainted Goblin Mini', act: 3, tier: 'minion', hp: 16, mov: 4, armor: 0,
+  DD.registerEnemy({ id: 'dm_cameo_goblin', name: 'Unpainted Goblin Mini', act: 3, tier: 'minion', hp: 16, mov: 4, armor: 0, init: 1,
     tags: ['goblin', 'mini', 'cameo'], skills: ['dm_cameo_stab'], ai: { style: 'melee' }, xp: 2, gold: [1, 3],
     sprite: { base: 'humanoid', mini: true, scale: 0.85, build: 'slim', outfit: 'rags', palette: GREY,
       head: { ears: 'goblin', eyes: 'angry', mouth: 'fangs', blush: false }, mainhand: 'dagger' },
     barks: { spawn: ['I was in the bottom of the box!', 'Paint me like one of your elves.'], attack: ['Generic stab!', 'Stab, stab!'],
       hurt: ['My primer!', 'You chipped me!'], death: ['Back... in the box...', 'Never got painted...'] },
     desc: 'A goblin miniature from session one. The DM has been "about to paint it" for six years.' });
-  DD.registerEnemy({ id: 'dm_cameo_skeleton', name: 'Skeleton Mini (Some Assembly Required)', act: 3, tier: 'minion', hp: 14, mov: 3, armor: 0,
+  DD.registerEnemy({ id: 'dm_cameo_skeleton', name: 'Skeleton Mini (Some Assembly Required)', act: 3, tier: 'minion', hp: 14, mov: 3, armor: 0, init: 0,
     tags: ['undead', 'mini', 'cameo'], skills: ['dm_cameo_bone'], ai: { style: 'ranged', keepDistance: 3 }, xp: 2, gold: [1, 3],
     sprite: { base: 'humanoid', mini: true, scale: 0.85, build: 'slim', outfit: 'none', palette: GREY,
       head: { face: 'skull', eyes: 'glow', blush: false }, mainhand: 'club' },
     barks: { spawn: ['Rattle rattle. Where are my instructions?', 'I am missing a piece.'], attack: ['Femur incoming!', 'Catch!'],
       hurt: ['That was load-bearing!', 'Ow, my spare rib.'], death: ['Pieces everywhere...', 'Choking hazard...'] },
     desc: 'Came in a bag of thirty. Twenty-nine are still in the bag.' });
-  DD.registerEnemy({ id: 'dm_cameo_imp', name: 'Imp Mini (Still in Blister Pack)', act: 3, tier: 'minion', hp: 14, mov: 4, armor: 0,
-    tags: ['demon', 'mini', 'cameo'], flags: { flying: true }, skills: ['dm_cameo_ember'], ai: { style: 'ranged', keepDistance: 2 }, xp: 2, gold: [1, 3],
+  // a flyer: it dives the wounded (skirmisher) instead of trading blows with the tank
+  DD.registerEnemy({ id: 'dm_cameo_imp', name: 'Imp Mini (Still in Blister Pack)', act: 3, tier: 'minion', hp: 14, mov: 4, armor: 0, init: 2,
+    tags: ['demon', 'mini', 'cameo'], flags: { flying: true }, skills: ['dm_cameo_ember'], ai: { style: 'skirmisher' }, xp: 2, gold: [1, 3],
     sprite: { base: 'flyer', scale: 0.8, shape: { body: 'imp' }, palette: { skin: '#b9b7c1', eye: '#ff5a3c', accent: '#c9c7d1', outline: '#2b2a31' },
       head: { horns: 'demon', mouth: 'fangs' }, overlay: blisterPack },
     barks: { spawn: ['Mint condition! Do NOT open!', 'I am worth more in the package.'], attack: ['Pew! Through the plastic!', 'Hot!'],
       hurt: ['You creased my card!', 'My resale value!'], death: ['Opened... worthless now...', 'Out of the box, out of time.'] },
     desc: 'A collector\'s edition imp. Opening the package halves its value, which is why it is still fighting inside it.' });
 
-  DD.registerEnemy({ id: DM_ID, name: 'The Dungeon Master', act: 3, tier: 'boss', hp: N.hp, mov: 0, armor: 0,
+  DD.registerEnemy({ id: DM_ID, name: 'The Dungeon Master', act: 3, tier: 'boss', hp: N.hp, mov: 0, armor: 0, init: 2,
     tags: ['boss', 'human', 'dm'], flags: { large: true, immovable: true }, resist: { poison: 0.5 },
     sprite: DM_SPRITE,
-    skills: ['dm_fudged_roll', 'dm_secret_roll', 'dm_rocks_fall', 'dm_railroad', 'dm_plot_hook', 'dm_get_off', 'dm_tpk'],
-    ai: dmPlan, xp: 60, gold: [90, 110], hooks: HOOKS,
+    // immediate attacks only (the slots follow his phase: see KIT); Rocks Fall, The Railroad and the doom are wind-ups
+    skills: ['dm_secret_roll', 'dm_fudged_roll', 'dm_plot_hook', 'dm_get_off'],
+    ai: dmTurn, aiStyle: 'ranged', xp: 60, gold: [90, 110], hooks: HOOKS,
+    passive: { name: 'Rules Lawyering', icon: '🎲', desc: passiveText },
     barks: {
       spawn: ['So. You actually made it. Give me five minutes, I need to prep.', 'Welcome to the final session. No, you can\'t level up first.',
         'Roll for initiative. Actually, don\'t. I already did.'],
@@ -1181,7 +1325,7 @@
       stunned: ['I need a snack break.', 'Hold on, I lost my page.'],
     },
     desc: 'The final boss. Has run this campaign for eleven years and three editions. Fudges every roll, owns every sourcebook ' +
-      'and is secretly very proud of you. Invulnerable behind his screen; plot armor between phases.',
+      'and is secretly very proud of you. Invulnerable behind his screen; plot armor between phases; his rocks, trains and doom are wind-ups.',
     boss: { title: 'Master of the Table', intro: '"So. You actually made it." The Dungeon Master peers over his screen. "Give me a second. I need to prep."', music: null } });
 
   // ---- the arena: the DM's actual table -------------------------------------------------------------------------------
@@ -1252,7 +1396,7 @@
     'Train tracks appear on the battle map, drawn in pencil, with menace.',
   ]);
   DD.registerNarration('dm_phase3', [
-    'The DM closes his binder. "Rocks fall." A long pause. "Everyone dies. In three rounds."',
+    'The DM closes his binder. "Rocks fall." A long pause. "Everyone dies. In three turns."',
     'The DM is out of plot. He reaches for the rocks. Somebody find a rulebook. NOW.',
   ]);
   DD.registerNarration('dm_screen', [
@@ -1282,7 +1426,10 @@
   ]);
 
   // test / debug hooks (no game logic depends on them)
-  DD.BossDM = { N: N, HOUSE_RULES: HOUSE_RULES, LAYOUT: LAYOUT, findDM: findDM, boss: boss, lanes: lanes, divertable: divertable,
+  DD.BossDM = { N: N, KIT: KIT, HOUSE_RULES: HOUSE_RULES, LAYOUT: LAYOUT, findDM: findDM, boss: boss, lanes: lanes, divertable: divertable,
     panelsLeft: panelsLeft, rollHouseRule: rollHouseRule, randomEncounter: randomEncounter, cameoPool: cameoPool, unpainted: unpainted,
-    syncPhase: syncPhase, syncShield: syncShield, floorHp: floorHp, threshold: threshold };
+    syncPhase: syncPhase, syncShield: syncShield, syncKit: syncKit, kitOf: kitOf, floorHp: floorHp, threshold: threshold,
+    windupOf: windupOf, landsThisRound: landsThisRound, windDoom: windDoom, passiveText: passiveText,
+    // painters along the grid (map rotation; tests): panel / book points, the train's frame and its block corners
+    gridPx: gridPx, panelPt: P, trainFrame: trainFrame, isoPt: isoPt, drawTrain: drawTrain, drawPanel: drawPanel };
 })();

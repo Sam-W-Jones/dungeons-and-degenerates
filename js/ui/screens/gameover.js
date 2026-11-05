@@ -74,6 +74,9 @@
   function unlockProgress() {
     const UI = DD.UI, el = UI.el;
     const ids = UI.heroIds();
+    // v2 (integrator): every hero is available from the start, so there is no unlock progress to show (an empty
+    // fragment keeps the callers' appendChild working); it comes back if a hero def ever gets an unlock condition
+    if (!ids.some(function (id) { const d = DD.getHero(id); return d && d.unlock; })) return document.createDocumentFragment();
     const unlocked = ids.filter(function (id) { return UI.isUnlocked(id); });
     const nextLocked = ids.filter(function (id) { return !UI.isUnlocked(id); })[0];
     const box = el('div.unlock-progress', null,

@@ -138,7 +138,8 @@
     const UI = DD.UI, el = UI.el;
     const run = UI.run();
     const cands = candidates();
-    if (!cands.length) { UI.toast('Nobody new is drinking here tonight. Unlock more heroes!', { icon: '🪑' }); return; }
+    // v2 (integrator): every hero is unlocked, so an empty bar means the whole roster is here (no "unlock more" nag)
+    if (!cands.length) { UI.toast('Nobody new is drinking here tonight. The whole roster is already in your party.', { icon: '🪑' }); return; }
     UI.choice({
       title: 'Recruit: Who Leaves?', icon: '🍺', size: 'md', cancelLabel: 'Never mind',
       text: 'Pick the party member to replace. Their gear goes back to the stash.',
@@ -206,8 +207,8 @@
       hurt ? 'Party is missing ' + hurt + ' HP' + (scars ? ' · ' + scars + ' scar' + (scars > 1 ? 's' : '') : '') : (scars ? scars + ' scar' + (scars > 1 ? 's' : '') + ' to treat' : 'Everyone is fine. Suspicious.'), doRest, null, used));
     box.appendChild(optionCard('train', '🥋', 'Train', 'Upgrade one socketed skill of one hero by one level (max III).',
       trainable ? trainable + ' skill' + (trainable > 1 ? 's' : '') + ' can improve' : 'Nothing left to learn', doTrain, trainable ? null : 'Every skill is already at max level.', used));
-    box.appendChild(optionCard('recruit', '🍺', 'Recruit', 'Replace a party member — dead or alive — with an unlocked hero at the party\'s lowest level.',
-      deadCount ? deadCount + ' empty seat' + (deadCount > 1 ? 's' : '') + '! ' + cands.length + ' available' : cands.length + ' hero' + (cands.length === 1 ? '' : 'es') + ' drinking at the bar', doRecruit, cands.length ? null : 'No unlocked heroes outside the party.', used));
+    box.appendChild(optionCard('recruit', '🍺', 'Recruit', 'Replace a party member — dead or alive — with a hero from the bar at the party\'s lowest level.',
+      deadCount ? deadCount + ' empty seat' + (deadCount > 1 ? 's' : '') + '! ' + cands.length + ' available' : cands.length + ' hero' + (cands.length === 1 ? '' : 'es') + ' drinking at the bar', doRecruit, cands.length ? null : 'Nobody else is drinking at the bar.', used));
     st.refs.result.innerHTML = '';
     if (t.result) st.refs.result.appendChild(el('div.tav-result', null, el('span.tr-icon', null, '📜'), el('span', null, t.result)));
     st.refs.leave.querySelector('.btn-label').textContent = used ? 'Leave Tavern' : 'Leave Without Choosing';

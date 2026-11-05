@@ -4,13 +4,16 @@
  * Params (URL query):
  *   seeds=N from=S        runs (seeds S..S+N-1)          diff=casual|normal|brutal
  *   maxr=30               round cap per fight             timeout=victory|defeat (how a capped fight ends)
- *   party=a,b,c,d         fixed party (else random 4 of all 10)
+ *   party=a,b,c,d         fixed party (else random 4 of all 16)
  *   route=smart|random    node choice: smart = shops when rich, taverns when hurt, elites when healthy (default)
  *   stop=N                end each run after clearing act N (quick act-1 / act-2 checks)
  *   bal=path:value,...    DD.Balance overrides for this page, e.g. bal=act.1.hp:1.3,hype.dealtPer:6,gold.fight.normal:[10,16]
  *   verbose=1             one line per run      json=1   raw per-fight records in #json
+ *   healers=a,b           boss results are split by these heroes in the party (default ellaria,josiah)
+ *   dump=1                print the units left and the last 40 log lines of every fight that hit the round cap
  * Output (#out): campaign win rate (Wilson 95% interval), act clears, levels at bosses, per-kind table (party HP lost,
- * rounds, short wins, fights with downs, signatures, Hype by source), encounter table, downs by cause, per-hero run
+ * rounds, short wins, fights with downs, signatures, Hype by source, attacks of opportunity, boss wind-ups), encounter
+ * table, downs by cause, per-hero run
  * wins, skill usage, gold flow. Counting wrappers (Combat.useSkill etc.) are installed on this page only.
  * Policies: level-ups learn until 4 skills then upgrade (15% random); loot by a simple score; gear upgrades equipped;
  * shop: heal under 60% HP, items that beat a hero's gear (best rarity first), tomes for heroes with < 4 skills,
@@ -26,6 +29,7 @@
   const ON_TIMEOUT = P.timeout || 'victory';
   const ROUTE = P.route || 'smart';
   const STOP = +(P.stop || 3);
+  const HEALERS = String(P.healers || 'ellaria,josiah').split(',');
   const out = [];
   const lines = [];
   const records = [];
@@ -71,7 +75,7 @@
     runs: 0, wins: 0, actEnter: [0, 0, 0, 0], actClear: [0, 0, 0, 0], lossAt: {}, lossTo: {}, fights: 0, timeouts: 0,
     levelsAtBoss: { 1: [], 2: [], 3: [] }, enc: {}, downs: {}, downsByAct: [0, 0, 0, 0], deaths: 0, heroes: {}, skills: {},
     socketed: {}, cons: {}, gold: { earned: 0, shopSpent: 0, shopVisits: 0, shopGoldIn: 0, eventDelta: 0, endGold: [], finalBossGold: [], bought: {}, fined: 0 },
-    failed: 0, rewardsTaken: {}, levelChoices: {}, errors: [], warns: {}, bossFights: {}, fightMs: 0, runMs: [],
+    failed: 0, rewardsTaken: {}, levelChoices: {}, errors: [], warns: {}, dumps: [], bossFights: {}, fightMs: 0, runMs: [],
     kinds: {}, hypeBy: {}, dmgBy: {},
   };
   let curRun = null;      // per-run scratch
@@ -86,9 +90,10 @@
     }
     return null;
   }
-  function H(id) { return G.heroes[id] || (G.heroes[id] = { runs: 0, wins: 0, fights: 0, dmg: 0, kills: 0, taken: 0, heals: 0, downs: 0, deaths: 0, summonDmg: 0 }); }
+  function H(id) { return G.heroes[id] || (G.heroes[id] = { runs: 0, wins: 0, fights: 0, dmg: 0, kills: 0, taken: 0, heals: 0, downs: 0, deaths: 0, summonDmg: 0, oppMade: 0, oppTaken: 0 }); }
   function K(key) {
-    return G.kinds[key] || (G.kinds[key] = { n: 0, wins: 0, hpLost: [], taken: [], rounds: [], short: 0, withDowns: 0, downs: 0, sigs: 0, hype: 0, hype100: 0, timeouts: 0 });
+    return G.kinds[key] || (G.kinds[key] = { n: 0, wins: 0, hpLost: [], taken: [], rounds: [], short: 0, withDowns: 0, downs: 0, sigs: 0, hype: 0, hype100: 0, timeouts: 0,
+      oppHero: 0, oppEnemy: 0, oppDmgH: 0, oppDmgE: 0, wuStart: 0, wuCancel: 0, wuLand: 0, wuHit: 0, wuDmg: 0 });
   }
 
   // ---- counting wrappers (this page only) ----------------------------------------------------------------------------
@@ -108,27 +113,30 @@
       }
       return ok;
     };
-    // telegraph accounting: damaging intents planned (player phase start) → still standing when the enemy phase
-    // starts (not killed / stunned / cancelled) → executed and hurt a hero-side unit
-    function liveIntents() {
-      let n = 0;
-      DD.Combat.active('enemy').forEach(function (u) {
-        (u.intents || []).forEach(function (it) { if (!(it.delay > 0) && DD.AI.intentDmg(u, it) > 0) n++; });
-      });
-      return n;
-    }
-    DD.Events.on('turn:player', function () { if (!DD.Act.simulating && curFight) curFight.tele.planned += liveIntents(); });
-    DD.Events.on('turn:enemy', function () { if (!DD.Act.simulating && curFight) curFight.tele.standing += liveIntents(); });
+    // v2 wind-up accounting (bosses / elite signatures): announced → interrupted (stun, sleep, death...) → landed and
+    // hurt a hero-side unit (with the HP + Block it cost them)
+    DD.Events.on('windup:start', function () { if (!DD.Act.simulating && curFight) curFight.wu.start++; });
+    DD.Events.on('windup:cancel', function () { if (!DD.Act.simulating && curFight) curFight.wu.cancel++; });
     const exec = DD.AI.executeIntent;
     DD.AI.executeIntent = function (unit, intent) {
-      if (DD.Act.simulating || !curFight || !intent || intent.delay > 0) return exec.apply(this, arguments);
+      if (DD.Act.simulating || !curFight || !intent || !intent.windup) return exec.apply(this, arguments);
       const party = DD.Combat.party();
-      const hp0 = party.reduce(function (a, u) { return a + u.hp + (u.block || 0); }, 0);
+      const hp0 = party.reduce(function (a, u) { return a + (u.dead || u.downed ? 0 : u.hp + (u.block || 0)); }, 0);
       const r = exec.apply(this, arguments);
       const hp1 = party.reduce(function (a, u) { return a + (u.dead || u.downed ? 0 : u.hp + (u.block || 0)); }, 0);
-      if (hp1 < hp0) curFight.tele.hit++;
+      if (r) curFight.wu.land++;
+      if (hp1 < hp0) { curFight.wu.hit++; curFight.wu.dmg += hp0 - hp1; }
       return r;
     };
+    // attacks of opportunity: who made them (hero side / enemy side) and the HP + Block they cost the mover
+    DD.Events.on('opportunity:attack', function (e) {
+      if (DD.Act.simulating || !curFight || !e) return;
+      const a = e.attacker, m = e.mover;
+      if (a && a.side === 'hero') curFight.opp.hero++; else curFight.opp.enemy++;
+      const ha = heroOf(a), hm = heroOf(m);
+      if (ha) H(ha).oppMade++;
+      if (hm) H(hm).oppTaken++;
+    });
     const useCons = C.useConsumable;
     C.useConsumable = function (unit, index) {
       const id = (C.consumables() || [])[index];
@@ -138,6 +146,10 @@
     };
     const fire = DD.Hooks.fire;
     DD.Hooks.fire = function (name, unit) {
+      if (name === 'onTakeDamage' && !DD.Act.simulating && curFight && unit && (arguments[2] || {}).opportunity) {
+        const d = arguments[2];
+        if (d.dealt > 0) { if (unit.side === 'hero') curFight.opp.dmgOnHeroes += d.dealt; else curFight.opp.dmgOnEnemies += d.dealt; }
+      }
       if (name === 'onTakeDamage' && !DD.Act.simulating && curFight && unit && unit.kind === 'hero') {
         const d = arguments[2] || {};
         if (d.dealt > 0) {
@@ -361,7 +373,8 @@
     const heroes0 = cs.units.filter(function (u) { return u.kind === 'hero'; });
     const lvl = heroes0.reduce(function (a, u) { return a + (u.level || 1); }, 0) / Math.max(1, heroes0.length);
     const hp0 = heroes0.reduce(function (a, u) { return a + u.hp; }, 0), max0 = heroes0.reduce(function (a, u) { return a + u.maxHp; }, 0);
-    curFight = { downs: 0, hypeMax: cs.hype || 0, sigs: 0, hype: {}, kind: kind, tele: { planned: 0, standing: 0, hit: 0 } };
+    curFight = { downs: 0, hypeMax: cs.hype || 0, sigs: 0, hype: {}, kind: kind,
+      opp: { hero: 0, enemy: 0, dmgOnHeroes: 0, dmgOnEnemies: 0 }, wu: { start: 0, cancel: 0, land: 0, hit: 0, dmg: 0 } };
     const act = s.act;
     const finalBoss = kind === 'boss' && act === 3;
     if (finalBoss) G.gold.finalBossGold.push(s.gold);
@@ -380,6 +393,14 @@
     if (DD.Run.inCombat()) {
       timeout = true;
       G.timeouts++;
+      // dump=1: what a capped fight looked like (units left, the last log lines) for stall hunting
+      if (P.dump === '1') {
+        const left = cs.units.filter(function (u) { return !u.dead; }).map(function (u) {
+          return u.name + ' ' + u.hp + '/' + u.maxHp + (u.downed ? ' DOWN' : '') + ' at ' + u.x + ',' + u.y;
+        });
+        G.dumps.push('seed ' + curRun.seed + ' ' + encId + ' r' + cs.round + ': ' + left.join(', ') + '\n      ' +
+          cs.log.slice(-40).map(function (l) { return 'r' + l.round + ' ' + l.text; }).join('\n      '));
+      }
       DD.Act.endCombat(ON_TIMEOUT === 'defeat' ? 'defeat' : 'victory');
       if (DD.FX && DD.FX.flush) DD.FX.flush();
       if (DD.Run.inCombat()) DD.Run.finishCombat(ON_TIMEOUT === 'defeat' ? 'defeat' : 'victory', cs);
@@ -403,17 +424,23 @@
     const k = K(kind), ka = K('a' + act + ' ' + kind);
     [k, ka].forEach(function (x) {
       x.n++; if (result === 'victory') x.wins++;
+      x.hpStart = (x.hpStart || 0) + (max0 ? hp0 / max0 : 0);
       x.hpLost.push(lost); x.taken.push(max0 ? taken / max0 : 0); x.rounds.push(cs.round);
       if (cs.round <= 2 && result === 'victory') x.short++;
       if (curFight.downs) x.withDowns++;
       x.downs += curFight.downs; x.sigs += curFight.sigs; x.hype += curFight.hypeMax; if (curFight.hypeMax >= 100) x.hype100++;
       if (timeout) x.timeouts++;
-      x.tPlanned = (x.tPlanned || 0) + curFight.tele.planned; x.tStanding = (x.tStanding || 0) + curFight.tele.standing; x.tHit = (x.tHit || 0) + curFight.tele.hit;
+      x.oppHero += curFight.opp.hero; x.oppEnemy += curFight.opp.enemy; x.oppDmgH += curFight.opp.dmgOnHeroes; x.oppDmgE += curFight.opp.dmgOnEnemies;
+      x.wuStart += curFight.wu.start; x.wuCancel += curFight.wu.cancel; x.wuLand += curFight.wu.land; x.wuHit += curFight.wu.hit; x.wuDmg += curFight.wu.dmg;
     });
     Object.keys(curFight.hype).forEach(function (r) { const hk = kind + ':' + r; G.hypeBy[hk] = (G.hypeBy[hk] || 0) + curFight.hype[r]; });
     if (kind === 'boss') {
-      const b = G.bossFights[encId] || (G.bossFights[encId] = { n: 0, wins: 0 });
+      const b = G.bossFights[encId] || (G.bossFights[encId] = { n: 0, wins: 0, hp: 0, h: { n: 0, wins: 0 }, x: { n: 0, wins: 0 } });
       b.n++; if (result === 'victory') b.wins++;
+      b.hp += max0 ? hp0 / max0 : 0;
+      // split by a starting healer in the party (healers=ellaria,josiah by default: the two heroes who start with an ally heal)
+      const hb = heroes0.some(function (u) { return HEALERS.indexOf(u.defId) >= 0; }) ? b.h : b.x;
+      hb.n++; if (result === 'victory') hb.wins++;
     }
     if (result !== 'victory' && kind !== 'boss' && !DD.Run.state.over) G.failed++;
     G.fights++;
@@ -512,11 +539,15 @@
 
   function kindLine(label, x) {
     return '  ' + label.padEnd(10) + ' n ' + String(x.n).padStart(4) + ' · win ' + pct(x.wins, x.n).padStart(4) +
+      ' · start HP ' + Math.round(100 * (x.hpStart || 0) / Math.max(1, x.n)) + '%' +
       ' · HP lost ' + Math.round(100 * avg(x.hpLost)) + '% (gross ' + Math.round(100 * avg(x.taken)) + '%)' +
       ' · rounds ' + r1(avg(x.rounds)) + ' · ≤2-round wins ' + pct(x.short, x.n) + ' · fights with downs ' + pct(x.withDowns, x.n) +
       ' · downs/fight ' + r2(x.downs / Math.max(1, x.n)) + ' · signatures/fight ' + r2(x.sigs / Math.max(1, x.n)) +
       ' · hype max ' + Math.round(x.hype / Math.max(1, x.n)) + ' (100: ' + pct(x.hype100, x.n) + ')' + (x.timeouts ? ' · TIMEOUTS ' + x.timeouts : '') +
-      ' · telegraphs/fight planned ' + r1((x.tPlanned || 0) / Math.max(1, x.n)) + ' → standing ' + r1((x.tStanding || 0) / Math.max(1, x.n)) + ' → hit ' + r1((x.tHit || 0) / Math.max(1, x.n));
+      '\n' + ''.padEnd(13) + 'attacks of opportunity/fight: by heroes ' + r2(x.oppHero / Math.max(1, x.n)) + ' (' + r1(x.oppDmgE / Math.max(1, x.n)) + ' dmg)' +
+      ' · by enemies ' + r2(x.oppEnemy / Math.max(1, x.n)) + ' (' + r1(x.oppDmgH / Math.max(1, x.n)) + ' dmg)' +
+      (x.wuStart ? ' · wind-ups/fight ' + r1(x.wuStart / x.n) + ' (interrupted ' + r1(x.wuCancel / x.n) + ', landed ' + r1(x.wuLand / x.n) +
+        ', hit someone ' + r1(x.wuHit / x.n) + ', ' + r1(x.wuDmg / x.n) + ' HP+Block)' : '');
   }
 
   function report(overrides) {
@@ -533,6 +564,10 @@
       out.push('party level at act ' + a + ' boss: avg ' + (l.length ? r1(avg(l)) : '-') + ' (n ' + l.length + ', min ' + (l.length ? Math.min.apply(null, l) : '-') + ', max ' + (l.length ? Math.max.apply(null, l) : '-') + ')');
     });
     out.push('boss fights: ' + Object.keys(G.bossFights).map(function (k) { const b = G.bossFights[k]; return k + ' ' + b.wins + '/' + b.n; }).join(' · '));
+    out.push('boss fights by a starting healer (' + HEALERS.join('/') + ') in the party · party HP at the start: ' + Object.keys(G.bossFights).map(function (k) {
+      const b = G.bossFights[k];
+      return k + ' with ' + b.h.wins + '/' + b.h.n + ' (' + pct(b.h.wins, b.h.n) + '), without ' + b.x.wins + '/' + b.x.n + ' (' + pct(b.x.wins, b.x.n) + ') · start HP ' + Math.round(100 * b.hp / Math.max(1, b.n)) + '%';
+    }).join(' · '));
     out.push('\n== by fight kind (party HP lost = start HP − end HP over max, downed = 0; gross = HP damage taken over max)');
     ['normal', 'elite', 'boss'].forEach(function (k) { if (G.kinds[k]) out.push(kindLine(k, G.kinds[k])); });
     [1, 2, 3].forEach(function (a) { ['normal', 'elite', 'boss'].forEach(function (k) { const x = G.kinds['a' + a + ' ' + k]; if (x) out.push(kindLine('a' + a + ' ' + k, x)); }); });
@@ -567,13 +602,14 @@
     });
     const shares = Object.keys(G.heroes).map(function (k) { return G.heroes[k].runs ? G.heroes[k].wins / G.heroes[k].runs : 0; }).sort(function (a, b) { return a - b; });
     const median = shares.length ? (shares[(shares.length - 1) >> 1] + shares[shares.length >> 1]) / 2 : 0;
-    out.push('\n== heroes (runs, run wins, fights, dmg/fight, summon dmg/fight, kills/fight, taken/fight, heals/fight, downs/fight, deaths) · median run-win share ' + Math.round(100 * median) + '%');
+    out.push('\n== heroes (runs, run wins, fights, dmg/fight, summon dmg/fight, kills/fight, taken/fight, heals/fight, downs/fight, deaths, attacks of opportunity made / suffered per fight) · median run-win share ' + Math.round(100 * median) + '%');
     Object.keys(G.heroes).sort().forEach(function (k) {
       const h = G.heroes[k];
       const f = Math.max(1, h.fights);
       const share = h.runs ? h.wins / h.runs : 0;
       out.push('  ' + k.padEnd(9) + ' runs ' + String(h.runs).padStart(3) + ' · wins ' + pct(h.wins, h.runs).padStart(4) + ' (' + (share >= median ? '+' : '') + Math.round(100 * (share - median)) + ') · fights ' + String(h.fights).padStart(4) + ' · dmg ' + r1(h.dmg / f) +
-        ' (summons ' + r1(h.summonDmg / f) + ') · kills ' + r1(h.kills / f) + ' · taken ' + r1(h.taken / f) + ' · heals ' + r1(h.heals / f) + ' · downs ' + r2(h.downs / f) + ' · deaths ' + h.deaths);
+        ' (summons ' + r1(h.summonDmg / f) + ') · kills ' + r1(h.kills / f) + ' · taken ' + r1(h.taken / f) + ' · heals ' + r1(h.heals / f) + ' · downs ' + r2(h.downs / f) + ' · deaths ' + h.deaths +
+        ' · AoO ' + r2(h.oppMade / f) + '/' + r2(h.oppTaken / f));
     });
     out.push('\n== skill usage per hero (uses per fight socketed; * = never used while socketed ≥ 10 fights)');
     const byHero = {};
@@ -593,6 +629,7 @@
       ' · gold at the final boss ' + r1(avg(gg.finalBossGold)) + ' (n ' + gg.finalBossGold.length + ') · gold left at the end ' + r1(avg(gg.endGold)) + ' · bought ' + JSON.stringify(gg.bought));
     const errs = G.errors.slice(0, 15);
     out.push('\n== errors (' + G.errors.length + '): ' + errs.join(' | '));
+    if (G.dumps.length) out.push('\n== capped fights (dump=1)\n  ' + G.dumps.join('\n  '));
     const probs = Object.keys(G.warns).sort(function (a, b) { return G.warns[b] - G.warns[a]; }).slice(0, 25);
     out.push('== DD.warn lines (' + probs.length + ' distinct):');
     probs.forEach(function (k) { out.push('  ' + G.warns[k] + '× ' + k); });

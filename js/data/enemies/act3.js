@@ -1,21 +1,28 @@
 /* Dungeons and Degenerates — js/data/enemies/act3.js
  * Act 3 "Behind the DM Screen": regular enemies, three elite mini-bosses and the act's encounters
  * (hellscape, hoard, dm_table). v2: every enemy decides and acts at once on its initiative turn (no telegraphs); only
- * each elite's one signature move winds up (announced, lands at the start of its next turn). Gimmicks are in the
- * inspect panel (def.passive where it is a rule, ability descs, the codex desc) and in how each one plays its turn:
- *   Imp Influencer (init +3) — blinks up to 5 tiles instead of walking; Go Live! Marks a hero (+4 on the next hit).
- *   Hell Hound (+2) — fire-immune; runs, then Pounces up to 4 tiles; Hot Dog Breath leaves the floor burning.
- *   Mind Flayer Life Coach (+1) — Unsolicited Life Advice charms; Hustle Culture cone confuses.
- *   Floating Eyeball Intern (+2) — beams that pierce coworkers too; the overtime beam at two heroes, then it passes out.
+ * each elite's one signature move winds up (announced, lands at the start of its next turn). Each def states in
+ * def.passive (the inspect panel) what it does on its turn and how it picks its target, and its codex desc sums it up:
+ *   Imp Influencer (init +3, the act's diver) — blinks up to 5 tiles instead of walking and livestreams the weakest
+ *     hero it can reach; Go Live! Marks them (+3 on the next hit).
+ *   Hell Hound (+2) — fire-immune; runs, then bites or Pounces up to 4 tiles; Hot Dog Breath leaves the floor burning.
+ *   Mind Flayer Life Coach (+1) — keeps its distance; Unsolicited Life Advice charms, Hustle Culture cone confuses.
+ *   Floating Eyeball Intern (+2) — keeps its distance; beams pierce coworkers too; the overtime beam, then a nap.
  *   Rules Lawyer (Devil, Esq.) (0) — OBJECTION! strips buffs + silences; Motion to Dismiss shoves (into pits).
- *   Natural 1 Golem (−2) — every swing is a d20 roll (a natural 1 hits itself); lobs dice that double on doubles.
+ *   Natural 1 Golem (−2) — every swing is a d20 roll (1 hits itself, 20 doubles); lobs dice that double on doubles.
  *   Kobold Dragonshield (+1) — Shield Wall: Block for itself and adjacent allies until their next turns.
- *   Succubus Dating Coach (0) — Terrible Pickup Line charms; You Deserve Better! Inspires allies.
+ *   Succubus Dating Coach (0) — keeps her distance; Terrible Pickup Line charms; You Deserve Better! Inspires allies.
  *   Skeletal Backup Dancer (+2) — minion that shimmies in to kick; arrives with the Death Knight's intermission.
  *   Elites (all Unshakeable after a stun lands: no stun-locks): Young Red Dragon (+1, Hoarder: guards its hoard and
  *   basks in it for Block at the end of its turns, gold pickers become hunted Thieves; wind-up: Hoard Breath), Death
  *   Knight (−1, Very Dramatic: wind-up Villain Monologue, interruptible by damage; chain + swing; intermission dancers),
  *   Pit Fiend Accountant (+1, compounding Infernal Debt; wind-up: Hostile Audit along a whole line).
+ * Targeting (DESIGN §8): brutes (default planner 'melee', custom planners aiStyle 'melee') stick to the hero next to
+ * them, the flayer / eyeball / succubus keep their distance ('ranged'), the imp is the one diver ('assassin'). Walks
+ * are move actions: every planner prices the attacks of opportunity a walk would provoke (api.aooCost; never a lethal
+ * one); leaps, swoops, shimmies, blinks and pulls never provoke. Each enemy's first melee skill is its attack of
+ * opportunity: the hound's bite, the lawyer's Motion, the golem's roll, the kobold's jab, the Death Knight's swing and
+ * the fiend's smack (the rest make none).
  * Extras: statuses a3_thief / a3_monologue / a3_debt / a3_unshakeable, objects a3_hoard_pile / a3_snack_bowl.
  * Planners share plan() (best attack for a chosen movement style, approach, act now or wind up) — every id is a3_.
  */
@@ -34,8 +41,12 @@
   const MONO_HYPE = 10;
   const DEBT_MAX = 5;
   const DEBT_PAYOFF = 2;
+  // v2 targeting styles (DD.AI.targetBonus): brutes stick to the hero they are engaged with, ranged units keep their
+  // distance and shoot what is in range, divers go for the weakest hero they can reach
   const MELEE = { style: 'melee', keepDistance: 0 };
   const SNIPER = { style: 'ranged', keepDistance: 3 };
+  const KITER = { style: 'ranged', keepDistance: 2 };
+  const DIVER = { style: 'assassin', keepDistance: 3 };
 
   // ---- helpers ------------------------------------------------------------------------------------------------
   function A() { return DD.Act; }
@@ -44,6 +55,8 @@
   function active(u) { return !!u && !u.dead && !u.downed; }
   function has(u, id) { return DD.Act.hasStatus(u, id); }
   function eskill(def) { def.owner = 'enemy'; def.ap = 0; return DD.registerSkill(def); }
+  /** Level-1 numbers of an act-3 skill (passive descs read them, so the inspect panel never drifts from the skills). */
+  function lvl(id) { const s = DD.getSkill(id); return (s && DD.skillLevel(s, 1)) || {}; }
   function lunge(ctx) { if (ctx.target) DD.FX.lunge(ctx.user, ctx.target); }
   function shoot(ctx, kind, color, extra) {
     if (ctx.target) DD.FX.projectile(ctx.user, ctx.target, Object.assign({ kind: kind, color: color }, extra || {}));
@@ -102,7 +115,7 @@
       if (G().isDrop(nx, ny)) return target.kind === 'hero' ? 10 : 0;
       const td = G().terrain(t);
       if (G().unitAt(nx, ny) || (t.obj && G().objBlocksMove(t.obj)) || td.walkable === false) return 2;
-      if (td.liquid === 'lava') return 8;
+      if (td.liquid === 'lava' && !G().harmlessTo(td, null, target)) return 8;   // v2: lava can't hurt a fire-proof target
       x = nx; y = ny;
     }
     return 0;
@@ -121,7 +134,9 @@
   /**
    * Walk toward the foes along a distance field (walls, lava rivers...), stopping `keep` tiles short.
    * Same idea as the engine's approach, but with a style chosen by the planner. within(p) (optional) limits the
-   * destinations; a unit standing outside them takes any allowed tile.
+   * destinations; a unit standing outside them takes any allowed tile. The attacks of opportunity a walk would provoke
+   * are a cost (api.aooCost), and a walk they would drop it on is never taken. Returns true if it set off (its move is
+   * spent, even when a reaction stopped the walk on its first tile).
    */
   function approach(unit, api, keep, within) {
     if (A().cantMove(unit)) return false;
@@ -138,6 +153,9 @@
         if (!G().inBounds(nx, ny) || !G().isWalkable(nx, ny, unit)) continue;
         const from = { x: nx, y: ny }, to = { x: x, y: y };
         if (!G().canStep(unit, from, to)) continue;
+        // a hostile body it can't walk through (a downed hero in a doorway) is no shortcut to the foes behind it
+        const o = G().unitAt(nx, ny);
+        if (o && o !== unit && !o.dead && G().hostile(unit, o)) continue;
         const j = ny * W + nx;
         const c = dist[i] + G().stepCost(unit, from, to) + (G().hazardAt(nx, ny, unit) ? 3 : 0);
         if (c < dist[j]) { dist[j] = c; q.push(j); }
@@ -148,37 +166,62 @@
     api.reachable(unit).forEach(function (e) {
       if (within && !within(e)) return;
       const risk = DD.AI.pathRisk(unit, e);
-      if (risk.lethal) return;
+      const aoo = api.aooCost(unit, e);
+      if (risk.lethal || aoo === Infinity) return;
       const nd = nearestDist(e, foes);
       let v = dist[e.y * W + e.x];
       if (!isFinite(v)) v = 200 + nd;
       if (keep && nd < keep) v += (keep - nd) * 2;
-      v += risk.penalty + e.cost * 0.01;
+      v += risk.penalty + aoo + e.cost * 0.01;
       if (v < bestV) { bestV = v; best = e; }
     });
     if (!best || (isFinite(here) && bestV >= here)) return false;
-    return DD.AI.moveTo(unit, best.x, best.y, best.path);
+    DD.AI.moveTo(unit, best.x, best.y, best.path);
+    return true;
+  }
+
+  /**
+   * DD.AI.bestAttack on a unit placed virtually on `spot` measures "engaged" (the brute's +4 for the hero next to it)
+   * from that spot; re-base it on the tile the unit really started its turn on. The focus part of the targeting bonus
+   * counts once per action, for the best foe in its area (DD.AI.targetValue with no damage = that focus part).
+   */
+  function engagedFix(unit, b, spot, origin, style) {
+    if (spot.x === origin.x && spot.y === origin.y) return 0;
+    const def = DD.getSkill(b.skillId);
+    if (!def) return 0;
+    let atSpot = 0, atHome = 0;
+    DD.Targeting.area(unit, def, (b.slot && b.slot.level) || 1, b.target).forEach(function (q) {
+      const o = G().unitAt(q.x, q.y);
+      if (!active(o) || !G().hostile(unit, o)) return;
+      atSpot = Math.max(atSpot, DD.AI.targetValue(unit, o, 0, style, spot));
+      atHome = Math.max(atHome, DD.AI.targetValue(unit, o, 0, style, origin));
+    });
+    return atHome - atSpot;
   }
 
   /**
    * api.bestAttack restricted to destinations where within(p) holds (staying put counts only if within(here)).
-   * bonus(p) (optional) adds a positional preference. Same result shape: { moveTo, path, skillId, slot, target,
+   * bonus(p) (optional) adds a positional preference. Walks are priced like the engine does (walk cost, hazards, the
+   * attacks of opportunity they provoke; never a lethal one). Same result shape: { moveTo, path, skillId, slot, target,
    * score, actionScore } | null.
    */
   function bestWithin(unit, api, skills, style, within, bonus) {
-    const ox = unit.x, oy = unit.y, spots = [];
+    const ox = unit.x, oy = unit.y, origin = { x: ox, y: oy }, spots = [];
     if (within(unit)) spots.push({ x: ox, y: oy, cost: 0, path: [] });
     api.reachable(unit).forEach(function (e) { if (within(e)) spots.push(e); });
     let best = null;
     try {
       spots.forEach(function (p) {
-        const risk = p.path.length ? DD.AI.pathRisk(unit, p) : { lethal: false, penalty: 0 };
-        if (risk.lethal) return;
+        const walked = p.path && p.path.length;
+        const risk = walked ? DD.AI.pathRisk(unit, p) : { lethal: false, penalty: 0 };
+        const aoo = walked ? api.aooCost(unit, p) : 0;
+        if (risk.lethal || aoo === Infinity) return;
         unit.x = p.x; unit.y = p.y;
         const b = DD.AI.bestAttack(unit, { skills: skills, style: style, noMove: true });
+        const fix = b ? engagedFix(unit, b, p, origin, style) : 0;
         unit.x = ox; unit.y = oy;
         if (!b) return;
-        const sc = b.score - risk.penalty - (p.cost || 0) * 0.05 + (bonus ? bonus(p) : 0);
+        const sc = b.score + fix - risk.penalty - aoo - (p.cost || 0) * 0.2 + (bonus ? bonus(p) : 0);
         if (!best || sc > best.score) {
           best = { moveTo: { x: p.x, y: p.y }, path: p.path, skillId: b.skillId, slot: b.slot, target: b.target, score: sc, actionScore: b.actionScore };
         }
@@ -191,7 +234,8 @@
    * One action on its turn: the best (move, skill, target) for some skills and a movement style, walk there, then use
    * it at once — or wind it up (opts.windUp: wind-up options; only an elite's signature). Nothing in reach: approach
    * (keep tiles short) and try again from where it stands. opts: { skills, style, noMove, keep (false = don't approach),
-   * within (destination filter), bonus (positional preference inside `within`), windUp }.
+   * within (destination filter), bonus (positional preference inside `within`), windUp, minScore (the action's own score
+   * it must still reach after an interrupted walk) }.
    * Returns { done, moved, skillId, target (the unit it aimed at, or null), windup }; it never moves twice, so callers
    * can chain a fallback with noMove when `moved` is set.
    */
@@ -203,17 +247,18 @@
     let b = opts.within && !opts.noMove ? bestWithin(unit, api, skills, style, opts.within, opts.bonus)
       : api.bestAttack(unit, { skills: skills, style: style, noMove: !!opts.noMove });
     if (!b && !opts.noMove && opts.keep !== false) {
-      approach(unit, api, opts.keep || 0, opts.within);
-      res.moved = unit.x !== x0 || unit.y !== y0;
+      const set = approach(unit, api, opts.keep || 0, opts.within);
+      res.moved = set || unit.x !== x0 || unit.y !== y0;
       if (incapacitated(unit)) return res;
       b = api.bestAttack(unit, { skills: skills, style: style, noMove: true });
     } else if (b && (b.moveTo.x !== x0 || b.moveTo.y !== y0)) {
       const ok = DD.AI.moveTo(unit, b.moveTo.x, b.moveTo.y, b.path);
-      res.moved = unit.x !== x0 || unit.y !== y0;
+      res.moved = true;   // its move is spent, also when a reaction stopped it on its first tile
       if (incapacitated(unit)) return res;
       if (!ok) b = api.bestAttack(unit, { skills: skills, style: style, noMove: true });
     }
-    if (!b) return res;
+    // a reaction cut the walk short and the re-aimed action is no longer worth it (a breath at an empty cone)
+    if (!b || (opts.minScore && !(b.actionScore >= opts.minScore))) return res;
     const def = DD.getSkill(b.skillId);
     const tu = G().unitAt(b.target.x, b.target.y);
     res.skillId = b.skillId;
@@ -344,8 +389,9 @@
   DD.registerObject({
     id: 'a3_hoard_pile', name: 'Hoard Pile', blocksMove: false, blocksLos: false, hp: 0, height: 0.45, color: '#f4c430',
     desc: 'A dragon\'s hoard. At the end of each of its turns a Young Red Dragon gains ' + HOARD_BLOCK + ' Block per pile within ' + HOARD_RANGE +
-      ' tiles of it (max ' + HOARD_MAX + '). Walk over it to pocket the gold (and be branded a Thief).',
-    autoplay: function (unit, obj, tile) { return tile && guarded(tile) ? 10 : 3; },
+      ' tiles of it (max ' + HOARD_MAX + '). Walk over it to pocket the gold (and be branded a Thief). Flyers can\'t reach down that far.',
+    // pocketing is a floor effect (v2: flyers float over the gold); AutoPlay checks it too, the hint says it anyway
+    autoplay: function (unit, obj, tile) { return unit && !G().feelsFloor(unit) ? 0 : tile && guarded(tile) ? 10 : 3; },
     onEnter: function (unit, o, tile) { pocketHoard(unit, o, tile); },
     draw: function (g, obj, t) {
       const tw = Math.sin(t * 2.6 + ((obj.data && obj.data.gold) || 0));
@@ -387,7 +433,8 @@
   // =============================================================================================================
   eskill({
     id: 'a3_imp_golive', name: 'Go Live!', icon: '📱', kind: 'spell', tags: ['ranged', 'fire', 'mark'], anchor: 'unit', cooldown: 1,
-    levels: [{ dmg: 7, mark: 4, r: 6 }], target: { type: 'unit', range: function (L) { return [1, L.r]; }, filter: 'enemy', los: false },
+    // v2 (imps now dive the weakest hero): 6 + Mark 3 (was 7 + 4) keeps the act's most common minion in its 6-8 band
+    levels: [{ dmg: 6, mark: 3, r: 6 }], target: { type: 'unit', range: function (L) { return [1, L.r]; }, filter: 'enemy', los: false },
     desc: function (L) { return 'Deal ' + L.dmg + ' fire damage to a target up to ' + L.r + ' tiles away (no line of sight needed) and Mark it: the next damage it takes is +' + L.mark + '.'; },
     flavor: 'Smash that like button. With your face.',
     execute: function (ctx) {
@@ -406,7 +453,7 @@
 
   eskill({
     id: 'a3_imp_hottake', name: 'Hot Take', icon: '🌶️', kind: 'spell', tags: ['ranged', 'fire'], anchor: 'unit',
-    levels: [{ dmg: 8, r: 5 }], target: { type: 'unit', range: function (L) { return [1, L.r]; }, filter: 'enemy', los: true },
+    levels: [{ dmg: 7, r: 5 }], target: { type: 'unit', range: function (L) { return [1, L.r]; }, filter: 'enemy', los: true },
     desc: function (L) { return 'Deal ' + L.dmg + ' fire damage to a target up to ' + L.r + ' tiles away.'; },
     flavor: 'Controversial opinion: you, but on fire.',
     execute: function (ctx) {
@@ -417,7 +464,10 @@
     aiScore: function (ctx) { const u = ctx.targetUnit; return u && has(u, 'marked') ? 4 : 0; },
   });
 
-  /** Best tile within BLINK_RANGE to attack from (the imp's own tile included). */
+  /**
+   * Best tile within BLINK_RANGE to attack from (the imp's own tile included): the diver's pick of target (the weakest
+   * hero it can reach, DD.AI 'assassin' targeting) from a spot about 3 tiles from the nearest hero (never next to one).
+   */
   function blinkSpot(unit, api) {
     const foes = api.foes(unit);
     if (!foes.length) return null;
@@ -430,13 +480,15 @@
           const x = ox + dx, y = oy + dy, stay = !dx && !dy;
           if (!stay) {
             const t = G().tile(x, y);
-            if (!t || !G().isFree(x, y, unit) || G().hazardAt(x, y, unit) || (t.surface && t.surface.id === 'web')) continue;
+            // a web only snares a walker (v2: the imp flies over it, unless something grounds it)
+            if (!t || !G().isFree(x, y, unit) || G().hazardAt(x, y, unit) || (t.surface && t.surface.id === 'web' && G().feelsSurface(unit, t.surface))) continue;
           }
           unit.x = x; unit.y = y;
           const b = DD.AI.bestAttack(unit, { noMove: true });
           const near = nearestDist(unit, foes);
           let sc = b ? b.score : -Math.abs(near - 3) - 5;
           if (near <= 1) sc -= 6;
+          else if (near === 2) sc -= 1;   // influencers film from a safe distance
           if (!stay) sc -= 0.75;
           if (!best || sc > best.sc) best = { x: x, y: y, sc: sc };
         }
@@ -445,7 +497,7 @@
     return best && (best.x !== ox || best.y !== oy) ? best : null;
   }
 
-  /** Its turn: blink to the best spot to shoot from (not while Rooted / held), then shoot. */
+  /** Its turn: blink (a teleport: never provokes) to the best spot to shoot from (not while Rooted / held), then shoot. */
   function impPlan(unit, api) {
     if (!A().cantMove(unit)) {
       const spot = blinkSpot(unit, api);
@@ -471,21 +523,25 @@
 
   DD.registerEnemy({
     id: 'a3_imp_influencer', name: 'Imp Influencer', act: 3, tier: 'minion', hp: 18, mov: 5, armor: 0, init: 3,
-    tags: ['devil', 'imp'], flags: { flying: true }, resist: { fire: 0.5 },
+    tags: ['devil', 'imp'], flags: { flying: true, noProvoke: true }, resist: { fire: 0.5 },
     sprite: { base: 'flyer', scale: 0.78, shape: { body: 'imp' }, outfit: 'tunic',
       palette: { skin: '#e8485a', cloth: '#ff5fa2', cloth2: '#2a1d33', hair: '#2a1d33', eye: '#fff36b', accent: '#ff5fa2', wing: '#7a1f3a', metal: '#ffd23f' },
       head: { eyes: 'glow', mouth: 'grin', face: 'sunglasses', hair: 'mohawk' }, bling: ['chain'],
       aura: { kind: 'sparkles', color: '#ff8ad8' }, overlay: impOverlay },
-    skills: ['a3_imp_golive', 'a3_imp_hottake'], ai: impPlan, aiStyle: { style: 'ranged', keepDistance: 3 }, xp: 3, gold: [1, 3],
-    passive: { name: 'Blink', icon: '✨', desc: 'Instead of walking it teleports up to ' + BLINK_RANGE + ' tiles (not while Rooted) to a spot it can shoot from, out of melee reach.' },
+    // the act's diver: it picks on the weakest hero it can reach (DD.AI 'assassin' targeting); blinks never provoke
+    skills: ['a3_imp_golive', 'a3_imp_hottake'], ai: impPlan, aiStyle: DIVER, xp: 3, gold: [1, 3],
+    passive: { name: 'Blink', icon: '✨', desc: function () {
+      return 'Sneaky: on its turn it teleports up to ' + BLINK_RANGE + ' tiles instead of walking (never provoking; not while Rooted) to a spot out of melee reach ' +
+        '(3+ tiles from the heroes when it can), then shoots the weakest hero it can reach (the wounded and the squishy first). Go Live! needs no line of sight.';
+    } },
     barks: {
       spawn: ['Hey hellions, we\'re LIVE!', 'Don\'t forget to like and subscribe!', 'Ooh, this dungeon has great lighting.'],
       attack: ['Going live in 3, 2...', 'Hot take incoming!', 'This is SO going on my story.', 'Ratio + you fell off + fireball.'],
       hurt: ['Ow! That\'s going in the vlog.', 'My ring light!', 'Unfollowed. Blocked. Reported.'],
       death: ['Stream... ending... smash... like...', 'Clear my search history!', 'I was about to get verified...'],
     },
-    desc: 'On its turn it blinks up to 5 tiles and livestreams a hero: Go Live! Marks them, so the next hit deals +4. Always first to post ' +
-      '(initiative +3). 2.3 million followers, every one of them another imp.',
+    desc: 'Sneaky: it blinks up to 5 tiles instead of walking (you can\'t pin it down) and livestreams the weakest hero it can reach; Go Live! ' +
+      'Marks them for the next hit. Always first to post (initiative +3). 2.3 million followers, every one of them another imp.',
   });
 
   // =============================================================================================================
@@ -579,15 +635,21 @@
       palette: { skin: '#76291f', cloth2: '#ff9a3a', belly: '#ff9a3a', hair: '#3d1513', eye: '#ffd23f', accent: '#ff4d1a', collar: '#2a2a33', horn: '#2a1416' },
       head: { size: 1.15, ears: 'pointy', horns: 'demon', eyes: 'glow', mouth: 'fangs' }, tail: 'devil', extras: ['collar'],
       aura: { kind: 'flames', color: '#ff6a1a' }, overlay: houndOverlay },
+    // a brute: it sticks to the hero next to it; Chew Toy is its attack of opportunity (the breath and the pounce are not)
     skills: ['a3_hound_breath', 'a3_hound_pounce', 'a3_hound_bite'], ai: MELEE, xp: 5, gold: [3, 6],
+    passive: { name: 'Off the Leash', icon: '🐾', desc: function () {
+      return 'On its turn it runs up to 4 tiles, then bites the hero next to it (it sticks to that one), Pounces on a hero up to ' + lvl('a3_hound_pounce').r +
+        ' tiles away or breathes fire in a short cone that leaves the floor burning. Walk away from it and it bites (attack of opportunity).';
+    } },
     barks: {
       spawn: ['*sizzling woof*', 'BORK. (Ominously.)', '*sniffs you, smokes slightly*'],
       attack: ['*flaming growl*', 'Who\'s a bad boy? HIM.', '*hot dog noises*'],
       hurt: ['*sad sizzle*', '*yelps in Infernal*'],
       death: ['*whimper* ...good boy?', '*goes to live on a farm (Hell)*', '*final ember*'],
     },
-    desc: 'On its turn it runs up to 4 tiles and pounces on a hero up to 4 tiles further (walls and corners break its sight), or breathes ' +
-      'fire that leaves the floor burning. Quick off the leash (initiative +2). Immune to fire, weak to frost. Fetches souls; does not drop them.',
+    desc: 'Runs up and bites, or pounces on a hero up to 4 tiles further (walls and corners break its sight), or breathes fire that leaves the ' +
+      'floor burning. It sticks to whoever is next to it and bites anyone who walks away. Quick off the leash (initiative +2). Immune to fire, ' +
+      'weak to frost. Fetches souls; does not drop them.',
   });
 
   // =============================================================================================================
@@ -645,15 +707,19 @@
       palette: { skin: '#9b6fc4', cloth: '#1f7a6e', cloth2: '#f4f1e8', eye: '#ffffff', accent: '#c48aff', metal: '#ffd23f', book: '#f4f1e8' },
       head: { size: 1.15, hair: 'none', ears: 'pointy', eyes: 'glow', mouth: 'none' }, mainhand: 'book', bling: ['rings'], extras: ['collar'],
       aura: { kind: 'runes', color: '#c48aff' }, overlay: flayerOverlay },
-    skills: ['a3_flayer_blast', 'a3_flayer_advice'], ai: { style: 'ranged', keepDistance: 2 }, xp: 5, gold: [3, 6],
+    skills: ['a3_flayer_blast', 'a3_flayer_advice'], ai: KITER, xp: 5, gold: [3, 6],
+    passive: { name: 'Life Coaching', icon: '🧠', desc: function () {
+      return 'On its turn it keeps 2 tiles from the heroes and coaches whoever is in range: Unsolicited Life Advice charms a hero up to ' +
+        lvl('a3_flayer_advice').r + ' tiles away (no line of sight needed), or Hustle Culture confuses everyone in its 3-deep cone. It makes no attacks of opportunity.';
+    } },
     barks: {
       spawn: ['Your brain is your greatest asset. I would know.', 'Let\'s unlock your potential. And your skull.'],
       attack: ['Have you tried waking up at 4 AM?', 'Sounds like a mindset problem.', 'Visualize success. Now visualize me eating it.'],
       hurt: ['This is a growth opportunity.', 'Rude. One star.'],
       death: ['My seminar... is non-refundable...', 'Remember... it\'s all... mindset...'],
     },
-    desc: 'On its turn it charms one hero up to 5 tiles away (that hero can\'t hurt it and has 1 less AP next turn) or confuses everyone in a big ' +
-      'cone. Up at 4 AM every day (initiative +1). Sells a brain-boosting course. Ingredients: your brain.',
+    desc: 'Keeps its distance and charms a hero up to 5 tiles away (that hero can\'t hurt it and has 1 less AP next turn) or confuses everyone ' +
+      'in a big cone. Up at 4 AM every day (initiative +1). Sells a brain-boosting course. Ingredients: your brain.',
   });
 
   // =============================================================================================================
@@ -681,7 +747,7 @@
 
   eskill({
     id: 'a3_eye_stare', name: 'Piercing Stare', icon: '👁️', kind: 'attack', tags: ['ranged', 'pierce'], anchor: 'unit',
-    levels: [{ dmg: 10, len: 5 }], target: { type: 'unit', range: [1, 5], filter: 'enemy', los: true }, area: { shape: 'custom', fn: rayTiles },
+    levels: [{ dmg: 9, len: 5 }], target: { type: 'unit', range: [1, 5], filter: 'enemy', los: true }, area: { shape: 'custom', fn: rayTiles },
     desc: function (L) { return 'A ' + L.len + '-tile ray toward a target up to 5 tiles away (stops at walls): ' + L.dmg + ' damage to every unit along it, coworkers included.'; },
     flavor: 'It was told to "really look at" the problem.',
     execute: function (ctx) {
@@ -739,6 +805,11 @@
       palette: { skin: '#f4ece6', eye: '#3fb06a', accent: '#3f8fd8' }, head: { mouth: 'none' },
       aura: { kind: 'glow', color: '#ff6a6a' }, overlay: eyeOverlay },
     skills: ['a3_eye_stare', 'a3_eye_overtime'], ai: SNIPER, xp: 5, gold: [3, 6],
+    passive: { name: 'Unpaid Overtime', icon: '⏰', desc: function () {
+      return 'On its turn it keeps 3 tiles from the heroes and stares at one in range: the ' + lvl('a3_eye_stare').len + '-tile ray pierces everyone on it, its ' +
+        'coworkers too. When it can line up two heroes (or their summons) in a straight line from it, it fires the ' + lvl('a3_eye_overtime').len +
+        '-tile overtime beam instead, then passes out for its next turn.';
+    } },
     barks: {
       spawn: ['Hi! I\'m new! Where\'s the coffee?', 'Is this the beam meeting?'],
       attack: ['Sorry! I\'ll aim better next time!', 'Is this a ray? Am I doing rays?', 'My manager said to stare harder.'],
@@ -746,8 +817,8 @@
       death: ['Finally... a day off...', 'Tell my manager... I quit...'],
       overtime: ['*passes out on the keyboard*', 'Five... more... minutes...'],
     },
-    desc: 'Its beams pierce everyone in the line, its coworkers too: never line up in front of it. When two heroes share a straight line it pulls ' +
-      'an overtime beam and then passes out for a turn. Over-caffeinated (initiative +2). Unpaid. Mostly vitreous humour.',
+    desc: 'Keeps its distance; its beams pierce everyone in the line, its coworkers too: never line up in front of it. When it can line up two heroes ' +
+      'in a straight line it pulls an overtime beam and then passes out for a turn. Over-caffeinated (initiative +2). Unpaid. Mostly vitreous humour.',
   });
 
   // =============================================================================================================
@@ -799,26 +870,34 @@
       palette: { skin: '#c23a2e', cloth: '#16141c', cloth2: '#efe9d8', hair: '#f2efe6', eye: '#ffe14a', accent: '#c0102a', metal: '#d4af37', book: '#6b2a1a' },
       head: { horns: 'demon', hair: 'long', face: 'monocle', mouth: 'grin' }, tail: 'devil', mainhand: 'book', offhand: 'scroll',
       extras: ['collar'], overlay: lawyerOverlay },
+    // a brute: he sticks to the hero next to him; the Motion is his attack of opportunity (OBJECTION! deals no damage)
     skills: ['a3_lawyer_objection', 'a3_lawyer_motion'], ai: MELEE, xp: 5, gold: [4, 7],
+    passive: { name: 'Rules As Written', icon: '⚖️', desc: function () {
+      const Lm = lvl('a3_lawyer_motion');
+      return 'On his turn he walks up and files a Motion to Dismiss on the hero next to him (' + Lm.dmg + ' damage, pushed ' + Lm.push + ' tiles: into pits and lava ' +
+        'given the chance; he sticks to that one), or OBJECTS to a hero up to ' + lvl('a3_lawyer_objection').r + ' tiles away: every buff gone and no spells ' +
+        'next turn. Walk away from him and he files the Motion (attack of opportunity).';
+    } },
     barks: {
       spawn: ['Per page 312, this encounter is perfectly legal.', 'I\'d like to see the DM\'s notes.'],
       attack: ['OBJECTION!', 'Actually, RAW says...', 'Sustained. By me.', 'Counterpoint: no.'],
       hurt: ['That\'s not how flanking works!', 'I\'ll see you in court!'],
       death: ['I demand... a retcon...', 'The errata... was on my side...'],
     },
-    desc: 'On its turn it shoves an adjacent hero 2 tiles (into pits and lava, given the chance), or objects from up to 6 tiles away: every buff ' +
-      'gone and no spells next turn. Silence him first: the Objection is a spell. Bills in six-minute increments of your suffering.',
+    desc: 'Shoves the hero next to him 2 tiles (into pits and lava, given the chance), also when they try to walk away, or objects from up to 6 ' +
+      'tiles away: every buff gone and no spells next turn. Silence him first: the Objection is a spell. Bills in six-minute increments of your suffering.',
   });
 
   // =============================================================================================================
   // Natural 1 Golem — d20 attacks (a natural 1 hits itself), 2d6 dice lob
   // =============================================================================================================
+  // v2 simplicity: one roll, three outcomes (the old 2-9 / 10-19 split averaged out to the same 9 a swing)
   eskill({
     id: 'a3_golem_roll', name: 'Roll to Hit', icon: '🎲', kind: 'attack', tags: ['melee', 'aoe', 'random'], anchor: 'self',
-    levels: [{ dmg: 11, low: 6, crit: 22, oops: 10 }], target: { type: 'dir' }, area: { shape: 'row', size: 1 },
+    levels: [{ dmg: 9, crit: 18, oops: 10 }], target: { type: 'dir' }, area: { shape: 'row', size: 1 },
     desc: function (L) {
-      return 'Roll a d20, then smash the 3 tiles in front (foes only): 1 = it hits itself for ' + L.oops + ' instead and is Stunned for its next turn; 2-9 = ' +
-        L.low + ' damage; 10-19 = ' + L.dmg + ' damage; 20 = ' + L.crit + ' damage.';
+      return 'Roll a d20 and smash the 3 tiles in front: ' + L.dmg + ' damage to each foe there; a 20 deals ' + L.crit + '; a 1 hits itself for ' + L.oops +
+        ' instead and Stuns it for its next turn.';
     },
     flavor: 'Statistically it should hit half the time. Statistically.',
     execute: function (ctx) {
@@ -834,7 +913,7 @@
       }
       if (roll === 20) { A().bark(u, 'crit'); DD.FX.shake(9, 350); } else attackBark(u, 0.2);
       lunge(ctx);
-      hitFoes(ctx, roll === 20 ? L.crit : roll >= 10 ? L.dmg : L.low);
+      hitFoes(ctx, roll === 20 ? L.crit : L.dmg);
     },
   });
 
@@ -916,7 +995,13 @@
     sprite: { base: 'custom', scale: 1.08, height: 50, width: 36, headY: -40,
       palette: { skin: '#c0392b', eye: '#ffe14a', accent: '#ffffff', outline: '#1a1014' }, draw: drawNat1Golem,
       portrait: { x: 0, y: -30, r: 22 } },
+    // a brute: it sticks to the hero next to it; Roll to Hit is its attack of opportunity (a natural 1 still backfires)
     skills: ['a3_golem_roll', 'a3_golem_toss'], ai: golemPlan, aiStyle: MELEE, xp: 5, gold: [3, 7],
+    passive: { name: 'Rolls for Everything', icon: '🎲', desc: function () {
+      const Lr = lvl('a3_golem_roll');
+      return 'On its turn it lumbers up and rolls a d20 at the 3 tiles in front (' + Lr.dmg + ' to each foe; a 20 deals ' + Lr.crit + ', a 1 hits itself and Stuns it), ' +
+        'sticking to the hero next to it; with nobody in reach it lobs dice instead. Walk away from it and it rolls at you (attack of opportunity).';
+    } },
     barks: {
       spawn: ['*rattle of cursed dice*', 'Statistically, I am a menace.'],
       attack: ['ROLLING!', 'Come on, big money!', 'Daddy needs a new d20!'],
@@ -925,8 +1010,8 @@
       fumble: ['NOT AGAIN.', 'Who weighted me?!', 'Natural one. Classic.'],
       crit: ['NAT 20! NAT 20!', 'CRITICAL HIT, BABY!'],
     },
-    desc: 'Every swing is a d20 roll: 20 = double damage, a natural 1 hits itself and stuns it. Out of reach it lobs dice that double on doubles. ' +
-      'Lumbering (initiative −2). Built from every die that ever betrayed a player.',
+    desc: 'Every swing is a d20 roll: 20 = double damage, a natural 1 hits itself and stuns it. It sticks to whoever is next to it (walking away ' +
+      'gets a roll too); out of reach it lobs dice that double on doubles. Lumbering (initiative −2). Built from every die that ever betrayed a player.',
   });
 
   // =============================================================================================================
@@ -941,12 +1026,27 @@
       DD.FX.particles(ctx.user, { kind: 'sparks', count: 8 });
       ctx.friends.forEach(function (f) { if (active(f)) A().addBlock(f, ctx.L.block); });
     },
+    // only allies whose Block will meet a hero turn count (Block is gone at the start of the ally's own next turn: an ally
+    // acting next, before any hero, would lose it unused)
     aiScore: function (ctx) {
       let s = 0;
-      ctx.friends.forEach(function (f) { if (f !== ctx.user) s += f.tier === 'elite' || f.isBoss ? 9 : 4; });
+      ctx.friends.forEach(function (f) { if (f !== ctx.user && blockHolds(f)) s += f.tier === 'elite' || f.isBoss ? 9 : 4; });
       return s;
     },
   });
+
+  /** Block given now to `u` meets at least one hero-side turn before u's own next turn start wipes it. */
+  function blockHolds(u) {
+    const s = S(), order = s && s.order;
+    if (!order || !order.length || s.turnIndex < 0) return true;
+    for (let k = 1; k <= order.length; k++) {
+      const o = DD.Combat.byId(order[(s.turnIndex + k) % order.length].unitId);
+      if (!o || o.dead) continue;
+      if (o === u) return false;
+      if (!o.downed && G().hostile(u, o)) return true;
+    }
+    return true;
+  }
 
   eskill({
     id: 'a3_kobold_spear', name: 'Pointy Stick', icon: '🔱', kind: 'attack', tags: ['melee'], anchor: 'self',
@@ -974,14 +1074,20 @@
     sprite: { base: 'humanoid', scale: 0.78, build: 'tiny', outfit: 'armor',
       palette: { skin: '#d9622b', cloth: '#7a2a1a', cloth2: '#ffd23f', metal: '#c9a227', eye: '#ffe14a', accent: '#c0392b' },
       head: { ears: 'pointy', hat: 'helmet', eyes: 'angry', mouth: 'open' }, tail: 'lizard', mainhand: 'spear', overlay: koboldOverlay },
+    // Pointy Stick (the first melee skill: Shield Wall deals no damage) is its attack of opportunity
     skills: ['a3_kobold_wall', 'a3_kobold_spear'], ai: MELEE, xp: 3, gold: [1, 3],
+    passive: { name: 'Shield Wall', icon: '🛡️', desc: function () {
+      return 'On its turn it huddles next to its biggest ally and raises Shield Wall (' + lvl('a3_kobold_wall').block + ' Block for itself and every adjacent ally ' +
+        'until their next turns); otherwise it jabs the first unit within 2 in front, sticking to the hero next to it. Walk away from it and it jabs ' +
+        '(attack of opportunity).';
+    } },
     barks: {
       spawn: ['For the Big Red!', 'Shields up, scales out!'],
       attack: ['Poke poke poke!', 'Kobold tactics!', 'Stay back from the Boss!'],
       hurt: ['Yip! Shield too heavy!', 'Union break! Union break!'],
       death: ['Tell the dragon... I tried...', 'Was... a good shield...'],
     },
-    desc: 'On its turn it huddles next to its biggest ally and raises Shield Wall: 6 Block for itself and every adjacent ally until their next turns. ' +
+    desc: 'Huddles next to its biggest ally and raises Shield Wall: 6 Block for itself and every adjacent ally until their next turns. ' +
       'Kill it first or hit around it. Sworn to protect the dragon. Mostly from accountability.',
   });
 
@@ -1047,15 +1153,21 @@
       palette: { skin: '#e8768f', cloth: '#5a2d82', cloth2: '#ffd1e3', hair: '#2b1030', eye: '#ffe14a', accent: '#ff5fa2', wing: '#5a2140', metal: '#ffd23f', wand: '#ff5fa2' },
       head: { horns: 'tiefling', hair: 'long', eyes: 'big', mouth: 'smile', face: 'glasses' }, wings: 'demon', tail: 'devil', mainhand: 'wand',
       bling: ['earrings'], aura: { kind: 'sparkles', color: '#ff8ad8' }, overlay: succubusOverlay },
-    skills: ['a3_succubus_line', 'a3_succubus_pep'], ai: { style: 'ranged', keepDistance: 2 }, xp: 5, gold: [3, 6],
+    skills: ['a3_succubus_line', 'a3_succubus_pep'], ai: KITER, xp: 5, gold: [3, 6],
+    passive: { name: 'Dating Coach', icon: '💘', desc: function () {
+      const Lp = lvl('a3_succubus_pep');
+      return 'On her turn she keeps 2 tiles from the heroes and charms whoever she can see within ' + lvl('a3_succubus_line').r + ' with a terrible pickup line ' +
+        '(it can\'t hurt her and has 1 less AP next turn), or pep-talks every other ally within ' + Lp.r + ' into Inspired (+25% damage, ' + Lp.turns + ' turns). ' +
+        'She makes no attacks of opportunity.';
+    } },
     barks: {
       spawn: ['Hi! I\'m your dating coach. First: posture.', 'Rule one: confidence. Rule two: horns.'],
       attack: ['Are you a natural 20? You\'re critical to me.', 'Is your name Wi-Fi? I feel a connection.', 'You must be a dungeon map. I\'m lost in you.'],
       hurt: ['Ugh, red flag!', 'You are NOT ready for a relationship.'],
       death: ['I\'m... taking a break... from dating...', 'Swipe... left...'],
     },
-    desc: 'On her turn she charms a hero with a terrible pickup line (it can\'t hurt her and has 1 less AP next turn), or pep-talks her allies ' +
-      'within 3 into Inspired (+25% damage). Five stars on Yelp (Hell). Zero successful matches.',
+    desc: 'Keeps her distance and charms a hero with a terrible pickup line (it can\'t hurt her and has 1 less AP next turn), or pep-talks her ' +
+      'allies within 3 into Inspired (+25% damage). Five stars on Yelp (Hell). Zero successful matches.',
   });
 
   // =============================================================================================================
@@ -1081,14 +1193,19 @@
     sprite: { base: 'humanoid', scale: 0.82, build: 'slim', outfit: 'tunic',
       palette: { skin: '#ece5d3', cloth: '#1c1a22', cloth2: '#d4af37', eye: '#b48cff', metal: '#d4af37', accent: '#b48cff', hat: '#1c1a22' },
       head: { face: 'skull', eyes: 'glow', hat: 'tophat' }, mainhand: 'cane', extras: ['sash'], aura: { kind: 'notes', color: '#b48cff' } },
+    // the shimmy-kick reaches 2 tiles, so it is no attack of opportunity: dancers never strike anyone walking away
     skills: ['a3_dancer_kick'], ai: MELEE, xp: 2, gold: [0, 2],
+    passive: { name: 'Jazz Hands', icon: '💃', desc: function () {
+      return 'On its turn it dances up to 4 tiles and shimmies up to ' + lvl('a3_dancer_kick').r + ' more to kick a hero (it sticks to the one next to it). ' +
+        'Too busy dancing to strike anyone walking away.';
+    } },
     barks: {
       spawn: ['Five, six, seven, eight!', '*jazz hands*'],
       attack: ['Kick ball change!', 'Jazz hands of DOOM!'],
       hurt: ['My tibia!', 'Break a leg? Not like THAT!'],
       death: ['*collapses on the beat*', 'And... scene.'],
     },
-    desc: 'On its turn it moves up to 4 tiles and shimmies 2 more to kick a hero. Undead: holy damage hurts it more. Arrives when the Death Knight ' +
+    desc: 'Moves up to 4 tiles and shimmies 2 more to kick a hero. Undead: holy damage hurts it more. Arrives when the Death Knight ' +
       'calls an intermission. Always on the beat (initiative +2). Has rhythm. No skin.',
   });
 
@@ -1219,8 +1336,9 @@
     let best = { x: unit.x, y: unit.y, path: null, sc: value(unit) };
     api.reachable(unit).forEach(function (e) {
       const risk = DD.AI.pathRisk(unit, e);
-      if (risk.lethal) return;
-      const sc = value(e) - risk.penalty - e.cost * 0.01;
+      const aoo = api.aooCost(unit, e);
+      if (risk.lethal || aoo === Infinity) return;
+      const sc = value(e) - risk.penalty - aoo - e.cost * 0.01;
       if (sc > best.sc + 0.5) best = { x: e.x, y: e.y, path: e.path, sc: sc };
     });
     return best.path ? DD.AI.moveTo(unit, best.x, best.y, best.path) : false;
@@ -1239,8 +1357,11 @@
     if (!windupOf(unit, 'a3_dragon_breath') && api.canUse(unit, 'a3_dragon_breath')) {
       const b = within ? bestWithin(unit, api, ['a3_dragon_breath'], MELEE, within, bonus) : api.bestAttack(unit, { skills: ['a3_dragon_breath'], style: MELEE });
       if (b && b.actionScore >= BREATH_MIN) {
-        const r = plan(unit, api, { skills: ['a3_dragon_breath'], style: MELEE, windUp: { label: 'Hoard Breath', anchor: 'ground' }, within: within, bonus: bonus });
-        if (r.done || r.moved) { tailSweep(unit, api); return; }
+        const r = plan(unit, api, { skills: ['a3_dragon_breath'], style: MELEE, windUp: { label: 'Hoard Breath', anchor: 'ground' }, within: within, bonus: bonus,
+          minScore: BREATH_MIN });
+        if (r.done) { tailSweep(unit, api); return; }
+        // the walk to its mark was cut short (an attack of opportunity): no breath, it strikes from where it is
+        if (r.moved) { if (!incapacitated(unit)) plan(unit, api, { skills: melee, style: MELEE, noMove: true }); return; }
       }
     }
     if (within) {
@@ -1268,8 +1389,9 @@
       desc: function (u) {
         const n = u && S() ? hoardNear(u) : null;
         return 'At the end of each of its turns: +' + HOARD_BLOCK + ' Block per hoard pile within ' + HOARD_RANGE + ' tiles of it (max ' + HOARD_MAX + ')' +
-          (n === null ? '' : '; ' + n + ' in range now') + '. It guards the piles; whoever pockets one is a Thief: +' + THIEF_BONUS + ' damage from it, and it hunts them. ' +
-          UNSHAKEABLE_LINE;
+          (n === null ? '' : '; ' + n + ' in range now') + '. While piles remain it guards them: it stays within ' + HOARD_RANGE + ' tiles of one, swoops out to bite ' +
+          '(it sticks to the hero next to it) and settles back on the gold. Whoever pockets a pile is a Thief: +' + THIEF_BONUS + ' damage from it, and it ' +
+          'leaves its hoard to hunt them. Flying, it makes no attacks of opportunity. ' + UNSHAKEABLE_LINE;
       },
     },
     hooks: withTenacity({
@@ -1289,7 +1411,7 @@
     },
     desc: 'Hoarder: guards its hoard and basks in it for Block (+' + HOARD_BLOCK + ' per pile within ' + HOARD_RANGE + ', max ' + HOARD_MAX + '). Walk over a pile to pocket it: ' +
       'you become a Thief (+' + THIEF_BONUS + ' damage from it) and it leaves its hoard to hunt you. Its breath winds up for a turn first: get out of the cone. ' +
-      'Shrugs off back-to-back stuns. Flies. Immune to fire.',
+      'Otherwise it sticks to whoever is next to it. Shrugs off back-to-back stuns. Flies. Immune to fire.',
   });
 
   // =============================================================================================================
@@ -1311,10 +1433,12 @@
     A().gainHype(MONO_HYPE, 'monologue interrupted');
   }
 
+  // v2: a plain melee arc (it was "a target up to 2 tiles away and its sides"): he holds the line, and it is his attack
+  // of opportunity
   eskill({
-    id: 'a3_dk_cleave', name: 'Overly Dramatic Swing', icon: '⚔️', kind: 'attack', tags: ['melee', 'aoe'], anchor: 'unit',
-    levels: [{ dmg: 14 }], target: { type: 'unit', range: [1, 2], filter: 'enemy', los: true }, area: { shape: 'row', size: 1 },
-    desc: function (L) { return 'A sweeping greatsword arc at a target up to 2 tiles away: ' + L.dmg + ' damage to it and the tiles on either side of it (foes only).'; },
+    id: 'a3_dk_cleave', name: 'Overly Dramatic Swing', icon: '⚔️', kind: 'attack', tags: ['melee', 'aoe'], anchor: 'self',
+    levels: [{ dmg: 14 }], target: { type: 'dir' }, area: { shape: 'row', size: 1 },
+    desc: function (L) { return 'A sweeping greatsword arc at the 3 tiles in front of him: ' + L.dmg + ' damage to each foe there.'; },
     flavor: 'He practised this in front of a mirror. For a century.',
     execute: function (ctx) { lunge(ctx); attackBark(ctx.user, 0.3); hitFoes(ctx, ctx.L.dmg); },
   });
@@ -1335,6 +1459,11 @@
         A().damage(ctx.user, f, ctx.L.dmg, { element: 'frost' });
         if (active(f)) A().pull(ctx.user, f, ctx.user, ctx.L.pull);
       });
+    },
+    // the yank sets up the swing: a hero the pull can bring next to him is worth more
+    aiScore: function (ctx) {
+      const f = ctx.targetUnit;
+      return f && !A().isImmovable(f) && G().dist(ctx.user, f) <= ctx.L.pull + 1 ? 4 : 0;
     },
   });
 
@@ -1357,19 +1486,31 @@
     },
   });
 
-  /** Reachable tile (or here) with the most foes within 2: worth stopping to monologue at. */
+  /**
+   * Reachable tile (or here) with the most foes within 2: worth stopping to monologue at. The walk's attacks of
+   * opportunity are a cost (never a lethal one).
+   */
   function monologueSpot(unit, api) {
     const foes = api.foes(unit);
-    const opts = [{ x: unit.x, y: unit.y, cost: 0 }];
-    api.reachable(unit).forEach(function (e) { if (!e.hazard && !DD.AI.pathRisk(unit, e).lethal) opts.push(e); });
+    const opts = [{ x: unit.x, y: unit.y, cost: 0, aoo: 0 }];
+    api.reachable(unit).forEach(function (e) {
+      if (e.hazard || DD.AI.pathRisk(unit, e).lethal) return;
+      const aoo = api.aooCost(unit, e);
+      if (aoo !== Infinity) { e.aoo = aoo; opts.push(e); }
+    });
     let best = null;
     opts.forEach(function (p) {
-      let n = 0;
-      foes.forEach(function (f) { if (Math.abs(f.x - p.x) + Math.abs(f.y - p.y) <= 2) n++; });
-      const sc = n * 10 - (p.cost || 0) * 0.1;
-      if (n >= 2 && (!best || sc > best.sc)) best = { x: p.x, y: p.y, sc: sc };
+      const n = audience(p, foes);
+      const sc = n * 10 - (p.cost || 0) * 0.1 - (p.aoo || 0);
+      if (n >= 2 && (!best || sc > best.sc)) best = { x: p.x, y: p.y, path: p.path || null, sc: sc };
     });
     return best;
+  }
+  /** Foes within the monologue's 2 tiles of p. */
+  function audience(p, foes) {
+    let n = 0;
+    foes.forEach(function (f) { if (Math.abs(f.x - p.x) + Math.abs(f.y - p.y) <= 2) n++; });
+    return n;
   }
 
   function intermission(unit) {
@@ -1382,30 +1523,39 @@
 
   /**
    * His turn: with 2+ heroes within 2 of a reachable tile he stops there and winds up the monologue (+ one swing);
-   * otherwise he swings at whoever is in reach, or chains a straggler in and swings at them if they land within 2.
+   * otherwise he swings at whoever he can reach (sticking to the hero next to him), or chains a straggler in and swings
+   * at them if they land next to him.
    */
   function dkPlan(unit, api) {
     if (has(unit, 'a3_monologue') && !windupOf(unit, 'a3_dk_monologue')) A().removeStatus(unit, 'a3_monologue', { silent: true });
+    let walked = false;
     if (!windupOf(unit, 'a3_dk_monologue') && api.canUse(unit, 'a3_dk_monologue')) {
       const spot = monologueSpot(unit, api);
       if (spot) {
-        if (spot.x !== unit.x || spot.y !== unit.y) api.moveTo(unit, spot.x, spot.y);
+        // a walk that a reaction stopped on its first tile still spent his move
+        walked = spot.x !== unit.x || spot.y !== unit.y;
+        if (walked) DD.AI.moveTo(unit, spot.x, spot.y, spot.path);
         if (incapacitated(unit)) return;
-        if (api.windUp(unit, 'a3_dk_monologue', unit, { anchor: 'self', label: 'Villain Monologue' })) {
-          A().addStatus(unit, 'a3_monologue', {}, unit);
-          A().bark(unit, 'monologue');
+        // an attack of opportunity can stop the walk short (a stun, a push, a hold): he only starts the speech where
+        // the audience still is, otherwise he takes a plain turn from where he ended up
+        if (audience(unit, api.foes(unit)) >= 2) {
+          if (api.windUp(unit, 'a3_dk_monologue', unit, { anchor: 'self', label: 'Villain Monologue' })) {
+            A().addStatus(unit, 'a3_monologue', {}, unit);
+            A().bark(unit, 'monologue');
+          }
+          plan(unit, api, { skills: ['a3_dk_cleave'], style: MELEE, noMove: true });
+          return;
         }
-        plan(unit, api, { skills: ['a3_dk_cleave'], style: MELEE, noMove: true });
-        return;
       }
     }
     const chainReady = api.canUse(unit, 'a3_dk_grip');
-    const r = plan(unit, api, { skills: ['a3_dk_cleave'], style: MELEE, keep: chainReady ? false : 1 });
+    const r = plan(unit, api, { skills: ['a3_dk_cleave'], style: MELEE, noMove: walked, keep: chainReady ? false : 1 });
     if (r.done || incapacitated(unit) || !chainReady) return;
-    // yank and swing: the chain first, then the swing at the same hero once the pull brought them within 2
-    const g = plan(unit, api, { skills: ['a3_dk_grip'], style: MELEE, noMove: r.moved, keep: false });
-    if (g.done && active(g.target) && !incapacitated(unit) && G().dist(unit, g.target) <= 2) api.act(unit, 'a3_dk_cleave', g.target);
-    else if (!g.done && !r.moved && !g.moved) plan(unit, api, { skills: ['a3_dk_cleave'], style: MELEE, keep: 1 });
+    const moved = walked || r.moved;
+    // yank and swing: the chain first, then the swing at the same hero once the pull brought them next to him
+    const g = plan(unit, api, { skills: ['a3_dk_grip'], style: MELEE, noMove: moved, keep: false });
+    if (g.done && active(g.target) && !incapacitated(unit) && G().dist(unit, g.target) === 1) api.act(unit, 'a3_dk_cleave', g.target);
+    else if (!g.done && !moved && !g.moved) plan(unit, api, { skills: ['a3_dk_cleave'], style: MELEE, keep: 1 });
   }
 
   function dkUnderlay(g, t) {
@@ -1443,8 +1593,10 @@
     skills: ['a3_dk_cleave', 'a3_dk_grip', 'a3_dk_monologue'], ai: dkPlan, aiStyle: MELEE, xp: 15, gold: [12, 18],
     passive: {
       name: 'Very Dramatic', icon: '🎭',
-      desc: 'Nobody in reach of his swing: he chains a hero 2-6 tiles away and swings at them if they land within 2. The first time his turn starts at ' +
-        'half HP or less he calls an INTERMISSION: two Skeletal Backup Dancers join the fight. ' + UNSHAKEABLE_LINE,
+      desc: 'On his turn he swings at the 3 tiles in front of him, sticking to the hero next to him; walk away from him and he swings (attack of ' +
+        'opportunity). Nobody in reach: he chains a hero 2-6 tiles away and swings if they land next to him. With 2+ heroes within 2 tiles of a spot ' +
+        'he can reach, he stops there and winds up his monologue. The first time his turn starts at half HP or less he calls an INTERMISSION: two ' +
+        'Skeletal Backup Dancers join the fight. ' + UNSHAKEABLE_LINE,
     },
     hooks: withTenacity({
       // a stun-like interrupts the speech at once (the engine), so does a silence (his monologue is a spell)
@@ -1467,15 +1619,17 @@
       intermission: ['INTERMISSION! Dancers!', 'Cue the music!'],
     },
     desc: 'Very Dramatic: his monologue winds up for a turn and then blasts everyone within 2, unless you deal him ' + MONO_BREAK + '+ damage first ' +
-      '(he is left Vulnerable, +' + MONO_HYPE + ' Hype) or stun or silence him. His chain reels in heroes 2-6 tiles away, straight into his swing. ' +
-      'At half HP: an intermission, with backup dancers. Fashionably late (initiative −1). Shrugs off back-to-back stuns. Weak to holy.',
+      '(he is left Vulnerable, +' + MONO_HYPE + ' Hype) or stun or silence him. His chain reels in heroes 2-6 tiles away, straight into his swing, and ' +
+      'nobody walks away from him unpunished. At half HP: an intermission, with backup dancers. Fashionably late (initiative −1). Shrugs off ' +
+      'back-to-back stuns. Weak to holy.',
   });
 
   // =============================================================================================================
   // ELITE: Pit Fiend Accountant — Infernal Debt (compounding, paid off by hitting him), wind-up: Hostile Audit
   // =============================================================================================================
   eskill({
-    id: 'a3_fiend_invoice', name: 'Itemized Invoice', icon: '🧾', kind: 'spell', tags: ['fire', 'aoe', 'ranged'], anchor: 'unit', cooldown: 1,
+    // v2: cooldown 2 (was 1): acting at once, a sight-free cross every other turn buried the party under Debt
+    id: 'a3_fiend_invoice', name: 'Itemized Invoice', icon: '🧾', kind: 'spell', tags: ['fire', 'aoe', 'ranged'], anchor: 'unit', cooldown: 2,
     levels: [{ dmg: 13, debt: 2, r: 8 }], target: { type: 'unit', range: function (L) { return [1, L.r]; }, filter: 'enemy', los: false }, area: { shape: 'cross', size: 1 },
     desc: function (L) { return 'Rain flaming paperwork on a target up to ' + L.r + ' tiles away (no line of sight needed) and the 4 tiles around it: ' + L.dmg + ' fire damage and ' + L.debt + ' Infernal Debt to every foe there.'; },
     flavor: 'Line 47: "Breathing (premium tier)."',
@@ -1570,7 +1724,9 @@
     passive: {
       name: 'Infernal Debt', icon: '🧾',
       desc: 'His hits add Infernal Debt: at the start of each of its turns an indebted hero loses its Debt in HP, then the Debt grows by 1 (max ' + DEBT_MAX +
-        '). Every skill hit on him pays off ' + DEBT_PAYOFF + '. Forgiven when he dies. ' + UNSHAKEABLE_LINE,
+        '). Every skill hit on him pays off ' + DEBT_PAYOFF + '. Forgiven when he dies. On his turn he marks an audit line when it is ready, then smacks the hero ' +
+        'next to him (he sticks to that one) or invoices a hero up to 8 tiles away. Walk away from him and he smacks you (attack of opportunity). ' +
+        UNSHAKEABLE_LINE,
     },
     hooks: withTenacity({
       onDeath: function (unit) {
@@ -1589,12 +1745,14 @@
       audit: ['Prepare to be AUDITED.', 'Every line. Every column.'],
     },
     desc: 'Infernal Debt: indebted heroes lose HP at the start of every turn and the debt grows; every hit on him pays off ' + DEBT_PAYOFF +
-      '. His audit marks a whole line and lands at the start of his next turn: step off it. Shrugs off back-to-back stuns. Immovable. Immune to fire.',
+      '. His audit marks a whole line and lands at the start of his next turn: step off it. Up close he smacks, also anyone walking away. ' +
+      'Shrugs off back-to-back stuns. Immovable. Immune to fire.',
   });
 
   // =============================================================================================================
   // Encounters
   // =============================================================================================================
+  const NOT_A_HIT = { status: 1, surface: 1, terrain: 1 };
   function enc(def) {
     if (def.weight === undefined) def.weight = 1;
     def.reward = def.reward || { goldMult: 1, itemRarity: def.kind === 'elite' ? 'rare' : null };
@@ -1611,9 +1769,10 @@
 
   enc({
     id: 'a3_influencer_collab', act: 3, kind: 'normal', name: 'Influencer Collab Stream', weight: 1, minDepth: 1,
-    intro: 'Three imps, their dating coach and an eyeball intern (camera duty) are filming a collab. You are the content now.',
+    intro: 'Two imps, their dating coach and an eyeball intern (camera duty) are filming a collab with a hell hound. You are the content now.',
     map: { theme: 'hellscape', w: 10, h: 9, features: ['fire', 'hills', 'chokepoint'], density: 1 },
-    enemies: [{ id: 'a3_imp_influencer', n: 3 }, { id: 'a3_succubus_coach', n: 1 }, { id: 'a3_hell_hound', n: 1 }, { id: 'a3_eyeball_intern', n: 1 }],
+    // v2: two imps (was three): three of them diving the weakest hero made it the act's deadliest normal fight (5 downs)
+    enemies: [{ id: 'a3_imp_influencer', n: 2 }, { id: 'a3_succubus_coach', n: 1 }, { id: 'a3_hell_hound', n: 1 }, { id: 'a3_eyeball_intern', n: 1 }],
     objective: { type: 'killAll' },
   });
 
@@ -1628,7 +1787,7 @@
 
   enc({
     id: 'a3_trial_by_combat', act: 3, kind: 'normal', name: 'Trial by Combat (Rules As Written)', weight: 1, minDepth: 2,
-    intro: 'The court of the DM\'s table is now in session. The judge is a d20. The court reporter is an imp with a phone. Nobody reads the minutes.',
+    intro: 'The court of the DM\'s table is now in session. The judge is a d20. The court reporter is an eyeball intern. Nobody reads the minutes.',
     map: {
       theme: 'dm_table',
       layout: [
@@ -1665,7 +1824,9 @@
         X: { obj: { id: 'barrel_explosive', label: 'Exhibit B (Volatile)' } },
       },
     },
-    enemies: [{ id: 'a3_rules_lawyer', n: 2 }, { id: 'a3_eyeball_intern', n: 1 }, { id: 'a3_nat1_golem', n: 1 }, { id: 'a3_imp_influencer', n: 1 }],
+    // v2: no imp (it went first, Marked the weakest hero and the bench's high ground did the rest: a round-1 down in 1
+    // fight of 6 at level 4)
+    enemies: [{ id: 'a3_rules_lawyer', n: 2 }, { id: 'a3_eyeball_intern', n: 1 }, { id: 'a3_nat1_golem', n: 1 }],
     objective: { type: 'killAll' },
     reinforcements: [{ round: 3, enemies: [{ id: 'a3_hell_hound', n: 1 }], edge: 'N', text: 'The bailiff releases his dog. It is on fire. Objection overruled.' }],
   });
@@ -1687,11 +1848,13 @@
     reinforcements: [{ round: 4, enemies: [{ id: 'a3_succubus_coach', n: 1 }, { id: 'a3_imp_influencer', n: 1 }], edge: 'N', text: 'The pep squad arrives: a succubus dating coach and an imp with a megaphone.' }],
     rules: [{
       id: 'a3_spirit_fingers', name: 'Spirit Fingers', icon: '📣', turns: -1,
-      desc: 'While a totem stands, enemies take 2 less damage from every hit.',
+      desc: 'While a totem stands, enemies take 1 less damage from every hit (Burn, Poison, Bleed and hazard ticks are unaffected).',
       hooks: {
+        // v2: 1 (was 2): with enemies acting at once, a party of small hitters spent the whole fight chipping. A hit is
+        // an attack, a blast or a bump: status ticks and hazards (cause 'status' / 'surface' / 'terrain') are not hits
         modifyIncomingDamage: function (d) {
-          if (!d.target || d.target.side !== 'enemy' || !countObjects('totem')) return;
-          d.flat -= 2;
+          if (!d.target || d.target.side !== 'enemy' || !countObjects('totem') || NOT_A_HIT[d.cause]) return;
+          d.flat -= 1;
         },
       },
     }],
@@ -1725,7 +1888,7 @@
     map: { theme: 'hoard', w: 12, h: 12, features: ['pillars', 'open'], density: 1 },
     enemies: [{ id: 'a3_eyeball_intern', n: 3 }, { id: 'a3_rules_lawyer', n: 1 }, { id: 'a3_kobold_shield', n: 1 }],
     objective: { type: 'killAll' },
-    reinforcements: [{ round: 3, enemies: [{ id: 'a3_imp_influencer', n: 2 }], edge: 'E', text: 'Two imps from Marketing crash the orientation.' }],
+    reinforcements: [{ round: 3, enemies: [{ id: 'a3_imp_influencer', n: 1 }], edge: 'E', text: 'An imp from Marketing crashes the orientation. It brought a ring light.' }],
   });
 
   // ---- elites ------------------------------------------------------------------------------------------------
@@ -1819,9 +1982,10 @@
         X: { obj: { id: 'barrel_explosive', label: 'Industrial Shredder' } },
       },
     },
-    enemies: [{ id: 'a3_pit_fiend', n: 1 }, { id: 'a3_imp_influencer', n: 2 }, { id: 'a3_rules_lawyer', n: 1 }],
+    // v2: the fiend and his two imps (the Rules Lawyer and a second late imp made it a 6-enemy pile-up under initiative)
+    enemies: [{ id: 'a3_pit_fiend', n: 1 }, { id: 'a3_imp_influencer', n: 2 }],
     objective: { type: 'killAll' },
-    reinforcements: [{ round: 4, enemies: [{ id: 'a3_imp_influencer', n: 2 }], edge: 'N', text: 'Two more imps are back from their lunch break. They brought receipts (and ring lights).' }],
+    reinforcements: [{ round: 4, enemies: [{ id: 'a3_imp_influencer', n: 1 }], edge: 'N', text: 'An imp is back from its lunch break. It brought receipts (and a ring light).' }],
     reward: { goldMult: 1.3, itemRarity: 'rare' },
   });
 })();

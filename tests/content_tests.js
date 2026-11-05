@@ -23,7 +23,8 @@
   const SHAPES = ['single', 'circle', 'square', 'ring', 'cross', 'line', 'cone', 'row', 'adjacent', 'all_foes', 'all_allies', 'custom'];
   const ANCHORS = ['self', 'ground', 'unit'];
   const TIERS = ['minion', 'normal', 'elite', 'boss'];
-  const STYLES = ['melee', 'ranged', 'support', 'coward', 'summoner', 'kamikaze'];
+  // v2 targeting: 'assassin' / 'skirmisher' dive the weakest hero (everyone else sticks to the hero it is engaged with)
+  const STYLES = ['melee', 'ranged', 'support', 'coward', 'summoner', 'kamikaze', 'assassin', 'skirmisher'];
   const HOOKS = ['onCombatStart', 'onCombatEnd', 'onRoundStart', 'onTurnStart', 'onTurnEnd', 'onMove', 'onEnterTile', 'onSkillUsed',
     'modifyCost', 'modifyRange', 'modifyOutgoingDamage', 'modifyIncomingDamage', 'onDealDamage', 'onTakeDamage', 'onKill', 'onDeath',
     'onDowned', 'onHealed', 'onStatusApplied', 'onAllyDeath', 'modifyStatus', 'modifyPush' /* core fix: hero-marwyn */,
@@ -31,10 +32,13 @@
     'modifyFinalDamage', 'preventDeath', 'onAnyDeath', 'onAllyDowned', 'modifyHeal', 'modifyMoveCost', 'modifyOutgoingPush',
     'onCostPaid', 'threatAt',
     // v2: initiative rolls (modifyGuard is gone with Guard: a content hook named so is reported as unknown)
-    'modifyInitiative'];
+    'modifyInitiative',
+    // v2: attacks of opportunity (modifyOpportunity must be pure: previews and the AI query it)
+    'modifyOpportunity', 'onOpportunityAttack'];
   const BARK_KEYS = ['select', 'start', 'move', 'kill', 'hurt', 'lowhp', 'downed', 'revive', 'ally_down', 'levelup', 'victory', 'idle', 'signature'];
   const ENEMY_BARK_KEYS = ['spawn', 'attack', 'hurt', 'death'];
-  const UNIT_FLAGS = ['flying', 'hop', 'large', 'immovable', 'stunImmune', 'invulnerable', 'untargetable', 'immune'];
+  // noProvoke: its moves never provoke attacks of opportunity · noOpportunity: it never makes them (v2)
+  const UNIT_FLAGS = ['flying', 'hop', 'large', 'immovable', 'stunImmune', 'invulnerable', 'untargetable', 'immune', 'noProvoke', 'noOpportunity'];
   const NARRATION_KEYS = ['combat_start', 'elite_start', 'boss_start', 'victory', 'defeat', 'kill', 'env_kill', 'overkill', 'multi_kill',
     'hero_downed', 'hero_revived', 'hero_death', 'level_up', 'signature', 'round_start', 'enemy_turn', 'shop_greet', 'shop_buy', 'shop_broke',
     'shop_leave', 'tavern_greet', 'rest', 'recruit', 'map_enter', 'act_intro_1', 'act_intro_2', 'act_intro_3', 'act_clear', 'treasure', 'tips',
@@ -278,6 +282,10 @@
       });
       const ai = e.ai;
       t.ok(ai === 'default' || typeof ai === 'function' || (ai && typeof ai === 'object' && STYLES.indexOf(ai.style) >= 0) || STYLES.indexOf(ai) >= 0, L + ': ai');
+      if (e.aiStyle !== undefined) {
+        const st = e.aiStyle && typeof e.aiStyle === 'object' ? e.aiStyle.style : e.aiStyle;
+        t.ok(STYLES.indexOf(st) >= 0, L + ': aiStyle "' + st + '" is a known style (' + STYLES.join('/') + ')');
+      }
       if (e.tier === 'boss') t.ok(e.boss && !badText(e.boss.title || 'x'), L + ': boss info');
       if (e.init !== undefined) t.ok(typeof e.init === 'number' && isFinite(e.init), L + ': init is a number (initiative modifier)');
       if (e.turnsPerRound !== undefined) t.ok([1, 2, 3, 4].indexOf(e.turnsPerRound) >= 0, L + ': turnsPerRound 1-4');
@@ -728,6 +736,156 @@
       for (let i = 0; i < 2 && !DD.Combat.state.result; i++) DD.Combat.endRound();
       t.ok(sanity(t, 'status ' + st.id), 'status ' + st.id + ' applied + ticked');
     });
+  });
+
+  // ---- v2 requests (user): barrels, heals on the downed, flyers ------------------------------------------------------
+  /**
+   * What the v2 targeting rules reach in the registered content (DD.Targeting.aimsAtObjects / revivesWith), with
+   * advisories for the content owners: objects that explode but are not flagged volatile, single-target heals that can
+   * be aimed at a downed ally but do not get it up (an early return on a non-active target), and the skills that can now
+   * set off a barrel (the list to review for target.objects: false). Flyers: every non-airborne content surface is a
+   * floor surface the engine keeps away from flyers; the list of airborne ones (clouds) is logged.
+   */
+  T.suite('content: v2 requests — barrels, heals that revive, clouds (advisories for content owners)', function (t) {
+    const Tg = DD.Targeting;
+    // 1. exploding objects are flagged volatile
+    const unflagged = all('objects').filter(function (o) {
+      return !isTest(o.id) && typeof o.onDestroyed === 'function' && /\bexplode\s*\(/.test(String(o.onDestroyed)) && !o.volatile;
+    }).map(function (o) { return o.id; });
+    t.ok(!!DD.getObject('barrel_explosive').volatile, 'barrel_explosive is volatile');
+    advise('objects that explode when destroyed but are not flagged volatile: single-target attacks can\'t be aimed at them', unflagged);
+    // 2. who can aim at barrels / at downed allies (a stand-in hero user: the rules only ask "player-controlled" and "basic")
+    function standIn(def) {
+      const h = DD.getHero(def.owner);
+      return { id: 'standin', kind: 'hero', side: 'hero', dead: false, flags: {}, statuses: [], basic: h ? { id: h.basic, level: 1 } : null };
+    }
+    const real = all('skills').filter(function (s) { return s.owner !== 'enemy' && !isTest(s.id); }).concat(all('consumables').filter(function (c) { return !isTest(c.id); }));
+    const aim = real.filter(function (d) { return Tg.aimsAtObjects(standIn(d), d); }).map(function (d) { return d.id; });
+    const heal = real.filter(function (d) { return Tg.revivesWith(standIn(d), d); });
+    t.log('can be aimed at a volatile object (' + aim.length + '): ' + aim.join(', '));
+    t.log('heals that can be aimed at a downed ally (' + heal.length + '): ' + heal.map(function (d) { return d.id; }).join(', '));
+    t.log('airborne surfaces (clouds: they touch flyers too): ' + all('surfaces').filter(function (sd) { return sd.airborne; }).map(function (sd) { return sd.id; }).join(', '));
+    // 3. each such heal, aimed at the arena's downed ally next to its user, really gets it up (preview = the dry run)
+    const dud = [];
+    heal.forEach(function (d) {
+      const cons = DD.getConsumable(d.id) === d;
+      let user, ref;
+      if (cons) {
+        const s = arena(anyHeroId(null), 5);
+        user = s.units.filter(function (u) { return u.kind === 'hero' && !u.downed; })[0];
+        s.consumables = [d.id];
+        ref = d;
+      } else {
+        const probe = userFor(d, 1);
+        if (!probe || probe.user.kind !== 'hero') return;
+        user = probe.user; ref = probe.slot;
+      }
+      const down = DD.Combat.state.units.filter(function (u) { return u.downed && !u.dead; })[0];
+      if (!down) return;
+      const at = Tg.validTargets(user, ref).filter(function (q) { return q.x === down.x && q.y === down.y; })[0];
+      if (!at) return;   // out of its range from the arena's spot: the engine suites cover the rule itself
+      t.ok(at.revive === true, d.id + ': the downed ally is marked revive: true');
+      const pv = Tg.preview(user, ref, at);
+      const e = pv.perUnit[down.id];
+      if (!e || !e.revived) dud.push(d.id);
+    });
+    advise('heals that can be aimed at a downed ally but do not get it up (they return early on a non-active target, or apply their statuses first): let DD.Act.heal see ctx.targetUnit', dud);
+  });
+
+  /**
+   * [v2 review] The real thing, for every real skill and consumable the v2 rules reach: aimed at an explosive barrel it
+   * sets it off (costs paid, preview = reality, nothing thrown by the content's onSkillUsed / onCostPaid hooks, which
+   * now see a use with ctx.targetObj and no targetUnit); aimed at a downed ally a heal does what its preview says (UP!
+   * or nothing) without errors. A swallowed "Error in …" fails the suite (the harness).
+   */
+  T.suite('content: v2 review — every barrel-aimable attack sets a barrel off; every revive heal does what it previews', function (t) {
+    const Tg = DD.Targeting;
+    const real = all('skills').filter(function (s) { return s.owner !== 'enemy' && !isTest(s.id); });
+    /** Put a barrel on a free floor tile the user can aim at (2+ tiles away when the range allows): its tile or null. */
+    function barrelFor(user, ref) {
+      const s = DD.Combat.state, G = DD.Grid;
+      const tiles = s.grid.tiles.slice().sort(function (a, b) {
+        const da = G.dist(user, a), db = G.dist(user, b);
+        return (da < 2) - (db < 2) || da - db;
+      });
+      for (let i = 0; i < tiles.length; i++) {
+        const tl = tiles[i];
+        if (tl.obj || G.unitAt(tl.x, tl.y) || G.isDrop(tl.x, tl.y) || !G.isWalkable(tl.x, tl.y)) continue;
+        DD.Act.placeObject(tl.x, tl.y, 'barrel_explosive');
+        if (Tg.validTargets(user, ref).some(function (q) { return q.obj && q.x === tl.x && q.y === tl.y; })) return { x: tl.x, y: tl.y };
+        tl.obj = null;
+      }
+      return null;
+    }
+    function use(user, ref, p, cons) {
+      return DD.Combat._action(function () { return !!DD.Combat.resolveSkill(user, ref, p, { pay: true, consumable: cons }); });
+    }
+    let shots = 0, ups = 0, still = 0;
+    // 1. barrels
+    real.concat(all('consumables').filter(function (c) { return !isTest(c.id); })).forEach(function (d) {
+      const cons = DD.getConsumable(d.id) === d;
+      let user, ref, s;
+      if (cons) {
+        s = arena(anyHeroId(null), 5);
+        user = s.units.filter(function (u) { return u.kind === 'hero' && !u.downed; })[0];
+        s.consumables = [d.id];
+        ref = d;
+      } else {
+        const probe = userFor(d, 1);
+        if (!probe) return;
+        user = probe.user; ref = probe.slot; s = probe.state;
+      }
+      if (!Tg.aimsAtObjects(user, ref)) return;
+      user.ap = 10;
+      const p = barrelFor(user, ref);
+      if (!p) { t.log(d.id + ': no barrel spot in range in the arena'); return; }
+      const label = d.id + ' aimed at a barrel @' + p.x + ',' + p.y;
+      const fp = fingerprint(s);
+      const pv = Tg.preview(user, ref, p);
+      if (fingerprint(s) !== fp) t.fail(label + ': its preview changed the real fight');
+      t.ok(pv.detonates === 'barrel_explosive' && pv.blast.length > 0, label + ': the preview detonates it');
+      const before = outcomeBefore(s);
+      const ap0 = user.ap, cost = cons ? (d.ap === undefined ? 1 : d.ap) : DD.Combat.costOf(user, d, 1).ap;
+      t.ok(use(user, ref, p, cons), label + ': resolved');
+      t.ok(!DD.Grid.tile(p.x, p.y).obj, label + ': the barrel is gone');
+      t.eq(ap0 - user.ap, cost, label + ': its AP is paid');
+      previewMismatches(pv, s, before).forEach(function (m) { t.fail(label + ': preview ≠ reality: ' + m); });
+      sanity(t, label);
+      shots++;
+    });
+    // 2. heals aimed at the arena's downed ally (next to the user)
+    real.concat(all('consumables').filter(function (c) { return !isTest(c.id); })).forEach(function (d) {
+      const cons = DD.getConsumable(d.id) === d;
+      let user, ref, s;
+      if (cons) {
+        s = arena(anyHeroId(null), 5);
+        user = s.units.filter(function (u) { return u.kind === 'hero' && !u.downed; })[0];
+        s.consumables = [d.id];
+        ref = d;
+      } else {
+        const probe = userFor(d, 1);
+        if (!probe) return;
+        user = probe.user; ref = probe.slot; s = probe.state;
+      }
+      if (!Tg.revivesWith(user, ref)) return;
+      const down = s.units.filter(function (u) { return u.downed && !u.dead; })[0];
+      const at = down && Tg.validTargets(user, ref).filter(function (q) { return q.x === down.x && q.y === down.y; })[0];
+      if (!at) return;
+      const label = d.id + ' aimed at the downed ' + down.name;
+      const fp = fingerprint(s);
+      const pv = Tg.preview(user, ref, at);
+      if (fingerprint(s) !== fp) t.fail(label + ': its preview changed the real fight');
+      const e = pv.perUnit[down.id];
+      const before = outcomeBefore(s);
+      t.ok(use(user, ref, at, cons), label + ': resolved');
+      t.eq(!down.downed, !!(e && e.revived), label + ': up exactly when the preview said "UP!" (' + (e ? e.text : 'no entry') + ')');
+      if (e && e.revived) t.eq(down.hp, e.heal, label + ': with the previewed HP');
+      previewMismatches(pv, s, before).forEach(function (m) { t.fail(label + ': preview ≠ reality: ' + m); });
+      sanity(t, label);
+      if (down.downed) still++; else ups++;
+    });
+    t.log('barrel shots ' + shots + ' · heals that got the ally up ' + ups + ' · that did not (content advisory) ' + still);
+    t.ok(shots >= 40 && ups >= 1, 'the rules reach real content (' + shots + ' barrel shots, ' + ups + ' revives)');
   });
 
   // ---- honest areas (v2: AI actions happen at once; boss wind-ups are the only telegraphs) ---------------------------

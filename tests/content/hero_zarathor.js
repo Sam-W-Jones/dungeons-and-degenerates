@@ -4,7 +4,8 @@
  * fights (desc == effect: damage vs armor-free fixture foes, statuses and how many of their owner's turns they last,
  * displacement, summons, costs, cooldowns, charges, gold), the Drip Check passive, the signature, the items, previews vs
  * reality, edge cases (stunned / silenced / sheep / charmed user, not his turn, AP, deaths mid-skill, pits / lava / water,
- * map edges), combos with other heroes and AutoPlay battles at levels 1/3/5.
+ * map edges), attacks of opportunity (his walks provoke; Strut and Lasso never do; Dazzle / Statue / Shades / Rebuke /
+ * Bedazzle), combos with other heroes (Burn payoffs included) and AutoPlay battles at levels 1/3/5.
  */
 (function () {
   'use strict';
@@ -131,7 +132,12 @@
     t.ok(h.growth.hp >= 3 && h.growth.hp <= 5, 'growth +3-5 HP');
     t.ok(h.sprite && h.sprite.base === 'humanoid' && h.sprite.head.horns === 'tiefling' && h.sprite.tail === 'devil', 'tiefling sprite');
     t.ok(h.sprite.bling.indexOf('chain') >= 0 && h.sprite.head.face === 'sunglasses' && h.sprite.aura.kind === 'flames', 'bling, shades indoors, flames');
+    // fire and bling from fight one (wild magic is the pool's Wild Card: see the notes' v2 review for the starter sims)
     t.eq(JSON.stringify(h.startingSkills), '["zar_fireball","zar_bling_throw"]', 'starts with fire and money');
+    t.eq(JSON.stringify(DD.Combat.makeRunHero({ id: ZAR, level: 1 }).skills.map(function (s) { return s.id; })), '["zar_fireball","zar_bling_throw"]',
+      'a fresh recruit sockets exactly those two');
+    t.ok(DD.getSkill('zar_fireball').tags.indexOf('fire') >= 0 && DD.getSkill('zar_bling_throw').tags.indexOf('gold') >= 0 &&
+      DD.getSkill('zar_wild_card').tags.indexOf('wild') >= 0, 'fire and gold starters; wild magic tagged in the pool');
     t.eq(JSON.stringify(h.skillPool), JSON.stringify(POOL), 'skill pool');
     t.ok(h.skillPool.length >= 9 && h.skillPool.length <= 10, 'pool of 9-10 (DESIGN v2: 8-10, content: 9-11)');
     t.ok(h.skillPool.indexOf(h.basic) < 0 && h.skillPool.indexOf(h.signature) < 0, 'basic / signature never socketed');
@@ -160,7 +166,7 @@
         t.ok(words(d) <= 26, id + ' L' + lv + ' desc is short (' + words(d) + ' words): ' + d);
         t.ok(!REMOVED.test(d), id + ' L' + lv + ' desc names no removed v1 mechanic');
         const Lv = DD.skillLevel(s, lv);
-        ['dmg', 'gold', 'block', 'bonus', 'fire', 'len', 'pull', 'hp', 'turns', 'range', 'r'].forEach(function (k) {
+        ['dmg', 'vsBurn', 'gold', 'block', 'bonus', 'fire', 'len', 'pull', 'hp', 'turns', 'range', 'r'].forEach(function (k) {
           // a radius of 1 reads "next to it"
           if (typeof Lv[k] === 'number' && Lv[k] > (k === 'r' ? 1 : 0)) t.ok(new RegExp('(^|[^0-9])' + Lv[k] + '(?![0-9])').test(d), id + ' L' + lv + ' desc shows its ' + k + ' ' + Lv[k]);
         });
@@ -182,6 +188,10 @@
     t.ok(charged === 2 && cooled >= 7, 'two big skills with charges (' + charged + '), the rest on cooldowns (' + cooled + ')');
     t.ok(kinds.spell && kinds.attack && kinds.buff && kinds.move && kinds.summon, 'kinds: ' + Object.keys(kinds).join(','));
     t.ok(DD.getSkill('zar_hex').tags.indexOf('vulnerable') >= 0 && DD.getSkill('zar_lasso').tags.indexOf('pull') >= 0, 'the combo setups are tagged (Vulnerable, pull)');
+    // one rider each (DESIGN §6): the basic pays off Burn and no longer ignites; the Supernova only Dazzles
+    t.ok(/Burning/.test(desc('zar_basic', 1)) && !/ignite/i.test(desc('zar_basic', 1)), 'basic: the Burn payoff is its one rider');
+    t.ok(/Dazzle/.test(desc('zar_signature', 1)) && !/ignite/i.test(desc('zar_signature', 1)), 'signature: Dazzle is its one rider');
+    t.ok(basic.target.range[1] > 1, 'his basic is ranged: he never makes attacks of opportunity (he has to slip away instead)');
 
     STATUSES.forEach(function (id) {
       const st = DD.getStatus(id);
@@ -200,7 +210,11 @@
     t.ok(items.some(function (it) { return it.rarity === 'rare'; }) && items.some(function (it) { return it.rarity === 'legendary'; }), 'a rare and a legendary');
     t.ok(items.every(function (it) { return !(it.stats && it.stats.block) && !(it.hooks && (it.hooks.modifyGuard || it.hooks.onCombatStart)); }), 'v2: no starting Block, no Guard hooks');
 
-    const names = ['Marwyn', 'Syllamin', 'Marbles', 'Josiah', 'Ellaria', 'Buga', 'Slate', 'Sparrow', 'Corelos', 'Kiri', 'Betty', 'Basanos'];
+    const names = ['Marwyn', 'Syllamin', 'Marbles', 'Josiah', 'Ellaria', 'Buga', 'Slate', 'Sparrow', 'Corelos', 'Kiri', 'Betty', 'Basanos',
+      'Valdris', 'Hjalmar', 'Pebbles'];
+    ['Valdris', 'Hjalmar', 'Pebbles'].forEach(function (n) {
+      t.ok(Object.keys(h.barks).some(function (k) { return h.barks[k].some(function (l) { return l.indexOf(n) >= 0; }); }), 'a bark for the new recruit ' + n);
+    });
     let mentions = 0;
     ['select', 'start', 'move', 'kill', 'hurt', 'lowhp', 'downed', 'revive', 'ally_down', 'levelup', 'victory', 'idle', 'signature'].forEach(function (k) {
       const lines = h.barks[k];
@@ -218,12 +232,14 @@
   });
 
   // ---- basic ---------------------------------------------------------------------------------------------------------
-  T.suite('hero_zarathor: Eldritch Bling (5 fire within 4, ignites its tile)', function (t) {
+  T.suite('hero_zarathor: Eldritch Bling (5 fire within 4, +2 to a Burning foe; the Burn payoff)', function (t) {
     if (!ready(t)) return;
-    fight({ heroes: [Z(1, 4)], enemies: [E(5, 4), E(6, 4), E(8, 8)], gold: 0,
+    const Lb = L('zar_basic', 1);
+    t.ok(Lb.dmg === 5 && Lb.vsBurn === 2, 'level table: 5 damage, +2 against Burning foes');
+    fight({ heroes: [Z(1, 4)], enemies: [E(5, 4), E(6, 4), E(3, 6), E(8, 8)], gold: 0,
       surfaces: [{ x: 5, y: 4, id: 'oil', turns: 5 }, { x: 6, y: 4, id: 'oil', turns: 5 }] });
     let z = zar();
-    const g1 = at(5, 4), g2 = at(6, 4);
+    const g1 = at(5, 4), g2 = at(6, 4), hot = at(3, 6);
     t.ok(cur() === z && z.ap === 3 && DD.Combat.state.round === 1, 'v2: his turn, round 1, 3 AP');
     t.ok(DD.Targeting.isValidTarget(z, z.basic, 5, 4), 'reaches a foe 4 tiles away');
     t.ok(!DD.Targeting.isValidTarget(z, z.basic, 6, 4), 'but not one 5 tiles away');
@@ -231,21 +247,49 @@
     t.eq(z.ap, 2, '1 AP');
     t.eq(hits[0] && hits[0].element, 'fire', 'fire damage');
     t.eq(hits.filter(function (h) { return h.cause === 'skill'; }).length, 1, 'one hit');
-    t.eq(g1.hp, 14 - 5 - 0, 'deals 5');
-    t.ok(surf(5, 4) === 'fire' && surf(6, 4) === 'fire', 'its tile ignites: the oil slick goes up along its length');
-    t.ok(has(g2, 'burn'), 'a foe standing in the burning slick catches fire');
+    t.eq(g1.hp, 14 - 5, 'a foe that is not Burning: 5');
+    t.ok(surf(5, 4) === 'oil' && surf(6, 4) === 'oil' && !has(g1, 'burn') && !has(g2, 'burn'), 'no hidden rider: the oil under it is not lit (Fireball and Strut light the ground)');
     t.eq(slotOf(z, 'zar_basic').cd, 0, 'no cooldown');
-    t.ok(DD.Combat.useSkill(z, z.basic, 5, 4), 'usable again the same turn');
-    // a target on bare floor: damage, no Burn rider; water under it boils to steam (and the steam blocks his sight)
-    fight({ heroes: [Z(1, 4)], enemies: [E(4, 4), E(3, 6), E(8, 8)], gold: 0, terrain: function (tl) { if (tl.x === 3 && tl.y === 6) tl.t = 'water'; } });
+    // the payoff: a Burning foe takes 5 + 2; the Burn itself is left alone
+    DD.Act.addStatus(hot, 'burn', { stacks: 2 }, null);
+    const hits2 = recordHits(z, function () { t.ok(DD.Combat.useSkill(z, z.basic, 3, 6), 'basic on a Burning foe'); });
+    t.eq(hot.hp, 14 - 7, 'Burning: 5 +2 = 7');
+    t.eq(hits2.length, 1, 'still one hit');
+    t.eq(stacks(hot, 'burn'), 2, 'its Burn is untouched (the bonus does not spend it)');
+    t.ok(DD.Combat.useSkill(z, z.basic, 3, 6), 'usable again the same turn');
+    t.ok(hot.dead, 'the second 7 finishes the pre-heated foe (it had 7 HP left)');
+    // a foe standing in a fire surface is Burning (Burn 2 on entering): the payoff without any status trickery
+    fight({ heroes: [Z(1, 4)], enemies: [E(6, 4), E(8, 8)], gold: 0, surfaces: [{ x: 5, y: 4, id: 'fire', turns: 3 }] });
     z = zar();
+    const walker = at(6, 4);
+    DD.Act.moveAlong(walker, [{ x: 5, y: 4 }]);
+    t.ok(has(walker, 'burn'), 'a grunt that steps into fire is Burning');
+    DD.Combat.useSkill(z, z.basic, 5, 4);
+    t.eq(walker.hp, 14 - 7, '...and takes 7 from his basic');
+    // Drip Check multiplies the whole hit: 150 gold, (5 + 2) × 1.3 = 9
+    fight({ heroes: [Z(1, 4)], enemies: [E(4, 4), E(8, 8)], gold: 150 });
+    z = zar();
+    DD.Act.addStatus(at(4, 4), 'burn', { stacks: 1 }, null);
     DD.Combat.useSkill(z, z.basic, 4, 4);
-    t.ok(at(4, 4).hp === 9 && !has(at(4, 4), 'burn'), 'bare floor: 5 damage, no Burn');
-    t.ok(DD.Combat.useSkill(z, z.basic, 3, 6), 'a foe standing in water');
-    t.eq(surf(3, 6), 'steam', '...the water under it steams');
+    t.eq(at(4, 4).hp, 14 - Math.round(7 * 1.3), '+30% drip on a Burning foe: 9');
+    // water puts the fire out: a Wet foe can't Burn, so no bonus
+    fight({ heroes: [Z(1, 4)], enemies: [E(4, 4), E(8, 8)], gold: 0, terrain: function (tl) { if (tl.x === 4 && tl.y === 4) tl.t = 'water'; } });
+    z = zar();
+    DD.Act.addStatus(at(4, 4), 'wet', { turns: 2 }, null);
+    DD.Act.addStatus(at(4, 4), 'burn', { stacks: 2 }, null);
+    t.ok(!has(at(4, 4), 'burn'), 'a Wet foe can\'t catch fire');
+    DD.Combat.useSkill(z, z.basic, 4, 4);
+    t.eq(at(4, 4).hp, 9, 'so the basic deals its plain 5');
+    t.eq(surf(4, 4), null, 'and the water under it is left alone (no ignite: no steam)');
     // line of sight
     fight({ heroes: [Z(1, 4)], enemies: [E(4, 4), E(8, 8)], gold: 0, objects: [{ x: 2, y: 4, id: 'pillar' }] });
     t.ok(!DD.Targeting.isValidTarget(zar(), zar().basic, 4, 4), 'needs line of sight (a pillar blocks it)');
+    // the preview knows the payoff
+    fight({ heroes: [Z(1, 4)], enemies: [E(4, 4), E(8, 8)], gold: 0 });
+    z = zar();
+    DD.Act.addStatus(at(4, 4), 'burn', { stacks: 2 }, null);
+    const pv = DD.Combat.preview(z, z.basic, 4, 4).perUnit[at(4, 4).id];
+    t.ok(pv && pv.dmg === 7, 'the HUD preview on a Burning foe says 7 (' + (pv && pv.dmg) + ')');
   });
 
   // ---- fireball ------------------------------------------------------------------------------------------------------
@@ -261,8 +305,10 @@
       t.ok(use(z, 'zar_fireball', 5, 4), 'L' + lv + ': cast at range 4');
       hit.forEach(function (g) {
         t.eq(g.hp, 14 - Lv.dmg, 'L' + lv + ': ' + Lv.dmg + ' fire damage at ' + g.x + ',' + g.y);
-        t.ok(!has(g, 'burn'), 'L' + lv + ': no Burn rider on bare floor (desc: damage + ignite)');
+        t.ok(!has(g, 'burn') && surf(g.x, g.y) === null, 'L' + lv + ': bare floor: no Burn, no lingering fire (it only ignites what burns)');
       });
+      // v2 review: the desc said "ignite the area", which reads as a fire surface; it names what actually catches fire now
+      t.ok(/oil/.test(desc('zar_fireball', lv)) && !/ignite the area/.test(desc('zar_fireball', lv)), 'L' + lv + ': the desc says what it ignites');
       t.eq(knight.hp, knight.maxHp, 'L' + lv + ': the ally inside the blast is spared');
       t.eq(far.hp, 14, 'L' + lv + ': a foe 2 tiles from the centre is untouched');
       t.eq(z.ap, 1, 'L' + lv + ': 2 AP');
@@ -317,9 +363,13 @@
       t.eq(tg.hp, 14 - Lv.dmg, 'L' + lv + ': ' + Lv.dmg + ' damage');
       t.ok(has(tg, 'dazzled'), 'L' + lv + ': target Dazzled');
       t.ok(side.hp === 14 && !has(side, 'dazzled'), 'L' + lv + ': only the target');
-      t.ok(z.ap === 2 && slotOf(z, 'zar_bling_throw').cd === 1, 'L' + lv + ': 1 AP, cooldown 1');
+      t.ok(z.ap === 2 && slotOf(z, 'zar_bling_throw').cd === 2, 'L' + lv + ': 1 AP, cooldown 2');
       // v2: turns 1 from his turn = the target's next turn, gone when that turn ends
       t.eq(statusByTurn(tg, 'dazzled', function () { DD.Combat.endRound(); DD.Combat.endRound(); }), covers(1), 'L' + lv + ': Dazzled for exactly its next turn');
+      // cooldown 2 = unusable during his next two turns (rounds 2 and 3), back in round 4
+      t.ok(DD.Combat.state.round === 3 && cur() === z && /cooldown/i.test(String(can(z, 'zar_bling_throw'))), 'L' + lv + ': round 3: still cooling down');
+      DD.Combat.endRound();
+      t.ok(DD.Combat.state.round === 4 && can(z, 'zar_bling_throw') === true, 'L' + lv + ': round 4: ready again');
     });
     // a dazzled foe's attack on its turn lands a tile off: nobody is hit (no hero stands next to its victim)
     let missed = 0;
@@ -493,6 +543,27 @@
     DD.AI.act(g3);
     t.eq(g3.hp, 14 - 5, 'the stabber still takes 5');
     t.eq(((DD.Combat.state.stats.units[k.id] || {}).dmg || 0) - kd0, 5, 'credited to the warded knight');
+    // it is his damage: Drip Check boosts it (150 gold: 5 × 1.3 = 7)
+    fight({ heroes: [Z(4, 4, [sk('zar_rebuke', 1)])], enemies: [E(5, 4), E(8, 8)], gold: 150 });
+    z = zar();
+    use(z, 'zar_rebuke', 4, 4);
+    DD.AI.act(at(5, 4));
+    t.eq(at(5, 4).hp, 14 - Math.round(5 * 1.3), 'Drip +30%: the ward burns for 7');
+    // Gold Plating + Rebuke: a hit the Block soaks entirely still "hits" — the attacker burns, he loses nothing
+    fight({ heroes: [Z(4, 4, [sk('zar_rebuke', 1), sk('zar_gold_plating', 3)])], enemies: [E(5, 4), E(8, 8)], gold: 40 });
+    z = zar();
+    use(z, 'zar_gold_plating', 4, 4);
+    use(z, 'zar_rebuke', 4, 4);
+    DD.AI.act(at(5, 4));
+    t.ok(z.hp === z.maxHp && z.block === 12 - 4 && at(5, 4).hp === 14 - 5, 'plated and warded: the stab (4) is soaked, the stabber takes 5');
+    // Statue of Me + Rebuke: the taunted crowd queues up to hit a warded statue (his whole turn: 2 + 1 AP)
+    fight({ enemyAi: true, heroes: [Z(2, 2, [sk('zar_statue', 1), sk('zar_rebuke', 1)])], enemies: [E(4, 4), E(5, 3), E(3, 4), E(8, 8)], gold: 0 });
+    z = zar();
+    t.ok(use(z, 'zar_statue', 4, 3) && use(z, 'zar_rebuke', 4, 3), 'statue unveiled and warded');
+    const st = at(4, 3), crowd = [at(4, 4), at(5, 3), at(3, 4)];
+    DD.Combat.endTurn();
+    t.ok(crowd.every(function (f) { return f.hp === 14 - 5; }), 'all three taunted grunts hit the statue and take 5 each (' + crowd.map(function (f) { return f.hp; }).join(',') + ')');
+    t.ok(!st.dead && st.hp === 12 - 3 * 3 && z.hp === z.maxHp, 'the statue soaks 3 stabs (4 − 1 armor each), Zarathor is untouched');
   });
 
   // ---- bling lasso -------------------------------------------------------------------------------------------------------
@@ -621,9 +692,9 @@
     if (!ready(t)) return;
     [1, 2, 3].forEach(function (lv) {
       const Lv = L('zar_gold_plating', lv);
-      fight({ heroes: [Z(1, 4, [sk('zar_gold_plating', lv)]), H('test_cleric', 3, 4)], enemies: [E(8, 8)], gold: 40 });
+      fight({ heroes: [Z(1, 4, [sk('zar_gold_plating', lv)]), H('test_cleric', 3, 4), H('test_mage', 6, 4), H('test_rogue', 5, 4)], enemies: [E(8, 8)], gold: 40 });
       const z = zar(), c = at(3, 4);
-      t.ok(!valid(z, 'zar_gold_plating', 5, 5) || !at(5, 5), 'L' + lv + ': range 4');
+      t.ok(valid(z, 'zar_gold_plating', 5, 4) && !valid(z, 'zar_gold_plating', 6, 4), 'L' + lv + ': range 4 (an ally 4 tiles away yes, 5 no)');
       t.ok(use(z, 'zar_gold_plating', 1, 4), 'L' + lv + ': gold-plates himself');
       t.eq(z.block, Lv.block, 'L' + lv + ': +' + Lv.block + ' Block');
       t.eq(DD.Act.gold(), 40 - Lv.gold, 'L' + lv + ': costs ' + Lv.gold + ' gold');
@@ -700,6 +771,30 @@
     DD.Act.kill(st, early);
     t.ok(st.dead && early.hp === e0, 'it shatters into coins and hurts nobody');
     t.ok(sane(t, 'statue break'), 'state sane');
+    // Zarathor goes down: the statue still stands and still taunts newcomers when his (skipped or not) turn comes round
+    fight({ heroes: [Z(1, 2, [sk('zar_statue', 1)]), H('test_knight', 1, 6)], enemies: [E(7, 4), E(4, 4), E(8, 8)], gold: 0 });
+    const z2 = zar(), late2 = at(7, 4);
+    t.ok(use(z2, 'zar_statue', 3, 3), 'unveiled at 3,3 (knight elsewhere)');
+    const st2 = at(3, 3);
+    DD.Act.kill(z2, at(4, 4));
+    t.ok(z2.downed && !st2.dead, 'Zarathor is down, his statue stands');
+    DD.Act.moveAlong(late2, [{ x: 6, y: 4 }, { x: 5, y: 4 }, { x: 5, y: 3 }]);
+    t.tryRun('rounds with a downed owner and his statue', function () { DD.Combat.endRound(); DD.Combat.endRound(); });
+    t.ok(has(late2, 'taunt') && DD.Act.getStatus(late2, 'taunt').source === st2.id, 'the statue taunts the newcomer on its downed owner\'s turn');
+    t.ok(sane(t, 'downed owner statue'), 'state sane');
+    // v2 review: a foe charmed onto the heroes' side is not taunted (taunted by a statue it may not hit, it stood idle and
+    // the party's charm — Sign Here, Heckle, Bribe, Love Potion — was wasted); it still stabs its friend
+    fight({ heroes: [Z(2, 3, [sk('zar_statue', 1)])], enemies: [E(5, 4), E(6, 4), E(4, 5), E(8, 8)], gold: 0 });
+    const z3 = zar(), charmed = at(5, 4), pal = at(6, 4), plain = at(4, 5);
+    DD.Act.addStatus(charmed, 'charmed', { turns: 2 }, z3);
+    t.ok(use(z3, 'zar_statue', 4, 3), 'unveiled 2 tiles from a charmed grunt and a plain one');
+    const st4 = at(4, 3);
+    t.ok(!has(charmed, 'taunt') && has(plain, 'taunt'), 'the charmed grunt is not taunted, the plain one is');
+    const p0 = pal.hp, s4 = st4.hp;
+    DD.AI.act(charmed);
+    t.ok(pal.hp < p0 && st4.hp === s4, 'on its turn the charmed grunt stabs its friend (' + p0 + ' → ' + pal.hp + '), not the statue');
+    DD.Combat.endTurn();
+    t.ok(cur() === z3 && has(charmed, 'charmed') && !has(charmed, 'taunt') && has(plain, 'taunt'), 'his next turn start: still charmed, still left alone; the plain one re-taunted');
     // AutoPlay copes with a 0-AP summon on his turn
     fight({ heroes: [Z(1, 4, [sk('zar_statue', 1)])], enemies: [E(6, 4), E(7, 7)], gold: 0 });
     use(zar(), 'zar_statue', 2, 4);
@@ -719,15 +814,18 @@
     t.ok(ev.length === 1 && ev[0].source === 'wild card' && ev[0].unitId === z.id, 'L1: one surge from the wild card');
     t.ok(z.ap === 2 && slotOf(z, 'zar_wild_card').cd === 1 && slotOf(z, 'zar_wild_card').uses === 1, '1 AP, cooldown 1, a charge used');
     t.ok(/cooldown/i.test(String(can(z, 'zar_wild_card'))) || z.ap < 1, 'cooldown 1');
-    // charges: two uses per combat (rounds 1 and 3), then none
+    // charges: two uses per combat, then none (level II: good surges only, so no backfire can sheep or down him and
+    // skip the check — v2 review: this used to sit behind an if that could silently skip it)
+    arena(3, 2);
+    z = zar();
+    t.ok(use(z, 'zar_wild_card', 1, 1), 'L2: first use');
     DD.Combat.endRound(); DD.Combat.endRound();
     z = zar();
-    if (z && cur() === z && DD.Combat.canUse(z, slotOf(z, 'zar_wild_card')) === true) {
-      use(z, 'zar_wild_card', z.x, z.y);
-      DD.Combat.endRound(); DD.Combat.endRound();
-      z = zar();
-      if (z && cur() === z && !z.downed && !has(z, 'sheep')) t.eq(can(z, 'zar_wild_card'), 'No charges left.', '2 uses per combat');
-    }
+    t.ok(cur() === z && use(z, 'zar_wild_card', z.x, z.y), 'L2: second use two turns later');
+    DD.Combat.endRound(); DD.Combat.endRound();
+    z = zar();
+    t.ok(cur() === z && !z.downed && !has(z, 'sheep'), 'L2: he is fine and it is his turn');
+    t.eq(can(z, 'zar_wild_card'), 'No charges left.', '2 uses per combat');
     let any1 = 0, good2 = 0, good3 = 0, n3 = 0;
     const kinds = {};
     for (let seed = 1; seed <= 12; seed++) {
@@ -802,7 +900,7 @@
   });
 
   // ---- signature ----------------------------------------------------------------------------------------------------------------
-  T.suite('hero_zarathor: Bling Supernova (signature: 18 fire in radius 2, Dazzle the survivors, ignite)', function (t) {
+  T.suite('hero_zarathor: Bling Supernova (signature: 18 fire in radius 2, Dazzle the survivors)', function (t) {
     if (!ready(t)) return;
     fight({ heroes: [Z(1, 4), H('test_knight', 3, 4)], enemies: [E(5, 4), E(6, 4), E(5, 6), E(4, 5, 'test_brute'), E(8, 8)], gold: 40,
       surfaces: [{ x: 7, y: 4, id: 'oil', turns: 5 }, { x: 8, y: 4, id: 'oil', turns: 5 }] });
@@ -816,7 +914,7 @@
     t.ok(has(brute, 'dazzled'), 'survivors are Dazzled');
     t.eq(knight.hp, knight.maxHp, 'allies in the blast are spared');
     t.eq(far.hp, 14, 'foes outside radius 2 untouched');
-    t.eq(surf(7, 4), 'fire', 'the area ignites (oil goes up)');
+    t.ok(surf(7, 4) === 'oil' && surf(8, 4) === 'oil', 'one rider only: the oil in the blast is not lit (the Dazzle is the rider)');
     t.eq(DD.Act.gold(), 40, 'no gold changes hands (the coins are just for show now)');
     t.eq(s.hype, 3 * 8 + 4, 'Hype: −100, then +8 per kill and +4 for the multi-hit');
     t.eq(z.ap, 1, '2 AP');
@@ -941,6 +1039,13 @@
     t.eq(can(z, 'zar_bling_throw'), true, 'silenced: money still talks');
     t.eq(can(z, 'zar_lasso'), true, 'silenced: the lasso works');
     t.eq(can(z, 'zar_strut'), true, 'silenced: so does the strut');
+    fight({ heroes: [Z(2, 4, [sk('zar_wild_card', 1), sk('zar_bedazzle', 1), sk('zar_gold_plating', 1), sk('zar_rebuke', 1)]), H('test_knight', 2, 5)],
+      enemies: [E(5, 4), E(8, 8)], gold: 60 });
+    z = zar();
+    DD.Act.addStatus(z, 'silenced', { turns: 1 });
+    t.ok(can(z, 'zar_wild_card') === true && can(z, 'zar_bedazzle') === true && can(z, 'zar_gold_plating') === true,
+      'silenced: Wild Card, Bedazzle and Gold Plating are not spells');
+    t.eq(can(z, 'zar_rebuke'), 'Silenced!', 'silenced: no Hellish Rebuke (a spell)');
     // a stun applied during his own turn costs exactly his NEXT turn (v2)
     z = kit();
     DD.Act.addStatus(z, 'stun', { turns: 1 });
@@ -1016,8 +1121,111 @@
     t.eq(DD.Zarathor.wildSurge(zar(), 'test', true), null, 'no surge on demand once the fight is over');
   });
 
+  // ---- attacks of opportunity --------------------------------------------------------------------------------------------------
+  T.suite('hero_zarathor: attacks of opportunity (his walks provoke, Strut and Lasso never do; Dazzle, Statue, Shades, Rebuke, Bedazzle)', function (t) {
+    if (!ready(t)) return;
+    function oppLog(fn) {
+      const list = [];
+      const off = DD.Events.on('opportunity:attack', function (e) { list.push(e); });
+      try { fn(); } finally { off(); }
+      return list;
+    }
+    // he makes none: his basic is ranged, so a grunt walks away from him for free
+    fight({ heroes: [Z(3, 4)], enemies: [E(4, 4), E(8, 8)], gold: 0 });
+    let z = zar(), g = at(4, 4);
+    t.eq(DD.Act.opportunitySlot(z), null, 'no melee basic: he never makes attacks of opportunity');
+    let ev = oppLog(function () { DD.AI.moveTo(g, 6, 4); });
+    t.ok(ev.length === 0 && g.x === 6 && g.hp === 14, 'a grunt walks away from him untouched');
+    // a plain move away from a melee foe provokes it once, and he walks on
+    fight({ heroes: [Z(3, 4)], enemies: [E(4, 4), E(8, 8)], gold: 0 });
+    z = zar(); g = at(4, 4);
+    const pv = DD.Combat.provokes(z, 1, 4);
+    t.ok(pv.length === 1 && pv[0].unitId === g.id && pv[0].dmg === 4, 'the move preview: provokes the grunt (4)');
+    const hp0 = z.hp;
+    ev = oppLog(function () { t.ok(DD.Combat.move(z, 1, 4), 'he walks away'); });
+    t.ok(ev.length === 1 && ev[0].attacker === g && ev[0].mover === z, 'the grunt makes an attack of opportunity');
+    t.ok(z.hp === hp0 - 4 && z.x === 1 && z.y === 4, 'he takes the stab (4) and keeps walking');
+    t.ok(!DD.Combat.canUndo(), 'a move that provoked cannot be undone');
+    ev = oppLog(function () { t.ok(DD.Combat.move(z, 3, 4), 'he steps back next to it'); });
+    t.eq(ev.length, 0, 'stepping next to a foe never provokes');
+    ev = oppLog(function () { DD.Combat.move(z, 1, 4); });
+    t.ok(ev.length === 0 && z.hp === hp0 - 4 && z.x === 1, 'and away again: its attack of opportunity for this round is spent');
+    // a lethal one ends the walk on the spot
+    fight({ heroes: [Z(3, 4, [], { hp: 4 }), H('test_knight', 1, 7)], enemies: [E(4, 4), E(8, 8)], gold: 0 });
+    z = zar();
+    DD.Combat.move(z, 1, 4);
+    t.ok(z.downed && z.x === 3 && z.y === 4, 'at 4 HP the stab downs him where he stood');
+    // Fabulous Strut is a dash: it never provokes, even boxed in by two grunts
+    fight({ heroes: [Z(3, 4, [sk('zar_strut', 1)])], enemies: [E(4, 4), E(3, 5), E(8, 8)], gold: 0 });
+    z = zar();
+    t.eq(DD.Combat.provokes(z, 3, 1).length, 2, 'walking off would provoke both grunts');
+    ev = oppLog(function () { t.ok(use(z, 'zar_strut', 3, 1), 'he struts off instead'); });
+    t.ok(ev.length === 0 && z.hp === z.maxHp && z.x === 3 && z.y === 1, 'the dash provokes nothing: not a scratch');
+    t.eq(surf(3, 4), 'fire', 'and leaves the grunts a fire lane where he stood');
+    // Bling Lasso: a pull never provokes, even dragged right past the knight
+    fight({ heroes: [Z(1, 4, [sk('zar_lasso', 1)]), H('test_knight', 3, 3)], enemies: [E(5, 4), E(8, 8)], gold: 0 });
+    z = zar(); g = at(5, 4);
+    const kn = at(3, 3);
+    ev = oppLog(function () { t.ok(use(z, 'zar_lasso', 5, 4), 'lassoed'); });
+    t.ok(ev.length === 0 && g.x === 2 && g.hp === 14 - 3, 'pulled through 3,4 (next to the knight): no attack of opportunity, just the 3');
+    t.ok(kn.oppRound !== DD.Combat.state.round, 'the knight keeps his reaction for this round');
+    // Throw Money At It: a Dazzled grunt makes no attack of opportunity, so the cleric next to it slips away (control: it stabs)
+    [true, false].forEach(function (dazzle) {
+      fight({ heroes: [Z(1, 4, [sk('zar_bling_throw', 1)]), H('test_cleric', 4, 4)], enemies: [E(5, 4), E(8, 8)], gold: 40 });
+      const c = at(4, 4), gr = at(5, 4);
+      if (dazzle) t.ok(use(zar(), 'zar_bling_throw', 5, 4) && has(gr, 'dazzled'), 'money thrown: the grunt is Dazzled');
+      DD.Combat.endTurn();
+      t.eq(cur(), c, 'the cleric\'s turn');
+      const c0 = c.hp;
+      const e2 = oppLog(function () { DD.Combat.move(c, 4, 1); });
+      t.eq(e2.length, dazzle ? 0 : 1, dazzle ? 'Dazzled: no attack of opportunity' : 'control: undazzled, it stabs the leaving cleric');
+      t.eq(c.hp, dazzle ? c0 : c0 - 4, dazzle ? 'the cleric walks off untouched' : 'control: 4 damage');
+    });
+    // Statue of Me: a grunt taunted by the statue strikes only the statue, so the cleric next to it slips away
+    fight({ heroes: [Z(3, 6, [sk('zar_statue', 1)]), H('test_cleric', 4, 4)], enemies: [E(5, 4), E(8, 8)], gold: 0 });
+    const c2 = at(4, 4), g2 = at(5, 4);
+    t.ok(use(zar(), 'zar_statue', 5, 6), 'statue unveiled 2 tiles from the grunt');
+    t.ok(has(g2, 'taunt') && DD.Act.getStatus(g2, 'taunt').source === at(5, 6).id, 'the grunt is Taunted by the statue');
+    DD.Combat.endTurn();
+    ev = oppLog(function () { DD.Combat.move(c2, 4, 1); });
+    t.ok(ev.length === 0 && c2.hp === c2.maxHp && c2.y === 1, 'the cleric walks away from the taunted grunt untouched');
+    // ...and a taunted foe walks to its taunter through the knight's attack of opportunity
+    fight({ heroes: [Z(1, 4, [sk('zar_statue', 3)]), H('test_knight', 6, 3)], enemies: [E(6, 4), E(8, 8)], gold: 0 });
+    t.ok(use(zar(), 'zar_statue', 3, 4), 'a level III statue (taunts within 3)');
+    const st3 = at(3, 4), g3 = at(6, 4), k3 = at(6, 3);
+    t.ok(has(g3, 'taunt'), 'the grunt next to the knight is Taunted by the statue');
+    ev = oppLog(function () { DD.AI.act(g3); });
+    t.ok(ev.some(function (e) { return e.attacker === k3 && e.mover === g3; }), 'it walks off toward the statue: the knight gets his attack of opportunity');
+    t.eq(g3.hp, 14 - 5, 'the knight slashes it for 5 on its way');
+    t.eq(st3.hp, 24 - 3, 'and it stabs the statue (4 − 1 armor), not the knight');
+    // Shades of Indoor Brilliance: the grunt whose attack of opportunity hits him is Dazzled
+    fight({ heroes: [Z(3, 4, [], { items: ['zar_shades'] })], enemies: [E(4, 4), E(8, 8)], gold: 0 });
+    z = zar(); g = at(4, 4);
+    DD.Combat.move(z, 1, 4);
+    t.ok(z.hp === z.maxHp - 3 && has(g, 'dazzled'), 'Shades: the stab (4 − 1 armor) lands and the shine Dazzles the stabber');
+    // Hellish Rebuke: an attack of opportunity is an enemy attack too
+    fight({ heroes: [Z(3, 4, [sk('zar_rebuke', 1)])], enemies: [E(4, 4), E(8, 8)], gold: 0 });
+    z = zar(); g = at(4, 4);
+    t.ok(use(z, 'zar_rebuke', 3, 4), 'self-ward');
+    DD.Combat.move(z, 1, 4);
+    t.eq(g.hp, 14 - 5, 'Rebuke: the grunt that stabbed him on his way out takes 5 fire');
+    // Bedazzle: an ally's free attack of opportunity is not "its next damaging skill" (like Empowered)
+    fight({ heroes: [Z(2, 2, [sk('zar_bedazzle', 2)]), H('test_knight', 4, 4)], enemies: [E(5, 4), E(4, 5), E(8, 8)], gold: 0 });
+    const kz = at(4, 4), runner = at(5, 4), stayer = at(4, 5);
+    t.ok(use(zar(), 'zar_bedazzle', 4, 4), 'the knight is bedazzled (+5)');
+    ev = oppLog(function () { DD.AI.moveTo(runner, 7, 4); });
+    t.ok(ev.length === 1 && ev[0].attacker === kz, 'a grunt walks away from the knight: attack of opportunity');
+    t.eq(runner.hp, 14 - 5, 'it lands for his plain 5 (no sparkles)');
+    t.ok(has(kz, 'zar_bedazzled'), 'the sparkles are still on him');
+    DD.Combat.endTurn();
+    t.eq(cur(), kz, 'the knight\'s turn');
+    DD.Combat.useSkill(kz, kz.basic, 4, 5);
+    t.ok(stayer.hp === 14 - 10 && !has(kz, 'zar_bedazzled'), 'his own slash gets the +5 (10), then they are spent');
+    t.ok(sane(t, 'attacks of opportunity'), 'state sane');
+  });
+
   // ---- combos ------------------------------------------------------------------------------------------------------------------
-  T.suite('hero_zarathor: combos with other heroes (Hex, Bedazzle, Lasso into a cleave, Statue → Fireball, Rebuke on a taunter, fire lane)', function (t) {
+  T.suite('hero_zarathor: combos with other heroes (Hex, Bedazzle, Lasso into a cleave, Statue → Fireball, Rebuke on a taunter, fire lane, Burn payoffs)', function (t) {
     if (!ready(t)) return;
     // Tacky Hex → every ally hits harder: knight 5 → 6, mage bolt 4 → 5
     fight({ heroes: [Z(1, 3, [sk('zar_hex', 1)]), H('test_knight', 4, 3), H('test_mage', 1, 6)], enemies: [E(4, 4, 'test_brute'), E(8, 8)], gold: 0 });
@@ -1084,13 +1292,33 @@
     const k5 = hero('test_knight'), g5 = at(4, 4);
     t.ok(DD.Combat.useSkill(k5, slotOf(k5, 'test_shield_bash'), 4, 4), 'the knight bashes the grunt west');
     t.ok(g5.x === 2 && stacks(g5, 'burn') === 2, 'Strut + shove: pushed through the fire lane, it Burns (2)');
+    t.eq(g5.hp, 14 - 4, 'the bash itself: 4');
+    // ...and next round his basic cashes in on the Burn (the grunt's own turn end took 2 off and left Burn 1)
+    DD.Combat.endTurn();
+    z = zar();
+    t.ok(cur() === z && DD.Combat.state.round === 2 && stacks(g5, 'burn') === 1 && g5.hp === 14 - 4 - 2, 'round 2: Burn ticked once (2), Burn 1 left');
+    t.ok(DD.Combat.useSkill(z, z.basic, g5.x, g5.y), 'Eldritch Bling on the Burning grunt');
+    t.eq(g5.hp, 14 - 4 - 2 - 7, 'pre-heated: 5 +2');
+    // Burn payoff 2: the mage oils the pack, Gold-Plated Fireball lights it, Eldritch Bling cashes in
+    fight({ order: ['test_mage', 'zarathor'], heroes: [Z(1, 4, [sk('zar_fireball', 1)]), H('test_mage', 2, 3, { skills: ['test_oil_slick'] })],
+      enemies: [E(5, 4), E(5, 5), E(6, 4), E(8, 8)], gold: 0 });
+    const mage = hero('test_mage');
+    t.eq(cur(), mage, 'the mage acts first');
+    t.ok(DD.Combat.useSkill(mage, slotOf(mage, 'test_oil_slick'), 5, 4), 'Oil Slick on the pack');
+    DD.Combat.endTurn();
+    z = zar();
+    t.ok(cur() === z && use(z, 'zar_fireball', 5, 4), 'Gold-Plated Fireball into the oil');
+    const pack = [at(5, 4), at(5, 5), at(6, 4)];
+    t.ok(pack.every(function (f) { return f.hp === 14 - 5 && has(f, 'burn'); }), 'the slick goes up: 5 each and the whole pack is Burning');
+    t.ok(DD.Combat.useSkill(z, z.basic, 5, 4), 'his last AP: Eldritch Bling');
+    t.eq(at(5, 4).hp, 14 - 5 - 7, 'on a Burning foe: 7');
   });
 
   // ---- autoplay battles ------------------------------------------------------------------------------------------------------------
   T.suite('hero_zarathor: AutoPlay v2 battles at levels 1/3/5 (acts 1-3 + elites, no errors, his skills get used)', function (t) {
     if (!ready(t)) return;
     const loadouts = {
-      1: [['zar_fireball', 1], ['zar_bling_throw', 1]],
+      1: [['zar_fireball', 1], ['zar_bling_throw', 1]],   // the starting kit
       3: [['zar_fireball', 2], ['zar_bling_throw', 1], ['zar_hex', 1], ['zar_bedazzle', 1]],
       '5a': [['zar_fireball', 2], ['zar_statue', 1], ['zar_rebuke', 2], ['zar_lasso', 2]],
       '5b': [['zar_bling_throw', 2], ['zar_strut', 2], ['zar_gold_plating', 2], ['zar_wild_card', 2]],
@@ -1194,5 +1422,41 @@
         (r.rounds / Math.max(1, r.fights)).toFixed(1) + (r.errors ? ' · errors ' + r.errors : ''));
     });
     t.ok(rows.every(function (r) { return !r.errors; }), 'no fight threw');
+  });
+
+  // ---- v2 requests (user, Nov 3): barrels, flyers --------------------------------------------------------------
+  T.suite('hero_zarathor: v2 requests — Eldritch Bling and the Lasso set barrels off (Throw Money never: its gold), flyers over his fire lane', function (t) {
+    if (!ready(t)) return;
+    // 1. barrels: Eldritch Bling (his basic) detonates one in range; the blast is credited to him
+    fight({ heroes: [Z(1, 4, [sk('zar_bling_throw'), sk('zar_lasso')])], enemies: [E(5, 4), E(5, 5), E(8, 8)], objects: [{ x: 4, y: 4, id: 'barrel_explosive' }] });
+    let z = zar();
+    t.ok(!DD.Targeting.validTargets(z, slotOf(z, 'zar_bling_throw')).some(function (q) { return q.obj; }),
+      'Throw Money At It never targets a barrel (its gold is paid in execute: a barrel shot would be free)');
+    t.ok(valid(z, 'zar_basic', 4, 4) && DD.Targeting.validTargets(z, z.basic).some(function (q) { return q.obj && q.x === 4 && q.y === 4; }), 'Eldritch Bling can be aimed at the barrel');
+    const pv = DD.Combat.preview(z, z.basic, 4, 4);
+    t.ok(pv.detonates === 'barrel_explosive' && pv.perUnit[at(5, 4).id].dmg === 8 && !pv.perUnit[at(5, 5).id], 'preview: 8 to the foe beside it, none to the diagonal one');
+    t.ok(use(z, 'zar_basic', 4, 4), 'Bling at the barrel');
+    t.ok(!DD.Grid.tile(4, 4).obj && at(5, 4).hp === 6 && at(5, 5).hp === 14 && z.ap === 2 && DD.Act.gold() === 40, 'KABOOM: 8 to the neighbour, 1 AP, no gold spent');
+    // the Lasso: lashes a barrel in a straight line (nothing to pull)
+    fight({ heroes: [Z(1, 4, [sk('zar_lasso')])], enemies: [E(8, 8)], objects: [{ x: 4, y: 4, id: 'barrel_explosive' }] });
+    z = zar();
+    t.ok(use(z, 'zar_lasso', 4, 4) && !DD.Grid.tile(4, 4).obj && z.x === 1 && slotOf(z, 'zar_lasso').cd === 2, 'Bling Lasso at the barrel: KABOOM, he stays put, cooldown 2');
+    // his Fireball still sets barrels off the old way (fire in the area)
+    fight({ heroes: [Z(1, 4, [sk('zar_fireball')])], enemies: [E(8, 8)], objects: [{ x: 4, y: 3, id: 'barrel_explosive' }] });
+    z = zar();
+    t.ok(use(z, 'zar_fireball', 4, 4) && !DD.Grid.tile(4, 3).obj, 'Gold-Plated Fireball ignites a barrel in its radius');
+
+    // 2. flyers: the fire lane of Fabulous Strut is on the floor — a flying foe crossing it doesn't burn, a walker does
+    fight({ heroes: [Z(1, 4, [sk('zar_strut')])], enemies: [E(3, 2), E(1, 2), E(8, 8)] });
+    z = zar();
+    t.ok(use(z, 'zar_strut', 4, 4), 'strut 3 tiles east');
+    t.ok(surf(2, 4) === 'fire' && surf(3, 4) === 'fire', 'a fire lane behind him');
+    const fl = at(3, 2), wk = at(1, 2);
+    fl.flags = Object.assign({}, fl.flags, { flying: true });   // test setup: a flying foe
+    DD.Act.moveAlong(fl, [{ x: 3, y: 3 }, { x: 3, y: 4 }, { x: 3, y: 5 }]);
+    t.ok(fl.y === 5 && !has(fl, 'burn') && fl.hp === 14, 'a flyer crosses the lane: no Burn');
+    t.ok(DD.Grid.hazardAt(2, 4, fl) === null && DD.Grid.hazardAt(2, 4, wk) !== null, 'the lane is a hazard for walkers only');
+    DD.Act.moveAlong(wk, [{ x: 1, y: 3 }, { x: 2, y: 3 }, { x: 2, y: 4 }]);
+    t.ok(wk.y === 4 && has(wk, 'burn'), 'a walker stepping into it catches fire');
   });
 })();

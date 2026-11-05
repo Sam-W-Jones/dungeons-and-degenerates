@@ -4,7 +4,9 @@
  * Passive MAGNIFICENCE (status mrw_magnificence, 0-5): each of his skills that reaches a foe (a foe in its area) adds 1;
  * at 5 his NEXT skill unleashes a MAGNIFICENT SURGE (a random good DD.WildMagic effect, +10 party Hype) and the meter
  * resets. Gains are paid out in onSkillUsed after the surge check, so the surge always belongs to the skill after the
- * one that filled the meter. Registers: hero marwyn, 11 skills (mrw_*), statuses mrw_magnificence + mrw_rage, 3 items.
+ * one that filled the meter. His melee basic is also his attack of opportunity (DESIGN §4.2): it counts like any other
+ * use (+1, and it surges at 5), while his leap, throws, pulls and knockbacks never provoke anyone.
+ * Registers: hero marwyn, 11 skills (mrw_*), statuses mrw_magnificence + mrw_rage, 3 items.
  */
 (function () {
   'use strict';
@@ -51,6 +53,20 @@
     return out;
   }
   function taunt(u, f) { return active(f) ? DD.Act.addStatus(f, 'taunt', { turns: 1 }, u) : null; }
+  /** The foes in list that u has not Taunted yet. */
+  function untaunted(u, list) {
+    return (list || []).filter(function (f) {
+      const st = active(f) ? DD.Act.getStatus(f, 'taunt') : null;
+      return active(f) && !(st && st.source === u.id);
+    });
+  }
+  /** A foe standing next to one of u's allies (busy hitting a friend). */
+  function onAFriend(u, f) {
+    return G().neighbors(f.x, f.y).some(function (t) {
+      const o = G().unitAt(t.x, t.y);
+      return active(o) && o !== u && o.side === u.side && !G().hostile(u, o);
+    });
+  }
 
   // ---- MAGNIFICENCE -----------------------------------------------------------------------------------
   /** Add MAGNIFICENCE right now (capped at 5). Returns how many were added. */
@@ -79,34 +95,49 @@
 
   /**
    * MAGNIFICENT SURGE: the meter resets, the party gains 10 Hype and a random GOOD wild magic effect goes off (two
-   * different ones with the Hand Mirror), picked with the combat RNG. Returns the applied effects.
+   * different ones with the Hand Mirror), picked with the combat RNG. Only the good table (the passive says so; it is
+   * never empty for a hero). A mirror's second effect is skipped when the first one won the fight, and re-rolled when
+   * the first took its target away (Smite on the last non-boss foe, then Baa-d Luck); the banner names what went off.
+   * Returns the applied effects.
    */
   function surge(u, rng) {
     DD.Act.removeStatus(u, 'mrw_magnificence', { silent: true });
     const out = [];
     const WM = DD.WildMagic;
     if (!WM || !active(u) || !rng) return out;
+    const weight = function (d) { return d.weight; };
+    const names = function (list) { return list.map(function (d) { return (d.icon || '✨') + ' ' + d.name; }).join(' + '); };
     let pool = WM.pool(u, { good: true });
-    if (!pool.length) pool = WM.pool(u, {});
     const picks = [];
     for (let i = 0; i < (hasItem(u, MIRROR) ? 2 : 1) && pool.length; i++) {
-      const def = rng.weighted(pool, function (d) { return d.weight; });
+      const def = rng.weighted(pool, weight);
       if (!def) break;
       picks.push(def);
       pool = pool.filter(function (d) { return d !== def; });
     }
     if (!picks.length) return out;
-    DD.FX.banner('MAGNIFICENT SURGE!', { sub: picks.map(function (d) { return (d.icon || '✨') + ' ' + d.name; }).join(' + '), color: ORANGE, ms: 900 });
+    // queued now, played later: its sub line is set to the effects that really went off once they are known
+    const banner = DD.FX.banner('MAGNIFICENT SURGE!', { sub: names(picks), color: ORANGE, ms: 900 });
     DD.FX.sound('magic');
     DD.FX.particles(u, { kind: 'glitter', color: '#c9a8ff', count: 24 });
     DD.Act.bark(u, 'surge');
     DD.Act.log('MAGNIFICENT SURGE! The crowd goes wild.', 'hero');
     DD.Act.gainHype(SURGE_HYPE, 'MAGNIFICENT SURGE');
-    picks.forEach(function (def) {
-      if (!active(u)) return;
-      const e = WM.apply(def.id, u, { silent: true, source: 'mrw_magnificence' });
-      if (e) out.push(e);
+    const s = DD.Combat.state, done = [];
+    picks.forEach(function (pick) {
+      if (!active(u) || (s && s.result)) return;
+      let def = pick;
+      let e = WM.apply(def.id, u, { silent: true, source: 'mrw_magnificence' });
+      if (!e && done.length) {
+        const rest = WM.pool(u, { good: true }).filter(function (d) {
+          return d.id !== pick.id && !done.some(function (x) { return x.id === d.id; });
+        });
+        def = rest.length ? rng.weighted(rest, weight) : null;
+        e = def ? WM.apply(def.id, u, { silent: true, source: 'mrw_magnificence' }) : null;
+      }
+      if (e) { out.push(e); done.push(def); }
     });
+    if (banner && typeof banner === 'object' && done.length) banner.sub = names(done);
     return out;
   }
 
@@ -132,8 +163,8 @@
 
   const PASSIVE = {
     name: 'MAGNIFICENCE',
-    desc: 'Each of his skills that reaches a foe (a foe in its area) adds 1 MAGNIFICENCE. At ' + MAX + ', his next skill also ' +
-      'unleashes a MAGNIFICENT SURGE (a random good wild magic effect, +' + SURGE_HYPE + ' party Hype) and the meter resets.',
+    desc: 'Each of his skills that reaches a foe adds 1 MAGNIFICENCE. At ' + MAX + ', his next skill also unleashes a ' +
+      'MAGNIFICENT SURGE (random good wild magic, +' + SURGE_HYPE + ' party Hype) and resets the meter.',
     hooks: {
       onSkillUsed: function (ctx) {
         const u = ctx && ctx.user;
@@ -203,6 +234,55 @@
     return out;
   }
   function throwTiles(user, L) { return ((L && L.push) || 3) + (hasItem(user, GAUNTLETS) ? GAUNTLET_TILES : 0); }
+  /**
+   * AutoPlay hint (skill autoplayValue): its quick pass picks the (move +) skill options worth an exact dry run by their
+   * numbers, and YEET has none, so a good throw from another tile was never tried. Estimate the throw from its HUD area
+   * (crash damage, a drop, hazards on the way; friends count against it). The exact pass (ctx.autoplay set) measures
+   * the real throw, so the hint adds nothing there.
+   */
+  function yeetHint(ctx) {
+    const u = ctx && ctx.user, t = ctx && ctx.targetUnit;
+    if (!ctx || ctx.autoplay || !ctx.L || !active(u) || !active(t) || t === u || G().dist(u, t) !== 1) return 0;
+    const side = function (o) { return G().hostile(u, o) ? 1 : -1.5; };
+    const path = (ctx.tiles || []).slice(1), end = path[path.length - 1];
+    const crash = side(t) * ctx.L.crash;
+    let v = 0;
+    path.forEach(function (p) {
+      const hz = G().unitAt(p.x, p.y) || G().isDrop(p.x, p.y) ? null : G().hazardDamage(p.x, p.y, t);
+      if (hz) v += side(t) * hz.enter;
+    });
+    if (!end) return v + crash;
+    const o = G().unitAt(end.x, end.y), obj = G().tile(end.x, end.y).obj;
+    if (active(o)) return v + crash + side(o) * ctx.L.crash;
+    if (obj && G().objBlocksMove(obj)) return v + crash;
+    if (G().isDrop(end.x, end.y) && !G().isFlying(t)) {
+      return v + side(t) * (t.kind === 'hero' || DD.Act.isBoss(t) ? Math.ceil(t.maxHp * 0.25) : t.hp + 15);
+    }
+    return v + (path.length < throwDist(u, t, DD.util.dirTo(u, t), throwTiles(u, ctx.L)) ? crash : 0);   // a wall or the edge
+  }
+  /**
+   * AutoPlay hint (Hero Landing's autoplayValue, quick pass only like YEET's): the quick estimate of a leap sees his own
+   * danger at the landing tile but not the Taunt, so bodyguard landings were never tried. +1.5 per foe next to the
+   * landing tile that he has not Taunted yet, +1.5 more when that foe is next to one of his allies. The exact pass
+   * (ctx.autoplay set) measures the real outcome, so the hint adds nothing there.
+   */
+  function landingHint(ctx) {
+    const u = ctx && ctx.user, p = ctx && ctx.target;
+    if (!ctx || ctx.autoplay || !active(u) || !p) return 0;
+    let v = 0;
+    untaunted(u, adjacentFoes(u, p)).forEach(function (f) { v += onAFriend(u, f) ? 3 : 1.5; });
+    return v;
+  }
+  /**
+   * AutoPlay hint (BEHOLD's aiScore): its gain counts a Taunt as 1 and Block as 0.1 a point, so the signature never
+   * cleared the "worth 100 Hype" bar. Each foe that is not next to him (so it would hit someone else) and not yet
+   * Taunted by him is worth 4: about the hit it no longer lands on a friend.
+   */
+  function beholdHint(ctx) {
+    const u = ctx && ctx.user;
+    if (!ctx || !active(u)) return 0;
+    return untaunted(u, ctx.foes).filter(function (f) { return G().dist(f, u) > 1; }).length * 4;
+  }
 
   // ---- skills -------------------------------------------------------------------------------------------
   function skill(def) { def.owner = 'marwyn'; return DD.registerSkill(def); }
@@ -217,6 +297,7 @@
     execute: function (ctx) {
       const t = ctx.targetUnit;
       if (!active(t) || t === ctx.user) return;
+      if (ctx.opportunity) DD.Act.maybeBark(ctx.user, 'opportunity', 0.5);   // a foe tried to walk away from him
       DD.FX.lunge(ctx.user, t);
       DD.Act.damage(ctx.user, t, ctx.L.dmg, { tags: ['melee'] });
       DD.FX.particles(t, { kind: 'sparks', count: 8 });
@@ -265,10 +346,11 @@
       },
     },
     desc: function (L, user) {
-      return 'Throw an adjacent unit (friend or foe) ' + throwTiles(user, L) + ' tiles away from him; on a crash, it and what it hits take ' +
+      return 'Throw an adjacent friend or foe ' + throwTiles(user, L) + ' tiles away; on a crash, it and what it hits take ' +
         L.crash + ' damage.';
     },
     flavor: 'Ancient barbarian technique. The ancient barbarians could not explain it either.',
+    autoplayValue: yeetHint,
     execute: function (ctx) {
       const u = ctx.user, t = ctx.targetUnit;
       if (!active(t) || t === u) return;
@@ -336,8 +418,9 @@
     },
     area: { shape: 'circle', size: 1 },
     canUse: function (ctx) { return ctx.user && DD.Act.cantMove(ctx.user) ? 'Rooted: no leaping without legs.' : true; },
-    desc: function (L) { return 'Leap to a free tile up to ' + L.leap + ' tiles away and Taunt every foe next to where he lands.'; },
+    desc: function (L) { return 'Leap up to ' + L.leap + ' tiles, then Taunt every foe next to him.'; },
     flavor: 'Superhero landings are terrible for the knees. His knees filed a complaint. Marwyn denied it.',
+    autoplayValue: landingHint,
     execute: function (ctx) {
       const u = ctx.user, p = ctx.target;
       if (!active(u) || !p) return;
@@ -416,7 +499,7 @@
     levels: [{ heal: 4, r: 1 }, { heal: 6, r: 1 }, { heal: 8, r: 2 }],
     target: { type: 'self' },
     area: { shape: 'circle', size: function (L) { return L.r; } },
-    desc: function (L) { return 'Heal ' + L.heal + ' HP and splash water on every tile within ' + L.r + ' (units there get Wet). 2 kegs per fight.'; },
+    desc: function (L) { return 'Heal ' + L.heal + ' HP and splash water on every tile within ' + L.r + ' (grounded units there get Wet). 2 kegs per fight.'; },
     flavor: 'Ale is mostly water. Marwyn is mostly ale. Hydration is very important to him.',
     execute: function (ctx) {
       const u = ctx.user;
@@ -437,6 +520,7 @@
     area: { shape: 'all_foes' },
     desc: function (L) { return 'EVERY enemy is Taunted and Marwyn gains ' + L.block + ' Block.'; },
     flavor: 'He has rehearsed this pose in every puddle he has ever looked into.',
+    aiScore: beholdHint,
     execute: function (ctx) {
       const u = ctx.user;
       DD.FX.banner('BEHOLD, MARWYN!', { sub: 'Look upon him. LOOK.', color: ORANGE, ms: 900 });
@@ -528,8 +612,8 @@
     id: 'marwyn', name: 'Marwyn', epithet: 'the Magnificent', race: 'Human', cls: 'Barbarian',
     role: 'Tank / bruiser / taunts', complexity: 2,
     blurb: 'Seven feet of ginger beard, furs and volume who refers to himself in the third person, in capitals. Marwyn taunts ' +
-      'everything, throws anything and bottles up so much MAGNIFICENCE that it leaks out as wild magic. Nobody has ever won an ' +
-      'argument with the beard.',
+      'everything, throws anything, swings at whatever tries to walk away from him and bottles up so much MAGNIFICENCE ' +
+      'that it leaks out as wild magic. Nobody has ever won an argument with the beard.',
     color: '#e8823a',
     unlock: null,
     stats: { hp: 35, ap: 3, mov: 3, armor: 0, init: 0 },
@@ -564,6 +648,7 @@
         'Make way for MAGNIFICENCE!',
         'Stomp. Stomp. MAGNIFICENT stomp.',
         'The floor is honored.',
+        'Hjalmar, if this floor is trapped, Marwyn WILL find out.',
       ],
       kill: [
         'ANOTHER CHAPTER FOR THE SAGA OF MARWYN!',
@@ -577,12 +662,14 @@
         'Ow. That will make a GREAT scar.',
         'Marwyn felt that. Marwyn LIKED that.',
         'Is that all? The beard has taken worse.',
+        'Pebbles, stop licking the wound. It is ON FIRE now.',
       ],
       lowhp: [
         'Marwyn is... still MAGNIFICENT. Mostly.',
         'Ellaria! A corgi! Any corgi! For emotional support!',
         'This is just the dramatic part of the saga.',
         'Josiah, the good potion. Not the purple one.',
+        'Valdris! Forge Marwyn a new everything!',
       ],
       downed: [
         'Tell the bards... Marwyn was... MAGNIFICENT...',
@@ -614,6 +701,7 @@
         'Another MAGNIFICENT triumph for the saga!',
         'Syllamin, compose a ballad. Make Marwyn taller in it.',
         'Ale for everyone! Marwyn is paying! Buga is paying.',
+        'Hjalmar, give the goblin back its hat. ...Fine. Keep it.',
       ],
       idle: [
         'Marwyn flexes. Nobody asked. Marwyn flexes anyway.',
@@ -629,7 +717,8 @@
         'WITNESS ME! WITNESS MARWYN!',
         'LOOK UPON MARWYN AND DESPAIR! OR APPLAUD!',
       ],
-      // extra keys (DD.Act.bark): MAGNIFICENT SURGE, maxed meter, war cry, YEET, Hero Landing, Gun Show
+      // extra keys (DD.Act.bark): MAGNIFICENT SURGE, maxed meter, war cry, YEET, attack of opportunity, Hero Landing,
+      // Gun Show
       surge: [
         'MARWYN IS MAGNIFICENT!',
         'TOO MUCH MAGNIFICENCE! IT IS LEAKING!',
@@ -651,6 +740,14 @@
         'Marwyn calls this one: the long goodbye!',
         'Fly, little one! FLY!',
         'Sparrow, take notes. This is how you throw a goblin.',
+        'Pebbles! FETCH! ...Not the goblin, Pebbles. Too late.',
+      ],
+      // Ginger Snap as an attack of opportunity (a foe walked away from him)
+      opportunity: [
+        'LEAVING? Nobody leaves until Marwyn says so!',
+        'No running from MAGNIFICENCE!',
+        'Marwyn did not say you could go.',
+        'Where are you going? The show is HERE!',
       ],
       landing: [
         'FEAR NOT! MARWYN IS HERE!',

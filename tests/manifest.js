@@ -27,6 +27,9 @@ window.DD_EXTRA_SCRIPTS = [
   'tests/content/hero_kiri.js',
   'tests/content/hero_betty.js',
   'tests/content/hero_basanos.js',
+  'tests/content/hero_valdris.js',
+  'tests/content/hero_hjalmar.js',
+  'tests/content/hero_pebbles.js',
   'tests/content/shared.js',              // items
   'tests/content/kit.js',                 // generic skills + consumables
   'tests/content/passives.js',            // the Table of Questionable Blessings

@@ -1,5 +1,8 @@
 # CONTENT DIGEST — the whole game, integrated (briefing for balance / playtest / polish)
 
+> **SUPERSEDED (v2).** This is the v1 digest (10 heroes, telegraphs, Guard, XP, unlocks), kept for history. The current
+> content map, the 16 v2 kits, sims and open requests are in `docs/notes/v2-digest.md`.
+
 Written by the integrator after all 19 content areas landed and were reviewed. Everything below was measured with every
 file loaded together. Owner notes (`docs/notes/<area>.md`) stay the source of truth for each area's details.
 

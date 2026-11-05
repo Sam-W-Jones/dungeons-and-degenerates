@@ -1,9 +1,11 @@
 /* Dungeons and Degenerates — js/data/heroes/zarathor.js
  * Hero: ZARATHOR, THE BEDAZZLED — tiefling warlock of fire, wild magic and bling (starter).
- * v2 kit (DESIGN §6 "Simplicity"): one verb per skill, combos carry the power. Passive "Drip Check": at the start of
- * each of his turns he deals +10% damage per 50 gold the party holds (max +30%), snapshotted as status zar_drip.
- * His fire ignites what it lands on (DD.Act.applyElement: oil, webs, barrels, water → steam). Gold skills spend real
- * run gold through DD.Act.spendGold (sandbox: state.sandboxGold).
+ * v2 kit (DESIGN §6 "Simplicity"): one verb per skill, at most one rider, combos carry the power. Passive "Drip
+ * Check": at the start of each of his turns he deals +10% damage per 50 gold the party holds (max +30%), snapshotted
+ * as status zar_drip. Combo hooks: his basic pays off Burning foes (Pebbles, Valdris, fire lanes, burning oil),
+ * Fireball / Strut ignite the ground (DD.Act.applyElement: oil, webs, barrels, water → steam), Hex / Bedazzle / Lasso
+ * set up the party. Starters: Gold-Plated Fireball + Throw Money At It. Gold skills spend real run gold through
+ * DD.Act.spendGold (sandbox: state.sandboxGold).
  * Registers: hero zarathor, 12 skills, 3 statuses, summon zar_statue, 3 items (all ids zar_*).
  */
 (function () {
@@ -113,15 +115,19 @@
   DD.registerStatus({
     id: 'zar_rebuke', name: 'Hellish Rebuke', icon: '😈', color: '#ff4d2e', type: 'buff', stacking: 'refresh', maxStacks: 1,
     decay: 'turnStart', defaultTurns: 1,
-    desc: function (st) { return 'Every enemy attack that hits it deals ' + rebukeDmg(st) + ' fire damage to the attacker. Lasts until its next turn.'; },
+    desc: function (st) { return 'Enemies whose attacks hit it take ' + rebukeDmg(st) + ' fire damage. Lasts until its next turn.'; },
     hooks: { onTakeDamage: function (d, st) { rebukeHit(d, st); } },
   });
 
   function bonusOf(st) { return Math.max(1, Math.round(+(st && st.data && st.data.bonus) || 4)); }
-  /** Is this damage instance part of the status holder's own skill against a foe? */
+  /**
+   * Is this damage instance part of the status holder's own skill against a foe? A free attack of opportunity is not
+   * "its next damaging skill" (like Empowered, it neither uses nor spends the sparkles).
+   */
   function ownSkillHit(d) {
     const sk = DD.Act.currentSkill();
-    return d.cause === 'skill' && !!d.source && !!d.target && d.target !== d.source && hostile(d.source, d.target) && !!sk && sk.user === d.source;
+    return d.cause === 'skill' && !d.opportunity && !!d.source && !!d.target && d.target !== d.source && hostile(d.source, d.target) &&
+      !!sk && sk.user === d.source;
   }
   DD.registerStatus({
     id: 'zar_bedazzled', name: 'Bedazzled', icon: '💅', color: '#ff9cf0', type: 'buff', stacking: 'refresh', maxStacks: 1,
@@ -138,7 +144,7 @@
         st.data.armed = true;
       },
       onSkillUsed: function (ctx, st) {
-        if (!st.data.armed) return;
+        if (ctx.opportunity || !st.data.armed) return;
         st.data.armed = false;
         st.data.got = {};
         if (ctx.user) DD.Act.removeStatus(ctx.user, 'zar_bedazzled', { text: '💅 Sparkles spent' });
@@ -147,11 +153,15 @@
   });
 
   // ---- summon: the Tasteful Statue ----------------------------------------------------------------
-  /** Taunt every foe within the statue's radius (quiet: the start-of-turn re-taunt, no popups). Returns how many. */
+  /**
+   * Taunt every foe within the statue's radius (quiet: the start-of-turn re-taunt, no popups). Returns how many.
+   * A foe charmed onto the heroes' side is left alone: taunted by a statue it may not hit, it would waste the charm.
+   */
   function statueTaunt(statue, quiet) {
     if (!active(statue)) return 0;
     const r = Math.max(1, Math.round(+(statue.data && statue.data.r) || 2));
-    const list = DD.Combat.foesOf(statue).filter(function (f) { return DD.Grid.dist(f, statue) <= r; });
+    const side = DD.Grid.effectiveSide(statue);
+    const list = DD.Combat.foesOf(statue).filter(function (f) { return DD.Grid.dist(f, statue) <= r && DD.Grid.effectiveSide(f) !== side; });
     list.forEach(function (f) { if (active(f) && active(statue)) DD.Act.addStatus(f, 'taunt', { turns: 1, silent: !!quiet }, statue); });
     return list.length;
   }
@@ -237,22 +247,22 @@
   // ---- skills ------------------------------------------------------------------------------------------
   function skill(def) { def.owner = 'zarathor'; return DD.registerSkill(def); }
 
-  // Basic: Eldritch Bling
+  // Basic: Eldritch Bling — the Burn payoff (Pebbles' bites, Valdris' flame-forged edges, his fire lanes, burning oil)
   skill({
-    id: 'zar_basic', name: 'Eldritch Bling', icon: '🔮', kind: 'spell', tags: ['fire', 'ranged'],
+    id: 'zar_basic', name: 'Eldritch Bling', icon: '🔮', kind: 'spell', tags: ['fire', 'ranged', 'combo'],
     ap: 1, cooldown: 0,
-    levels: [{ dmg: 5 }],
+    levels: [{ dmg: 5, vsBurn: 2 }],
     target: { type: 'unit', range: [1, 4], los: true, filter: 'enemy' },
-    desc: function (L) { return 'Deal ' + L.dmg + ' fire damage to a foe within 4 and ignite its tile.'; },
-    flavor: 'Eldritch Blast, but bedazzled. The sequins add zero damage and one hundred percent style.',
+    desc: function (L) { return 'Deal ' + L.dmg + ' fire damage to a foe within 4 (+' + L.vsBurn + ' if it is Burning).'; },
+    flavor: 'Eldritch Blast, but bedazzled. Anything already on fire is, in his words, "pre-heated".',
     execute: function (ctx) {
       const u = ctx.user, t = ctx.targetUnit;
       if (!active(t)) return;
+      const hot = DD.Act.hasStatus(t, 'burn');
       DD.FX.projectile(u, t, { kind: 'bolt', color: PURPLE, trail: true });
-      DD.FX.particles(t, { kind: 'coins', count: 5 });
-      const at = { x: t.x, y: t.y };
-      DD.Act.damage(u, t, ctx.L.dmg, { element: 'fire', skill: ctx.skill, tags: ['fire'] });
-      ignite([at], u);
+      DD.FX.particles(t, { kind: hot ? 'fire' : 'coins', count: hot ? 9 : 5 });
+      if (hot) DD.FX.text(t, 'Pre-heated!', { color: FLAME, size: 13 });
+      DD.Act.damage(u, t, ctx.L.dmg + (hot ? ctx.L.vsBurn : 0), { element: 'fire', skill: ctx.skill, tags: ['fire'] });
     },
   });
 
@@ -263,7 +273,7 @@
     levels: [{ dmg: 5 }, { dmg: 6 }, { dmg: 7 }],
     target: { type: 'tile', range: [1, 5], los: true, filter: 'any' },
     area: { shape: 'circle', size: 1 },
-    desc: function (L) { return 'Deal ' + L.dmg + ' fire damage to every foe in radius 1 and ignite the area.'; },
+    desc: function (L) { return 'Deal ' + L.dmg + ' fire damage to every foe in radius 1. Ignites oil, webs and explosive barrels there.'; },
     flavor: 'A normal fireball, but gold-plated. It costs nothing extra because he simply says it does.',
     execute: function (ctx) {
       const u = ctx.user, p = ctx.target;
@@ -276,12 +286,14 @@
     },
   });
 
-  // Throw Money At It (starter): gold for a big hit + Dazzle
+  // Throw Money At It (starter): gold for a big hit + Dazzle. Cooldown 2: in v2 a Dazzle spoils the target's whole next
+  // attack, so a 1-AP hit + Dazzle every other turn was too much control for the price.
   skill({
     id: 'zar_bling_throw', name: 'Throw Money At It', icon: '💸', kind: 'attack', tags: ['ranged', 'gold'],
-    ap: 1, cooldown: 1, hpCost: debtHp,
+    ap: 1, cooldown: 2, hpCost: debtHp,
     levels: [{ dmg: 8, gold: 5 }, { dmg: 10, gold: 5 }, { dmg: 12, gold: 5 }],
-    target: { type: 'unit', range: [1, 5], los: true, filter: 'enemy' },
+    // never at an explosive barrel: the gold is paid in execute, so a barrel shot would be free (Eldritch Bling does barrels)
+    target: { type: 'unit', range: [1, 5], los: true, filter: 'enemy', objects: false },
     canUse: canPay,
     desc: function (L) { return 'Spend ' + L.gold + ' gold: hit a foe within 5 for ' + L.dmg + ' damage and Dazzle it.'; },
     flavor: 'When fire can\'t solve it, throw money at it. He has never once picked the coins back up.',
@@ -345,9 +357,7 @@
     ap: 1, cooldown: 2,
     levels: [{ fire: 5 }, { fire: 7 }, { fire: 9 }],
     target: { type: 'unit', range: [0, 4], los: false, filter: 'allyOrSelf' },
-    desc: function (L) {
-      return 'Ward himself or an ally within 4 until its next turn: every enemy attack that hits it deals ' + L.fire + ' fire damage to the attacker.';
-    },
+    desc: function (L) { return 'Ward himself or an ally within 4 until its next turn: enemies whose attacks hit it take ' + L.fire + ' fire damage.'; },
     flavor: 'Hit me? In THIS economy? In THIS outfit?',
     execute: function (ctx) {
       const u = ctx.user, t = ctx.targetUnit;
@@ -467,7 +477,7 @@
     },
   });
 
-  // Wild Card: deliberately set off wild magic
+  // Wild Card: deliberately set off wild magic, the brief's other obsession
   skill({
     id: 'zar_wild_card', name: 'Wild Card', icon: '🃏', kind: 'buff', tags: ['random', 'wild'],
     ap: 1, cooldown: 1, charges: 2,
@@ -495,7 +505,7 @@
     levels: [{ dmg: 18 }],
     target: { type: 'tile', range: [0, 5], los: true, filter: 'any' },
     area: { shape: 'circle', size: 2 },
-    desc: function (L) { return 'Deal ' + L.dmg + ' fire damage to every foe within 2 tiles of the target and Dazzle the survivors. The area ignites.'; },
+    desc: function (L) { return 'Deal ' + L.dmg + ' fire damage to every foe within 2 tiles of the target and Dazzle the survivors.'; },
     flavor: 'Do not look directly at the bling. Do not look directly at the bling. DO NOT LOOK DIRECTLY AT THE—',
     execute: function (ctx) {
       const u = ctx.user, p = ctx.target;
@@ -512,7 +522,6 @@
         DD.Act.damage(u, f, ctx.L.dmg, { element: 'fire', skill: ctx.skill, tags: ['fire', 'aoe'] });
         if (active(f)) DD.Act.addStatus(f, 'dazzled', { turns: 1 }, u);
       });
-      ignite(ctx.tiles, u);
     },
   });
 
@@ -578,24 +587,25 @@
       start: ['Let\'s light this place up. Literally.', 'Nobody scuff the bling and nobody gets hurt. Much.', 'Roll for initiative! Mine\'s a gold d20.',
         'Marwyn, you\'re standing in my good light.', 'Hope these goons brought a fire extinguisher.'],
       move: ['Strutting. Do not interrupt the strut.', 'Make way for the main character.', 'Every floor is a runway if you believe.',
-        'This dungeon should be honored, frankly.'],
+        'This dungeon should be honored, frankly.', 'Attacks of opportunity? I only take opportunities.'],
       kill: ['And THAT is why you accessorize.', 'Crispy. Golden brown. Perfection.', 'You\'ve been bedazzled. Fatally.',
         'Too much drip? No. Just enough.', 'Next! I have sparkle to spare.'],
       hurt: ['Not the face! Not the rings!', 'Ow! Do you know what this coat cost?', 'You scratched the gold leaf, you animal!',
         'Rude. Incredibly, unfashionably rude.', 'That\'s coming out of your loot.'],
       lowhp: ['I\'m fine! The sunglasses hide the panic.', 'Josiah? Ellaria? Somebody heal the talent!', 'Bleeding on velvet. A true tragedy.',
-        'Okay, wild magic. Do not fail me now.'],
+        'Okay, wild magic. Do not fail me now.', 'Valdris! Forge me some armor! Gold, if you have it!'],
       downed: ['Tell my rings... I loved them...', 'Bury me with the bling. ALL of the bling.', 'Tragic. Iconic, but tragic.',
         'It was the shades. I couldn\'t see. Worth it.'],
       revive: ['The legend returns! Lightly singed.', 'Did anyone touch my stuff? I\'m counting rings.', 'Death? Not in this outfit.',
         'Back, baby. Back and shinier than ever.'],
       ally_down: ['Nooo! That one still owes me twelve gold!', 'Hero down! Gently, people! Mind the coat!', 'Hold on! I\'ll avenge you. Fabulously.',
-        'Betty! Stop eating the loot! We have a hero down!', 'Professor Marbles, wake up! Someone\'s down!'],
+        'Betty! Stop eating the loot! We have a hero down!', 'Professor Marbles, wake up! Someone\'s down!',
+        'Pebbles, fetch help! No, not a stick! HELP!'],
       levelup: ['Level up! New bling unlocked.', 'More power? Put it on my tab.', 'I\'ve grown. Mostly my ego, but still.',
         'Ding! That\'s the sound of my value rising.'],
       victory: ['Another win for the well-dressed.', 'Drip check: passed. Enemies: failed.', 'Loot first. Then more loot. Then a nap.',
         'Mayor Buga, hands off. I saw that coin first.', 'Kiri, check the ethereal plane. Any loot? For me?'],
-      idle: ['Is it hot in here, or is it me? It\'s me.', 'Has anyone seen my other ring? The big one?', 'Syllamin, your heckles need more sparkle.',
+      idle: ['Is it hot in here, or is it me? It\'s me.', 'Hjalmar. My ring. The big one. I know it was you.', 'Syllamin, your heckles need more sparkle.',
         'Slate, you\'d look amazing in gold leaf.', 'Basanos, you are shedding on the velvet. Again.', 'Wild magic is just magic with ambition.'],
       signature: ['BLING SUPERNOVA! Avert your eyes!', 'Behold! MAXIMUM DRIP!', 'Feel the shine! FEEL IT!', 'Fire, gold and bad decisions!',
         'Look upon my bling, ye mighty, and despair!'],

@@ -141,25 +141,47 @@
     return run;
   };
 
-  /** Open the rewards screen as if a fight of `kind` was just won: gold + XP granted, a pending rewards step. */
+  /** Every pending level-up choice of the run, one entry per level (DD.Run.levelQueueFull, else the heroes that leveled). */
+  function levelQueue(fallback) {
+    if (DD.Run && typeof DD.Run.levelQueueFull === 'function') return DD.safe('Run.levelQueueFull', DD.Run.levelQueueFull, DD.Run) || [];
+    return fallback || [];
+  }
+
+  /**
+   * Open the rewards screen as if a fight of `kind` was just won (v2: no XP): gold, the fight's level-up through the
+   * rotation (DD.Run.grantLevelUps, so the screen shows the DM's d4 moment and who leveled) and a pending rewards step.
+   */
   Main.debugRewards = function (kind) {
     const run = DD.UI.run();
     if (!run || !DD.Rewards || typeof DD.Rewards.combat !== 'function') { warnToast('Debug: rewards need a run and DD.Rewards.'); return false; }
     kind = kind || 'normal';
-    const rw = DD.safe('Rewards.combat', DD.Rewards.combat, DD.Rewards, [kind, run.act, DD.Run.rng(), run]) || { gold: 0, xp: 0, choices: [] };
+    const rw = DD.safe('Rewards.combat', DD.Rewards.combat, DD.Rewards, [kind, run.act, DD.Run.rng(), run]) || { gold: 0, levelUpCount: 1, choices: [] };
     if (rw.gold && typeof DD.Run.addGold === 'function') DD.safe('Run.addGold', DD.Run.addGold, DD.Run, [rw.gold]);
-    const leveled = rw.xp && typeof DD.Run.grantXp === 'function' ? DD.safe('Run.grantXp', DD.Run.grantXp, DD.Run, [rw.xp]) || [] : [];
-    const xpByHero = {};
-    run.party.forEach(function (h, i) { if (!h.dead) xpByHero[i] = rw.xp; });
+    const count = rw.levelUpCount !== undefined ? rw.levelUpCount
+      : typeof DD.Run.levelUpsPerWin === 'function' ? DD.safe('Run.levelUpsPerWin', DD.Run.levelUpsPerWin, DD.Run, [kind]) : 1;
+    const levelUps = typeof DD.Run.grantLevelUps === 'function' ? DD.safe('Run.grantLevelUps', DD.Run.grantLevelUps, DD.Run, [count, 'debug']) || [] : [];
     const id = 'rwdbg' + Date.now();
     const data = {
-      id: id, source: kind === 'boss' ? 'boss' : 'combat', kind: kind, act: run.act, gold: rw.gold, xp: rw.xp, xpByHero: xpByHero, leveled: leveled,
+      id: id, source: kind === 'boss' ? 'boss' : 'combat', kind: kind, act: run.act, gold: rw.gold,
+      levelUps: levelUps, leveled: levelQueue(levelUps.map(function (lv) { return lv.heroIdx; })), boss: kind === 'boss',
       downed: [], scars: [], deaths: [], kills: 0, encounterId: null, encounterName: '', actClear: null, text: '', taken: null, skipped: false,
       choices: (rw.choices || []).map(function (c, i) { return Object.assign({}, c, { rid: id + ':' + i }); }),
     };
     run.pending = { type: 'rewards', data: data };
     if (typeof DD.Run.save === 'function') DD.safe('Run.save', DD.Run.save, DD.Run);
     return DD.UI.show('rewards', data);
+  };
+
+  /** One level-up (v2): hero `idx` when given (a named level-up), else the rotation's pick; then the level-up flow. */
+  Main.debugLevelUp = function (idx) {
+    const run = DD.UI.run();
+    if (!run || !DD.Run || typeof DD.Run.levelUp !== 'function') { warnToast('Debug: level-ups need a run.'); return null; }
+    const named = idx !== undefined && idx !== null && idx !== '' && isFinite(+idx);
+    const lv = DD.safe('Run.levelUp', DD.Run.levelUp, DD.Run, named ? [+idx, { src: 'debug' }] : [undefined, { src: 'debug' }]);
+    if (!lv) { warnToast('Debug: nobody can level up (dead, missing or at the max level).'); return null; }
+    const queue = levelQueue([lv.heroIdx]);
+    DD.UI.show('levelup', { queue: queue.length ? queue : [lv.heroIdx] });
+    return lv;
   };
 
   // ---- debug combat ---------------------------------------------------------------------------------------------------
@@ -292,15 +314,8 @@
         break;
       }
       case 'rewards': Main.debugRewards(P.kind || 'normal'); break;
-      case 'levelup': {
-        // Grant just enough XP for everyone to actually gain a level, then run the real flow.
-        const alive = run.party.map(function (h, i) { return i; }).filter(function (i) { return !run.party[i].dead; });
-        const need = alive.reduce(function (m, i) { const h = run.party[i]; return Math.max(m, DD.UI.xpForLevel((h.level || 1) + 1) - (h.xp || 0)); }, 0);
-        let queue = null;
-        if (need > 0 && isFinite(need) && typeof DD.Run.grantXp === 'function') queue = DD.safe('Run.grantXp', DD.Run.grantXp, DD.Run, [need]);
-        DD.UI.show('levelup', { queue: Array.isArray(queue) && queue.length ? queue : alive });
-        break;
-      }
+      // v2: one level-up (the rotation, or &hero=<party index>), then the real level-up flow
+      case 'levelup': if (!Main.debugLevelUp(P.hero)) DD.UI.show('map'); break;
       case 'gameover': DD.UI.show('gameover', { debug: true }); break;
       case 'victory': DD.UI.show('victory', { act: run.act, final: P.final === '1' || run.act >= 3, debug: true }); break;
       default: DD.UI.show(screen);
@@ -332,12 +347,12 @@
           'DDdbg.show(id, params)    — show a UI screen',
           'DDdbg.run() / combat()    — current run / combat state',
           'DDdbg.newRun(ids?, diff?) — start a debug run',
-          'DDdbg.gold(n) / xp(n)     — give gold / XP (prints level-ups)',
+          'DDdbg.gold(n)             — give gold',
+          'DDdbg.levelUp(i?)         — one level-up: hero i, or the rotation (lowest level); opens the flow',
           'DDdbg.item(idOrRarity)    — give an item (id, or common|rare|legendary|cursed)',
           'DDdbg.consumable(id?)     — give a consumable',
           'DDdbg.skill(heroIdx, id)  — teach a skill (replace flow if full)',
           'DDdbg.heal() / scar(i)    — heal party / add a scar',
-          'DDdbg.levelUp(i)          — open the level-up flow for hero i',
           'DDdbg.win() / lose()      — end the current combat',
           'DDdbg.fight(kindOrId)     — start a run combat (normal|elite|boss|encounter id)',
           'DDdbg.event(id?) / shop() / tavern() / rewards(kind?)',
@@ -358,7 +373,8 @@
         return run();
       },
       gold: function (n) { const f = R('addGold'); if (f) f(n === undefined ? 100 : n); return run() && run().gold; },
-      xp: function (n) { const f = R('grantXp'); const lv = f ? f(n === undefined ? 25 : n) : null; if (lv && lv.length) DD.UI.show('levelup', { queue: lv }); return lv; },
+      /** v2 has no XP: kept as an alias of one rotation level-up (old console habits). */
+      xp: function () { return Main.debugLevelUp(); },
       item: function (idOrRarity) {
         if (!run() || !DD.Run) return null;
         let id = idOrRarity;
@@ -383,7 +399,7 @@
       },
       heal: function () { const f = R('healParty'); if (f) f(1); return true; },
       scar: function (i) { const f = R('addScar'); return f ? f(i || 0) : null; },
-      levelUp: function (i) { return DD.UI.show('levelup', { queue: [i || 0] }); },
+      levelUp: function (i) { return Main.debugLevelUp(i); },
       win: function () { if (DD.Act && DD.Act.endCombat) DD.Act.endCombat('victory'); return true; },
       lose: function () { if (DD.Act && DD.Act.endCombat) DD.Act.endCombat('defeat'); return true; },
       fight: function (kindOrId) {

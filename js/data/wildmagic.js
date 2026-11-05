@@ -362,9 +362,11 @@
       if (fx('projectile')) DD.FX.projectile(skyAbove(ctx, foe), foe, { kind: 'bolt', color: '#bfe8ff', size: 2 });
       if (fx('sound')) DD.FX.sound('zap');
       const x = foe.x, y = foe.y;
+      // a flyer stands in no water (v2: flyers ignore the floor), so the bolt has no pool to light up
+      const grounded = !(DD.Grid && typeof DD.Grid.isFlying === 'function' && DD.Grid.isFlying(foe));
       hit(unit, foe, ctx.n.dmg, 'lightning', ['lightning']);
       const t = ctx.tile(x, y);
-      const wet = t && (DD.MapGen.terrainInfo(t.t).liquid === 'water' || (t.surface && t.surface.id === 'water'));
+      const wet = grounded && t && (DD.MapGen.terrainInfo(t.t).liquid === 'water' || (t.surface && t.surface.id === 'water'));
       if (wet && act('applyElement')) DD.Act.applyElement(x, y, 'lightning', unit);
       return { text: 'Lightning strikes ' + foe.name + ' for ' + ctx.n.dmg + ' lightning damage.' };
     },
@@ -481,7 +483,8 @@
 
   WM.register({
     id: 'wm_continental_drift', name: 'Continental Drift', icon: '🌍', weight: 2, good: null, enemySafe: true,
-    text: 'Every unit is pushed 1 tile south (toward the bottom-left).',
+    // grid south (y + 1), not a screen direction: the map turns (the HUD compass needle points grid north)
+    text: 'Every unit is pushed 1 tile south (away from the compass needle).',
     quip: 'The whole battlefield tilts. Somebody bumped the table.',
     canApply: function () { return act('push'); },
     apply: function (unit, ctx) {

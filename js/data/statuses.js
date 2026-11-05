@@ -7,6 +7,9 @@
  *   defaultTurns  — turns when addStatus() gets none (-1 = until removed)
  *   skipFresh     — false: a status applied during the owner's own turn DOES tick at the end of that turn
  *   stunLike      — the unit loses its next turn (0 AP; AI turns pass) and pending wind-ups are interrupted
+ *   element       — the element of the damage it deals (resist 0 to it: the status can't hurt the unit, so hazards
+ *                   that only apply it are no hazard for that unit, DD.Grid.harmlessTo)
+ *   flying        — true | (st, unit) => bool: the unit flies while it has the status (DD.Grid.isFlying)
  */
 (function () {
   'use strict';
@@ -25,7 +28,7 @@
   }
 
   DD.registerStatus({
-    id: 'burn', name: 'Burning', icon: '🔥', color: '#ff7a1a', type: 'debuff', stacking: 'stack', maxStacks: 20,
+    id: 'burn', name: 'Burning', icon: '🔥', color: '#ff7a1a', type: 'debuff', stacking: 'stack', maxStacks: 20, element: 'fire',
     decay: 'never', defaultTurns: -1,
     desc: function (st) { return 'Takes ' + st.stacks + ' fire damage at the end of its turn, then Burn −1. Water or Wet puts it out.'; },
     hooks: {
@@ -37,7 +40,7 @@
   });
 
   DD.registerStatus({
-    id: 'poison', name: 'Poisoned', icon: '☠️', color: '#7bd23c', type: 'debuff', stacking: 'stack', maxStacks: 20,
+    id: 'poison', name: 'Poisoned', icon: '☠️', color: '#7bd23c', type: 'debuff', stacking: 'stack', maxStacks: 20, element: 'poison',
     decay: 'never', defaultTurns: -1,
     desc: function (st) { return 'Takes ' + st.stacks + ' poison damage at the start of its turn (ignores Block), then Poison −1.'; },
     hooks: {

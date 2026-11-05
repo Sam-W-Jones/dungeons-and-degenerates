@@ -2609,4 +2609,1008 @@
     problems.slice(0, 20).forEach(function (p) { t.fail(p); });
     t.ok(!problems.length && turns > N * 5, N + ' random fights: every unit one turn per entry per round, AP only on its own turn, sane durations, every fight ends (' + problems.length + ' problems)');
   });
+
+  // =====================================================================================================
+  // v2: attacks of opportunity + reach-aware AI targeting (docs/notes/rules.md "Attacks of opportunity", "Targeting")
+  // =====================================================================================================
+  /** Run fn while recording 'opportunity:attack' events: [{ a: attacker defId, m: mover defId, skill, at }]. */
+  function opportunities(fn) {
+    const seen = [];
+    const off = DD.Events.on('opportunity:attack', function (e) { seen.push({ a: e.attacker.defId, m: e.mover.defId, skill: e.skillId, at: e.from }); });
+    try { fn(); } finally { off(); }
+    return seen;
+  }
+
+  T.suite('engine: v2 attacks of opportunity — a move away from a melee foe provokes one free basic attack', function (t) {
+    quiet({ w: 9, h: 9, heroes: [H(2, 4)], enemies: [E(3, 4)], enemyAi: false });
+    const h = hero(), g = foe(), s = DD.Combat.state;
+    const e = DD.Combat.reachable(h).get('0,4');
+    t.ok(e && e.provokes.length === 1 && e.provokes[0] === g.id, 'Combat.reachable marks the move away: provokes [the grunt]');
+    t.eq(DD.Combat.reachable(h).get('2,3').provokes.length, 1, 'any step off a tile next to it leaves its reach (4-way adjacency)');
+    const pv = DD.Combat.provokes(h, 0, 4);
+    t.ok(pv.length === 1 && pv[0].unitId === g.id && pv[0].skillId === 'test_grunt_stab' && pv[0].dmg === 4, 'Combat.provokes: who, with which skill, for how much (' + JSON.stringify(pv) + ')');
+    const hp = h.hp, ap = h.ap, n0 = s.log.length, m0 = s.mutations;
+    let ok = false;
+    const seen = opportunities(function () { ok = DD.Combat.move(h, 0, 4); });
+    t.ok(ok, 'the move happens');
+    t.ok(seen.length === 1 && seen[0].a === 'test_grunt' && seen[0].m === 'test_mage' && seen[0].skill === 'test_grunt_stab', 'opportunity:attack (' + JSON.stringify(seen) + ')');
+    t.ok(seen[0] && seen[0].at.x === 2 && seen[0].at.y === 4, 'it strikes as the mover leaves the tile next to it');
+    t.eq(h.hp, hp - 4, 'the grunt stabs it (4, normal damage rules)');
+    t.ok(h.x === 0 && h.y === 4, 'and the walk goes on to the destination');
+    t.eq(h.ap, ap - 1, 'one move action: 1 AP, nothing else');
+    t.ok(logSince(n0, /attack of opportunity on Wizzy McTest \(Stab\)/), 'logged');
+    t.ok(s.mutations > m0 && !DD.Combat.canUndo(), 'a move that provoked can\'t be undone');
+    t.eq(g.oppRound, s.round, 'the grunt\'s reaction is used for this round');
+    t.ok((g.skillSlots[0].cd || 0) === 0 && (g.skillSlots[0].uses || 0) === 0, 'free: no cooldown, no use counted');
+    t.ok(DD.Combat.move(h, 2, 4) && h.hp === hp - 4, 'walking back next to it never provokes (entering its reach)');
+    t.eq(DD.Combat.reachable(h).get('2,1').provokes.length, 0, 'its reaction is spent: the next move away is free this round');
+    t.ok(DD.Combat.move(h, 2, 1) && h.hp === hp - 4, 'at most one attack of opportunity per attacker per round');
+    DD.Combat.endTurn();
+    t.ok(s.round === 2 && cur() === h, 'round 2, the mage again');
+    DD.Act.teleport(h, 2, 4);
+    t.eq(DD.Combat.reachable(h).get('0,4').provokes.length, 1, 'a new round: the grunt may strike again');
+    DD.Combat.move(h, 0, 4);
+    t.eq(h.hp, hp - 8, 'and does');
+    // walking past a foe provokes too (into its reach and out again)
+    quiet({ w: 9, h: 9, heroes: [H(1, 3)], enemies: [E(3, 4)], enemyAi: false });
+    const p = DD.Combat.reachable(hero()).get('5,3');
+    t.ok(p && p.provokes.length === 1 && p.path.some(function (q) { return q.x === 3 && q.y === 3; }), 'the only path within its move passes the grunt: provokes 1');
+    const hp2 = hero().hp;
+    DD.Combat.move(hero(), 5, 3);
+    t.ok(hero().hp === hp2 - 4 && hero().x === 5, 'walking past it costs a stab');
+    // undo still works for a clean move
+    quiet({ w: 9, h: 9, heroes: [H(1, 1)], enemies: [E(7, 7)], enemyAi: false });
+    t.ok(DD.Combat.move(hero(), 3, 1) && DD.Combat.canUndo(), 'a move that provoked nothing can still be undone');
+  });
+
+  T.suite('engine: v2 attacks of opportunity — paths provoke as few attacks as possible (reachable, path, previews)', function (t) {
+    // mage on (2,2), grunt on (3,3): (3,2) is next to the grunt; the long way round (2,1)-(3,1)-(4,1) is not
+    quiet({ w: 9, h: 9, heroes: [H(2, 2)], enemies: [E(3, 3)], enemyAi: false });
+    const h = hero(), g = foe();
+    const e = DD.Combat.reachable(h).get('4,2');
+    t.ok(e && e.provokes.length === 0 && e.cost === 4 && e.path.length === 4, 'within its move the path goes the long way round: provokes nothing (' + JSON.stringify(e && e.path) + ')');
+    const plain = DD.Grid.reachable(h, 4).get('4,2');
+    t.ok(plain && plain.path.length === 2 && plain.provokes === undefined, 'Grid.reachable without aoo: the cheapest path, no provokes field (unchanged)');
+    t.eq(DD.Grid.provokes(h, plain.path).join(','), g.id, 'Grid.provokes: that short cut would provoke the grunt');
+    const gp = DD.Grid.path(h, 4, 2, { maxCost: 4, aoo: true });
+    t.ok(gp && gp.length === 4 && DD.Grid.provokes(h, gp).length === 0, 'Grid.path with aoo: the same safe path');
+    t.ok(DD.Grid.path(h, 4, 2, { maxCost: 2, aoo: true }).length === 2, 'no safe path within the budget: the provoking one');
+    const e2 = DD.Combat.reachable(h).get('4,3');
+    t.ok(e2 && e2.provokes.length === 1, 'some tiles can only be reached by provoking (4,3: the cheap way passes next to it)');
+    t.eq(DD.AI.provokes(h, 4, 3).join(','), g.id, 'AI.provokes(unit, x, y)');
+    t.eq(DD.AI.provokes(h, 8, 8), null, 'AI.provokes: null when out of reach');
+    t.eq(DD.Combat.provokes(h, 4, 2).length, 0, 'Combat.provokes: [] for the safe path');
+    // a dry run of a move sees the attack; the real state does not change
+    const hp = h.hp;
+    const sim = DD.Targeting.simulate(function () {
+      const su = DD.Combat.byId(h.id);
+      DD.Combat.move(su, 4, 3);
+      return { hp: su.hp, at: su.x + ',' + su.y, used: DD.Combat.byId(g.id).oppRound };
+    });
+    t.ok(sim && sim.hp === hp - 4 && sim.at === '4,3', 'simulate(move): the attack of opportunity happens in the dry run (' + JSON.stringify(sim) + ')');
+    t.ok(h.hp === hp && h.x === 2 && (g.oppRound || 0) === 0, 'the real state is untouched');
+    // speed: AoO-aware reachable on a busy 12x12 board
+    quiet({ w: 12, h: 12, heroes: [H(5, 5), H(4, 6, 'test_knight'), H(6, 6, 'test_rogue')], enemies: [E(5, 6), E(6, 5), E(4, 5), E(5, 4, 'test_brute'), E(9, 9, 'test_archer')], enemyAi: false });
+    const t0 = performance.now();
+    let n = 0;
+    for (let i = 0; i < 20; i++) n += DD.Grid.reachable(hero(0), 6, { aoo: true }).size;
+    t.log('20 AoO-aware reachable calls (mov 6, 4 adjacent foes): ' + (performance.now() - t0).toFixed(1) + 'ms');
+    t.ok(n >= 0, 'AoO-aware reachable runs on a crowded board');
+  });
+
+  T.suite('engine: v2 attacks of opportunity — what never provokes', function (t) {
+    const A = DD.Act;
+    function setup(foeId, extra) {
+      quiet(Object.assign({ w: 9, h: 9, heroes: [H(2, 4)], enemies: [E(3, 4, foeId)], enemyAi: false }, extra || {}));
+      return { h: hero(), g: foe() };
+    }
+    function lost(u, fn) { const hp = u.hp; const seen = opportunities(fn); return { dmg: hp - u.hp, n: seen.length }; }
+    function walkAway(u) { return lost(u, function () { DD.Combat.move(u, 0, 4); }); }
+    let s = setup('test_archer');
+    t.eq(walkAway(s.h).n, 0, 'an archer (range 2-6, no melee attack) makes none');
+    s = setup('test_healer');
+    t.eq(walkAway(s.h).n, 0, 'a medic (Mend, Poke range 1-3) makes none: melee = max range 1');
+    ['stun', 'sleep', 'frozen', 'sheep', 'dazzled', 'confused'].forEach(function (id) {
+      s = setup();
+      A.addStatus(s.g, id, { turns: 1 });
+      t.eq(walkAway(s.h).n, 0, id + ': no attack of opportunity');
+    });
+    s = setup();
+    A.addStatus(s.h, 'stealth', { turns: 1 });
+    t.eq(walkAway(s.h).n, 0, 'a stealthed mover slips away');
+    s = setup();
+    s.h.flags.noProvoke = true;
+    t.eq(walkAway(s.h).n, 0, 'flags.noProvoke: its moves never provoke');
+    s = setup();
+    s.g.flags.noOpportunity = true;
+    t.eq(walkAway(s.h).n, 0, 'flags.noOpportunity: it never strikes');
+    s = setup(null, { heroes: [H(2, 4), H(7, 7, 'test_cleric')] });
+    A.addStatus(s.g, 'taunt', { turns: 1 }, hero(1));
+    t.eq(walkAway(s.h).n, 0, 'a foe taunted by someone else only strikes its taunter');
+    s = setup(null, { heroes: [H(2, 4), H(2, 5, 'test_knight')], enemies: [E(7, 7)] });
+    t.eq(walkAway(s.h).n, 0, 'allies never strike (the knight next to it)');
+    // displacement and skills are not move actions
+    s = setup();
+    t.eq(lost(s.h, function () { A.teleport(s.h, 0, 4); }).n, 0, 'teleport');
+    s = setup();
+    t.eq(lost(s.h, function () { A.push(null, s.h, { x: -1, y: 0 }, 2); }).n, 0, 'push');
+    s = setup();
+    t.eq(lost(s.h, function () { A.pull(null, s.h, { x: 0, y: 4 }, 2); }).n, 0, 'pull');
+    s = setup(null, { enemies: [E(3, 4), E(7, 7, 'test_minion')] });
+    t.eq(lost(s.h, function () { A.swap(s.h, foe(1), { force: true }); }).n, 0, 'swap');
+    s = setup();
+    t.eq(lost(s.h, function () { A.moveAlong(s.h, [{ x: 1, y: 4 }, { x: 0, y: 4 }]); }).n, 0, 'a scripted walk without provoke (skill dashes, leaps) never provokes');
+    setup(null, { heroes: [H(2, 4, 'test_knight', { skills: ['test_charge'] })], enemies: [E(3, 4), E(2, 1, 'test_minion')] });
+    const k = hero();
+    k.block = 0;
+    const r = lost(k, function () { DD.Combat.useSkill(k, slotOf(k, 'test_charge'), 2, 1); });
+    t.ok(r.n === 0 && k.y === 2, 'a charge skill dashes away from the grunt for free (' + k.x + ',' + k.y + ')');
+    setup(null, { heroes: [H(2, 4, 'test_mage', { skills: ['test_blink'] })] });
+    const bl = lost(hero(), function () { DD.Combat.useSkill(hero(), slotOf(hero(), 'test_blink'), 0, 4); });
+    t.ok(bl.n === 0 && hero().x === 0, 'Blink teleports out for free');
+    // a downed hero does not strike; deployment moves never provoke
+    quiet({ w: 9, h: 9, heroes: [H(2, 4, 'test_knight'), H(8, 8, 'test_cleric')], enemies: [E(3, 4)], enemyAi: false });
+    const kn = hero(0), gr = foe();
+    kn.block = 0; kn.hp = 1;
+    A.damage(null, kn, 5, { cause: 'other' });
+    t.ok(kn.downed, 'knight downed');
+    t.eq(lost(gr, function () { DD.AI.moveTo(gr, 6, 4); }).n, 0, 'a downed knight makes no attack of opportunity');
+    quiet({ w: 9, h: 9, heroes: [H(2, 4)], enemies: [E(3, 3)], deploy: true, deployTiles: [{ x: 2, y: 4 }, { x: 2, y: 3 }, { x: 1, y: 3 }], enemyAi: false });
+    t.ok(DD.Combat.isDeploying(), 'deployment');
+    const dm = lost(hero(), function () { DD.Combat.deployMove(hero(), 2, 3); DD.Combat.deployMove(hero(), 1, 3); });
+    t.ok(dm.n === 0 && hero().x === 1, 'deployment moves never provoke');
+  });
+
+  T.suite('engine: v2 attacks of opportunity — interrupts, heroes and summons strike too, several attackers', function (t) {
+    const A = DD.Act, AI = DD.AI;
+    // the boss's Assertion Slam pushes 1: the walk ends where it lands
+    quiet({ w: 9, h: 9, heroes: [H(4, 4)], enemies: [E(5, 4, 'test_boss')], enemyAi: false });
+    let h = hero();
+    const hp = h.hp, ap = h.ap;
+    t.ok(DD.Act.opportunitySlot(foe()) && DD.Act.opportunitySlot(foe()).id === 'test_boss_slam', 'an enemy strikes with its first ready melee skill (the slam)');
+    t.ok(!DD.Act.opportunitySlot(h), 'a hero with a ranged basic attack has none');
+    t.eq(DD.Combat.reachable(h).get('4,1').provokes.length, 1, 'the boss is in the way of every move');
+    t.ok(DD.Combat.move(h, 4, 1), 'Combat.move: true, the move action happened');
+    t.ok(h.hp === hp - 10 && h.x === 3 && h.y === 4, 'slammed (10) and pushed 1: the walk ends there (' + h.x + ',' + h.y + ')');
+    t.eq(h.ap, ap - 1, 'the move action is spent');
+    // a lethal attack of opportunity: downed on the tile it tried to leave
+    quiet({ w: 9, h: 9, heroes: [H(2, 4), H(8, 8, 'test_cleric')], enemies: [E(3, 4)], enemyAi: false });
+    h = hero(0);
+    h.hp = 3;
+    DD.Combat.move(h, 0, 4);
+    t.ok(h.downed && h.x === 2 && h.y === 4, 'downed by the stab, it stays where it was');
+    // a stunning attack of opportunity ends the walk too
+    withTemp('skills', [{ id: 'test_tmp_bonk', name: 'Bonk', owner: 'enemy', ap: 0, kind: 'attack', tags: ['melee'], levels: [{ dmg: 1 }],
+      target: { type: 'unit', range: [1, 1], filter: 'enemy' }, desc: function () { return 'Deal 1 damage and Stun.'; },
+      execute: function (ctx) { if (ctx.targetUnit) { A.damage(ctx.user, ctx.targetUnit, 1); A.addStatus(ctx.targetUnit, 'stun', { turns: 1 }, ctx.user); } } }], function () {
+      withTemp('enemies', [{ id: 'test_tmp_bonker', name: 'Bonker', act: 1, tier: 'normal', hp: 20, sprite: SPR, skills: ['test_tmp_bonk'], ai: 'default' }], function () {
+        quiet({ w: 9, h: 9, heroes: [H(2, 4)], enemies: [E(3, 4, 'test_tmp_bonker')], enemyAi: false });
+        DD.Combat.move(hero(), 0, 4);
+        t.ok(has(hero(), 'stun') && hero().x === 2, 'stunned by the attack of opportunity: the walk stops at once');
+        t.eq(DD.Combat.reachable(hero()).size, 0, 'and it cannot move on');
+      });
+    });
+    // heroes strike enemies that walk away from them (on the enemy's move action), for free
+    quiet({ w: 9, h: 9, heroes: [H(3, 4, 'test_knight')], enemies: [E(4, 4)], enemyAi: false });
+    const k = hero(), g = foe();
+    const kap = k.ap, uses = k.basic.uses || 0;
+    const seen = opportunities(function () { AI.moveTo(g, 7, 4); });
+    t.ok(seen.length === 1 && seen[0].a === 'test_knight' && seen[0].skill === 'test_slash', 'the knight strikes with his basic attack');
+    t.ok(g.hp === g.maxHp - 5 && g.x === 7, 'the grunt takes 5 and walks on');
+    t.ok(k.ap === kap && (k.basic.uses || 0) === uses && !k.basic.usedThisTurn, 'free: no AP, no use');
+    // hero summons strike too; several attackers each strike once, in unit order
+    quiet({ w: 9, h: 9, heroes: [H(3, 4, 'test_knight'), H(4, 3, 'test_rogue')], summons: [{ id: 'test_hound', x: 5, y: 4, owner: 0 }], enemies: [E(4, 4)], enemyAi: false });
+    const g2 = foe();
+    const many = opportunities(function () { AI.moveTo(g2, 4, 7); });
+    t.eq(many.map(function (x) { return x.a; }).join(' '), 'test_knight test_rogue test_hound', 'knight, rogue and hound all strike as it leaves (' + JSON.stringify(many) + ')');
+    t.ok(g2.dead || g2.hp === g2.maxHp - 5 - 4 - 3 - 1, 'slash 5 + stab 4 + bite 3, then the stab\'s Bleed ticks on the move (1): ' + g2.hp);
+  });
+
+  T.suite('engine: v2 attacks of opportunity — hooks and riders (modifyOpportunity, onOpportunityAttack, d.opportunity)', function (t) {
+    const A = DD.Act;
+    function setup() { quiet({ w: 9, h: 9, heroes: [H(2, 4)], enemies: [E(3, 4)], enemyAi: false }); return { h: hero(), g: foe() }; }
+    let s = setup();
+    s.h.hooks = { modifyOpportunity: function (o) { o.cancel = true; } };
+    t.eq(DD.Combat.reachable(s.h).get('0,4').provokes.length, 0, 'the mover\'s modifyOpportunity cancel: "can\'t be opportunity-attacked" (paths know it)');
+    let hp = s.h.hp;
+    DD.Combat.move(s.h, 0, 4);
+    t.eq(s.h.hp, hp, 'and no attack happens');
+    s = setup();
+    s.g.hooks = { modifyOpportunity: function (o) { if (o.attacker === s.g) o.flat += 3; } };
+    t.eq(DD.Combat.provokes(s.h, 0, 4)[0].dmg, 7, 'the attacker\'s flat bonus shows in Combat.provokes');
+    hp = s.h.hp;
+    DD.Combat.move(s.h, 0, 4);
+    t.eq(s.h.hp, hp - 7, '"+3 damage on attacks of opportunity" (o.flat)');
+    s = setup();
+    const calls = [];
+    let flagged = 0, other = 0;
+    s.g.hooks = {
+      onOpportunityAttack: function (o) { calls.push('attacker:' + o.attacker.defId + '>' + o.mover.defId + ':' + o.dealt); },
+      modifyOutgoingDamage: function (d) { if (d.opportunity) flagged++; else other++; },
+    };
+    s.h.hooks = { onOpportunityAttack: function (o) { calls.push('mover:' + o.skill.id); } };
+    DD.Combat.move(s.h, 0, 4);
+    t.eq(calls.join(' '), 'attacker:test_grunt>test_mage:4 mover:test_grunt_stab', 'onOpportunityAttack on both sides, o.dealt');
+    t.ok(flagged === 1 && other === 0, 'the hit carries d.opportunity');
+    A.teleport(s.h, 2, 4);
+    DD.AI.useNow(s.g, 'test_grunt_stab', s.h, {});
+    t.ok(other === 1 && flagged === 1, 'an ordinary stab does not');
+    s = setup();
+    A.addStatus(s.g, 'empowered');
+    hp = s.h.hp;
+    DD.Combat.move(s.h, 0, 4);
+    t.ok(s.h.hp === hp - 4 && has(s.g, 'empowered'), 'Empowered is neither used nor consumed by an attack of opportunity');
+    s = setup();
+    A.addStatus(s.g, 'weak', { turns: 1 });
+    t.eq(DD.Combat.provokes(s.h, 0, 4)[0].dmg, 3, 'Weak shows in the estimate (4 → 3)');
+    hp = s.h.hp;
+    DD.Combat.move(s.h, 0, 4);
+    t.eq(s.h.hp, hp - 3, 'and in the hit (normal damage rules)');
+    // ctx.opportunity reaches the skill and onSkillUsed; the mover's tile only (an area basic hits nobody else)
+    quiet({ w: 9, h: 9, heroes: [H(2, 4), H(3, 3, 'test_cleric')], enemies: [E(3, 4, 'test_brute')], enemyAi: false });
+    const ctx = captureSkill(foe(), function () { DD.Combat.move(hero(0), 0, 4); });
+    t.ok(ctx && ctx.opportunity && ctx.skill.id === 'test_smash' && ctx.tiles.length === 1, 'ctx.opportunity, one tile (the brute\'s row smash)');
+    t.eq(hero(1).hp, hero(1).maxHp, 'the cleric beside the mover is not hit by it');
+  });
+
+  T.suite('engine: v2 targeting — engaged brutes stick, the AoO holds the line, divers dive, ranged stay pinned', function (t) {
+    const AI = DD.AI;
+    // grunt (4,4) engaged with the knight (3,4); the mage (4,2) on 3 HP is one step away — a kill
+    function layout(knightAt) {
+      quiet({ w: 9, h: 9, heroes: [H(4, 2), H(knightAt.x, knightAt.y, 'test_knight')], enemies: [E(4, 4)], enemyAi: false });
+      const m = hero(0), k = hero(1), g = foe();
+      m.hp = 3; k.block = 0;
+      return { m: m, k: k, g: g };
+    }
+    let L = layout({ x: 3, y: 4 });
+    AI.act(L.g);
+    t.ok(L.m.hp === 3 && L.k.hp === L.k.maxHp - 3 && L.g.x === 4 && L.g.y === 4, 'engaged: it stabs the knight next to it (3) instead of walking off to finish the mage');
+    L = layout({ x: 6, y: 4 });
+    AI.act(L.g);
+    t.ok(L.m.downed, 'not engaged (the knight 2 tiles off): it goes for the kill on the mage');
+    L = layout({ x: 3, y: 4 });
+    L.k.oppRound = DD.Combat.state.round;
+    AI.act(L.g);
+    t.ok(L.m.downed && L.g.hp === L.g.maxHp, 'engaged, but the knight\'s reaction is spent: nothing holds it — the attack of opportunity is what holds the line');
+    L = layout({ x: 3, y: 4 });
+    L.g.hp = 4;
+    AI.act(L.g);
+    t.ok(L.m.hp === 3 && L.g.x === 4, 'it never walks into a lethal attack of opportunity');
+    // engaged with a mage (no attack of opportunity to fear): it still sticks to the hero next to it
+    quiet({ w: 9, h: 9, heroes: [H(3, 4), H(6, 4, 'test_cleric')], enemies: [E(4, 4)], enemyAi: false });
+    hero(1).hp = 12;
+    const mhp = hero(0).hp;
+    AI.act(foe());
+    t.ok(hero(0).hp === mhp - 4 && hero(1).hp === 12 && foe().x === 4, 'it stabs the mage next to it rather than walking to the wounded cleric');
+    // the reach-aware list for planners
+    L = layout({ x: 3, y: 4 });
+    const list = AI.reachableTargets(L.g);
+    const byId = {};
+    list.forEach(function (x) { byId[x.unit.id] = x; });
+    t.ok(list.length === 2 && list[0].unit === L.k && list[0].engaged && list[0].provokes.length === 0 && list[0].cost === 0, 'AI.reachableTargets: the engaged knight first (no walk, no provoke)');
+    t.ok(byId[L.m.id] && byId[L.m.id].provokes.length === 1 && byId[L.m.id].provokes[0] === L.k.id && byId[L.m.id].est === 4, 'the mage: reachable by provoking the knight, 4 damage');
+    t.ok(AI.engaged(L.g).length === 1 && AI.engaged(L.g)[0] === L.k, 'AI.engaged: the knight would strike if it walked away');
+    t.ok(AI.aooCost(L.g, byId[L.m.id]) === 9.5 && AI.opportunityDmg(L.k, L.g) === 5, 'AI.aooCost / AI.opportunityDmg (5 × 1.5 + 2)');
+    // divers: assassins go for the weak and shrug off the hit
+    withTemp('enemies', [{ id: 'test_tmp_shank', name: 'Shank', act: 1, tier: 'normal', hp: 14, mov: 3, sprite: SPR, skills: ['test_grunt_stab'], ai: 'assassin' },
+      { id: 'test_tmp_skirm', name: 'Skirm', act: 1, tier: 'normal', hp: 14, mov: 3, sprite: SPR, skills: ['test_grunt_stab'], ai: { style: 'skirmisher' } }], function () {
+      ['test_tmp_shank', 'test_tmp_skirm'].forEach(function (id) {
+        quiet({ w: 9, h: 9, heroes: [H(4, 2), H(3, 4, 'test_knight')], enemies: [E(4, 4, id)], enemyAi: false });
+        const m = hero(0), k = hero(1), a = foe();
+        m.hp = 3; k.block = 0;
+        t.ok(AI.isDiver(a), id + ': a diver style (' + AI.styleOf(a).style + ')');
+        AI.act(a);
+        t.ok(m.downed && a.hp === a.maxHp - 5 && k.hp === k.maxHp, id + ': disengages through the knight\'s slash (5) and downs the mage');
+      });
+      quiet({ w: 9, h: 9, heroes: [H(4, 2), H(3, 4, 'test_knight')], enemies: [E(4, 4, 'test_tmp_shank')], enemyAi: false });
+      hero(0).hp = 3; hero(1).block = 0; foe().hp = 5;
+      AI.act(foe());
+      t.ok(hero(0).hp === 3 && !foe().dead, 'even an assassin does not walk into a lethal attack of opportunity');
+      quiet({ w: 9, h: 9, heroes: [H(4, 2), H(3, 4, 'test_knight')], enemies: [E(4, 4, 'test_tmp_shank')], enemyAi: false });
+      const kk = hero(1);
+      hero(0).hp = 3; kk.block = 0;
+      kk.hooks = { modifyOpportunity: function (o) { if (o.attacker === kk) o.flat += 10; } };
+      AI.act(foe());
+      t.ok(hero(0).hp === 3 && foe().hp === foe().maxHp, 'the AI reads modifyOpportunity bonuses: a +10 reaction (15 ≥ its 14 HP) keeps even the assassin put');
+    });
+    // ranged: an archer next to the knight cannot shoot him (min range 2) and stepping away would cost a slash: it stays
+    quiet({ w: 9, h: 9, heroes: [H(1, 1), H(4, 4, 'test_knight')], enemies: [E(5, 4, 'test_archer')], enemyAi: false });
+    let ar = foe();
+    const kn = hero(1);
+    kn.block = 0;
+    const seen = opportunities(function () { AI.act(ar); });
+    t.ok(ar.x === 5 && ar.y === 4 && seen.length === 0 && kn.hp === kn.maxHp, 'pinned by the knight: it does not step away to shoot');
+    quiet({ w: 9, h: 9, heroes: [H(4, 4)], enemies: [E(5, 4, 'test_archer')], enemyAi: false });
+    ar = foe();
+    const mh = hero().hp;
+    AI.act(ar);
+    t.ok(DD.Grid.dist(ar, hero()) >= 3 && hero().hp === mh - 4, 'next to a mage (no melee attack) it steps back and shoots');
+    // ranged picks a target it reaches without walking into the party
+    quiet({ w: 10, h: 9, heroes: [H(1, 4, 'test_cleric'), H(5, 4, 'test_knight')], enemies: [E(8, 4, 'test_archer')], enemyAi: false });
+    hero(0).hp = 9; hero(1).block = 0;
+    ar = foe();
+    AI.act(ar);
+    t.ok(hero(1).hp === hero(1).maxHp - 3 && hero(0).hp === 9 && ar.x >= 7, 'in range now: it shoots the knight from where it stands rather than walking up to the wounded cleric');
+  });
+
+  T.suite('engine: v2 targeting — taunt still forces (through attacks of opportunity), planners get reachableTargets', function (t) {
+    const A = DD.Act, AI = DD.AI;
+    // the grunt is engaged with the rogue; the knight 2 tiles away taunts it: it walks to the knight, eating the rogue's stab
+    quiet({ w: 9, h: 9, heroes: [H(3, 4, 'test_rogue'), H(6, 4, 'test_knight')], enemies: [E(4, 4)], enemyAi: false });
+    const r = hero(0), k = hero(1), g = foe();
+    k.block = 0;
+    A.addStatus(g, 'taunt', { turns: 1 }, k);
+    const seen = opportunities(function () { AI.act(g); });
+    t.ok(seen.length === 1 && seen[0].a === 'test_rogue', 'it walks off anyway: the rogue gets the stab');
+    t.ok(k.hp === k.maxHp - 3 && r.hp === r.maxHp, 'and it stabs the taunting knight (3), not the rogue');
+    // a taunted unit next to someone else does not strike them as they walk away (only its taunter)
+    quiet({ w: 9, h: 9, heroes: [H(3, 4), H(8, 8, 'test_knight')], enemies: [E(4, 4)], enemyAi: false });
+    A.addStatus(foe(), 'taunt', { turns: 1 }, hero(1));
+    const hp = hero(0).hp;
+    DD.Combat.move(hero(0), 1, 4);
+    t.eq(hero(0).hp, hp, 'taunted by the knight: no attack of opportunity on the mage');
+    // custom planners: api.reachableTargets / api.engaged / api.provokes
+    let got = null;
+    withTemp('enemies', [{ id: 'test_tmp_picky', name: 'Picky', act: 1, tier: 'normal', hp: 14, mov: 3, sprite: SPR, skills: ['test_grunt_stab'],
+      ai: function (u, api) {
+        const list = api.reachableTargets(u);
+        const r43 = api.reachable(u).get('4,3');
+        got = { first: list[0] && list[0].unit.defId, n: list.length, engaged: api.engaged(u).map(function (x) { return x.defId; }).join(','),
+          pv: (api.provokes(u, 4, 3) || []).length, reach: r43 ? r43.provokes.length : -1 };
+        if (list[0]) { api.moveTo(u, list[0].moveTo.x, list[0].moveTo.y); api.act(u, list[0].skillId, list[0].unit, {}); }
+      } }], function () {
+      quiet({ w: 9, h: 9, heroes: [H(4, 2), H(3, 4, 'test_knight')], enemies: [E(4, 4, 'test_tmp_picky')], enemyAi: false });
+      hero(0).hp = 3; hero(1).block = 0;
+      AI.act(foe());
+      t.ok(got && got.first === 'test_knight' && got.n === 2 && got.engaged === 'test_knight' && got.pv === 1 && got.reach === 1, 'api.reachableTargets / engaged / provokes / reachable (' + JSON.stringify(got) + ')');
+      t.ok(hero(1).hp === hero(1).maxHp - 3 && hero(0).hp === 3, 'the planner hits the engaged knight');
+    });
+  });
+
+  T.suite('engine: v2 attacks of opportunity — invariants in random fights (fuzz)', function (t) {
+    const HEROES = ['test_knight', 'test_mage', 'test_cleric', 'test_rogue', 'test_summoner'];
+    const FOES = ['test_grunt', 'test_archer', 'test_healer', 'test_coward', 'test_minion', 'test_bomber', 'test_web_spinner', 'test_brute'];
+    const problems = [];
+    let n = 0, heroSide = 0;
+    const N = t.n || 20;
+    for (let f = 0; f < N; f++) {
+      const rng = DD.RNG('aoo-fuzz:' + f);
+      const used = {};
+      const spot = function (x0, x1) { for (let g = 0; g < 50; g++) { const x = rng.int(x0, x1), y = rng.int(0, 7); if (!used[x + ',' + y]) { used[x + ',' + y] = 1; return { x: x, y: y }; } } return { x: x0, y: 0 }; };
+      const heroes = rng.shuffle(HEROES.slice()).slice(0, rng.int(2, 4)).map(function (id) { const p = spot(1, 3); return { id: id, x: p.x, y: p.y, level: rng.int(1, 4) }; });
+      const enemies = [];
+      for (let i = 0, k = rng.int(2, 5); i < k; i++) { const p = spot(4, 7); enemies.push({ id: FOES[rng.int(0, FOES.length - 1)], x: p.x, y: p.y }); }
+      DD.Combat.sandbox({ w: 9, h: 8, seed: 'aoo-fz' + f, initiative: rng.chance(0.5) ? 'roll' : 'heroesFirst', heroes: heroes, enemies: enemies });
+      const s = DD.Combat.state;
+      const per = {};
+      let cur = null;
+      const offs = [DD.Events.on('opportunity:attack', function (e) {
+        n++;
+        cur = e;
+        if (e.attacker.side === 'hero') heroSide++;
+        const k = s.round + ':' + e.attackerId;
+        if (per[k]) problems.push('fight ' + f + ': ' + e.attacker.defId + ' struck twice in round ' + s.round);
+        per[k] = 1;
+        if (DD.Grid.dist(e.attacker, e.from) !== 1 || e.mover.x !== e.from.x || e.mover.y !== e.from.y) problems.push('fight ' + f + ': ' + e.attacker.defId + ' struck a mover that was not next to it');
+        if (!DD.Grid.hostile(e.attacker, e.mover)) problems.push('fight ' + f + ': ' + e.attacker.defId + ' struck a friend');
+        if (DD.Act.isStunned(e.attacker) || DD.Act.hasStatus(e.attacker, 'sheep') || e.attacker.downed) problems.push('fight ' + f + ': an incapacitated ' + e.attacker.defId + ' struck');
+        if (!DD.Act.opportunitySlot(e.attacker)) problems.push('fight ' + f + ': ' + e.attacker.defId + ' has no melee skill');
+      }), DD.Events.on('turn:end', function () {
+        // (review) nobody ends a turn inside someone else (a walker downed on a friend's tile is moved off it)
+        const at = {};
+        s.units.forEach(function (u) {
+          if (u.dead) return;
+          const k = u.x + ',' + u.y;
+          if (at[k]) problems.push('fight ' + f + ' round ' + s.round + ': ' + u.defId + ' shares ' + k + ' with ' + at[k]);
+          at[k] = u.defId;
+        });
+      })];
+      // (review) the strike lands on the mover, never on the friend it is passing
+      DD.Act.addRule({ id: 'test_aoo_fuzz', name: 'AoO fuzz', hooks: { modifyIncomingDamage: function (d) {
+        if (d.opportunity && d.cause === 'skill' && cur && d.target !== cur.mover) problems.push('fight ' + f + ': ' + d.source.defId + '\'s attack of opportunity hit ' + d.target.defId + ', not the mover ' + cur.mover.defId);
+      } } });
+      try { DD.AutoPlay.runBattle(20); } catch (e) { problems.push('fight ' + f + ': threw ' + (e && e.message)); }
+      offs.forEach(function (o) { o(); });
+      if (!s.result && s.round <= 20) problems.push('fight ' + f + ': unfinished');
+    }
+    t.log(N + ' fights, ' + n + ' attacks of opportunity (' + heroSide + ' by the heroes\' side)');
+    problems.slice(0, 15).forEach(function (p) { t.fail(p); });
+    t.ok(!problems.length, N + ' random fights: at most one per attacker per round, always next to it, never on a friend, never while incapacitated, it hits the mover, no shared tiles (' + problems.length + ' problems)');
+  });
+
+  // v2 AoO review (ADVERSARIAL REVIEWER): regressions for what the review broke (docs/notes/rules.md "AoO review")
+  T.suite('engine: v2 attacks of opportunity — review: walkers passing friends, charm, what counts as melee, recounted paths', function (t) {
+    const A = DD.Act, AI = DD.AI;
+    // 1. a walker passing through a friend: the strike is aimed at the walker (the friend shares the tile for a step).
+    // The knight is first in the unit list; the mage's only path within its move crosses his tile, next to the grunt.
+    quiet({ w: 9, h: 9, heroes: [H(3, 4, 'test_knight'), H(2, 4)], enemies: [E(3, 5)], enemyAi: false });
+    let k = hero(0), m = hero(1);
+    k.block = 0;
+    DD.Combat.giveTurnTo(m);
+    const e = DD.Combat.reachable(m).get('5,4');
+    t.ok(e && e.path[0].x === 3 && e.path[0].y === 4 && e.provokes.length === 1, 'the path crosses the knight\'s tile and provokes the grunt there');
+    let kh = k.hp, mh = m.hp;
+    const seen = opportunities(function () { DD.Combat.move(m, 5, 4); });
+    t.ok(seen.length === 1 && seen[0].m === 'test_mage', 'one attack of opportunity on the mage');
+    t.ok(k.hp === kh && m.hp === mh - 4, 'the stab hits the mage (the mover), not the knight it was passing (knight ' + kh + '→' + k.hp + ', mage ' + mh + '→' + m.hp + ')');
+    // the same for an AI walker: the grunt walking through its friend's tile next to the knight takes the slash
+    quiet({ w: 9, h: 9, heroes: [H(4, 5, 'test_knight')], enemies: [E(4, 4), E(3, 4)], enemyAi: false });
+    const g1 = foe(0), g2 = foe(1);
+    t.ok(AI.moveTo(g2, 6, 4) && g2.x === 6, 'the second grunt walks through the first one\'s tile');
+    t.ok(g1.hp === g1.maxHp && g2.hp === g2.maxHp - 5, 'the knight\'s slash hits the walker, not the grunt it passed (' + g1.hp + ', ' + g2.hp + ')');
+    // a walker downed on a friend's tile is moved off it (no two units on one tile)
+    quiet({ w: 9, h: 9, heroes: [H(2, 4), H(3, 4, 'test_knight'), H(8, 8, 'test_cleric')], enemies: [E(3, 5)], enemyAi: false });
+    m = hero(0); k = hero(1);
+    m.hp = 2;
+    DD.Combat.move(m, 5, 4);
+    t.ok(m.downed, 'the mage is downed by the stab on the knight\'s tile');
+    t.ok(!(m.x === k.x && m.y === k.y) && DD.Grid.dist(m, k) === 1 && DD.Grid.isWalkable(m.x, m.y, m), 'its body is moved to the nearest free tile, off the knight (' + m.x + ',' + m.y + ')');
+    t.ok(DD.Grid.unitAt(3, 4) === k, 'the knight\'s tile is his alone again');
+    // 2. charm: an enemy charmed to fight for the heroes walks off a hero without being stabbed in the back
+    quiet({ w: 9, h: 9, heroes: [H(3, 4, 'test_knight')], enemies: [E(4, 4), E(7, 4)], enemyAi: false });
+    k = hero();
+    const c = foe(0), victim = foe(1);
+    A.addStatus(c, 'charmed', { turns: 1 }, k);
+    t.ok(!A.opportunityOf(k, c, null) && DD.AI.provokes(c, 6, 4).length === 0, 'no attack of opportunity on the charmed grunt (paths know it)');
+    const seenC = opportunities(function () { AI.act(c); });
+    t.ok(seenC.length === 0 && c.hp === c.maxHp, 'its turn: it walks off the knight unharmed (' + JSON.stringify(seenC) + ')');
+    t.ok(victim.hp === victim.maxHp - 4, 'and stabs its old friend for the heroes');
+    // ...while it still punishes its old friends walking away from it, for the heroes
+    quiet({ w: 9, h: 9, heroes: [H(1, 1, 'test_knight')], enemies: [E(4, 4), E(5, 4)], enemyAi: false });
+    A.addStatus(foe(0), 'charmed', { turns: 1 }, hero());
+    const seenF = opportunities(function () { AI.moveTo(foe(1), 8, 4); });
+    t.ok(seenF.length === 1 && foe(1).hp === foe(1).maxHp - 4, 'the charmed grunt stabs the grunt walking away from it');
+    // 3. what counts as a melee attack: never a 'ranged' one, an area one only if tagged 'melee' ('dir' skills always
+    // read as range 1: a slingshot down a line or a breath cone would otherwise be a free reaction)
+    withTemp('skills', [
+      { id: 'test_tmp_sling_line', name: 'Line Sling', owner: 'enemy', ap: 0, kind: 'attack', tags: ['ranged', 'line'], levels: [{ dmg: 5 }],
+        target: { type: 'dir' }, area: { shape: 'line', size: 6 }, desc: function (L) { return 'Deal ' + L.dmg + ' damage down a line.'; },
+        execute: function (ctx) { ctx.foes.forEach(function (f) { A.damage(ctx.user, f, ctx.L.dmg); }); } },
+      { id: 'test_tmp_breath', name: 'Breath', owner: 'enemy', ap: 0, kind: 'attack', tags: ['fire', 'aoe'], levels: [{ dmg: 16 }],
+        target: { type: 'dir' }, area: { shape: 'cone', size: 3 }, desc: function (L) { return 'Deal ' + L.dmg + ' fire damage in a cone.'; },
+        execute: function (ctx) { ctx.foes.forEach(function (f) { A.damage(ctx.user, f, ctx.L.dmg, { element: 'fire' }); }); } },
+      { id: 'test_tmp_bite', name: 'Bite', owner: 'enemy', ap: 0, kind: 'attack', tags: ['melee'], levels: [{ dmg: 3 }],
+        target: { type: 'unit', range: [1, 1], filter: 'enemy' }, desc: function (L) { return 'Deal ' + L.dmg + ' damage.'; },
+        execute: function (ctx) { if (ctx.targetUnit) A.damage(ctx.user, ctx.targetUnit, ctx.L.dmg); } },
+    ], function () {
+      withTemp('enemies', [{ id: 'test_tmp_slinger', name: 'Slinger', act: 1, tier: 'normal', hp: 12, sprite: SPR, skills: ['test_tmp_sling_line'], ai: 'default' },
+        { id: 'test_tmp_dragon', name: 'Wyrmling', act: 1, tier: 'normal', hp: 30, sprite: SPR, skills: ['test_tmp_breath', 'test_tmp_bite'], ai: 'default' }], function () {
+        quiet({ w: 9, h: 9, heroes: [H(2, 4)], enemies: [E(3, 4, 'test_tmp_slinger'), E(2, 5, 'test_tmp_dragon')], enemyAi: false });
+        t.eq(A.opportunitySlot(foe(0)), null, 'a ranged-tagged line shot is no melee attack');
+        t.eq((A.opportunitySlot(foe(1)) || {}).id, 'test_tmp_bite', 'a breath cone is not either: the wyrmling strikes with its bite');
+        const hp = hero().hp;
+        DD.Combat.move(hero(), 0, 4);
+        t.eq(hero().hp, hp - 3, 'walking off both: one bite (3), no breath (16), no sling');
+      });
+    });
+    quiet({ w: 9, h: 9, heroes: [H(2, 4)], enemies: [E(3, 4, 'test_brute')], enemyAi: false });
+    t.eq(A.opportunitySlot(foe()).id, 'test_smash', 'a melee-tagged row smash still counts');
+    // 4. paths: an attacker passed twice strikes once (once per round), so walking round it is no worse than going wide —
+    // the wide way through fire is not taken to dodge a second attack that cannot happen
+    quiet({ w: 9, h: 9, heroes: [H(3, 2, 'test_rogue')], enemies: [E(3, 3)], enemyAi: false, surfaces: [{ x: 1, y: 3, id: 'fire', turns: 5 }] });
+    const r = hero();
+    t.ok(!!DD.Grid.hazardAt(1, 3, r), 'fire on the wide way');
+    const pe = DD.Combat.reachable(r).get('2,4');
+    t.ok(pe && !pe.hazard && pe.path.length === 3 && pe.provokes.length === 1, 'the tight way round the grunt (provokes 1, no fire): ' + JSON.stringify(pe && pe.path));
+    const gp = DD.Grid.path(r, 2, 4, { maxCost: DD.Combat.effectiveMov(r), aoo: true });
+    t.ok(gp && gp.length === 3 && !gp.some(function (p) { return p.x === 1 && p.y === 3; }), 'Grid.path agrees');
+    const hp4 = r.hp;
+    DD.Combat.move(r, 2, 4);
+    t.ok(r.x === 2 && r.y === 4 && r.hp === hp4 - 4 && !has(r, 'burn'), 'one stab, no burn');
+    // ...and a tie between a stab on the short way and a hazard tile on the long way goes to the less harmful walk:
+    // the rogue (mov 6) heading for (5,1) passes the grunt at (3,2), or detours over the lava at (3,0)
+    function lavaWay(bonus) {
+      quiet({ w: 9, h: 9, heroes: [H(1, 1, 'test_rogue')], enemies: [E(3, 2)], enemyAi: false, terrain: function (tl) { if (tl.x === 3 && tl.y === 0) tl.t = 'lava'; } });
+      hero().mov = 6;
+      if (bonus) foe().hooks = { modifyOpportunity: function (o) { o.flat += bonus; } };
+      return DD.Combat.reachable(hero()).get('5,1');
+    }
+    let lw = lavaWay(0);
+    t.ok(lw && !lw.hazard && lw.provokes.length === 1, 'a 4-damage stab beats 8 lava: no lava walk just to dodge a stab (' + JSON.stringify(lw && lw.path) + ')');
+    lw = lavaWay(10);
+    t.ok(lw && lw.hazard === 'lava' && lw.provokes.length === 0, 'a 14-damage reaction is worse than the lava: then the detour');
+    // 5. a fight rule's hooks count once per attack (they are among both units' sources)
+    quiet({ w: 9, h: 9, heroes: [H(2, 4)], enemies: [E(3, 4)], enemyAi: false });
+    let calls = 0;
+    A.addRule({ id: 'test_aoo_house_rule', name: 'Opportunity Knocks', hooks: {
+      modifyOpportunity: function (o) { o.flat += 1; },
+      onOpportunityAttack: function () { calls++; },
+    } });
+    t.eq(DD.Combat.provokes(hero(), 0, 4)[0].dmg, 5, 'a rule\'s "+1 on attacks of opportunity" adds 1 (4 → 5), not 2');
+    const hp5 = hero().hp;
+    DD.Combat.move(hero(), 0, 4);
+    t.ok(hero().hp === hp5 - 5 && calls === 1, 'the stab deals 5 and the rule hears about it once (' + (hp5 - hero().hp) + ', ' + calls + ' calls)');
+  });
+
+  // =====================================================================================================
+  // v2 requests (user): flyers ignore floor effects · hazards per unit · attacks set off barrels · heals get downed
+  // allies back up
+  // =====================================================================================================
+  function flyer(u) { u.flags = Object.assign({}, u.flags, { flying: true }); return u; }
+  function ids(u) { return u.statuses.map(function (st) { return st.id; }).sort().join(',') || '-'; }
+  /** One step onto (x, y) (a walk, not a move action: no Bleed, no attacks of opportunity). */
+  function stepOnto(u, x, y) { return DD.Act.moveAlong(u, [{ x: x, y: y }], { action: false }).length === 1; }
+  /** End this unit's own turn (sandbox: its turn starts now, then ends: onTurnEnd, decay, the tile it stands on). */
+  function endOwnTurn(u) { DD.Combat.giveTurnTo(u); if (DD.Combat.current() === u) DD.Combat.endTurn(); }
+  /** A flying mage on (1,1) and a walking knight on (1,3); prep(x, y) dresses (2,1) and (2,3) the same way. */
+  function flyerAndWalker(prep, extra) {
+    quiet(Object.assign({ w: 9, h: 9, heroes: [H(1, 1), H(1, 3, 'test_knight')], enemies: [E(8, 8)], enemyAi: false }, extra || {}));
+    const f = flyer(hero(0)), w = hero(1);
+    if (prep) { prep(2, 1); prep(2, 3); }
+    return { f: f, w: w };
+  }
+
+  T.suite('engine: v2 requests — flyers ignore everything on the floor (terrain, surfaces, objects, ticks, reactions)', function (t) {
+    const A = DD.Act, G = DD.Grid;
+    // helper API
+    let p = flyerAndWalker(null);
+    t.ok(G.isFlying(p.f) && !G.feelsFloor(p.f) && G.feelsFloor(p.w) && !G.feelsFloor(null), 'Grid.feelsFloor: walkers yes, flyers no');
+    t.ok(!G.feelsSurface(p.f, 'fire') && G.feelsSurface(p.w, 'fire') && G.feelsSurface(p.f, 'steam') && G.feelsSurface(p.f, DD.getSurface('smoke')), 'Grid.feelsSurface: flyers feel clouds only (id or def)');
+    ['fire', 'poison', 'web', 'holy', 'water', 'oil', 'ice', 'blood', 'electric', 'cheeto'].forEach(function (id) {
+      t.ok(!DD.getSurface(id).airborne, 'surface ' + id + ' lies on the floor (not airborne)');
+    });
+    t.ok(DD.getSurface('steam').airborne && DD.getSurface('smoke').airborne, 'steam and smoke are clouds (airborne)');
+    // terrain on entry: lava, water
+    p = flyerAndWalker(function (x, y) { setT(x, y, 'lava'); });
+    let f0 = p.f.hp, w0 = p.w.hp;
+    t.ok(stepOnto(p.f, 2, 1) && stepOnto(p.w, 2, 3), 'both step onto lava');
+    t.ok(p.f.hp === f0 && ids(p.f) === '-', 'lava: the flyer feels nothing (' + (f0 - p.f.hp) + ' dmg, ' + ids(p.f) + ')');
+    t.ok(p.w.hp === w0 - 8 && has(p.w, 'burn'), 'lava: the walker takes 8 and Burns');
+    f0 = p.f.hp; w0 = p.w.hp;
+    endOwnTurn(p.f);
+    t.ok(p.f.hp === f0 && ids(p.f) === '-', 'ending a turn over lava: nothing for the flyer');
+    p = flyerAndWalker(function (x, y) { setT(x, y, 'water'); });
+    stepOnto(p.f, 2, 1); stepOnto(p.w, 2, 3);
+    t.ok(!has(p.f, 'wet') && has(p.w, 'wet'), 'shallow water: the walker gets Wet, the flyer stays dry');
+    // surfaces on entry
+    const onEntry = { fire: 'burn', poison: 'poison', web: 'root', cheeto: 'slow', water: 'wet' };
+    Object.keys(onEntry).forEach(function (sid) {
+      p = flyerAndWalker(function (x, y) { A.setSurface(x, y, sid, 3); });
+      stepOnto(p.f, 2, 1); stepOnto(p.w, 2, 3);
+      t.ok(!has(p.f, onEntry[sid]) && has(p.w, onEntry[sid]), 'surface ' + sid + ': ' + onEntry[sid] + ' for the walker only (flyer ' + ids(p.f) + ', walker ' + ids(p.w) + ')');
+    });
+    p = flyerAndWalker(function (x, y) { A.setSurface(x, y, 'electric', 1); });
+    f0 = p.f.hp; w0 = p.w.hp;
+    stepOnto(p.f, 2, 1); stepOnto(p.w, 2, 3);
+    t.ok(p.f.hp === f0 && p.w.hp === w0 - 3, 'live current: 3 lightning to the walker only');
+    // standing in it at turn end: fire, poison, holy ground
+    [['fire', 'burn'], ['poison', 'poison']].forEach(function (c) {
+      p = flyerAndWalker(function (x, y) { A.setSurface(x, y, c[0], 3); });
+      A.teleport(p.f, 2, 1, { noEnter: true }); A.teleport(p.w, 2, 3, { noEnter: true });
+      // checked right after each one's own turn end (Poison ticks off at its owner's next turn start)
+      endOwnTurn(p.f);
+      const fHas = has(p.f, c[1]);
+      endOwnTurn(p.w);
+      t.ok(!fHas && has(p.w, c[1]), 'ending a turn in ' + c[0] + ': ' + c[1] + ' for the walker only');
+    });
+    p = flyerAndWalker(function (x, y) { A.setSurface(x, y, 'holy', 3); });
+    A.teleport(p.f, 2, 1, { noEnter: true }); A.teleport(p.w, 2, 3, { noEnter: true });
+    p.f.hp -= 5; p.w.hp -= 5;
+    f0 = p.f.hp; w0 = p.w.hp;
+    endOwnTurn(p.f); endOwnTurn(p.w);
+    t.ok(p.f.hp === f0 && p.w.hp === w0 + 3, 'holy ground heals walkers only (good effects too: flyers are above all that)');
+    // ground objects and traps
+    p = flyerAndWalker(function (x, y) { A.placeObject(x, y, 'spikes'); });
+    f0 = p.f.hp; w0 = p.w.hp;
+    stepOnto(p.f, 2, 1); stepOnto(p.w, 2, 3);
+    t.ok(p.f.hp === f0 && p.w.hp === w0 - 5, 'spikes: 5 to the walker only');
+    p = flyerAndWalker(function (x, y) { A.placeObject(x, y, 'pressure_plate'); });
+    stepOnto(p.f, 2, 1);
+    t.ok(!tile(2, 1).obj.data.pressed, 'a flyer never presses a plate');
+    stepOnto(p.w, 2, 3);
+    t.ok(tile(2, 3).obj.data.pressed, '... a walker does');
+    p = flyerAndWalker(function (x, y) { A.placeObject(x, y, 'gold_pile'); }, { gold: 0 });
+    stepOnto(p.f, 2, 1);
+    t.ok(A.gold() === 0 && !!tile(2, 1).obj, 'a flying hero floats over a gold pile (good things too)');
+    stepOnto(p.w, 2, 3);
+    t.ok(A.gold() > 0 && !tile(2, 3).obj, '... a walking one pockets it');
+    withDefs('objects', [{ id: 'test_tmp_snare', name: 'Snare', blocksMove: false, hp: 0, onEnter: function (u) { A.addStatus(u, 'root', { turns: 1 }, null); } }], function () {
+      p = flyerAndWalker(function (x, y) { A.placeObject(x, y, 'test_tmp_snare'); });
+      stepOnto(p.f, 2, 1); stepOnto(p.w, 2, 3);
+      t.ok(!has(p.f, 'root') && has(p.w, 'root'), 'a content trap (object onEnter) never fires for a flyer');
+      // pushed or teleported onto it: same
+      p = flyerAndWalker(function (x, y) { A.placeObject(x, y, 'test_tmp_snare'); });
+      A.push(null, p.f, { x: 1, y: 0 }, 1); A.teleport(p.w, 2, 3);
+      t.ok(p.f.x === 2 && !has(p.f, 'root') && has(p.w, 'root'), 'pushed onto it (flyer) / teleported onto it (walker)');
+    });
+    // clouds still touch flyers
+    withDefs('surfaces', [{ id: 'test_tmp_gas', name: 'Test Gas', color: 'rgba(0,255,0,0.3)', turns: 3, airborne: true, hazard: true, hazardDmg: 0, hazardEnd: 1, hazardStatus: 'poison',
+      onEnter: function (u) { A.addStatus(u, 'poison', { stacks: 2 }, null); }, onTurnEnd: function (u) { A.addStatus(u, 'poison', { stacks: 1 }, null); } }], function () {
+      p = flyerAndWalker(function (x, y) { A.setSurface(x, y, 'test_tmp_gas', 3); });
+      t.eq(G.hazardAt(2, 1, p.f), 'test_tmp_gas', 'an airborne cloud is a hazard for flyers too');
+      stepOnto(p.f, 2, 1); stepOnto(p.w, 2, 3);
+      t.ok(A.getStatus(p.f, 'poison').stacks === 2 && A.getStatus(p.w, 'poison').stacks === 2, 'clouds (airborne: gases) poison flyers and walkers alike');
+      endOwnTurn(p.f);
+      t.eq(A.getStatus(p.f, 'poison').stacks, 2, '... and when a flyer ends its turn inside (2, −1 at its turn start, +1 at its turn end)');
+      p = flyerAndWalker(null);
+      A.splash(1, 1, 0, 'test_tmp_gas', 2, null);
+      t.ok(has(p.f, 'poison'), 'a splashed cloud too');
+    });
+    // splashes on the floor
+    p = flyerAndWalker(null);
+    A.splash(1, 1, 0, 'poison', 3, null); A.splash(1, 3, 0, 'poison', 3, null);
+    t.ok(!has(p.f, 'poison') && has(p.w, 'poison'), 'a poison puddle splashed under them: the walker only');
+    // floor element reactions: an oil slick going up burns the walkers on it, not the flyer above it
+    p = flyerAndWalker(null);
+    [[1, 1], [1, 2], [1, 3]].forEach(function (q) { A.setSurface(q[0], q[1], 'oil', 5); });
+    A.applyElement(1, 2, 'fire', null);
+    t.ok(tile(1, 1).surface.id === 'fire' && tile(1, 3).surface.id === 'fire', 'the slick burns end to end');
+    t.ok(!has(p.f, 'burn') && has(p.w, 'burn'), 'a lit oil slick burns the walker on it, not the flyer above it');
+    A.applyElement(1, 1, 'fire', null);
+    t.ok(has(p.f, 'burn'), 'fire aimed at the flyer\'s own tile still hits it (attacks and spells aimed at their area)');
+    // lightning in water: only grounded units
+    p = flyerAndWalker(null);
+    [[1, 1], [1, 2], [1, 3]].forEach(function (q) { setT(q[0], q[1], 'water'); });
+    f0 = p.f.hp; w0 = p.w.hp;
+    A.applyElement(1, 2, 'lightning', null);
+    t.ok(p.f.hp === f0 && !has(p.f, 'stun') && p.w.hp === w0 - 4 && has(p.w, 'stun'), 'an electrified pool shocks the walker, not the flyer');
+    // explosions still hit flyers (blast damage), the fire they leave does not
+    p = flyerAndWalker(null);
+    A.placeObject(1, 2, 'barrel_explosive');
+    f0 = p.f.hp; w0 = p.w.hp;
+    A.destroyObject(1, 2, null);
+    t.ok(p.f.hp === f0 - 8 && p.w.hp === w0 - 7, 'an explosion\'s blast hits the flyer too (8; the knight 8 − 1 armor)');
+    // ice slides, setTerrain under them, pits
+    p = flyerAndWalker(function (x, y) { setT(x, y, 'ice'); });
+    A.push(null, p.f, { x: 1, y: 0 }, 1); A.push(null, p.w, { x: 1, y: 0 }, 1);
+    t.ok(p.f.x === 2 && p.w.x === 3, 'ice: a pushed walker slides one extra tile, a flyer stops');
+    p = flyerAndWalker(function (x, y) { A.setSurface(x, y, 'ice', 3); });
+    A.push(null, p.f, { x: 1, y: 0 }, 1); A.push(null, p.w, { x: 1, y: 0 }, 1);
+    t.ok(p.f.x === 2 && p.w.x === 3, 'an ice sheet (surface) too');
+    p = flyerAndWalker(function (x, y) { setT(x, y, 'mud'); });
+    t.ok(G.stepCost(p.f, { x: 1, y: 1 }, { x: 2, y: 1 }) === 1 && G.stepCost(p.w, { x: 1, y: 3 }, { x: 2, y: 3 }) === 2, 'mud costs a walker 2, a flyer 1');
+    p = flyerAndWalker(null);
+    f0 = p.f.hp; w0 = p.w.hp;
+    A.setTerrain(1, 1, 'lava'); A.setTerrain(1, 3, 'lava');
+    t.ok(p.f.hp === f0 && p.w.hp === w0 - 8, 'lava appearing under them: the walker burns, the flyer hovers');
+    // hazards for flyers (paths, AI, previews)
+    p = flyerAndWalker(function (x, y) { setT(x, y, 'lava'); A.setSurface(x + 1, y, 'fire', 3); A.placeObject(x + 2, y, 'spikes'); });
+    t.ok(G.hazardAt(2, 1, p.f) === null && G.hazardAt(3, 1, p.f) === null && G.hazardAt(4, 1, p.f) === null, 'Grid.hazardAt: lava, fire and spikes are no hazard for a flyer');
+    t.ok(G.hazardAt(2, 3, p.w) === 'lava' && G.hazardAt(3, 3, p.w) === 'fire' && G.hazardAt(4, 3, p.w) === 'spikes', '... they are for a walker');
+    t.ok(!G.hazardDamage(2, 1, p.f) && !G.hazardDamage(3, 1, p.f) && G.hazardDamage(2, 3, p.w).enter === 8, 'Grid.hazardDamage too (AI / AutoPlay risk)');
+    const fe = DD.Combat.reachable(p.f).get('5,1');
+    t.ok(fe && !fe.hazard && fe.path.length === 4 && fe.path[0].y === 1, 'the flyer\'s move preview flies straight over them, no hazard warning (' + JSON.stringify(fe && fe.path) + ')');
+    t.eq(DD.AI.pathRisk(p.f, { x: 5, y: 1, path: [{ x: 2, y: 1 }, { x: 3, y: 1 }, { x: 4, y: 1 }, { x: 5, y: 1 }] }).penalty, 0, 'AI.pathRisk: 0 for a flyer over all of it');
+    // a status can grant flight
+    withDefs('statuses', [{ id: 'test_tmp_wings', name: 'Borrowed Wings', icon: '🪽', type: 'buff', stacking: 'refresh', maxStacks: 1, flying: true, desc: function () { return 'Flies.'; } }], function () {
+      p = flyerAndWalker(function (x, y) { setT(x, y, 'lava'); });
+      A.addStatus(p.w, 'test_tmp_wings', { turns: 2 }, null);
+      w0 = p.w.hp;
+      t.ok(G.isFlying(p.w) && stepOnto(p.w, 2, 3) && p.w.hp === w0 && !has(p.w, 'burn'), 'a status with flying: true makes its unit a flyer (no lava damage)');
+    });
+  });
+
+  T.suite('engine: v2 requests — hazards are per unit (flyers, immunities): previews, AI and AutoPlay agree', function (t) {
+    const A = DD.Act, G = DD.Grid;
+    quiet({ w: 9, h: 9, heroes: [H(1, 1), H(1, 3, 'test_knight'), H(1, 5, 'test_rogue')], enemies: [E(8, 8), E(8, 6, 'test_minion')], enemyAi: false });
+    const m = hero(0), k = hero(1), r = hero(2), g = foe(0), mn = foe(1);
+    A.setSurface(3, 1, 'fire', 3); setT(3, 3, 'lava'); A.setSurface(3, 5, 'poison', 3); A.setSurface(3, 7, 'electric', 3);
+    A.setSurface(5, 1, 'web', 3); A.placeObject(5, 3, 'spikes');
+    // fireproof (Pebbles: resist fire 0, immune to Burn)
+    m.resist = { fire: 0 }; m.flags = { immune: ['burn'] };
+    t.ok(G.hazardAt(3, 1, m) === null && G.hazardAt(3, 3, m) === null, 'fireproof: fire and lava are no hazard for it');
+    t.ok(!G.hazardDamage(3, 3, m) && !G.hazardDamage(3, 1, m), '... no hazard numbers either');
+    t.ok(G.hazardAt(3, 1, k) === 'fire' && G.hazardAt(3, 3, k) === 'lava', 'a plain walker is warned of both');
+    t.ok(G.hazardAt(3, 5, m) === 'poison' && G.hazardAt(5, 3, m) === 'spikes', 'it is still warned of poison and spikes');
+    // immune to Burn only: the fire surface only Burns (harmless), lava also deals fire damage (still a hazard)
+    k.flags = { immune: ['burn'] };
+    t.ok(G.hazardAt(3, 1, k) === null && G.hazardAt(3, 3, k) === 'lava', 'immune to Burn: fire is harmless, lava still burns its feet');
+    // resist fire 0 without the Burn immunity: Burn deals fire damage (status def element), so both are harmless
+    k.flags = {}; k.resist = { fire: 0 };
+    t.ok(G.hazardAt(3, 1, k) === null && G.hazardAt(3, 3, k) === null, 'resist fire 0: Burn (fire) can\'t hurt it either (hell hounds in lava)');
+    // poison-proof (slimes: resist poison 0), lightning-proof
+    r.resist = { poison: 0, lightning: 0 };
+    t.ok(G.hazardAt(3, 5, r) === null && G.hazardAt(3, 7, r) === null, 'resist poison / lightning 0: poison puddles and live current are harmless');
+    t.ok(G.hazardAt(3, 5, k) === 'poison' && G.hazardAt(3, 7, k) === 'electric', '... for the others they are hazards');
+    t.ok(G.harmlessTo(DD.getTerrain('lava'), null, m) && !G.harmlessTo(DD.getTerrain('lava'), null, r) && !G.harmlessTo(DD.getObject('spikes'), null, m),
+      'Grid.harmlessTo(def, inst, unit): needs metadata (spikes declare none: a hazard for every walker)');
+    t.ok(G.hazardAt(3, 1, null) === 'fire', 'unit null = anyone: still a hazard');
+    // instance metadata wins over the def's
+    A.placeObject(5, 5, 'spikes', { hazardElement: 'poison' });
+    t.ok(G.hazardAt(5, 5, r) === null && G.hazardAt(5, 5, k) === 'spikes', 'instance hazardElement / hazardStatus override the def');
+    // the move preview and paths: the fireproof mage walks straight through the fire, the knight goes around
+    const me = DD.Combat.reachable(m).get('4,1');
+    t.ok(me && !me.hazard && me.path.some(function (q) { return q.x === 3 && q.y === 1; }), 'the move preview walks Pebbles through the fire, no warning (' + JSON.stringify(me && me.path) + ')');
+    const kp = G.reachable(k, 6).get('4,3');
+    t.ok(kp && !kp.hazard, 'resist fire 0 walks lava without a warning');
+    k.resist = {}; k.flags = {};
+    const plain = G.reachable(k, 6).get('4,1');
+    t.ok(plain && !plain.hazard && plain.path.every(function (q) { return !(q.x === 3 && q.y === 1); }), 'a plain walker paths around the fire (' + JSON.stringify(plain && plain.path) + ')');
+    // AI risk: a poison-proof enemy crosses a puddle, a plain one pays for it
+    mn.resist = { poison: 0 };
+    const way = { x: 4, y: 5, path: [{ x: 2, y: 5 }, { x: 3, y: 5 }, { x: 4, y: 5 }] };
+    t.ok(DD.AI.pathRisk(mn, way).penalty === 0 && DD.AI.pathRisk(g, way).penalty > 0, 'AI.pathRisk: 0 for the poison-proof minion, > 0 for the grunt');
+    // AutoPlay's exposure: ending the turn on fire costs the fireproof mage nothing extra
+    const inc = function (u, x, y) { return DD.AutoPlay.incomingAt(u, x, y).dmg; };
+    t.ok(inc(m, 3, 1) === inc(m, 2, 1), 'AutoPlay: standing in fire costs the fireproof mage nothing (' + inc(m, 3, 1) + ' vs ' + inc(m, 2, 1) + ')');
+    k.resist = {};
+    t.ok(inc(k, 3, 1) > inc(k, 2, 1), '... it does cost a plain hero');
+  });
+
+  T.suite('engine: v2 requests — attacks aimed at a volatile object set it off (range, sight, credit, previews = reality)', function (t) {
+    const A = DD.Act, Tg = DD.Targeting;
+    // the mage (basic: Magic Missile, a single-target 'spell' basic, range 5) and a barrel among foes
+    function scene(extra) {
+      quiet(Object.assign({ w: 9, h: 9, heroes: [H(1, 4), H(0, 0, 'test_knight')],
+        enemies: [E(5, 4, 'test_minion'), E(4, 5, 'test_minion'), E(4, 3, 'test_grunt'), E(8, 8, 'test_archer')],
+        objects: [{ x: 4, y: 4, id: 'barrel_explosive' }], enemyAi: false }, extra || {}));
+      return hero(0);
+    }
+    function targetsOf(u, ref) { return Tg.validTargets(u, ref).filter(function (q) { return q.obj; }).map(function (q) { return q.x + ',' + q.y; }).join(' '); }
+    let m = scene();
+    t.ok(A.isVolatile(tile(4, 4).obj) && !A.isVolatile({ id: 'barrel' }) && A.isVolatile({ id: 'barrel', volatile: true }), 'Act.isVolatile: barrel_explosive (def flag), instances may flag too');
+    t.ok(Tg.aimsAtObjects(m, m.basic), 'a hero\'s basic attack can be aimed at barrels (even a "spell" basic)');
+    t.eq(targetsOf(m, m.basic), '4,4', 'validTargets lists the barrel (with obj: its id)');
+    t.ok(Tg.validTargets(m, m.basic).filter(function (q) { return q.obj; })[0].obj === 'barrel_explosive', '... obj = the object id');
+    t.ok(!Tg.aimsAtObjects(m, slotOf(m, 'test_fireball')) && !Tg.aimsAtObjects(m, DD.getSkill('test_chain_zap')), 'tile skills and non-basic spells don\'t (they have their own ways)');
+    t.ok(Tg.aimsAtObjects(hero(1), slotOf(hero(1), 'test_shield_bash')) === false && Tg.aimsAtObjects(hero(1), hero(1).basic), 'dir skills don\'t; the knight\'s Test Slash (kind attack) does');
+    t.eq(targetsOf(hero(1), hero(1).basic), '', '... within its range only (the knight is far)');
+    t.ok(!Tg.aimsAtObjects(foe(2), foe(2).skillSlots[0]), 'enemies never aim at objects (barrels stay a hero tool)');
+    t.ok(!Tg.buildCtx(foe(2), foe(2).skillSlots[0], { x: 4, y: 4 }).targetObj, '... not even when handed one');
+    // range and line of sight
+    m = scene({ objects: [{ x: 7, y: 4, id: 'barrel_explosive' }] });
+    t.eq(targetsOf(m, m.basic), '', 'a barrel 6 tiles away is out of Magic Missile\'s range (5)');
+    m = scene();
+    setT(3, 4, 'wall');
+    t.eq(targetsOf(m, m.basic), '', 'a wall in between: no line of sight, no target');
+    m = scene({ objects: [{ x: 4, y: 4, id: 'barrel' }] });
+    t.eq(targetsOf(m, m.basic), '', 'a plain barrel is no target');
+    // opt-in / opt-out
+    withTemp('skills', [
+      { id: 'test_tmp_dud', name: 'Dud Shot', owner: 'test_mage', kind: 'attack', ap: 1, levels: [{ dmg: 3 }], target: { type: 'unit', range: [1, 5], filter: 'enemy', objects: false }, desc: function () { return 'x'; }, execute: function () {} },
+      { id: 'test_tmp_zing', name: 'Zing', owner: 'test_mage', kind: 'spell', ap: 1, levels: [{ dmg: 3 }], target: { type: 'unit', range: [1, 5], filter: 'enemy', objects: true }, desc: function () { return 'x'; }, execute: function () {} },
+      { id: 'test_tmp_rider', name: 'Poison Dart', owner: 'test_mage', kind: 'attack', ap: 2, cooldown: 2, levels: [{ dmg: 3 }], target: { type: 'unit', range: [1, 5], filter: 'enemy' },
+        desc: function () { return 'x'; }, execute: function (ctx) { ctx.state.data.dartRan = true; } },
+    ], function () {
+      m = scene();
+      t.eq(targetsOf(m, DD.getSkill('test_tmp_dud')), '', 'target.objects: false opts out');
+      t.eq(targetsOf(m, DD.getSkill('test_tmp_zing')), '4,4', 'target.objects: true opts a spell in');
+      // costs paid, riders skipped
+      const sl = giveSkill(m, 'test_tmp_rider');
+      m.ap = 3;
+      t.ok(DD.Combat.useSkill(m, sl, 4, 4), 'used on the barrel');
+      t.ok(!DD.Combat.state.data.dartRan, 'its execute (the rider) does not run');
+      t.ok(m.ap === 1 && sl.cd === 2, 'AP (2) and cooldown (2) are paid');
+      t.ok(!tile(4, 4).obj, 'the barrel is gone');
+    });
+    // the preview shows the blast exactly, and it is what happens
+    m = scene();
+    const s = DD.Combat.state;
+    const m1 = foe(0), m2 = foe(1), gr = foe(2);
+    const pv = DD.Combat.preview(m, m.basic, 4, 4);
+    t.ok(!pv.uncertain && pv.detonates === 'barrel_explosive', 'preview: certain, detonates the barrel');
+    t.ok(pv.perUnit[m1.id] && pv.perUnit[m1.id].lethal && pv.perUnit[m2.id].lethal, 'preview: both minions KO');
+    t.ok(pv.perUnit[gr.id] && pv.perUnit[gr.id].dmg === 8 && !pv.perUnit[gr.id].lethal, 'preview: the grunt −8 (' + (pv.perUnit[gr.id] && pv.perUnit[gr.id].text) + ')');
+    t.ok(!pv.perUnit[m.id], 'preview: the mage 3 tiles away is safe');
+    t.ok(pv.objects.length === 1 && pv.objects[0].destroyed, 'preview: the barrel destroyed');
+    t.eq(keys(pv.tiles), keys([{ x: 4, y: 4 }, { x: 3, y: 4 }, { x: 5, y: 4 }, { x: 4, y: 3 }, { x: 4, y: 5 }]), 'preview.tiles = the blast (radius 1 around the barrel), for the HUD\'s area');
+    t.eq(keys(pv.blast), keys(pv.tiles), 'preview.blast: the explosions\' tiles');
+    const hype0 = s.hype, n0 = s.log.length;
+    let kills = 0;
+    A.addRule({ id: 'test_kill_count', name: 'Kill Count', hooks: { onKill: function (d) { if (d.credit === m) kills++; } } });
+    t.ok(DD.Combat.useSkill(m, m.basic, 4, 4), 'useSkill on the barrel tile');
+    t.ok(m1.dead && m2.dead && gr.hp === gr.maxHp - 8 && !tile(4, 4).obj, 'it blows: minions dead, grunt −8, barrel gone');
+    t.eq(s.hype - hype0, pv.hype, 'Hype as previewed (' + pv.hype + ': environmental kills + a multi-hit)');
+    t.ok(s.stats.units[m.id].kills === 2 && s.stats.envKills === 2 && kills === 2, 'credited to the mage: 2 kills, 2 environmental kills, onKill on her sources');
+    t.ok(m.ap === 2, 'Magic Missile\'s 1 AP paid');
+    t.ok(logSince(n0, /takes a shot at the explosive barrel/) && logSince(n0, /KABOOM/), 'logged (shot, KABOOM)');
+    // a chain: two barrels side by side
+    m = scene({ objects: [{ x: 4, y: 4, id: 'barrel_explosive' }, { x: 3, y: 4, id: 'barrel_explosive' }] });
+    t.ok(DD.Combat.useSkill(m, m.basic, 4, 4) && !tile(4, 4).obj && !tile(3, 4).obj, 'chain reaction: the first blast sets off the barrel next to it');
+    // melee (lunge), summons, consumables
+    quiet({ w: 9, h: 9, heroes: [H(3, 4, 'test_knight')], enemies: [E(8, 8)], objects: [{ x: 4, y: 4, id: 'barrel_explosive' }], enemyAi: false });
+    const kn = hero(), hp0 = kn.hp;
+    kn.block = 0;
+    t.eq(targetsOf(kn, kn.basic), '4,4', 'melee basic: the adjacent barrel');
+    t.ok(DD.Combat.useSkill(kn, kn.basic, 4, 4) && !tile(4, 4).obj && kn.hp === hp0 - 7, 'whacked: it blows up in the knight\'s face (8 − 1 armor)');
+    quiet({ w: 9, h: 9, heroes: [H(1, 1, 'test_summoner')], enemies: [E(8, 8)], objects: [{ x: 5, y: 5, id: 'barrel_explosive' }], enemyAi: false });
+    const hound = A.summon(hero(), 'test_hound', 5, 4, { ready: true, noFx: true });
+    t.eq(targetsOf(hound, DD.Combat.slotsOf(hound)[0]), '5,5', 'a hero-side summon\'s melee attack (the hound\'s Bite) too');
+    DD.registerConsumable({ id: 'test_tmp_dart', name: 'Throwing Dart', icon: '🎯', rarity: 'common', ap: 1, target: { type: 'unit', range: [1, 4], filter: 'enemy' },
+      desc: 'Throw a dart at a foe: 2 damage.', execute: function (ctx) { if (ctx.targetUnit) A.damage(ctx.user, ctx.targetUnit, 2); } });
+    try {
+      m = scene({ consumables: ['test_tmp_dart'] });
+      t.ok(Tg.aimsAtObjects(m, DD.getConsumable('test_tmp_dart')), 'a consumable with a single-unit enemy target (no kind) too');
+      const mm = foe(0);
+      const cpv = Tg.preview(m, DD.getConsumable('test_tmp_dart'), { x: 4, y: 4 });
+      t.ok(cpv.perUnit[mm.id] && cpv.perUnit[mm.id].lethal, 'its preview shows the blast');
+      t.ok(DD.Combat.useConsumable(m, 0, 4, 4) && !tile(4, 4).obj && mm.dead, 'thrown: the barrel blows');
+      t.eq(DD.Combat.consumables().length, 0, 'and the dart is used up');
+    } finally { delete DD.defs.consumables.test_tmp_dart; }
+    // the AI never aims at barrels: an archer next to a barrel by the heroes shoots a hero
+    quiet({ w: 9, h: 9, heroes: [H(3, 4), H(3, 6, 'test_knight')], enemies: [E(7, 5, 'test_archer')], objects: [{ x: 4, y: 5, id: 'barrel_explosive' }] });
+    DD.AI.act(foe());
+    t.ok(!!tile(4, 5).obj, 'the AI shot a hero, not the barrel between them');
+    // Smash stays as it was (objective objects / smashable ones only)
+    quiet({ w: 9, h: 9, heroes: [H(3, 4)], enemies: [E(8, 8)], objects: [{ x: 4, y: 4, id: 'barrel_explosive' }, { x: 3, y: 5, id: 'totem' }], enemyAi: false });
+    const ia = DD.Combat.interactions(hero()).map(function (o) { return o.kind + '@' + o.x + ',' + o.y; }).join(' ');
+    t.ok(/smash@3,5/.test(ia) && !/smash@4,4/.test(ia), 'the Smash interaction is unchanged (' + ia + ')');
+  });
+
+  T.suite('engine: v2 requests — a heal aimed at a downed ally gets it back up (only that heal)', function (t) {
+    const A = DD.Act, Tg = DD.Targeting;
+    // cleric (Patch Notes: heal 7, unit allyOrSelf, range 0-4), knight downed next to her, mage further away
+    function scene(extra, order) {
+      quiet(Object.assign({ w: 9, h: 9, heroes: order || [H(1, 1, 'test_cleric'), H(2, 1, 'test_knight'), H(3, 2)], enemies: [E(8, 8)], enemyAi: false }, extra || {}));
+      const c = DD.Combat.heroes().filter(function (u) { return u.defId === 'test_cleric'; })[0];
+      const k = DD.Combat.heroes().filter(function (u) { return u.defId === 'test_knight'; })[0];
+      A.kill(k, null);
+      return { c: c, k: k };
+    }
+    let sc = scene();
+    const heal = function () { return slotOf(sc.c, 'test_heal'); };
+    t.ok(sc.k.downed && Tg.revivesWith(sc.c, heal()), 'Patch Notes is a single-target heal that can revive');
+    const vt = Tg.validTargets(sc.c, heal()).filter(function (q) { return q.x === 2 && q.y === 1; })[0];
+    t.ok(vt && vt.revive === true, 'validTargets lists the downed knight (revive: true)');
+    t.ok(!Tg.revivesWith(sc.c, DD.getSkill('test_sanctuary')) && !Tg.revivesWith(sc.c, DD.getSkill('test_cleric_sig')) && !Tg.revivesWith(sc.c, DD.getSkill('test_bless')),
+      'area heals and buffs don\'t revive');
+    t.ok(!Tg.revivesWith(foe(), DD.getSkill('test_mend')), 'enemy heals never aim at downed heroes');
+    const ctx = Tg.buildCtx(sc.c, heal(), { x: 2, y: 1 });
+    t.ok(ctx.targetUnit === sc.k && ctx.reviveTarget === sc.k, 'buildCtx: targetUnit = reviveTarget = the downed knight');
+    // the preview says "UP!" with the HP, and that is what happens
+    const pv = DD.Combat.preview(sc.c, heal(), 2, 1);
+    const e = pv.perUnit[sc.k.id];
+    t.ok(e && e.revived && e.heal === 7 && !e.lethal && !pv.uncertain && /UP! 7 HP/.test(e.text), 'preview: "' + (e && e.text) + '"');
+    t.eq(pv.revives, sc.k.id, 'preview.revives = the ally');
+    const seen = { narr: [], bark: [], fx: 0 }, heals = [];
+    const nar = A.narrate, bark = A.bark, fxr = DD.FX.revive;
+    A.addRule({ id: 'test_heal_watch', name: 'Watch', hooks: { onHealed: function (u, n) { heals.push(u.defId + ':' + n); } } });
+    A.narrate = function (key) { seen.narr.push(key); return nar.apply(this, arguments); };
+    A.bark = function (u, key) { if (typeof key === 'string') seen.bark.push(key); return bark.apply(this, arguments); };
+    DD.FX.revive = function () { seen.fx++; return fxr.apply(this, arguments); };
+    const n0 = DD.Combat.state.log.length, ap0 = sc.c.ap;
+    let ok;
+    try { ok = DD.Combat.useSkill(sc.c, heal(), 2, 1); } finally { A.narrate = nar; A.bark = bark; DD.FX.revive = fxr; }
+    t.ok(ok && !sc.k.downed && sc.k.hp === 7 && sc.k.ap === 0, 'the knight is up with 7 HP and 0 AP');
+    t.eq(sc.c.ap, ap0 - 1, 'the heal\'s 1 AP paid');
+    t.ok(logSince(n0, /Sir Testsalot is back up \(7 HP\)/), 'the revive log line');
+    t.ok(seen.narr.indexOf('hero_revived') >= 0 && seen.bark.indexOf('revive') >= 0 && seen.fx === 1, 'narration hero_revived, the revive bark, the revive FX');
+    t.ok(heals.indexOf('test_knight:7') >= 0 && DD.Combat.state.stats.units[sc.c.id].heals >= 7, 'onHealed and the healing stat count it');
+    // he acts on his own slot this round (after the cleric's)
+    DD.Combat.endTurn();
+    t.ok(cur() === sc.k && sc.k.ap === 3, 'his turn comes up as usual, with full AP');
+    // his slot already passed: next round
+    sc = scene(null, [H(2, 1, 'test_knight'), H(1, 1, 'test_cleric')]);
+    DD.Combat.endTurn();
+    t.eq(cur(), sc.c, 'the downed knight\'s slot passed: the cleric');
+    DD.Combat.useSkill(sc.c, heal(), 2, 1);
+    t.ok(!sc.k.downed && sc.k.ap === 0, 'up, 0 AP');
+    const r0 = DD.Combat.state.round;
+    DD.Combat.endTurn();
+    t.ok(cur() === sc.k && DD.Combat.state.round === r0 + 1 && sc.k.ap === 3, 'he acts next round');
+    // the HP: heal bonuses, modifyHeal, the level, at least 1, at most max HP
+    sc = scene();
+    sc.c.healBonus = 0.5;
+    DD.Combat.useSkill(sc.c, heal(), 2, 1);
+    t.eq(sc.k.hp, 11, 'item heal bonus +50%: round(7 × 1.5) = 11 HP');
+    function withRule(hook, fn) { A.addRule({ id: 'test_heal_mod', name: 'Mod', hooks: { modifyHeal: hook } }); fn(); }
+    sc = scene();
+    withRule(function (h) { h.amount = 0.2; }, function () { DD.Combat.useSkill(sc.c, heal(), 2, 1); });
+    t.ok(!sc.k.downed && sc.k.hp === 1, 'a heal shrunk below 1 still gets him up at 1 HP');
+    sc = scene();
+    withRule(function (h) { if (h.revive) h.amount = 999; }, function () { DD.Combat.useSkill(sc.c, heal(), 2, 1); });
+    t.eq(sc.k.hp, sc.k.maxHp, 'capped at max HP (h.revive tells modifyHeal it is a revive)');
+    sc = scene();
+    withRule(function (h) { h.cancel = true; }, function () { DD.Combat.useSkill(sc.c, heal(), 2, 1); });
+    t.ok(sc.k.downed, 'a cancelled heal (modifyHeal) does not revive');
+    sc = scene();
+    slotOf(sc.c, 'test_heal').level = 3;
+    DD.Combat.useSkill(sc.c, heal(), 2, 1);
+    t.eq(sc.k.hp, 12, 'Patch Notes III: 12 HP');
+    // what never revives
+    sc = scene();
+    giveSkill(sc.c, 'test_sanctuary');
+    sc.c.ap = 3;
+    t.ok(DD.Combat.useSkill(sc.c, slotOf(sc.c, 'test_sanctuary'), 2, 1) && sc.k.downed, 'an area heal centred on him: still down');
+    t.eq(A.heal(sc.c, sc.k, 10), 0, 'a heal outside an aimed use (passives, round ends): 0, still down');
+    t.ok(A.heal(sc.c, sc.k, 10, { cause: 'status' }) === 0 && sc.k.downed, 'regeneration (cause status): 0');
+    sc = scene();
+    t.ok(DD.Combat.useSkill(sc.c, heal(), 3, 2), 'the heal aimed at the mage');
+    t.ok(sc.k.downed, 'a heal aimed at someone else: he stays down');
+    withTemp('skills', [{ id: 'test_tmp_salve', name: 'Salve', owner: 'test_cleric', kind: 'heal', tags: ['heal'], ap: 1, levels: [{ heal: 5 }],
+      target: { type: 'unit', range: [0, 4], filter: 'allyOrSelf', revive: false }, desc: function () { return 'x'; },
+      execute: function (ctx) { if (ctx.targetUnit) A.heal(ctx.user, ctx.targetUnit, ctx.L.heal); } }], function () {
+      sc = scene();
+      t.ok(!Tg.validTargets(sc.c, DD.getSkill('test_tmp_salve')).some(function (q) { return q.x === 2 && q.y === 1; }), 'target.revive: false opts out');
+    });
+    // 'downedAlly' revive skills and Help Up stay as they were
+    sc = scene();
+    const rv = giveSkill(sc.c, 'test_revive');
+    t.ok(DD.Combat.useSkill(sc.c, rv, 2, 1) && sc.k.hp === Math.round(sc.k.maxHp * 0.4), 'Rerun Failed (downedAlly) still revives at 40%');
+    sc = scene();
+    const help = DD.Combat.interactions(sc.c).filter(function (o) { return o.kind === 'helpUp'; })[0];
+    t.ok(help && help.ap === 2 && DD.Combat.interact(sc.c, 2, 1) && sc.k.hp === Math.round(sc.k.maxHp * 0.25), 'Help Up: 2 AP, ¼ HP');
+    // a consumable heal
+    DD.registerConsumable({ id: 'test_tmp_tonic', name: 'Tonic', icon: '🧃', rarity: 'common', ap: 1, tags: ['heal'], target: { type: 'unit', range: [0, 1], filter: 'allyOrSelf' },
+      desc: 'Heal yourself or an adjacent ally 6 HP.', execute: function (ctx) { if (ctx.targetUnit) A.heal(ctx.user, ctx.targetUnit, 6); } });
+    try {
+      sc = scene({ consumables: ['test_tmp_tonic'] });
+      const cpv = Tg.preview(sc.c, DD.getConsumable('test_tmp_tonic'), { x: 2, y: 1 });
+      t.ok(cpv.perUnit[sc.k.id] && cpv.perUnit[sc.k.id].revived, 'a healing consumable previews "UP!" too');
+      t.ok(DD.Combat.useConsumable(sc.c, 0, 2, 1) && !sc.k.downed && sc.k.hp === 6, 'and drinks him back up (6 HP)');
+    } finally { delete DD.defs.consumables.test_tmp_tonic; }
+  });
+
+  // ---- v2 requests review (ADVERSARIAL REVIEWER): docs/notes/rules.md "v2 requests review" ------------------------------
+  T.suite('engine: v2 requests review — flight that ends over a pit lands the unit in it (status wings)', function (t) {
+    const A = DD.Act, G = DD.Grid;
+    withDefs('statuses', [{ id: 'test_tmp_wings', name: 'Borrowed Wings', icon: '🪽', type: 'buff', stacking: 'refresh', maxStacks: 1, flying: true,
+      desc: function () { return 'Flies.'; } }], function () {
+      // removed by name: the hero over the pit falls in and climbs out hurt (25% max HP), like any walker
+      quiet({ w: 9, h: 9, heroes: [H(1, 1)], enemies: [E(8, 8)], enemyAi: false });
+      let u = hero();
+      setT(2, 1, 'pit');
+      A.addStatus(u, 'test_tmp_wings', { turns: 2 }, null);
+      t.ok(stepOnto(u, 2, 1) && u.x === 2 && G.isFlying(u), 'with wings it hovers over the pit');
+      let hp0 = u.hp;
+      A.removeStatus(u, 'test_tmp_wings');
+      t.ok(!G.isDrop(u.x, u.y) && u.hp === hp0 - Math.ceil(u.maxHp * 0.25), 'wings gone: it falls in and climbs out (' + u.x + ',' + u.y + ', −' + (hp0 - u.hp) + ')');
+      // dispelled (cleanse of buffs): same
+      quiet({ w: 9, h: 9, heroes: [H(1, 1)], enemies: [E(8, 8)], enemyAi: false });
+      u = hero();
+      setT(2, 1, 'deep_water');
+      A.addStatus(u, 'test_tmp_wings', { turns: 2 }, null);
+      stepOnto(u, 2, 1);
+      hp0 = u.hp;
+      A.cleanse(u, 'buff');
+      t.ok(!G.isDrop(u.x, u.y) && u.hp < hp0 && has(u, 'wet'), 'dispelled over deep water: it sinks, splutters out Wet');
+      // run out at its turn end (decay): an enemy over a pit drops for good
+      quiet({ w: 9, h: 9, heroes: [H(1, 1)], enemies: [E(5, 5)], enemyAi: false });
+      const g = foe();
+      setT(5, 6, 'pit');
+      A.addStatus(g, 'test_tmp_wings', { turns: 1 }, null);
+      t.ok(stepOnto(g, 5, 6), 'the grunt flies over a pit');
+      endOwnTurn(g);
+      t.ok(g.dead, 'its wings run out at its turn end: YEET (the grunt falls)');
+      // over plain floor nothing happens
+      quiet({ w: 9, h: 9, heroes: [H(1, 1)], enemies: [E(8, 8)], enemyAi: false });
+      u = hero();
+      A.addStatus(u, 'test_tmp_wings', { turns: 2 }, null);
+      hp0 = u.hp;
+      A.removeStatus(u, 'test_tmp_wings');
+      t.ok(u.x === 1 && u.y === 1 && u.hp === hp0, 'over plain floor: it just lands');
+      // a natural flyer that also had wings keeps flying
+      quiet({ w: 9, h: 9, heroes: [H(1, 1)], enemies: [E(8, 8)], enemyAi: false });
+      u = flyer(hero());
+      setT(2, 1, 'pit');
+      A.addStatus(u, 'test_tmp_wings', { turns: 2 }, null);
+      stepOnto(u, 2, 1);
+      A.removeStatus(u, 'test_tmp_wings');
+      t.ok(u.x === 2 && u.y === 1, 'a born flyer stays up when the wings go');
+    });
+  });
+
+  T.suite('engine: v2 requests review — edges, surface instances and clouds are per unit / per cloud', function (t) {
+    const A = DD.Act, G = DD.Grid;
+    // 1. edges: a drop next to a flyer is no danger; lava next to a fireproof unit neither
+    let p = flyerAndWalker(null);
+    setT(3, 1, 'pit'); setT(3, 3, 'pit');
+    t.ok(G.isEdge(2, 3, p.w) && !G.isEdge(2, 1, p.f) && G.isEdge(2, 1), 'Grid.isEdge(x, y, unit): a pit edge for a walker, none for a flyer (no unit: anyone)');
+    t.ok(G.reachable(p.w, 4).get('2,3').edge && !G.reachable(p.f, 4).get('2,1').edge && !G.reachable(p.f, 4, { aoo: true }).get('2,1').edge, 'Grid.reachable (the move preview)\'s "next to a drop" flag is per unit');
+    p = flyerAndWalker(null);
+    setT(3, 3, 'lava');
+    t.ok(G.isEdge(2, 3, p.w), 'lava edge for a plain walker');
+    p.w.resist = { fire: 0 };
+    t.ok(!G.isEdge(2, 3, p.w), '... not for a fireproof one (lava can\'t hurt it)');
+    // 2. feelsSurface accepts a tile's surface instance (it carries no airborne flag of its own)
+    p = flyerAndWalker(null);
+    A.setSurface(2, 1, 'steam', 2); A.setSurface(2, 3, 'fire', 2);
+    t.ok(G.feelsSurface(p.f, tile(2, 1).surface) && !G.feelsSurface(p.f, tile(2, 3).surface) && G.feelsSurface(p.w, tile(2, 3).surface),
+      'Grid.feelsSurface(unit, tile.surface): a steam instance touches the flyer, a fire instance only the walker');
+    // 3. clouds (airborne) drift over pits and lava; floor surfaces don't
+    withDefs('surfaces', [{ id: 'test_tmp_fog', name: 'Test Fog', color: 'rgba(200,200,200,0.4)', turns: 2, airborne: true, desc: 'A cloud.' }], function () {
+      quiet({ w: 9, h: 9, heroes: [H(1, 1)], enemies: [E(8, 8)], enemyAi: false });
+      setT(3, 3, 'pit'); setT(4, 4, 'lava');
+      t.ok(A.setSurface(3, 3, 'test_tmp_fog', 2) && A.setSurface(4, 4, 'test_tmp_fog', 2), 'an airborne content cloud can hang over a pit and over lava');
+      t.ok(!A.setSurface(3, 4, 'fire', 2) || tile(3, 4).surface.id === 'fire', 'control: fire on floor is fine');
+      setT(5, 5, 'pit');
+      t.ok(!A.setSurface(5, 5, 'fire', 2) && !A.setSurface(4, 4, 'poison', 2), 'floor surfaces never lie on a pit or on lava');
+      A.setSurface(6, 6, 'test_tmp_fog', 2); A.setSurface(6, 7, 'fire', 2);
+      A.setTerrain(6, 6, 'lava'); A.setTerrain(6, 7, 'lava');
+      t.ok(tile(6, 6).surface && tile(6, 6).surface.id === 'test_tmp_fog' && !tile(6, 7).surface, 'lava welling up keeps a cloud, swallows the fire');
+      A.setSurface(7, 6, 'steam', 2); A.setSurface(7, 7, 'oil', 2);
+      A.setTerrain(7, 6, 'pit'); A.setTerrain(7, 7, 'pit');
+      t.ok(tile(7, 6).surface && tile(7, 6).surface.id === 'steam' && !tile(7, 7).surface, 'a floor collapsing into a pit keeps the steam above it, drops the oil');
+    });
+  });
 })();

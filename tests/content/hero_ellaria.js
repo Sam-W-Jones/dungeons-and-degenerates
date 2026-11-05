@@ -1,10 +1,11 @@
 /* Dungeons and Degenerates — tests/content/hero_ellaria.js
  * Suites 'hero_ellaria: …' for js/data/heroes/ellaria.js (v2: initiative turns, no telegraphs, no Guard, no starting
- * Block, durations per own turn): the hero def and its simplicity rules, passive Pack Leader, Thorn Whip / Chomp, every
- * pool skill at every level (desc == effect vs armor-free fixture foes: damage, heals, statuses and their exact own-turn
- * durations, displacement into pits / lava / water / brambles / map edges, summons, costs, cooldowns, charges), the
- * combos with other heroes' elements, the corgi summon, the signature, the hero items, v2 edge cases, previews and
- * AutoPlay battles at levels 1 / 3 / 5.
+ * Block, durations per own turn, attacks of opportunity): the hero def and its simplicity rules, passive Pack Leader,
+ * Thorn Whip / Chomp, every pool skill at every level (desc == effect vs armor-free fixture foes: damage, heals,
+ * statuses and their exact own-turn durations, displacement into pits / lava / water / brambles / map edges, summons,
+ * costs, cooldowns, charges), the combos with other heroes' elements, the corgi summon, attacks of opportunity (corgis
+ * and the Absolute Unit hold the line, her swaps / dashes / pulls / pushes never provoke), the signature, the hero
+ * items, v2 edge cases, previews and AutoPlay battles at levels 1 / 3 / 5.
  */
 (function () {
   'use strict';
@@ -108,10 +109,20 @@
       lines.forEach(function (l) { t.ok(l.length <= 70, 'bark ≤ 70 chars: ' + l); });
     });
     const allBarks = Object.keys(h.barks).map(function (k) { return h.barks[k].join(' '); }).join(' ');
-    const others = ['Zarathor', 'Syllamin', 'Marbles', 'Marwyn', 'Josiah', 'Slate', 'Mayor', 'Betty', 'Basanos'];
-    t.ok(others.filter(function (n) { return allBarks.indexOf(n) >= 0; }).length >= 5, 'barks reference other heroes');
+    const others = ['Zarathor', 'Syllamin', 'Marbles', 'Marwyn', 'Josiah', 'Slate', 'Mayor', 'Betty', 'Basanos', 'Valdris', 'Hjalmar', 'Pebbles'];
+    t.ok(others.filter(function (n) { return allBarks.indexOf(n) >= 0; }).length >= 8, 'barks reference other heroes, the new ones too');
+    // pronouns as the user confirmed them (MEMORY): Sparrow and Kiri are she; every other hero is he
+    Object.keys(h.barks).forEach(function (k) {
+      h.barks[k].forEach(function (l) {
+        if (/Sparrow|Kiri/.test(l)) t.ok(!/\b(he|him|his)\b/i.test(l), 'pronouns (she): ' + l);
+        if (/Zarathor|Syllamin|Marbles|Marwyn|Josiah|Corelos|Slate|Buga|Mayor|Betty|Basanos|Valdris|Hjalmar|Pebbles/.test(l)) {
+          t.ok(!/\b(she|her|hers)\b/i.test(l), 'pronouns (he): ' + l);
+        }
+      });
+    });
     // every registered def resolves at every level, with and without a user; numbers shown; one breath long
     const texts = [h.blurb, h.role, h.passive.desc, allBarks];
+    const breath = [];
     IDS.forEach(function (id) {
       const s = DD.getSkill(id);
       t.ok(!!s, 'skill ' + id + ' registered');
@@ -123,13 +134,16 @@
         const d0 = DD.skillDesc(s, lv, null);
         texts.push(d0);
         t.ok(d0 && !/undefined|NaN|\[object/.test(d0), id + ' L' + lv + ' desc (no user): ' + d0);
-        t.ok(words(d0) <= 24, id + ' L' + lv + ' desc reads in one breath (' + words(d0) + ' words)');
+        t.ok(words(d0) <= 21, id + ' L' + lv + ' desc reads in one breath (' + words(d0) + ' words)');
+        if (lv === 1 || lv === s.levels.length) breath.push(words(d0) + ' · ' + id + ' L' + lv + ': ' + d0);
         const L = DD.skillLevel(s, lv);
         if (L.dmg) t.ok(new RegExp('(^|[^0-9])' + L.dmg + '([^0-9]|$)').test(d0), id + ' L' + lv + ' desc shows dmg ' + L.dmg);
         if (L.heal) t.ok(new RegExp('(^|[^0-9])' + L.heal + '([^0-9]|$)').test(d0), id + ' L' + lv + ' desc shows heal ' + L.heal);
       }
     });
-    t.ok(words(h.passive.desc) <= 24, 'passive reads in one breath (' + words(h.passive.desc) + ' words)');
+    t.ok(words(h.passive.desc) <= 20, 'passive reads in one breath (' + words(h.passive.desc) + ' words)');
+    breath.push(words(h.passive.desc) + ' · passive: ' + h.passive.desc);
+    breath.forEach(function (l) { t.log(l); });
     POOL.forEach(function (id) { t.eq(DD.getSkill(id).levels.length, 3, id + ': 3 levels'); });
     const aps = POOL.map(function (id) { return DD.getSkill(id).ap; });
     t.ok(aps.indexOf(1) >= 0 && aps.indexOf(2) >= 0, 'mix of 1 and 2 AP skills');
@@ -207,16 +221,25 @@
     t.ok(has(heroOf('test_knight'), 'inspired'), 'the knight too');
     DD.Combat.endTurn();
     t.ok(!has(e, 'inspired'), 'gone at the end of her turn');
-    // Ellaria downed: no rally. Someone else's summon: no rally.
+    // someone else's summon: no rally; a corgi other content gives another hero: no rally (Pack Leader is Ellaria's)
     quiet({ heroes: [{ id: 'ellaria', x: 1, y: 4 }, { id: 'test_knight', x: 2, y: 6 }, { id: 'test_summoner', x: 1, y: 7 }], enemies: [E(7, 7)] });
     e = ell();
+    const kn = heroOf('test_knight');
     const hound = DD.Combat.party().filter(function (u) { return u.defId === 'test_hound'; })[0];
     A().kill(hound, null);
-    t.ok(!has(heroOf('test_knight'), 'inspired'), 'another summoner\'s hound does not count');
+    t.ok(!has(kn, 'inspired'), 'another summoner\'s hound does not count');
+    const stray = DD.Act.summon(kn, 'ell_corgi', 4, 6, { noFx: true, silent: true });
+    t.ok(stray && stray.ownerId === kn.id, 'a corgi owned by the knight');
+    A().kill(stray, null);
+    t.ok(!has(kn, 'inspired') && !has(e, 'inspired'), 'the knight\'s corgi does not trigger Pack Leader');
+    // one rule, no hidden clause: a corgi that falls while Ellaria is downed still rallies the party
     A().kill(e, null);
     t.ok(e.downed, 'Ellaria downed');
-    A().kill(corgis(e)[0], null);
-    t.ok(!has(heroOf('test_knight'), 'inspired'), 'no rally while Ellaria is down');
+    const lastCorgi = corgis(e)[0];
+    t.ok(!!lastCorgi, 'her corgi fights on while she is down');
+    A().kill(lastCorgi, null);
+    t.ok(has(kn, 'inspired') && st(kn, 'inspired').turns === 1, 'AVENGE BISCUIT even while she is down: the knight is Inspired');
+    t.ok(!has(e, 'inspired'), 'the downed Ellaria herself gets nothing');
   });
 
   // ---- basic attacks -------------------------------------------------------------------------------------------
@@ -295,6 +318,17 @@
       DD.Combat.endTurn();
       t.eq(c.ap, 2, 'L' + lv + ': 2 AP on her next turn');
     });
+    // review: never onto lava, fire, poison or spikes (the summon preview can't show the burn; a sacrificed corgi would
+    // also be a 2-AP party Inspire); brambles (her side walks through) and shallow water are fine
+    quiet({ heroes: [{ id: 'ellaria', x: 1, y: 4, skills: ['ell_summon_corgi'] }], enemies: [E(8, 8)], terrain: wall([[2, 4, 'lava'], [1, 5, 'water']]),
+      surfaces: [{ x: 1, y: 3, id: 'fire', turns: 3 }, { x: 0, y: 4, id: 'poison', turns: 3 }, { x: 3, y: 4, id: 'ell_bramble', turns: 3 }],
+      objects: [{ x: 1, y: 6, id: 'spikes' }] });
+    clearCorgis();
+    const hs = slotOf(ell(), 'ell_summon_corgi');
+    const okAt = function (x, y) { return DD.Targeting.isValidTarget(ell(), hs, x, y); };
+    t.ok(!okAt(2, 4) && !okAt(1, 3) && !okAt(0, 4) && !okAt(1, 6), 'no corgi onto lava, fire, poison or spikes');
+    t.ok(okAt(3, 4) && okAt(1, 5), 'brambles and shallow water are fine');
+    t.ok(DD.Combat.useSkill(ell(), hs, 3, 4) && at(3, 4) && at(3, 4).defId === 'ell_corgi', 'summoned into the brambles');
     // pack limit 3
     quiet({ heroes: [{ id: 'ellaria', x: 1, y: 4, skills: ['ell_summon_corgi'] }], enemies: [E(8, 8)] });
     const e = ell();
@@ -349,6 +383,11 @@
     t.ok(use(ell(), 'ell_spring', 4, 4), 'spring on a foe');
     A().applyElement(4, 4, 'frost', heroOf('test_mage'));
     t.ok(has(at(4, 4), 'frozen') && surf(4, 4) === 'ice', 'frost: the Wet foe is Frozen, the puddle is ice');
+    // "yourself and allies": she heals too when she stands in it (range 0: on herself), and no puddle under her
+    quiet({ heroes: [{ id: 'ellaria', x: 1, y: 4, skills: ['ell_spring'] }], enemies: [E(8, 8)] });
+    clearCorgis();
+    ell().hp = 10;
+    t.ok(use(ell(), 'ell_spring', 1, 4) && ell().hp === 15 && !surf(1, 4) && !has(ell(), 'wet'), 'on herself: heals 5, stays dry');
     // heal bonus (Flower Crown +15%)
     quiet({ heroes: [{ id: 'ellaria', x: 1, y: 4, skills: ['ell_spring'], items: ['ell_flower_crown'] }, { id: 'test_knight', x: 2, y: 4 }], enemies: [E(8, 8)] });
     clearCorgis();
@@ -386,6 +425,7 @@
       // the root covers the foe's next turn; the brambles count rounds
       DD.Combat.endRound();
       t.ok(!has(g1, 'root') && !has(g2, 'root'), 'L' + lv + ': the root ended with the foes\' turn');
+      t.ok(g1.hp === 14 - L[0] && g2.hp === 14 - L[0], 'L' + lv + ': "caught or entering": no further damage for staying in them');
       t.eq(surf(4, 4), 'ell_bramble', 'L' + lv + ': brambles still there in round 2');
       for (let r = 2; r <= L[1]; r++) DD.Combat.endRound();
       t.ok(!surf(4, 4), 'L' + lv + ': brambles gone after ' + L[1] + ' rounds');
@@ -553,6 +593,28 @@
     t.ok(!DD.Targeting.isValidTarget(ell(), fs, 6, 4) && DD.Targeting.isValidTarget(ell(), fs, 5, 4), 'boxed-in foe: not a valid target (its neighbours still are)');
     const pv = DD.Combat.preview(ell(), fs, 5, 4);
     t.ok(pv.perUnit[at(5, 4).id] && pv.perUnit[at(5, 4).id].dmg === 3, 'preview of a corridor fetch shows the bite');
+    // review: two corgis equally near, one on the drag lane: that one fetches (backs up), so nobody drags a foe into a packmate
+    quiet({ heroes: [{ id: 'ellaria', x: 4, y: 5, skills: [{ id: 'ell_fetch', level: 3 }] }], enemies: [E(2, 7), E(1, 7), E(6, 7)] });
+    clearCorgis();
+    const side = addCorgi(ell(), 2, 6), onLane = addCorgi(ell(), 3, 7);
+    const tg = at(2, 7);
+    t.ok(use(ell(), 'ell_fetch', 2, 7, 3), 'fetch with a corgi beside the foe and one on its drag lane');
+    t.ok(side.hp === side.maxHp && onLane.hp === onLane.maxHp, 'no corgi bumped (' + side.hp + ', ' + onLane.hp + ')');
+    t.ok(tg.hp === 14 - 5 && tg.x === 4 && tg.y === 7 && dist(onLane, tg) === 1, 'bite 5, the lane corgi gets out of the way and the foe is dragged 2 tiles (' + tg.x + ',' + tg.y + ')');
+    // review: a stunned / asleep / frozen / sheep corgi can't fetch (it can't act): the next able corgi goes, or nobody
+    ['stun', 'sleep', 'frozen', 'sheep'].forEach(function (sid) {
+      quiet({ heroes: [{ id: 'ellaria', x: 1, y: 4, skills: ['ell_fetch'] }], enemies: [E(6, 4), E(8, 8)] });
+      clearCorgis();
+      const near = addCorgi(ell(), 6, 3), far = addCorgi(ell(), 1, 1);
+      A().addStatus(near, sid, { turns: 1 }, null);
+      const g = at(6, 4);
+      t.ok(use(ell(), 'ell_fetch', 6, 4), sid + ': fetched');
+      t.ok(near.x === 6 && near.y === 3 && dist(far, g) === 1 && g.hp === 11 && g.x === 4, sid + ': the ' + sid + ' corgi stays put; the able one dashes in, bites and drags');
+      quiet({ heroes: [{ id: 'ellaria', x: 1, y: 4, skills: ['ell_fetch'] }], enemies: [E(6, 4), E(8, 8)] });
+      clearCorgis();
+      A().addStatus(addCorgi(ell(), 6, 3), sid, { turns: 1 }, null);
+      t.eq(DD.Combat.canUse(ell(), slotOf(ell(), 'ell_fetch')), 'Your corgis can\'t act right now.', sid + ': no corgi can act: refused');
+    });
   });
 
   // ---- Zoomies -------------------------------------------------------------------------------------------------------
@@ -603,6 +665,32 @@
     at(4, 4).hp = 3;
     const kd = at(4, 4);
     t.ok(use(ell(), 'ell_zoomies', 1, 1) && kd.dead, 'killed by the zoomies, nothing to push');
+    // review: a corgi that can't act (stunned / asleep / frozen / sheep) doesn't zoom
+    ['stun', 'sleep', 'frozen', 'sheep'].forEach(function (sid) {
+      quiet({ heroes: [{ id: 'ellaria', x: 1, y: 1, skills: ['ell_zoomies'] }], enemies: [E(4, 4), E(6, 6), E(8, 0)] });
+      clearCorgis();
+      const zz = addCorgi(ell(), 3, 4);
+      A().addStatus(zz, sid, { turns: 1 }, null);
+      t.eq(DD.Combat.canUse(ell(), slotOf(ell(), 'ell_zoomies')), 'Your corgis can\'t act right now.', sid + ': the only corgi can\'t act: refused');
+      addCorgi(ell(), 6, 5);
+      const g1 = at(4, 4), g2 = at(6, 6);
+      t.ok(use(ell(), 'ell_zoomies', 1, 1) && g1.hp === 14 && g1.x === 4 && g2.hp === 10 && g2.y === 7, sid + ': only the able corgi zooms');
+    });
+    // review: a foe next to two corgis is shoved by the one whose lane holds no friend (corgi W's lane = the knight)
+    quiet({ heroes: [{ id: 'ellaria', x: 1, y: 1, skills: ['ell_zoomies'] }, { id: 'test_knight', x: 5, y: 4 }], enemies: [E(4, 4), E(8, 8)] });
+    clearCorgis();
+    const zw = addCorgi(ell(), 3, 4), zs = addCorgi(ell(), 4, 5);
+    const zk = heroOf('test_knight'), zf = at(4, 4);
+    const pz = DD.Combat.preview(ell(), slotOf(ell(), 'ell_zoomies'), 1, 1);
+    t.ok(!pz.perUnit[zk.id] || !pz.perUnit[zk.id].dmg, 'preview: no friendly bump');
+    t.ok(use(ell(), 'ell_zoomies', 1, 1) && zf.x === 4 && zf.y === 3 && zf.hp === 10, 'pushed north, away from corgi S (4 damage, no bump)');
+    t.ok(zk.hp === zk.maxHp && zw.hp === zw.maxHp && zs.hp === zs.maxHp, 'the knight and both corgis are untouched');
+    // ...but squeezed between two corgis there is no clear lane: the shared bump rule (both take 3; the preview says so)
+    quiet({ heroes: [{ id: 'ellaria', x: 1, y: 1, skills: ['ell_zoomies'] }], enemies: [E(4, 4), E(8, 8)] });
+    clearCorgis();
+    const pa = addCorgi(ell(), 3, 4), pb = addCorgi(ell(), 5, 4);
+    const pf = at(4, 4);
+    t.ok(use(ell(), 'ell_zoomies', 1, 1) && pf.hp === 14 - 4 - 3 && pa.hp + pb.hp === pa.maxHp + pb.maxHp - 3, 'pincer: 4 + bump 3 on the foe, bump 3 on one corgi');
   });
 
   // ---- The Ol' Switcheroo ------------------------------------------------------------------------------------------
@@ -643,12 +731,17 @@
       t.ok(use(e, 'ell_wildshape', 3, 4, lv), 'L' + lv + ': shapeshift');
       t.ok(st(e, 'ell_absolute_unit') && st(e, 'ell_absolute_unit').turns === L[0], 'L' + lv + ': Absolute Unit (turns ' + L[0] + ')');
       t.ok(e.flags.immovable && e.sprite && e.sprite.base === 'quadruped' && e.sprite === DD.Ellaria.GIANT_SPRITE, 'L' + lv + ': immovable giant corgi sprite');
+      const said = DD.Combat.state.log.map(function (l) { return l.text; });
+      t.ok(said.indexOf('Ellaria is an Absolute Unit.') >= 0 && said.indexOf('Ellaria is Absolute Unit.') < 0, 'L' + lv + ': the log says "Ellaria is an Absolute Unit."');
       t.ok(e.basic.id === 'ell_chomp' && e.basic.level === lv, 'L' + lv + ': Thorn Whip becomes Chomp L' + lv);
       t.ok(e.block === 0 && e.hp === hp0 && !has(g1, 'taunt') && !has(g2, 'taunt') && !has(e, 'regen'), 'L' + lv + ': one verb: no Block, taunt or Regen riders');
-      t.eq(e.ap, 1, 'L' + lv + ': 2 AP');
+      t.eq(e.ap, 2, 'L' + lv + ': 1 AP (review: 2 AP left nothing to Chomp with)');
       t.eq(DD.Combat.canUse(e, slotOf(e, 'ell_wildshape')), 'No charges left.', 'L' + lv + ': once per fight');
       t.eq(A().push(g1, e, { x: -1, y: 0 }, 2).moved, 0, 'L' + lv + ': can\'t be pushed');
       t.ok(DD.Combat.useSkill(e, e.basic, 4, 4) && g1.hp === 14 - L[1] && g1.x === 5, 'L' + lv + ': Chomp hits for ' + L[1] + ' and knocks back 1');
+      // the cast turn still has room for a second Chomp (or a walk up to a foe first)
+      t.ok(A().teleport(g1, 4, 4) && DD.Combat.useSkill(e, e.basic, 4, 4) && e.ap === 0 && (g1.dead || g1.hp === 14 - 2 * L[1]),
+        'L' + lv + ': shapeshift + two Chomps in the cast turn');
       // it lasts through her next L[0] turn(s); an enemy turn after that sees an elf again
       const seen = [];
       const off = DD.Events.on('turn:start', function (ev) { if (ev.unit && ev.unit.side === 'enemy' && ev.unit === g2) seen.push(!!e.flags.immovable); });
@@ -780,6 +873,148 @@
     t.ok(DD.Combat.current() === k && DD.Combat.canUse(c, slotOf(c, 'ell_corgi_bite')) !== true, 'the knight\'s turn: the corgi waits for Ellaria\'s');
   });
 
+  // ---- attacks of opportunity ---------------------------------------------------------------------------------------
+  T.suite('hero_ellaria: attacks of opportunity (corgis hold the line, the Absolute Unit Chomps, her moves that never provoke)', function (t) {
+    const round = function () { return DD.Combat.state.round; };
+    let strikes = [];
+    const off = DD.Events.on('opportunity:attack', function (ev) { strikes.push(ev.attacker.name + '>' + ev.mover.name + ':' + ev.skillId); });
+    try {
+      // Thorn Whip is ranged: elf-form Ellaria makes no attacks of opportunity, and walking away from a grunt provokes it
+      quiet({ heroes: [{ id: 'ellaria', x: 2, y: 4 }], enemies: [E(3, 4), E(8, 8)] });
+      clearCorgis();
+      let e = ell(), g = at(3, 4);
+      t.eq(DD.Act.opportunitySlot(e), null, 'elf form: no attack of opportunity (Thorn Whip is ranged)');
+      const pv = DD.Combat.provokes(e, 0, 4);
+      t.ok(pv.length === 1 && pv[0].unitId === g.id && pv[0].dmg === 4, 'the move preview says the walk provokes the grunt\'s Stab (4)');
+      let hp0 = e.hp;
+      t.ok(DD.Combat.move(e, 0, 4), 'she walks away from the grunt');
+      t.ok(e.x === 0 && e.y === 4 && e.hp === hp0 - 4, 'the grunt stabs her as she leaves (4); the walk goes on');
+      t.eq(g.oppRound, round(), 'its reaction is spent for the round');
+      t.ok(!DD.Combat.canUndo(), 'a move that provoked cannot be undone');
+      quiet({ heroes: [{ id: 'ellaria', x: 2, y: 4 }], enemies: [E(3, 4), E(8, 8)] });
+      clearCorgis();
+      g = at(3, 4);
+      strikes = [];
+      DD.AI.moveTo(g, 6, 4);
+      t.ok(g.x === 6 && g.hp === 14 && !strikes.length, 'a grunt walks away from elf-form Ellaria unpunished');
+      // a corgi holds the line: a foe that walks away from it gets bitten (3), once per round; next round again
+      quiet({ heroes: [{ id: 'ellaria', x: 0, y: 0 }], enemies: [E(4, 4), E(4, 6), E(8, 8)] });
+      clearCorgis();
+      const c = addCorgi(ell(), 4, 5);
+      t.eq(DD.Act.opportunitySlot(c).id, 'ell_corgi_bite', 'the corgi strikes with Bite');
+      const g1 = at(4, 4), g2 = at(4, 6);
+      strikes = [];
+      DD.AI.moveTo(g1, 7, 4);
+      t.ok(g1.hp === 11 && g1.x === 7, 'the grunt walking away is bitten for 3, its walk goes on');
+      t.ok(strikes.length === 1 && strikes[0].indexOf('ell_corgi_bite') > 0 && c.oppRound === round(), 'one corgi attack of opportunity, logged');
+      DD.AI.moveTo(g2, 7, 6);
+      t.ok(g2.hp === 14 && g2.x === 7 && strikes.length === 1, 'at most one per round: the second walker gets away');
+      DD.Combat.endRound();
+      t.ok(A().teleport(g2, 4, 6) && DD.AI.moveTo(g2, 6, 6) && g2.hp === 11, 'round 2: the corgi bites again');
+      // the bite downs the walker: the walk ends there, a kill for the party
+      quiet({ heroes: [{ id: 'ellaria', x: 0, y: 0 }], enemies: [E(4, 4), E(8, 8)] });
+      clearCorgis();
+      addCorgi(ell(), 4, 5);
+      const v = at(4, 4);
+      v.hp = 2;
+      const h0 = hypeNow();
+      DD.AI.moveTo(v, 7, 4);
+      t.ok(v.dead && hypeNow() - h0 === 8, 'the corgi\'s bite kills the walker (+8 Hype)');
+      // stunned / asleep / sheep corgis can't; nor a corgi already spent
+      ['stun', 'sleep', 'sheep'].forEach(function (sid) {
+        quiet({ heroes: [{ id: 'ellaria', x: 0, y: 0 }], enemies: [E(4, 4), E(8, 8)] });
+        clearCorgis();
+        const cc = addCorgi(ell(), 4, 5);
+        A().addStatus(cc, sid, { turns: 1 }, null);
+        const w = at(4, 4);
+        DD.AI.moveTo(w, 7, 4);
+        t.ok(w.hp === 14 && w.x === 7, 'a corgi with ' + sid + ' makes no attack of opportunity');
+      });
+      // an Empowered corgi's free bite neither uses nor spends the treat: its next Bite does
+      quiet({ heroes: [{ id: 'ellaria', x: 2, y: 4, skills: ['ell_good_boy'] }], enemies: [E(4, 4), E(4, 6), E(8, 8)] });
+      clearCorgis();
+      const ec = addCorgi(ell(), 4, 5);
+      t.ok(use(ell(), 'ell_good_boy', 4, 5) && has(ec, 'empowered'), 'treat: the corgi is Empowered');
+      DD.AI.moveTo(at(4, 4), 7, 4);
+      t.ok(at(7, 4).hp === 11 && has(ec, 'empowered'), 'its attack of opportunity bites for 3 and keeps Empowered');
+      t.ok(DD.Combat.useSkill(ec, slotOf(ec, 'ell_corgi_bite'), 4, 6) && at(4, 6).hp === 14 - Math.round(3 * 1.5), 'its next Bite is the Empowered one (5)');
+      // the Absolute Unit: Chomp is melee, so foes that walk away are Chomped and knocked back (their walk ends)
+      quiet({ heroes: [{ id: 'ellaria', x: 2, y: 4, skills: ['ell_wildshape'] }], enemies: [E(3, 4), E(8, 8)] });
+      clearCorgis();
+      e = ell(); g = at(3, 4);
+      t.ok(use(e, 'ell_wildshape', 2, 4), 'shapeshift');
+      t.eq(DD.Act.opportunitySlot(e).id, 'ell_chomp', 'Absolute Unit: Chomp is her attack of opportunity');
+      DD.AI.moveTo(g, 3, 1);
+      t.ok(g.hp === 14 - 7 && g.x === 4 && g.y === 4, 'the walker is Chomped (7) and knocked back 1: its walk ends there (' + g.x + ',' + g.y + ')');
+      // ...with a pit behind it, walking away from an Absolute Unit is a YEET (environmental kill, +20 Hype)
+      quiet({ heroes: [{ id: 'ellaria', x: 2, y: 4, skills: ['ell_wildshape'] }], enemies: [E(3, 4), E(8, 8)], terrain: wall([[4, 4, 'pit']]) });
+      clearCorgis();
+      t.ok(use(ell(), 'ell_wildshape', 2, 4), 'shapeshift next to a grunt with a pit behind it');
+      const py = at(3, 4), ph = hypeNow();
+      DD.AI.moveTo(py, 3, 1);
+      t.ok(py.dead && DD.Combat.state.stats.envKills === 1 && hypeNow() - ph === 20, 'Chomped into the pit as it tries to leave: YEET (+20 Hype)');
+      // her escapes never provoke: The Ol' Switcheroo (a swap) out of two grunts
+      quiet({ heroes: [{ id: 'ellaria', x: 4, y: 4, skills: ['ell_switcheroo'] }], enemies: [E(5, 4), E(4, 5), E(8, 8)] });
+      clearCorgis();
+      e = ell();
+      const far = addCorgi(e, 0, 8);
+      hp0 = e.hp;
+      strikes = [];
+      t.ok(use(e, 'ell_switcheroo', 0, 8) && e.x === 0 && e.y === 8, 'switcheroo away from two grunts');
+      t.ok(e.hp === hp0 && far.hp === far.maxHp && !strikes.length, 'a swap provokes nothing');
+      // Fetch!: the corgi dashes away from the grunt beside it without provoking
+      quiet({ heroes: [{ id: 'ellaria', x: 1, y: 4, skills: ['ell_fetch'] }], enemies: [E(3, 1), E(6, 4), E(8, 8)] });
+      clearCorgis();
+      const fc = addCorgi(ell(), 3, 2);
+      strikes = [];
+      t.ok(use(ell(), 'ell_fetch', 6, 4), 'fetch the far grunt');
+      t.ok(fc.hp === fc.maxHp && !strikes.length && at(4, 4) && at(4, 4).hp === 11, 'the dash and the drag provoke nothing; the grunt is bitten and dragged');
+      // Thorn Whip pulls a foe away from a corgi: forced movement never provokes
+      quiet({ heroes: [{ id: 'ellaria', x: 1, y: 4 }], enemies: [E(4, 4), E(8, 8)] });
+      clearCorgis();
+      addCorgi(ell(), 5, 4);
+      strikes = [];
+      t.ok(use(ell(), 'basic', 4, 4) && at(3, 4) && at(3, 4).hp === 10 && !strikes.length, 'whipped away from the corgi: 4 damage, no bite');
+      // Zoomies push foes away from the pack: no attacks of opportunity either
+      quiet({ heroes: [{ id: 'ellaria', x: 1, y: 1, skills: ['ell_zoomies'] }], enemies: [E(4, 4), E(8, 8)] });
+      clearCorgis();
+      addCorgi(ell(), 3, 4);
+      strikes = [];
+      t.ok(use(ell(), 'ell_zoomies', 1, 1) && at(5, 4) && at(5, 4).hp === 10 && !strikes.length, 'zoomed 1 tile away: 4 damage, no bite');
+      // combo: a corgi's Bark lets Ellaria slip away (a taunted foe only strikes its taunter)...
+      quiet({ heroes: [{ id: 'ellaria', x: 3, y: 4 }], enemies: [E(4, 4), E(8, 8)] });
+      clearCorgis();
+      e = ell(); g = at(4, 4);
+      const bc = addCorgi(e, 4, 5);
+      t.ok(DD.Combat.useSkill(bc, slotOf(bc, 'ell_corgi_bark'), 4, 5) && has(g, 'taunt'), 'the corgi barks: the grunt is Taunted');
+      hp0 = e.hp;
+      t.eq(DD.Combat.provokes(e, 1, 4).length, 0, 'the move preview: walking away provokes nothing now');
+      t.ok(DD.Combat.move(e, 1, 4) && e.x === 1 && e.hp === hp0, 'Ellaria walks away untouched');
+      // ...but the corgi itself does not get away with it
+      const bhp = bc.hp;
+      t.ok(DD.Combat.move(bc, 4, 7) && bc.hp === bhp - 4, 'the corgi walking off is stabbed by the grunt it taunted');
+      // Barkskin's Thorns answer an attack of opportunity too
+      quiet({ heroes: [{ id: 'ellaria', x: 2, y: 4, skills: ['ell_barkskin'] }], enemies: [E(3, 4), E(8, 8)] });
+      clearCorgis();
+      e = ell(); g = at(3, 4);
+      t.ok(use(e, 'ell_barkskin', 2, 4), 'Barkskin on herself');
+      t.ok(DD.Combat.move(e, 0, 4) && g.hp === 14 - 2 && e.block === 5 - 4, 'the stab lands on her Block and the thorns prick the grunt for 2');
+      // AI: a grunt engaged with a corgi sticks to it rather than walking past to the mage (control: no corgi)
+      [true, false].forEach(function (withCorgi) {
+        live({ heroes: [{ id: 'ellaria', x: 0, y: 8 }, { id: 'test_mage', x: 4, y: 1 }], enemies: [E(4, 4)] });
+        clearCorgis();
+        const guard = withCorgi ? addCorgi(ell(), 4, 5) : null;
+        const mage = heroOf('test_mage'), gg = at(4, 4);
+        const mhp = mage.hp, ghp = guard ? guard.hp : 0;
+        DD.Combat.endTurn(); DD.Combat.endTurn();
+        t.log((withCorgi ? 'with a corgi' : 'no corgi') + ': grunt at ' + gg.x + ',' + gg.y + (guard ? ', corgi ' + ghp + '→' + guard.hp : '') +
+          ', mage ' + mhp + '→' + mage.hp);
+        if (withCorgi) t.ok(guard.hp < ghp && mage.hp === mhp, 'the grunt next to the corgi stabs the corgi; the mage is safe');
+        else t.ok(mage.hp < mhp, 'control: with no corgi in its face, the grunt walks up and stabs the mage');
+      });
+    } finally { off(); }
+  });
+
   // ---- items ---------------------------------------------------------------------------------------------------------
   T.suite('hero_ellaria: hero items', function (t) {
     // The Good Stick
@@ -804,6 +1039,12 @@
     quiet({ heroes: [{ id: 'ellaria', x: 1, y: 4, items: ['ell_good_stick'] }], enemies: [E(4, 4), E(8, 8)] });
     DD.Combat.state.hype = 100;
     t.ok(use(ell(), 'signature', 1, 4) && at(4, 4).hp === 14 - (Math.round(6 * 1.1) + 2), 'Good Stick: Release the Corgis bites for round(6 × 1.1) + 2 = 9');
+    // ...and the corgis' attacks of opportunity (they are Bites)
+    quiet({ heroes: [{ id: 'ellaria', x: 0, y: 0, items: ['ell_good_stick'] }], enemies: [E(4, 4), E(8, 8)] });
+    clearCorgis();
+    addCorgi(ell(), 4, 5);
+    DD.AI.moveTo(at(4, 4), 7, 4);
+    t.eq(at(7, 4).hp, 14 - 5, 'Good Stick: a corgi\'s attack of opportunity bites for 3 + 2');
     // Robe of Perpetual Shedding: a melee attacker is Dazzled until the end of its next turn; an archer is not
     live({ heroes: [{ id: 'ellaria', x: 4, y: 4, items: ['ell_shedding_robe'] }], enemies: [E(5, 4), E(4, 8, 'test_archer')] });
     clearCorgis();
@@ -818,6 +1059,13 @@
     DD.Combat.state.aiOff = true;
     DD.Combat.endTurn();
     t.ok(!has(g, 'dazzled'), 'Robe: the Dazzle ended with the grunt\'s next turn');
+    // an attack of opportunity is a melee hit too: the grunt that stabs her as she walks off is Dazzled
+    quiet({ heroes: [{ id: 'ellaria', x: 4, y: 4, items: ['ell_shedding_robe'] }], enemies: [E(5, 4), E(8, 8)] });
+    clearCorgis();
+    const rr = ell(), rg = at(5, 4);
+    const rhp = rr.hp;
+    t.ok(DD.Combat.move(rr, 1, 4) && rr.hp === rhp - 4 && has(rg, 'dazzled'), 'Robe: the attacker of opportunity is Dazzled');
+    t.eq(st(rg, 'dazzled').turns, 1, 'Robe: through its next turn');
     // Flower Crown of the Corgi Queen
     quiet({ heroes: [{ id: 'ellaria', x: 1, y: 4, items: ['ell_flower_crown'], skills: ['ell_summon_corgi'] }], enemies: [E(8, 8)] });
     const q = ell();
@@ -842,6 +1090,17 @@
     A().kill(corgis()[0], null);
     DD.Combat.endTurn();
     t.eq(corgis().length, n0 - 1, 'Crown: the pack is still over 3, nobody new bounds in');
+    // a corgi lost while she is downed: the new one bounds in at the start of her first turn back on her feet
+    quiet({ heroes: [{ id: 'ellaria', x: 1, y: 4, items: ['ell_flower_crown'] }, { id: 'test_knight', x: 1, y: 6 }], enemies: [E(8, 8)] });
+    const dq = ell();
+    A().kill(dq, null);
+    A().kill(corgis(dq)[0], null);
+    t.ok(dq.downed && corgis(dq).length === 0, 'Crown: downed, and her corgi fell');
+    DD.Combat.endTurn();
+    t.eq(corgis(dq).length, 0, 'Crown: nothing while she is down');
+    t.ok(A().revive(dq, 0.25) && !dq.downed, 'the knight helps her up');
+    DD.Combat.endTurn();
+    t.ok(DD.Combat.current() === dq && corgis(dq).length === 1 && corgis(dq)[0].ap === 2, 'Crown: her next turn starts with a new, ready corgi');
   });
 
   // ---- v2 edge cases & previews ------------------------------------------------------------------------------------
@@ -981,14 +1240,100 @@
     try { fn(used); } finally { DD.Combat.useSkill = orig; }
     return used;
   }
+  T.suite('hero_ellaria: AutoPlay releases the corgis when the Hype is there', function (t) {
+    [[E(4, 4), E(5, 2), E(6, 6)], [E(3, 4), E(4, 5), E(6, 2), E(7, 7)]].forEach(function (foes, k) {
+      live({ heroes: [{ id: 'ellaria', x: 1, y: 4, level: 3 }, { id: 'test_knight', x: 1, y: 6, level: 3 }], enemies: foes });
+      DD.Combat.state.hype = 100;
+      const n0 = corgis().length;
+      const used = counting(function () { DD.AutoPlay.takeTurn(); });
+      t.log('scene ' + k + ': ' + JSON.stringify(used) + ', Hype left ' + DD.Combat.state.hype);
+      t.ok(used.ell_release === 1 && corgis().length >= n0 + foes.length - 1, 'scene ' + k + ': RELEASE THE CORGIS! (' + n0 + ' → ' + corgis().length + ' corgis)');
+    });
+  });
+
   [1, 2, 3].forEach(function (act) {
     T.suite('hero_ellaria: AutoPlay battles act ' + act + ' (party ellaria + fixtures, L1/3/5)', function (t) {
-      const used = counting(function () { battles(t, act); });
+      // attacks of opportunity by / on her pack (the corgis hold the line)
+      const aoo = { byCorgi: 0, byEllaria: 0, onCorgi: 0, onEllaria: 0 };
+      const off = DD.Events.on('opportunity:attack', function (ev) {
+        const a = ev.attacker && ev.attacker.defId, m = ev.mover && ev.mover.defId;
+        if (a === 'ell_corgi') aoo.byCorgi++;
+        if (a === 'ellaria') aoo.byEllaria++;
+        if (m === 'ell_corgi') aoo.onCorgi++;
+        if (m === 'ellaria') aoo.onEllaria++;
+      });
+      let used;
+      try { used = counting(function () { battles(t, act); }); } finally { off(); }
       t.log('act ' + act + ' skill uses: ' + JSON.stringify(used));
+      t.log('act ' + act + ' attacks of opportunity: ' + JSON.stringify(aoo));
       const kinds = Object.keys(used);
       t.ok((used.ell_thorn_whip || 0) + (used.ell_chomp || 0) > 0, 'act ' + act + ': Ellaria attacks');
       t.ok(used.ell_corgi_bite > 0, 'act ' + act + ': corgis bite');
       t.ok(kinds.filter(function (k) { return POOL.indexOf(k) >= 0; }).length >= 3, 'act ' + act + ': at least 3 different pool skills used (' + kinds.join(', ') + ')');
     });
+  });
+
+  // ---- v2 requests (user, Nov 3): heals on the downed, barrels, flyers --------------------------------------------
+  T.suite('hero_ellaria: v2 requests — a Good Boy treat gets the downed up, barrels (not for Fetch!), flyers over Brambles', function (t) {
+    // 1. Who's a Good Boy? aimed at a downed ally: up with the treat's HP (preview "UP! N HP"), then Empowered
+    [3, 5, 6].forEach(function (heal, i) {
+      const lv = i + 1;
+      quiet({ heroes: [{ id: 'ellaria', x: 1, y: 4, skills: [{ id: 'ell_good_boy', level: lv }] }, { id: 'test_knight', x: 4, y: 4 }], enemies: [E(8, 8)] });
+      clearCorgis();
+      const e = ell(), k = heroOf('test_knight');
+      A().kill(k, null);
+      t.ok(k.downed, 'L' + lv + ': knight down');
+      const tg = DD.Targeting.validTargets(e, slotOf(e, 'ell_good_boy')).filter(function (q) { return q.x === 4 && q.y === 4; })[0];
+      t.ok(!!tg && tg.revive === true, 'L' + lv + ': the downed knight is a target (revive)');
+      const pv = DD.Combat.preview(e, slotOf(e, 'ell_good_boy'), 4, 4);
+      const pe = pv.perUnit[k.id];
+      t.ok(!!pe && pe.revived && pe.heal === heal && pe.text.indexOf('UP! ' + heal + ' HP') >= 0 && pe.statuses.indexOf('empowered') >= 0,
+        'L' + lv + ': preview "UP! ' + heal + ' HP" and Empowered (' + (pe && pe.text) + ')');
+      t.ok(use(e, 'ell_good_boy', 4, 4), 'L' + lv + ': treat thrown at the downed knight');
+      t.ok(!k.downed && k.hp === heal && k.ap === 0 && has(k, 'empowered'), 'L' + lv + ': up at ' + heal + ' HP, 0 AP, Empowered (' + k.hp + ')');
+      t.ok(e.ap === 2, 'L' + lv + ': 1 AP');
+      DD.Combat.endTurn();
+      t.ok(DD.Combat.current() === k && k.ap === 3, 'L' + lv + ': the knight acts on his own slot with full AP');
+    });
+    // Healing Spring is an area heal: it never gets anyone up (the downed ally in it stays down, the standing one heals)
+    quiet({ heroes: [{ id: 'ellaria', x: 1, y: 4, skills: ['ell_spring'] }, { id: 'test_knight', x: 3, y: 4 }, { id: 'test_mage', x: 4, y: 3 }], enemies: [E(8, 8)] });
+    clearCorgis();
+    A().kill(heroOf('test_knight'), null);
+    heroOf('test_mage').hp = 10;
+    t.ok(use(ell(), 'ell_spring', 4, 4), 'Healing Spring next to a downed knight');
+    t.ok(heroOf('test_knight').downed && heroOf('test_mage').hp === 15, 'area heal: the downed knight stays down, the mage heals 5');
+
+    // 2. barrels: Thorn Whip and a corgi's Bite set one off; Fetch! is never aimed at one (no corgi dash, no drag)
+    quiet({ heroes: [{ id: 'ellaria', x: 1, y: 4, skills: ['ell_fetch'] }], enemies: [E(5, 5), E(8, 8)], objects: [{ x: 4, y: 4, id: 'barrel_explosive' }] });
+    clearCorgis();
+    let e = ell();
+    addCorgi(e, 2, 6);
+    t.eq(DD.Combat.canUse(e, slotOf(e, 'ell_fetch')), true, 'Fetch! is ready (a corgi stands by)');
+    t.ok(!DD.Targeting.validTargets(e, slotOf(e, 'ell_fetch')).some(function (q) { return q.obj; }), 'Fetch! never targets a barrel (target.objects: false)');
+    t.ok(DD.Targeting.validTargets(e, e.basic).some(function (q) { return q.obj && q.x === 4 && q.y === 4; }), 'Thorn Whip can be aimed at the barrel 3 tiles away');
+    const pv = DD.Combat.preview(e, e.basic, 4, 4);
+    t.ok(pv.detonates === 'barrel_explosive' && pv.perUnit[at(5, 5).id] === undefined, 'preview: it detonates (the diagonal foe is outside radius 1)');
+    t.ok(use(e, 'basic', 4, 4) && !tile(4, 4).obj && e.ap === 2 && e.x === 1, 'whipped barrel: KABOOM, 1 AP, nothing pulled');
+    quiet({ heroes: [{ id: 'ellaria', x: 1, y: 4 }], enemies: [E(5, 5), E(8, 8)], objects: [{ x: 4, y: 5, id: 'barrel_explosive' }] });
+    clearCorgis();
+    e = ell();
+    const pup = addCorgi(e, 3, 5);
+    t.ok(DD.Combat.useSkill(pup, slotOf(pup, 'ell_corgi_bite'), 4, 5), 'a corgi bites the barrel');
+    t.ok(!tile(4, 5).obj && at(5, 5).hp === 6 && pup.hp === pup.maxHp - 8, 'the barrel blows: 8 to the foe beside it and 8 to the very good, very brave corgi');
+
+    // 3. flyers: Brambles are a floor effect (a flying foe pushed or flying through is not pricked, sees no hazard),
+    // but the cast itself catches a flyer standing in the area
+    quiet({ heroes: [{ id: 'ellaria', x: 1, y: 4, skills: ['ell_roots'] }], enemies: [E(4, 4), E(8, 2), E(8, 8)] });
+    clearCorgis();
+    e = ell();
+    const fl = at(4, 4), fl2 = at(8, 2);
+    fl.flags = Object.assign({}, fl.flags, { flying: true });   // test setup: flying foes
+    fl2.flags = Object.assign({}, fl2.flags, { flying: true });
+    t.ok(use(e, 'ell_roots', 4, 4), 'Entangling Roots on a flyer');
+    t.ok(fl.hp === 11 && has(fl, 'root'), 'caught by the cast: 3 damage and Rooted (the spell is aimed at it)');
+    t.eq(DD.Grid.hazardAt(4, 3, fl2) + '/' + DD.Grid.hazardAt(4, 3, at(8, 8)), 'null/ell_bramble', 'the patch is no hazard for a flyer, still one for a walker');
+    A().moveAlong(fl2, [{ x: 7, y: 2 }, { x: 6, y: 2 }, { x: 5, y: 2 }, { x: 4, y: 2 }, { x: 4, y: 3 }]);
+    t.ok(fl2.x === 4 && fl2.y === 3 && fl2.hp === 14 && !has(fl2, 'root'), 'a flyer flies into the brambles untouched (' + fl2.x + ',' + fl2.y + ' ' + fl2.hp + ')');
+    t.ok(A().teleport(at(8, 8), 5, 4) && at(5, 4).hp === 11 && has(at(5, 4), 'root'), 'a walker entering is still pricked and Rooted');
   });
 })();

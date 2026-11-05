@@ -1,16 +1,25 @@
 /* Dungeons and Degenerates — js/data/bosses/ratking.js
  * Act 1 boss: THE RAT KING AND THE RAT BAR ASSOCIATION (enemy 'rat_king', encounter 'boss_rat_king', a sewer junction).
- * A crowned, conjoined swarm. Too many rats to shove (immovable), so only sewer water can move him; immune to Sleep.
- * Planner rotation: Tangled Tails (tracking pull + root) / Gnaw (rotten floor tiles near heroes collapse into pits) /
- * Sewer Surge (delayed: a channel floods and washes everyone in it into the drain), then a Rat Pile on all 8 tiles
- * around him (after the tails, so a reeled-in hero lands in it) + the gavel. He likes to wade in the channels.
- * Swelling Ranks (soft timer): +1 stack every round from round 2, +2 damage per stack on all his attacks (max 6).
+ * A crowned, conjoined swarm. Too many rats to shove (immovable), so only sewer water can move him; immune to Sleep
+ * and Frozen.
+ * v2 (initiative, no telegraphs): he takes TWO turns a round (two initiative entries; one turn gave a solo boss too
+ * few actions to matter against four heroes). Each turn he walks (he likes to wade in the channels) and does ONE
+ * thing: a Rat Pile on everyone around him when a Rooted hero, or three or more heroes, stand on the 8 tiles next to
+ * him; otherwise the next step of his docket — Tangled Tails (reel a hero in and Root them), Gnaw (wind-up: marked
+ * rotten floor collapses into pits) or Sewer Surge (wind-up: a whole channel floods and washes everyone in it into
+ * the drain). Wind-ups land one round later, at the start of the same turn of his (every unit, so every hero, gets
+ * one turn first); stunning or flushing him cancels them. Tangled Tails + the Rat Pile is his combo: a reeled-in,
+ * rooted hero can't walk out of the pile. His ranged picks weigh the damage (capped at what the hero has left), a
+ * knockout, a hero close enough to reel into the pile and "contempt of court" — the hero who has dealt the most damage
+ * (never just "whoever is lowest").
+ * Swelling Ranks (soft timer): +1 stack every round from round 2, +1 damage per stack on his at-once attacks (no cap;
+ * not on wind-ups).
  * Phases at 66% / 33% HP: he SPLITS, two Rat Lawyers break off (max 3 on retainer). Phase 2 "Cross-Examination":
- * Gnaw takes 3 tiles, two gavels. Phase 3 "Closing Arguments": Sewer Surge floods both channels at once, Class Action.
+ * Gnaw takes 3 tiles. Phase 3 "Closing Arguments": Sewer Surge floods both channels at once, Class Action.
  * Puzzle: two sluice valves (mid-arena: A on the island, B on the party walkway). Opening one washes everyone in its
  * channel into the drain: Rat Lawyers drown (an environmental kill), heroes lose 25% max HP and climb out, and the Rat
- * King is FLUSHED: 30 damage, Stunned (his telegraphs are cancelled), Wet, and his Swelling Ranks wash away. Each
- * valve needs 3 rounds to build pressure again.
+ * King is FLUSHED: 30 damage, Stunned for both of his next turns (his wind-ups are cancelled), Wet, and his Swelling
+ * Ranks wash away. Each valve needs 4 rounds to build pressure again.
  * Puzzle state lives in object data and unit.data (copied by previews and deploy rewinds).
  */
 (function () {
@@ -19,16 +28,23 @@
   const TAU = Math.PI * 2;
 
   const FLUSH_DMG = 30;
-  const VALVE_CD = 3;
-  const WADE = 3;                 // how much the King likes ending his move in a channel (he holds court in the sewage)
+  const VALVE_CD = 4;            // rounds a valve needs to build pressure again (3 made the flush an 80% win button)
+  const WADE = 3;                // how much the King likes ending his move in a channel (he holds court in the sewage)
   const LAWYER_CAP = 3;
-  const SWARM_DMG = 2;           // Swelling Ranks: +2 damage per stack on all his attacks, +1 stack per round, max 6
-  const SWARM_MAX = 6;
-  // balance knobs (tests may tweak them for sims): lawyers on retainer, gavels per round by phase, valve recharge, wading
-  const CFG = { lawyerCap: LAWYER_CAP, gavels: { 1: 1, 2: 2, 3: 2 }, valveCd: VALVE_CD, wade: WADE, swarmDmg: SWARM_DMG };
+  const SWARM_DMG = 1;           // Swelling Ranks: +1 damage per stack on his at-once attacks, +1 stack per round
+  const SWARM_MAX = 99;          // no real cap: the soft timer keeps growing until a flush washes it away (no stalls)
+  const GUARD_TURNS = 3;         // Recess: the turn a stun costs him + his next two
+  const FLUSH_STUN = 2;          // a flush costs him both of his next turns (a round)
+  // balance knobs (tests may tweak them for sims): lawyers on retainer, valve recharge, wading, swarm damage
+  const CFG = { lawyerCap: LAWYER_CAP, valveCd: VALVE_CD, wade: WADE, swarmDmg: SWARM_DMG, swarmFrom: 2, crowd: 3, flushStun: FLUSH_STUN };
+  /** Heroes next to him that make a Rat Pile worth it even when none of them is Rooted. */
+  function crowd() { return Math.max(1, Math.round(+CFG.crowd || 3)); }
+  const NUM = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight'];
   const FLOW = { x: -1, y: 0 };          // the channels drain west
   const SPLITS = [0.66, 0.33];
-  const PATTERNS = { 1: ['tails', 'gnaw', 'tails', 'surge'], 2: ['surge', 'tails', 'gnaw', 'tails'], 3: ['surge', 'tails', 'class', 'gnaw'] };
+  // his docket: one step per turn (two turns a round); a crowd (or a Rooted hero) next to him gets the Rat Pile instead
+  const PATTERNS ={ 1: ['tails', 'gnaw', 'tails', 'surge'], 2: ['tails', 'surge', 'tails', 'gnaw'], 3: ['tails', 'surge', 'class', 'gnaw'] };
+  const STEP_NAMES = { tails: 'Tangled Tails', gavel: 'Order in the Court!', gnaw: 'Gnaw', surge: 'Sewer Surge', class: 'Class Action', pile: 'Rat Pile' };
   const LAWYER_NAMES = ['Ratticus Finch', 'Squeakson Esq.', 'Barrister Whiskers', 'Ratrick, Ratrick & Rat', 'Cheddarton QC', 'Johnnie Gnawchran'];
 
   // ---- helpers ----------------------------------------------------------------------------------------
@@ -36,21 +52,23 @@
   function A() { return DD.Act; }
   function G() { return DD.Grid; }
   function active(u) { return !!u && !u.dead && !u.downed; }
+  function out(u) { return !active(u) || DD.Act.isStunned(u) || DD.Act.hasStatus(u, 'sheep'); }
   function dist(a, b) { return Math.abs(a.x - b.x) + Math.abs(a.y - b.y); }
   function nearestDist(p, list) { let d = Infinity; list.forEach(function (q) { d = Math.min(d, dist(p, q)); }); return d; }
   function plural(n, w) { return n + ' ' + (n === 1 ? w : w + 's'); }
+  function rooted(u) { return DD.Act.hasStatus(u, 'root'); }
 
   function tilesWhere(s, fn) {
-    const out = [];
-    if (!s || !s.grid) return out;
-    s.grid.tiles.forEach(function (t) { if (fn(t)) out.push(t); });
-    return out;
+    const res = [];
+    if (!s || !s.grid) return res;
+    s.grid.tiles.forEach(function (t) { if (fn(t)) res.push(t); });
+    return res;
   }
   function chanOf(t) { return t && typeof t.tag === 'string' && t.tag.indexOf('rat_chan') === 0 ? t.tag.slice(8) : null; }
   function channels(s) {
-    const out = {};
-    tilesWhere(s || S(), function (t) { return !!chanOf(t); }).forEach(function (t) { const c = chanOf(t); (out[c] = out[c] || []).push({ x: t.x, y: t.y }); });
-    return out;
+    const res = {};
+    tilesWhere(s || S(), function (t) { return !!chanOf(t); }).forEach(function (t) { const c = chanOf(t); (res[c] = res[c] || []).push({ x: t.x, y: t.y }); });
+    return res;
   }
   function chanTiles(chan, s) { return channels(s)[chan] || []; }
   function inChannel(p, chan) { const t = G().tile(p.x, p.y); return !!t && chanOf(t) !== null && (!chan || chanOf(t) === chan); }
@@ -62,9 +80,9 @@
   /** Flush damage (the valve def's dmg; FLUSH_DMG unless a balance run tunes it). */
   function flushDmg() { const d = DD.getObject('rat_valve'); return d && d.dmg > 0 ? d.dmg : FLUSH_DMG; }
   function unitsIn(tiles) {
-    const out = [];
-    tiles.forEach(function (p) { const u = G().unitAt(p.x, p.y); if (active(u) && out.indexOf(u) < 0) out.push(u); });
-    return out;
+    const res = [];
+    tiles.forEach(function (p) { const u = G().unitAt(p.x, p.y); if (active(u) && res.indexOf(u) < 0) res.push(u); });
+    return res;
   }
 
   /** Which channel a valve feeds: its data, else the channel next to it. */
@@ -84,36 +102,43 @@
     id: 'rat_session', name: 'Court in Session', icon: '⚖️', color: '#d4af37', type: 'buff', stacking: 'refresh', maxStacks: 3,
     decay: 'never', defaultTurns: -1,
     desc: function (st) {
-      return st.stacks >= 3 ? 'Closing Arguments (phase 3): Sewer Surge floods both channels at once, Class Action calls in Plaintiff Rats, Gnaw takes 3 tiles, ' +
-          (CFG.gavels[3] || 1) + ' gavels a round.'
-        : st.stacks >= 2 ? 'Cross-Examination (phase 2): Gnaw takes 3 rotten tiles at once and ' + (CFG.gavels[2] || 1) + ' gavels fly every round. Splits again at 33% HP.'
-          : 'Opening Statements: one gavel a round. Splits off two Rat Lawyers at 66% and again at 33% HP.';
+      return st.stacks >= 3 ? 'Closing Arguments (phase 3): Sewer Surge floods both channels at once and Class Action calls in Plaintiff Rats.'
+        : st.stacks >= 2 ? 'Cross-Examination (phase 2): Gnaw takes up to 3 rotten tiles at once. Splits again at 33% HP.'
+          : 'Opening Statements: splits off two Rat Lawyers at 66% and again at 33% HP.';
     },
   });
 
-  // the soft timer: more sewer rats join the pile every round; a flush washes them away
+  // the soft timer: more sewer rats join the pile every round; a flush washes them away. Only his at-once attacks get
+  // the bonus: it grows at the round start, which could raise a pending wind-up after the heroes' last look at it
+  const WINDUPS = { rat_gnaw: 1, rat_surge: 1 };
+  function swarmNow(u) { const st = u && DD.Act.getStatus(u, 'rat_swarm'); return st ? CFG.swarmDmg * st.stacks : 0; }
   DD.registerStatus({
     id: 'rat_swarm', name: 'Swelling Ranks', icon: '🐀', color: '#b59a86', type: 'buff', stacking: 'stack', maxStacks: SWARM_MAX,
     decay: 'never', defaultTurns: -1,
     desc: function (st) {
-      return 'More sewer rats join the pile every round: +' + SWARM_DMG * st.stacks + ' damage on all of his attacks (up to +' + SWARM_DMG * SWARM_MAX +
-        '). Flushing him down the drain washes them all away.';
+      return 'More sewer rats join the pile every round: +' + CFG.swarmDmg * st.stacks + ' damage on his Rat Pile, Tangled Tails and gavel (no cap; not on his wind-ups). ' +
+        'Flushing him down the drain washes them all away.';
     },
     telegraphFlat: function (st) { return CFG.swarmDmg * st.stacks; },
     hooks: {
-      modifyOutgoingDamage: function (d, st) { if (d.cause === 'skill' && d.source && d.source.defId === 'rat_king') d.flat += CFG.swarmDmg * st.stacks; },
+      modifyOutgoingDamage: function (d, st) {
+        if (d.cause === 'skill' && d.source && d.source.defId === 'rat_king' && !(d.skill && WINDUPS[d.skill.id])) d.flat += CFG.swarmDmg * st.stacks;
+      },
     },
   });
 
-  // stun guard (like the act 2 and 3 bosses): a swarm can't be stun-locked; the flush always lands
-  const GUARDED = { stun: 1, sleep: 1, frozen: 1, charmed: 1 };
+  // stun guard (like the act 2 and 3 bosses): a swarm can't be stun-locked. During the recess a stun no longer costs him
+  // a turn but still scatters his wind-ups (stun = THE wind-up counter); the flush always lands
+  // guarded: every stun-like status (stun, sleep, frozen, a banana peel...) and charm
+  function stunLike(id) { return !!(DD.Act && DD.Act.isStunLike(id)); }
+  function guarded(id) { return id === 'charmed' || stunLike(id); }
   let puzzleStun = false;
   DD.registerStatus({
     id: 'rat_recess', name: 'Recess', icon: '🔔', color: '#c9b26b', type: 'buff', stacking: 'refresh', maxStacks: 1,
-    decay: 'turnEnd', defaultTurns: 2,
+    decay: 'turnEnd', defaultTurns: GUARD_TURNS,
     desc: function (st) {
-      return 'The court just took a recess: can\'t be Stunned or Charmed again until the end of next round (a flush still knocks him flat).' +
-        (st && st.turns > 0 ? ' (' + plural(st.turns, 'turn') + ' left)' : '');
+      return 'The court just took a recess: stuns (banana peels too) and Charm don\'t land on him (a stun still cancels his wind-ups; a flush still knocks him flat).' +
+        (st && st.turns > 0 ? ' (' + plural(st.turns, 'turn') + ' of his left)' : '');
     },
   });
 
@@ -303,13 +328,13 @@
   DD.registerTerrain({
     id: 'rat_rot', name: 'Rotten Floor', walkable: true, cost: 1, blocksLos: false,
     colors: { top: '#6c665c', left: '#504b44', right: '#433f39' },
-    desc: 'Chewed-through flooring. The Rat King can Gnaw it into a pit; anyone standing on it falls in.',
+    desc: 'Chewed-through flooring. The Rat King can Gnaw it into a pit; anyone still standing on it when it goes falls in (flyers just hover).',
     draw: drawRot,
   });
 
   DD.registerObject({
     id: 'rat_valve', name: 'Sluice Valve', blocksMove: true, blocksLos: false, hp: 0, height: 1.3, color: '#5f7d6e', dmg: FLUSH_DMG,
-    desc: 'Interact (1 AP): open the sluice. Everyone standing in its channel is washed all the way into the drain: enemies drown, heroes lose 25% max HP and climb out, and the Rat King is FLUSHED (' + FLUSH_DMG + ' damage, Stunned, Wet, and his Swelling Ranks wash away). Needs ' + VALVE_CD + ' rounds to build pressure again.',
+    desc: 'Interact (1 AP): open the sluice. Everyone standing in its channel is washed all the way into the drain (flyers stay dry): enemies drown, heroes lose 25% max HP and climb out, and the Rat King is FLUSHED (' + FLUSH_DMG + ' damage, Stunned for both of his next turns, Wet, and his Swelling Ranks wash away). Needs ' + VALVE_CD + ' rounds to build pressure again.',
     available: function (o) { return !(o.data && o.data.cd > 0); },
     interact: { ap: 1, label: 'Crank Sluice', fn: function (unit, o, tile) { return openSluice(unit, o, tile); } },
     autoplay: function (unit, o, tile, s) { return valveValue(unit, o, tile, s); },
@@ -350,7 +375,7 @@
     climbOut(u);
     if (!active(u)) return;
     puzzleStun = true;
-    try { A().addStatus(u, 'stun', { turns: 1 }, src || null); } finally { puzzleStun = false; }
+    try { A().addStatus(u, 'stun', { turns: CFG.flushStun || FLUSH_STUN }, src || null); } finally { puzzleStun = false; }
     if (active(u)) A().addStatus(u, 'wet', { turns: 2 }, src || null);
     if (active(u) && DD.Act.hasStatus(u, 'rat_swarm')) A().removeStatus(u, 'rat_swarm', { text: 'Rats washed away!' });
     DD.FX.text(u, 'FLUSHED!', { color: '#7fd0ff', size: 20 });
@@ -364,14 +389,13 @@
    * Wash everyone standing in a channel toward the drain (closest to the drain first, so nobody blocks the others).
    * opts: { exempt: unitId (the Rat King's own surge) }. The King is immovable to anything but this water.
    * The water sweeps past what it can't carry (a downed hero, a flyer, an immovable summon): on an arena with a drain,
-   * anyone it could not wash all the way still ends up in the drain (a blocked flush used to cost the valve for 2 bump
-   * damage).
+   * anyone it could not wash all the way still ends up in the drain.
    */
   function flood(chan, src, opts) {
     opts = opts || {};
     const tiles = chanTiles(chan);
     if (!tiles.length) return { moved: [], drowned: [], flushed: false };
-    const out = { moved: [], drowned: [], flushed: false };
+    const res = { moved: [], drowned: [], flushed: false };
     const drain = tilesWhere(S(), function (t) { return t.tag === 'rat_drain'; }).length > 0;
     DD.FX.sound('splash');
     tiles.forEach(function (p, i) { DD.FX.tile(p.x, p.y, 'splash', { parallel: i > 0, color: '#7fc4ff' }); });
@@ -382,20 +406,20 @@
       const isKing = u.defId === 'rat_king';
       const was = u.flags ? u.flags.immovable : undefined;
       if (isKing && u.flags) u.flags.immovable = false;
-      let res;
-      try { res = A().push(src || null, u, FLOW, 30, { bump: 0, slide: false }); } finally { if (isKing && u.flags) u.flags.immovable = was; }
-      if (res && res.moved) out.moved.push(u);
-      let fell = !!(res && res.fell);
+      let r;
+      try { r = A().push(src || null, u, FLOW, 30, { bump: 0, slide: false }); } finally { if (isKing && u.flags) u.flags.immovable = was; }
+      if (r && r.moved) res.moved.push(u);
+      let fell = !!(r && r.fell);
       if (!fell && drain && active(u) && inChannel(u, chan) && (isKing || !A().isImmovable(u))) { A().fall(u, src || null); fell = true; }
       if (fell) {
-        if (u.dead) out.drowned.push(u);
-        else if (isKing) { flush(u, src); out.flushed = true; } else climbOut(u);
+        if (u.dead) res.drowned.push(u);
+        else if (isKing) { flush(u, src); res.flushed = true; } else climbOut(u);
       }
     });
-    if (out.drowned.some(function (u) { return u.defId === 'rat_lawyer'; }) && !A().simulating) {
+    if (res.drowned.some(function (u) { return u.defId === 'rat_lawyer'; }) && !A().simulating) {
       A().log(DROWN_LINES[Math.floor(DD.rng.next() * DROWN_LINES.length) % DROWN_LINES.length], 'narrator');
     }
-    return out;
+    return res;
   }
   const DROWN_LINES = [
     'A Rat Lawyer is washed down the drain. Nobody files an appeal.',
@@ -443,23 +467,23 @@
     const room = Math.max(0, CFG.lawyerCap - lawyers().length);
     const want = Math.min(n, room);
     const spots = G().emptyTilesNear(u.x, u.y, 3).filter(function (p) { return !G().isDrop(p.x, p.y) && !(p.x === u.x && p.y === u.y); });
-    const out = [];
+    const res = [];
     for (let i = 0; i < want && i < spots.length; i++) {
       const L = A().spawn('rat_lawyer', spots[i].x, spots[i].y, { silent: true });
       if (!L) continue;
       L.name = LAWYER_NAMES[Math.floor(DD.rng.next() * LAWYER_NAMES.length) % LAWYER_NAMES.length];
       A().log(L.name + ' splits off the Rat King and passes the bar.', 'enemy');
       A().maybeBark(L, 'spawn', 0.7);
-      out.push(L);
+      res.push(L);
     }
-    return out;
+    return res;
   }
 
   /** Class Action: Plaintiff Rats crawl out next to the drains (next to the King on a map without drains). */
-  function classAction(king, n, cap) {
+  function classAction(k, n, cap) {
     const s = S();
     const want = Math.min(n, Math.max(0, cap - plaintiffs(s).length));
-    if (want <= 0) { DD.FX.text(king, 'Case dismissed!', { color: '#d0d0d0', size: 13 }); return []; }
+    if (want <= 0) { DD.FX.text(k, 'Case dismissed!', { color: '#d0d0d0', size: 13 }); return []; }
     const heroes = DD.Combat.active('hero');
     let spots = [];
     tilesWhere(s, function (t) { return t.tag === 'rat_drain'; }).forEach(function (dr) {
@@ -468,25 +492,23 @@
       });
     });
     spots.sort(function (a, b) { return nearestDist(a, heroes) - nearestDist(b, heroes) || a.y - b.y || a.x - b.x; });
-    if (!spots.length) spots = G().emptyTilesNear(king.x, king.y, 3).filter(function (p) { return !G().isDrop(p.x, p.y); });
-    const out = [];
+    if (!spots.length) spots = G().emptyTilesNear(k.x, k.y, 3).filter(function (p) { return !G().isDrop(p.x, p.y); });
+    const res = [];
     for (let i = 0; i < want && i < spots.length; i++) {
       const r = A().spawn('rat_plaintiff', spots[i].x, spots[i].y, { silent: true });
       if (!r) continue;
       DD.FX.particles(r, { kind: 'bubbles', count: 8 });
-      out.push(r);
+      res.push(r);
     }
-    if (out.length) {
-      A().log('Class action! ' + out.length + ' Plaintiff Rat' + (out.length === 1 ? '' : 's') + ' crawl out of the drains to join the lawsuit.', 'enemy');
-      A().maybeBark(out[0], 'spawn', 0.7);
+    if (res.length) {
+      A().log('Class action! ' + res.length + ' Plaintiff Rat' + (res.length === 1 ? '' : 's') + ' crawl out of the drains to join the lawsuit.', 'enemy');
+      A().maybeBark(res[0], 'spawn', 0.7);
     }
-    return out;
+    return res;
   }
 
   function split(u, k) {
     const phase = 1 + k;
-    // phase 2+ Gnaw takes 3 tiles: level 2 of the skill (telegraph, desc and execution all read the slot level)
-    DD.Combat.slotsOf(u).forEach(function (sl) { if (sl.id === 'rat_gnaw') sl.level = 2; });
     A().addStatus(u, 'rat_session', { stacks: phase, turns: -1, silent: true }, u);
     DD.FX.banner('MOTION TO SPLIT!', { sub: phase >= 3 ? 'Phase 3: Closing Arguments' : 'Phase 2: Cross-Examination', color: '#d4af37', ms: 1100 });
     DD.FX.particles(u, { kind: 'dust', count: 16 });
@@ -510,131 +532,46 @@
   function eskill(def) { def.owner = 'enemy'; def.ap = 0; def.cooldown = def.cooldown || 0; return DD.registerSkill(def); }
 
   function around(p) {
-    const out = [];
-    if (!p) return out;
-    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (dx || dy) out.push({ x: p.x + dx, y: p.y + dy });
-    return out;
+    const res = [];
+    if (!p) return res;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (dx || dy) res.push({ x: p.x + dx, y: p.y + dy });
+    return res;
   }
   function near8(a, b) { return Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y)) === 1; }
-  /** A tracking skill's reach (its def's target.range), so desc, planner and targeting always agree. */
+  /** A skill's reach (its def's target.range), so desc, planner and targeting always agree. */
   function reach(id) { const s = DD.getSkill(id); return (s && s.target && s.target.range) || [1, 1]; }
   function reachText(id) { const r = reach(id); return r[0] === r[1] ? String(r[0]) : r[0] + '-' + r[1]; }
   function inReach(id, d) { const r = reach(id); return d >= r[0] && d <= r[1]; }
 
-  // ---- telegraph truth (DD.AI.intentDmg adds a skill's telegraphFlat(unit, intent) to the planned number) ----------
-  /** The attacker's damage multiplier, as the engine applies it to telegraphs (Weak, Inspired, Empowered, items, difficulty). */
-  function outMult(u) {
-    let m = 1;
-    if (DD.Act.hasStatus(u, 'weak')) m *= 0.75;
-    if (DD.Act.hasStatus(u, 'inspired')) m *= 1.25;
-    if (DD.Act.hasStatus(u, 'empowered')) m *= 1.5;
-    if (u.dmgBonus) m *= 1 + u.dmgBonus;
-    const s = S();
-    if (u.side === 'enemy') m *= (s && s.difficulty && s.difficulty.dmg) || 1;
-    return m;
-  }
-  /** Run a query that consults content hooks with FX, log lines and barks silenced (telegraphs are pure). */
-  function quietly(fn) {
-    const sim = A().simulating, push = DD.FX.push;
-    A().simulating = true;
-    DD.FX.push = function (evt) { return evt; };
-    try { return fn(); } finally { DD.FX.push = push; A().simulating = sim; }
-  }
-  /** How far a pull of n really carries `unit` once modifyPush hooks had their say (Marwyn plants his feet). */
-  function pullDist(src, unit, dir, n) {
-    const pm = { unit: unit, src: src || null, dir: { x: dir.x, y: dir.y }, dist: Math.floor(n), cancel: false };
-    quietly(function () { DD.Hooks.fire('modifyPush', unit, pm); });
-    return pm.cancel ? 0 : Math.max(0, Math.floor(+pm.dist || 0));
-  }
-  /**
-   * Where Tangled Tails would drop hero h (DD.Act.pull toward the King k, n tiles: blocked by units, objects, walls
-   * and cliffs, one extra slide on ice), or null when it would fall in a pit or can't be moved. Pure.
-   */
-  function tailsLanding(k, h, n) {
-    if (!k || !h || A().isImmovable(h)) return null;
-    const dir = DD.util.dirTo(h, k);
-    if (!dir.x && !dir.y) return null;
-    const dx = k.x - h.x, dy = k.y - h.y;
-    const along = dx === 0 || dy === 0 ? Math.abs(dx + dy) - 1 : Math.abs(dir.x ? dx : dy);
-    let left = pullDist(k, h, dir, Math.max(0, Math.min(n, along)));
-    const fly = G().isFlying(h);
-    let p = { x: h.x, y: h.y }, slid = false;
-    while (left > 0) {
-      const q = { x: p.x + dir.x, y: p.y + dir.y };
-      if (q.x === k.x && q.y === k.y) break;
-      const t = G().tile(q.x, q.y);
-      if (!t || G().unitAt(q.x, q.y) || (t.obj && G().objBlocksMove(t.obj))) break;
-      const td = G().terrain(t);
-      const drop = G().isDrop(q.x, q.y);
-      if (td.walkable === false && !td.pit && !(td.liquid && (fly || td.liquid === 'deep'))) break;
-      if (!drop && !G().canStep(h, p, q)) break;
-      if (drop && !fly) return null;
-      p = q;
-      left--;
-      if (left === 0 && !slid && !fly) {
-        const sd = t.surface ? DD.getSurface(t.surface.id) : null;
-        if (td.slide || (sd && sd.slide)) { left = 1; slid = true; }
-      }
-    }
-    return p;
-  }
-  /** Rat Pile: a hero standing in it Rooted takes the buried number; the telegraph shows it while one does. */
-  function pileFlat(unit, intent) {
-    const L = DD.skillLevel(DD.getSkill('rat_pile'), (intent && intent.level) || 1);
-    if (!L || !unit || !(L.rooted > L.dmg)) return 0;
-    const buried = DD.AI.intentTiles(unit, intent).some(function (p) {
-      const f = G().unitAt(p.x, p.y);
-      return active(f) && G().hostile(unit, f) && DD.Act.hasStatus(f, 'root');
-    });
-    if (!buried) return 0;
-    const m = outMult(unit);
-    return Math.round(L.rooted * m) - Math.round(L.dmg * m);
-  }
-  /**
-   * Tangled Tails: when the King also telegraphs a Rat Pile and the pull would drop the tracked hero in it, the hero
-   * takes the buried pile hit right after the tails. The tails' number includes it, so the hero's "Will be hit by"
-   * tells the whole story (a hero already standing in the pile only adds the buried bonus: the pile shows the rest).
-   */
-  function tailsFlat(unit, intent) {
-    const h = intent && DD.Combat.byId(intent.unitId);
-    if (!unit || !active(h) || !(unit.intents || []).some(function (it) { return it.skillId === 'rat_pile'; })) return 0;
-    const T = DD.skillLevel(DD.getSkill('rat_tails'), intent.level || 1), P = DD.skillLevel(DD.getSkill('rat_pile'), 1);
-    const land = tailsLanding(unit, h, T.pull);
-    if (!land || !near8(land, unit)) return 0;
-    const m = outMult(unit);
-    if (near8(h, unit)) return DD.Act.hasStatus(h, 'root') ? 0 : Math.round(P.rooted * m) - Math.round(P.dmg * m);
-    return Math.round(P.rooted * m) + DD.AI.telegraphFlat(unit);
-  }
-
   eskill({
     id: 'rat_pile', name: 'Rat Pile', icon: '🐀', kind: 'attack', tags: ['melee', 'aoe'], anchor: 'self',
-    levels: [{ dmg: 12, rooted: 22, bleed: 1 }],
+    levels: [{ dmg: 7, bleed: 1 }],
     target: { type: 'self' }, area: { shape: 'custom', fn: function (ctx) { return around(ctx && ctx.user); } },
     desc: function (L) {
-      return 'Swarm all 8 surrounding tiles (diagonals too): deal ' + L.dmg + ' damage (' + L.rooted + ' to a Rooted hero, who is buried in rats) and Bleed ' + L.bleed + ' to every hero there.';
+      return 'Deal ' + L.dmg + ' damage and Bleed ' + L.bleed + ' to every hero on the 8 tiles around him (diagonals too).';
     },
     flavor: 'Two dozen teeth, one shared opinion.',
-    telegraphFlat: pileFlat,
     execute: function (ctx) {
       DD.FX.particles(ctx.user, { kind: 'dust', count: 10 });
       ctx.foes.forEach(function (f) {
         DD.FX.lunge(ctx.user, f, { parallel: true });
-        const buried = DD.Act.hasStatus(f, 'root');
-        if (buried) DD.FX.text(f, 'BURIED IN RATS', { color: '#e7a3ab', size: 14 });
-        A().damage(ctx.user, f, buried ? ctx.L.rooted : ctx.L.dmg, { noHighGround: true });
+        if (rooted(f)) DD.FX.text(f, 'BURIED IN RATS', { color: '#e7a3ab', size: 14 });
+        A().damage(ctx.user, f, ctx.L.dmg, { noHighGround: true });
         if (active(f)) A().addStatus(f, 'bleed', { stacks: ctx.L.bleed }, ctx.user);
       });
     },
   });
 
   eskill({
-    id: 'rat_gnaw', name: 'Gnaw', icon: '🦷', kind: 'attack', tags: ['aoe', 'terrain'], anchor: 'ground',
-    levels: [{ dmg: 8, n: 2 }, { dmg: 8, n: 3 }],
+    id: 'rat_gnaw', name: 'Gnaw', icon: '🦷', kind: 'attack', tags: ['aoe', 'terrain', 'windup'], anchor: 'ground',
+    levels: [{ dmg: 8, n: 2, n2: 3 }],
     target: { type: 'tile', range: [0, 40], los: false, filter: 'any' },
     desc: function (L) {
-      return 'Gnaw through ' + L.n + ' marked rotten floor tiles: deal ' + L.dmg + ' damage to every hero on them, then the floor collapses into a pit (a falling hero loses 25% max HP and climbs out).';
+      return 'Wind-up (lands one round later): the marked rotten floor tiles (up to ' + L.n + ' near heroes, ' + L.n2 + ' from phase 2) give way: ' + L.dmg +
+        ' damage to every hero on them, then they collapse into pits (a falling hero loses 25% max HP and climbs out).';
     },
     flavor: 'The building code was more of a suggestion.',
+    telegraphFlat: function (unit) { return -swarmNow(unit); },   // Swelling Ranks don't apply to wind-ups
     execute: function (ctx) {
       DD.FX.sound('bump');
       ctx.tiles.forEach(function (p, i) { DD.FX.tile(p.x, p.y, 'crack', { parallel: i > 0 }); DD.FX.particles(p, { kind: 'dust', count: 8, parallel: true }); });
@@ -650,13 +587,14 @@
   });
 
   eskill({
-    id: 'rat_surge', name: 'Sewer Surge', icon: '🌊', kind: 'attack', tags: ['aoe', 'delayed', 'water', 'push'], anchor: 'ground',
+    id: 'rat_surge', name: 'Sewer Surge', icon: '🌊', kind: 'attack', tags: ['aoe', 'windup', 'water', 'push'], anchor: 'ground',
     levels: [{ dmg: 8 }],
     target: { type: 'tile', range: [0, 40], los: false, filter: 'any' },
     desc: function (L) {
-      return 'After the countdown the marked channel floods: deal ' + L.dmg + ' damage to every hero in it, then wash everyone in it (except the Rat King) all the way into the drain: a hero loses 25% max HP and climbs out, his own lawyers and rats drown.';
+      return 'Wind-up (lands one round later): the marked channel floods: ' + L.dmg + ' damage to every hero in it, then everyone standing in it but him is washed into the drain (flyers stay dry; a hero loses 25% max HP and climbs out; his own rats drown).';
     },
     flavor: 'High tide in the low places.',
+    telegraphFlat: function (unit) { return -swarmNow(unit); },   // Swelling Ranks don't apply to wind-ups
     execute: function (ctx) {
       const chan = (ctx.intent && ctx.intent.data && ctx.intent.data.chan) || chanOf(ctx.tiles[0] ? G().tile(ctx.tiles[0].x, ctx.tiles[0].y) : null);
       A().log('SEWER SURGE! Channel ' + (chan || '?') + ' floods.', 'enemy');
@@ -667,9 +605,9 @@
 
   eskill({
     id: 'rat_gavel', name: 'Order in the Court!', icon: '🔨', kind: 'attack', tags: ['ranged'], anchor: 'unit',
-    levels: [{ dmg: 12 }],
-    target: { type: 'unit', range: [2, 6], los: true, filter: 'enemy' },
-    desc: function (L) { return 'Hurls the gavel at a hero ' + reachText('rat_gavel') + ' tiles away (tracking): deal ' + L.dmg + ' damage. Fizzles if the hero breaks line of sight or gets out of range.'; },
+    levels: [{ dmg: 10 }],
+    target: { type: 'unit', range: [1, 6], los: true, filter: 'enemy' },
+    desc: function (L) { return 'Hurl the gavel at a hero ' + reachText('rat_gavel') + ' tiles away (line of sight): deal ' + L.dmg + ' damage.'; },
     flavor: 'ORDER! ORDER! (The rats have never once achieved order.)',
     execute: function (ctx) {
       ctx.foes.forEach(function (f) {
@@ -682,14 +620,12 @@
 
   eskill({
     id: 'rat_tails', name: 'Tangled Tails', icon: '🪢', kind: 'attack', tags: ['ranged', 'pull', 'root'], anchor: 'unit',
-    levels: [{ dmg: 8, pull: 2, turns: 2 }],
-    target: { type: 'unit', range: [2, 6], los: true, filter: 'enemy' },
+    levels: [{ dmg: 6, pull: 2, turns: 1 }],
+    target: { type: 'unit', range: [1, 6], los: true, filter: 'enemy' },
     desc: function (L) {
-      return 'Tracks a hero ' + reachText('rat_tails') + ' tiles away: deal ' + L.dmg + ' damage, pull them ' + L.pull + ' tiles toward the King and Root them for ' + L.turns +
-        ' turns. It resolves before his Rat Pile, so a hero reeled in next to him lands in it, Rooted (buried); its telegraph then counts that pile hit too. Fizzles without line of sight.';
+      return 'Lash a hero ' + reachText('rat_tails') + ' tiles away (line of sight): deal ' + L.dmg + ' damage, pull them ' + L.pull + ' tiles toward him and Root them for ' + plural(L.turns, 'turn') + '.';
     },
     flavor: 'Forty tails, one knot, and now you are in it.',
-    telegraphFlat: tailsFlat,
     execute: function (ctx) {
       ctx.foes.forEach(function (f) {
         DD.FX.beam(ctx.user, f, { color: '#e7a3ab', width: 4 });
@@ -713,7 +649,7 @@
     id: 'rat_nibble', name: 'Nibble', icon: '🦷', kind: 'attack', tags: ['melee'], anchor: 'self',
     levels: [{ dmg: 4, bleed: 1 }],
     target: { type: 'unit', range: [1, 1], filter: 'enemy' },
-    desc: function (L) { return 'Deal ' + L.dmg + ' damage to the adjacent tile and Bleed ' + L.bleed + '.'; },
+    desc: function (L) { return 'Deal ' + L.dmg + ' damage to an adjacent hero and Bleed ' + L.bleed + '.'; },
     flavor: 'Pain and suffering, itemized.',
     execute: function (ctx) {
       if (ctx.target) DD.FX.lunge(ctx.user, ctx.target);
@@ -729,7 +665,7 @@
     id: 'rat_objection', name: 'OBJECTION!', icon: '☝️', kind: 'attack', tags: ['ranged', 'push'], anchor: 'unit',
     levels: [{ dmg: 7, push: 1 }],
     target: { type: 'unit', range: [1, 4], los: true, filter: 'enemy' },
-    desc: function (L) { return 'Tracks a hero up to 4 tiles away: deal ' + L.dmg + ' damage and push them ' + L.push + ' tile away. Fizzles without line of sight.'; },
+    desc: function (L) { return 'Deal ' + L.dmg + ' damage to a hero up to 4 tiles away (line of sight) and push them ' + L.push + ' tile away.'; },
     flavor: 'Sustained. Mostly by the defendant\'s face.',
     execute: function (ctx) {
       ctx.foes.forEach(function (f) {
@@ -745,12 +681,12 @@
     id: 'rat_cease', name: 'Cease and Desist', icon: '✋', kind: 'attack', tags: ['ranged', 'root'], anchor: 'unit',
     levels: [{ dmg: 4, turns: 1 }],
     target: { type: 'unit', range: [1, 4], los: true, filter: 'enemy' },
-    desc: function (L) { return 'Tracks a hero up to 4 tiles away: deal ' + L.dmg + ' damage and Root them for ' + L.turns + ' turn (they must cease all movement). Fizzles without line of sight.'; },
+    desc: function (L) { return 'Deal ' + L.dmg + ' damage to a hero up to 4 tiles away (line of sight) and Root them for ' + plural(L.turns, 'turn') + '.'; },
     flavor: 'Effective immediately. Signed, a rat.',
     // a rooted hero can't walk away from the King's Rat Pile: worth more the closer the King is
     aiScore: function (ctx) {
       const f = ctx.targetUnit;
-      if (!f || DD.Act.hasStatus(f, 'root')) return -10;
+      if (!f || rooted(f)) return -10;
       const k = king(ctx.state);
       return 6 + (k && active(k) && dist(k, f) <= 5 ? 6 : 0);
     },
@@ -768,7 +704,7 @@
     id: 'rat_billable', name: 'Billable Bite', icon: '🧾', kind: 'attack', tags: ['melee'], anchor: 'self',
     levels: [{ dmg: 6 }],
     target: { type: 'unit', range: [1, 1], filter: 'enemy' },
-    desc: function (L) { return 'Deal ' + L.dmg + ' damage to the adjacent tile. Billed in six-minute increments.'; },
+    desc: function (L) { return 'Deal ' + L.dmg + ' damage to an adjacent hero. Billed in six-minute increments.'; },
     flavor: 'The retainer is non-refundable.',
     execute: function (ctx) {
       if (ctx.target) DD.FX.lunge(ctx.user, ctx.target);
@@ -776,121 +712,230 @@
     },
   });
 
-  // ---- the Rat King's planner -------------------------------------------------------------------------------------
+  // ---- the Rat King's planner (v2: walk, one docket step, then a Rat Pile if anyone is next to him) -------------------
   function pendingOf(unit, skillId) { return (unit.intents || []).filter(function (it) { return it.skillId === skillId; }); }
 
+  /**
+   * Where he stands this turn: close to the party (a hero 2-3 tiles away can be reeled into the pile, a crowd next to
+   * him gets piled on, a rooted one is lunch), a little wading in the channels, walks priced with the attacks of
+   * opportunity they provoke, never onto his own marked Gnaw tiles. Boxed in (a downed hero and a barrel in a corner:
+   * no tile to walk to) with nothing to do from there, the swarm scurries through the cracks instead (see stalled).
+   */
   function moveKing(unit, api, foes) {
-    const opts = [{ x: unit.x, y: unit.y, cost: 0, path: [] }];
+    const opts = [{ x: unit.x, y: unit.y, cost: 0, path: [], here: true }];
     api.reachable(unit).forEach(function (e) { opts.push(e); });
+    if (opts.length === 1 && !DD.Act.cantMove(unit) && stalled(unit, api, foes) && scurry(unit, foes)) return;
+    // his own pending Gnaw: standing on a marked tile when it lands drops him into the pit (a free 30 for the party)
+    const gnawed = {};
+    pendingOf(unit, 'rat_gnaw').forEach(function (it) { DD.AI.intentTiles(unit, it).forEach(function (q) { gnawed[q.x + ',' + q.y] = 1; }); });
     let best = null, bestSc = -Infinity;
     opts.forEach(function (p) {
       const risk = DD.AI.pathRisk ? DD.AI.pathRisk(unit, p) : { lethal: false, penalty: 0 };
       if (risk.lethal) return;
+      const aoo = p.here ? 0 : api.aooCost(unit, p);
+      if (aoo === Infinity) return;
       const adj = foes.filter(function (f) { return near8(f, p); }).length;
-      const stuck = foes.filter(function (f) { return near8(f, p) && DD.Act.hasStatus(f, 'root'); }).length;
+      const stuck = foes.filter(function (f) { return near8(f, p) && rooted(f); }).length;
+      const reel = foes.some(function (f) { const dd = dist(f, p); return dd >= 2 && dd <= 3 && !rooted(f) && G().los(p, f); });
       const t = G().tile(p.x, p.y);
-      let sc = -2 * nearestDist(p, foes) + (adj ? 6 + adj : 0) + stuck * 10 - risk.penalty - (p.cost || 0) * 0.05;
+      const pile = adj >= crowd() || stuck > 0;                   // a Rat Pile right now beats setting up a reel
+      let sc = -2 * nearestDist(p, foes) + (adj ? 6 + adj : 0) + (pile ? 6 : 0) + stuck * 4 + (reel && !pile ? 3 : 0) - risk.penalty - aoo - (p.cost || 0) * 0.05;
       if (inChannel(p)) sc += CFG.wade;              // he holds court in the sewage (a little)
       if (t && t.t === 'rat_rot') sc -= 0.5;
+      if (gnawed[p.x + ',' + p.y]) sc -= 60;
       if (sc > bestSc) { bestSc = sc; best = p; }
     });
-    if (best && (best.x !== unit.x || best.y !== unit.y)) api.moveTo(unit, best.x, best.y);
+    if (best && !best.here) api.moveTo(unit, best.x, best.y);
   }
 
-  function planGnaw(unit, api, foes, phase) {
-    if (pendingOf(unit, 'rat_gnaw').length) return false;
-    const sl = api.slot(unit, 'rat_gnaw');
-    if (!sl) return false;
-    const L = DD.skillLevel(DD.getSkill('rat_gnaw'), sl.level);
-    const scored = rotTiles(api.state).filter(function (p) { return !(p.x === unit.x && p.y === unit.y); }).map(function (p) {
-      let sc = 0;
-      foes.forEach(function (f) { const d = dist(f, p); if (d === 0) sc += 20; else if (d === 1) sc += 6; else if (d === 2) sc += 1; });
-      return { p: p, sc: sc };
-    }).filter(function (e) { return e.sc > 0; }).sort(function (a, b) { return b.sc - a.sc || a.p.y - b.p.y || a.p.x - b.p.x; });
-    if (!scored.length || scored[0].sc < 6) return false;
-    const picks = scored.slice(0, L.n).map(function (e) { return e.p; });
-    api.addIntent(unit, 'rat_gnaw', picks[0], { anchor: 'ground', tiles: picks, noCooldown: true, label: 'Gnaw' });
+  /**
+   * Boxed in AND with nothing to do from here: no Rat Pile (no crowd, nobody Rooted next to him) and nobody in reach of
+   * Tangled Tails or the gavel. Heroes who surround him get piled on, not scurried away from.
+   */
+  function stalled(unit, api, foes) {
+    if (pileTime(unit, api)) return false;
+    return !rangedTarget(unit, api, foes, 'rat_tails', false) && !rangedTarget(unit, api, foes, 'rat_gavel', false);
+  }
+  /**
+   * Boxed in with nowhere to walk and nothing in reach (bodies can't be walked through, and a corner + a barrel + one
+   * downed hero does it): forty rats squeeze through the cracks and re-form on the free tile within his move (bodies
+   * ignored) closest to the party. A teleport, so no attacks of opportunity. Without this a boxed-in King stalled the
+   * fight (a 30-round sim).
+   */
+  function scurry(unit, foes) {
+    const mov = DD.Combat.effectiveMov(unit);
+    let best = null, bestSc = Infinity;
+    G().reachable(unit, mov, { ignoreUnits: true }).forEach(function (e) {
+      if (!G().isFree(e.x, e.y, unit) || G().isDrop(e.x, e.y) || G().hazardAt(e.x, e.y, unit)) return;
+      const sc = nearestDist(e, foes) * 10 + e.cost;
+      if (sc < bestSc) { bestSc = sc; best = e; }
+    });
+    if (!best) return false;
+    const from = { x: unit.x, y: unit.y };
+    if (!A().teleport(unit, best.x, best.y, { fx: false })) return false;
+    DD.FX.jump(unit, from, best);
+    DD.FX.text(unit, 'Scurry!', { color: '#e7a3ab', size: 15 });
+    A().log('Boxed in, the Rat King scatters into forty rats and re-forms a few tiles away.', 'enemy');
     return true;
   }
 
+  /** How many turns a round he takes (his initiative entries; the def's turnsPerRound before initiative). */
+  function turnsPerRound(unit) {
+    const s = S();
+    const n = s && s.order ? s.order.filter(function (e) { return e.unitId === unit.id; }).length : 0;
+    return Math.max(1, n || Math.round(+(DD.getEnemy(unit.defId) || {}).turnsPerRound || 1));
+  }
+  /**
+   * A wind-up that lands ONE ROUND later, at the start of this same turn of his (his other turn of the round counts it
+   * down): every unit in the order, so every hero, gets exactly one turn first. The engine's hero-window rule
+   * (ai.js heroWindow) is switched off for it (window 0): it would add a second round when his two turns are back to
+   * back, and the round already gives everyone their turn.
+   */
+  function windUpRound(api, unit, skillId, target, opts) {
+    opts = Object.assign({ turns: turnsPerRound(unit), noCooldown: true }, opts);
+    opts.data = Object.assign({ oneRound: true }, opts.data);
+    const it = api.windUp(unit, skillId, target, opts);
+    if (it) it.window = 0;
+    return it;
+  }
+  /** Turn start (before due wind-ups resolve): his one-round wind-ups ignore the hero window (see windUpRound). */
+  function openWindow(unit) { (unit.intents || []).forEach(function (it) { if (it.data && it.data.oneRound) it.window = 0; }); }
+
+  /**
+   * Gnaw (wind-up): the rotten tiles under and next to heroes (a rooted one can't step off). A flyer over the rot only
+   * takes the bite: it never falls in (v2), so its tile is worth less.
+   */
+  function planGnaw(unit, api, foes, phase) {
+    if (pendingOf(unit, 'rat_gnaw').length) return false;
+    const L = DD.skillLevel(DD.getSkill('rat_gnaw'), 1);
+    const n = phase >= 2 ? L.n2 : L.n;
+    const scored = rotTiles(api.state).filter(function (p) { return !(p.x === unit.x && p.y === unit.y); }).map(function (p) {
+      let sc = 0;
+      foes.forEach(function (f) {
+        const d = dist(f, p);
+        if (d === 0) sc += G().isFlying(f) ? 8 : rooted(f) ? 35 : 20;
+        else if (d === 1) sc += 6;
+        else if (d === 2) sc += 1;
+      });
+      return { p: p, sc: sc };
+    }).filter(function (e) { return e.sc > 0; }).sort(function (a, b) { return b.sc - a.sc || a.p.y - b.p.y || a.p.x - b.p.x; });
+    if (!scored.length || scored[0].sc < 6) return false;
+    const picks = scored.slice(0, n).map(function (e) { return e.p; });
+    return !!windUpRound(api, unit, 'rat_gnaw', picks[0], { tiles: picks, label: 'Gnaw' });
+  }
+
+  /** Sewer Surge (wind-up): the channel with the most heroes in it (phase 3: both channels). */
   function planSurge(unit, api, foes, phase) {
     const chans = channels(api.state);
     const pending = {};
     pendingOf(unit, 'rat_surge').forEach(function (it) { if (it.data && it.data.chan) pending[it.data.chan] = 1; });
     const cands = Object.keys(chans).filter(function (c) { return !pending[c]; }).map(function (c) {
-      const inIt = foes.filter(function (f) { return inChannel(f, c); }).length;
-      return { chan: c, n: inIt, tiles: chans[c] };
+      const inIt = foes.filter(function (f) { return inChannel(f, c); });
+      return { chan: c, n: inIt.length + inIt.filter(rooted).length, tiles: chans[c], first: inIt[0] };
     }).filter(function (e) { return e.n > 0 || phase >= 3; }).sort(function (a, b) { return b.n - a.n || (a.chan < b.chan ? -1 : 1); });
     if (!cands.length || !cands.some(function (e) { return e.n > 0; })) return false;
     const pick = phase >= 3 ? cands : cands.slice(0, 1);
-    pick.forEach(function (e) {
-      const anchor = foes.filter(function (f) { return inChannel(f, e.chan); })[0] || e.tiles[Math.floor(e.tiles.length / 2)];
-      api.addIntent(unit, 'rat_surge', { x: anchor.x, y: anchor.y }, { anchor: 'ground', tiles: e.tiles, delay: 1, data: { chan: e.chan }, noCooldown: true, label: 'Sewer Surge (channel ' + e.chan + ')' });
+    pick.forEach(function (e, i) {
+      const anchor = e.first || e.tiles[Math.floor(e.tiles.length / 2)];
+      windUpRound(api, unit, 'rat_surge', { x: anchor.x, y: anchor.y }, { tiles: e.tiles, data: { chan: e.chan }, label: 'Sewer Surge (' + e.chan + ')',
+        banner: i === 0 ? (pick.length > 1 ? 'Both channels are about to flood!' : 'Channel ' + e.chan + ' is about to flood!') : false });
     });
     return true;
   }
 
-  function planClass(unit, api) {
-    const L = DD.skillLevel(DD.getSkill('rat_class'), 1);
-    if (plaintiffs(api.state).length >= L.cap) return false;
-    api.addIntent(unit, 'rat_class', unit, { tiles: [], noCooldown: true, label: 'Class Action' });
-    return true;
-  }
-
-  /** Tangled Tails: reel in the most damaged hero in reach that is not already tied up (next round: Rat Pile). */
-  function planTails(unit, api, foes) {
+  /** Damage a unit has dealt this fight (the fight's own stats). */
+  function dealt(u) { const s = S(); const st = s && s.stats && s.stats.units && s.stats.units[u.id]; return st ? st.dmg || 0 : 0; }
+  /**
+   * Who a ranged docket attack goes for (in reach, in sight), by score: the damage the hit would do, capped at what the
+   * hero has left; +10 for a knockout (a sure kill tempts him, DESIGN §8); +12 for Tangled Tails on a hero 1-3 tiles
+   * away (reeled next to him, Rooted: Rat Pile fodder); and contempt of court, up to +4 for the hero who has dealt the
+   * most damage this fight (never "whoever is lowest"). The cap keeps him from knocking the same freshly helped-up hero
+   * down forever while the helpers stand around: as the swarm grows, a healthy hero is worth more than a 25%-HP one.
+   */
+  function rangedTarget(unit, api, foes, skillId, skipRooted) {
+    const L = DD.skillLevel(DD.getSkill(skillId), 1);
+    const dmg = ((L && L.dmg) || 0) + swarmNow(unit);
+    const top = Math.max(1, foes.reduce(function (m, f) { return Math.max(m, dealt(f)); }, 0));
     let best = null, bs = -Infinity;
     foes.forEach(function (f) {
       const d = dist(unit, f);
-      if (!inReach('rat_tails', d) || DD.Act.hasStatus(f, 'root') || !api.los(unit, f)) return;
-      const sc = (1 - f.hp / Math.max(1, f.maxHp)) * 10 - d * 0.5;
+      if (!inReach(skillId, d) || !api.los(unit, f) || (skipRooted && rooted(f))) return;
+      const left = f.hp + (f.block || 0);
+      const est = dmg > 0 ? DD.AI.estimate(unit, f, dmg, null) : 0;
+      const sc = Math.min(est, left) + (est >= left && est > 0 ? 10 : 0) + (skillId === 'rat_tails' && d <= 3 ? 12 : 0) + 4 * dealt(f) / top - d * 0.01;
       if (sc > bs) { bs = sc; best = f; }
     });
-    if (!best) return false;
-    api.addIntent(unit, 'rat_tails', best, { noCooldown: true });
-    return true;
+    return best;
+  }
+  function doTails(unit, api, foes) {
+    const tgt = rangedTarget(unit, api, foes, 'rat_tails', true);
+    return !!tgt && api.act(unit, 'rat_tails', tgt, { noCooldown: true });
+  }
+  function doGavel(unit, api, foes) {
+    const tgt = rangedTarget(unit, api, foes, 'rat_gavel', false);
+    return !!tgt && api.act(unit, 'rat_gavel', tgt, { noCooldown: true });
+  }
+  function doClass(unit, api) {
+    const L = DD.skillLevel(DD.getSkill('rat_class'), 1);
+    if (plaintiffs(api.state).length >= L.cap) return false;
+    return api.act(unit, 'rat_class', unit, { noCooldown: true });
   }
 
+  function doAction(unit, api, k) {
+    const foes = api.foes(unit);
+    return k === 'tails' ? doTails(unit, api, foes) : k === 'gavel' ? doGavel(unit, api, foes) : k === 'class' ? doClass(unit, api) : false;
+  }
+  function doWind(unit, api, k, phase) {
+    const foes = api.foes(unit);
+    return k === 'surge' ? planSurge(unit, api, foes, phase) : k === 'gnaw' ? planGnaw(unit, api, foes, phase) : false;
+  }
+
+  /** Rat Pile time: a Rooted hero, or a crowd (CFG.crowd: three or more heroes), on the 8 tiles around him. */
+  function pileTime(unit, api) {
+    const near = api.foes(unit).filter(function (f) { return near8(f, unit); });
+    return near.length >= crowd() || near.some(rooted);
+  }
+  const WIND_STEP = { gnaw: 1, surge: 1 };
+  /**
+   * One docket step now. Tangled Tails falls back to the gavel (everyone in reach is already Rooted), Class Action to
+   * Tangled Tails; a wind-up step winds up its Gnaw / Sewer Surge (or the other one) and throws the gavel instead while
+   * one is still pending or when neither has anyone to catch.
+   */
+  function docketStep(unit, api, k, phase) {
+    if (WIND_STEP[k]) {
+      if (!pendingOf(unit, 'rat_gnaw').length && !pendingOf(unit, 'rat_surge').length) {
+        if (doWind(unit, api, k, phase)) return k;
+        const v = k === 'gnaw' ? 'surge' : 'gnaw';
+        if (doWind(unit, api, v, phase)) return v;
+      }
+      return doAction(unit, api, 'gavel') ? 'gavel' : null;
+    }
+    if (doAction(unit, api, k)) return k;
+    const alt = k === 'tails' ? 'gavel' : 'tails';
+    return doAction(unit, api, alt) ? alt : null;
+  }
+
+  /**
+   * One of his two turns a round: walk, then ONE thing — a Rat Pile when a Rooted hero, or three or more heroes, stand
+   * on the 8 tiles around him, otherwise the next step of his docket (PATTERNS; see docketStep for the fallbacks).
+   */
   function ratKingPlan(unit, api) {
     const d = unit.data;
     checkSplit(unit);
-    const foes = api.foes(unit);
-    if (!foes.length) return;
+    if (!active(unit) || !api.foes(unit).length) return;
     const phase = phaseOf(unit);
-    const pat = PATTERNS[phase];
-    const act = pat[(d.step || 0) % pat.length];
-    d.step = (d.step || 0) + 1;
-    moveKing(unit, api, foes);
-    if (!active(unit)) return;
-    // one rotation step; each falls back to the others when it has nothing to do (summons only on their own step)
-    const FALLBACK = { surge: ['surge', 'tails', 'gnaw'], gnaw: ['gnaw', 'tails', 'surge'], tails: ['tails', 'gnaw', 'surge'], class: ['class', 'tails', 'gnaw', 'surge'] };
-    const order = FALLBACK[act] || FALLBACK.gnaw;
-    let reeled = false;
-    for (let i = 0; i < order.length; i++) {
-      const k = order[i];
-      if (k === 'surge' && planSurge(unit, api, foes, phase)) break;
-      if (k === 'gnaw' && planGnaw(unit, api, foes, phase)) break;
-      if (k === 'tails' && planTails(unit, api, foes)) { reeled = true; break; }
-      if (k === 'class' && planClass(unit, api)) break;
+    moveKing(unit, api, api.foes(unit));
+    if (out(unit)) return;
+    let did = null;
+    if (pileTime(unit, api) && api.act(unit, 'rat_pile', unit, { noCooldown: true })) did = 'pile';
+    else {
+      const pat = PATTERNS[phase] || PATTERNS[1];
+      const k = pat[(d.step || 0) % pat.length];
+      d.step = (d.step || 0) + 1;
+      d.lastStep = k;
+      did = docketStep(unit, api, k, phase);
     }
-    // Rat Pile on all 8 tiles around him, AFTER the tails (whoever gets reeled in lands in it)
-    if (reeled || foes.some(function (f) { return near8(f, unit); })) api.addIntent(unit, 'rat_pile', unit, { noCooldown: true });
-    // and every round the gavel flies at the most hurt hero in range that isn't already being reeled in
-    // (from phase 2 on, "ORDER! ORDER!": two gavels at two different heroes)
-    const skip = pendingOf(unit, 'rat_tails').map(function (it) { return it.unitId; });
-    const throws = CFG.gavels[phase] || 1;
-    for (let n = 0; n < throws; n++) {
-      let tgt = null, ts = -Infinity;
-      foes.forEach(function (f) {
-        const d = dist(unit, f);
-        if (!inReach('rat_gavel', d) || skip.indexOf(f.id) >= 0 || !api.los(unit, f)) return;
-        const sc = (1 - f.hp / Math.max(1, f.maxHp)) * 10 - d * 0.3;
-        if (sc > ts) { ts = sc; tgt = f; }
-      });
-      if (!tgt) break;
-      skip.push(tgt.id);
-      api.addIntent(unit, 'rat_gavel', tgt, { noCooldown: true });
-    }
+    d.lastAct = did;
   }
 
   // ---- enemies ----------------------------------------------------------------------------------------------------------
@@ -939,6 +984,7 @@
     },
     skills: ['rat_objection', 'rat_cease', 'rat_billable'],
     ai: { style: 'ranged', keepDistance: 2 }, xp: 4, gold: [2, 5],
+    passive: { name: 'Billable Hours', icon: '⚖️', desc: 'On its turn it keeps its distance and objects (push) or serves a Cease and Desist (Root: it loves rooting a hero near the King). Next to a hero it bites, and so it does when you walk away from it.' },
     barks: {
       spawn: ['Ratticus for the defense!', 'My client pleads the cheese.', 'I passed the bar. I also ate it.'],
       attack: ['OBJECTION!', 'Leading the witness!', 'That will be billed.'],
@@ -950,7 +996,7 @@
 
   DD.registerEnemy({
     id: 'rat_king', name: 'The Rat King', act: 1, tier: 'boss',
-    hp: 200, mov: 5, armor: 0, tags: ['beast', 'rat', 'swarm', 'boss'],
+    hp: 150, mov: 5, armor: 0, init: 2, turnsPerRound: 2, tags: ['beast', 'rat', 'swarm', 'boss'],
     flags: { large: true, immovable: true, immune: ['frozen', 'sleep'] }, resist: { poison: 0.5 },
     sprite: {
       base: 'custom', scale: 1.9, height: 40, width: 40, headY: -30,
@@ -958,27 +1004,40 @@
       portrait: { x: 0, y: -24, r: 18 },
       draw: drawRatKing,
     },
-    skills: ['rat_pile', 'rat_gnaw', 'rat_surge', 'rat_class', 'rat_tails', 'rat_gavel'],
-    ai: ratKingPlan, xp: 40, gold: [30, 40],
+    skills: ['rat_pile', 'rat_tails', 'rat_gavel', 'rat_class'],
+    ai: ratKingPlan, aiStyle: 'ranged', xp: 40, gold: [30, 40],
+    passive: {
+      name: 'Court Docket', icon: '⏳',
+      desc: function (u) {
+        const pat = PATTERNS[phaseOf(u)] || PATTERNS[1];
+        const next = u && u.data ? pat[(u.data.step || 0) % pat.length] : null;
+        return 'Two turns a round. Each turn: a Rat Pile if ' + NUM[crowd()] + ' or more heroes, or a Rooted one, are next to him, otherwise his docket: ' +
+          pat.map(function (k) { return STEP_NAMES[k]; }).join(', ') + (next ? ' (next: ' + STEP_NAMES[next] + ')' : '') +
+          '. Gnaw and Sewer Surge are wind-ups that land one round later (a stun or a flush cancels them); with nobody near the rot or in the water he throws his gavel instead.';
+      },
+    },
     hooks: {
       onCombatStart: function (u) { u.data.splits = u.data.splits || 0; A().addStatus(u, 'rat_session', { stacks: 1, turns: -1, silent: true }, u); },
-      // Swelling Ranks: one more stack every round from round 2 (before planning, so the telegraphs show it)
+      onTurnStart: function (u) { openWindow(u); },
+      // Swelling Ranks: one more stack every round from round 2 (the round count, not his turns)
       onRoundStart: function (u, round) {
         const now = DD.Act.getStatus(u, 'rat_swarm');
-        if (round < 2 || !active(u) || (now && now.stacks >= SWARM_MAX)) return;
+        if (round < (CFG.swarmFrom || 2) || !active(u) || (now && now.stacks >= SWARM_MAX)) return;
         const st = A().addStatus(u, 'rat_swarm', { stacks: 1, silent: true }, u);
         if (!st) return;
         DD.FX.status(u, 'rat_swarm', '+Swelling Ranks ' + st.stacks);
         A().log('More sewer rats pile onto the King: Swelling Ranks ' + st.stacks + ' (+' + CFG.swarmDmg * st.stacks + ' damage).', 'enemy');
       },
-      // stun guard: after a stun (or charm) he can't be stunned or charmed again until the end of next round
+      // stun guard: after a stun (or charm) none of them lands for his next GUARD_TURNS turns, but a stun still scatters
+      // his pending wind-ups
       modifyStatus: function (m) {
-        if (!GUARDED[m.id] || puzzleStun || !m.unit || !DD.Act.hasStatus(m.unit, 'rat_recess')) return;
+        if (!guarded(m.id) || puzzleStun || !m.unit || !DD.Act.hasStatus(m.unit, 'rat_recess')) return;
         m.cancel = true;
-        DD.FX.text(m.unit, '🔔 Recess: no effect', { color: '#e8d9a8', size: 13 });
+        const cut = stunLike(m.id) && (m.unit.intents || []).length ? DD.AI.cancelIntents(m.unit, 'Order! Wind-up scattered') : 0;
+        if (!cut) DD.FX.text(m.unit, '🔔 Recess: no effect', { color: '#e8d9a8', size: 13 });
       },
       onStatusApplied: function (u, st) {
-        if (st && GUARDED[st.id] && active(u)) A().addStatus(u, 'rat_recess', { turns: st.fresh ? 3 : 2, silent: true }, u);
+        if (st && guarded(st.id) && active(u)) A().addStatus(u, 'rat_recess', { turns: CFG.guard || GUARD_TURNS, silent: true }, u);
       },
       // falling in the drain (only the sewer water can move him) hurts a fixed amount: FLUSHED
       modifyIncomingDamage: function (d) { if (d.cause === 'fall') { d.mult = 0; d.flat = flushDmg(); } },
@@ -993,7 +1052,7 @@
       phase: ['Motion to split: GRANTED!', 'My associates will handle this.', 'We are many. We are billable.'],
       flush: ['Not the drain! Anything but the drain!', 'GLUB! Objection! GLUB!', 'We\'ll remember this. All forty of us.'],
     },
-    desc: 'Too many rats to shove (only sewer water moves him) and too many to put to sleep; after a stun the court calls a recess (no second stun next round). More rats join the pile every round (+' + SWARM_DMG + ' damage each, up to +' + SWARM_DMG * SWARM_MAX + '). Gnaws rotten floor into pits, floods channels, reels heroes into his Rat Pile, splits into Rat Lawyers at 66% and 33% HP. Open a sluice while he wades and the drain does the rest.',
+    desc: 'Too many rats to shove (only sewer water moves him) and too many to put to sleep or freeze; after a stun the court calls a recess (no second one for a while, though a stun always cancels his wind-ups). More rats join the pile every round (+' + SWARM_DMG + ' damage each on his Rat Pile, Tangled Tails and gavel, no cap) until a flush washes them away. Takes two turns a round. Reels heroes in with Tangled Tails and buries them under a Rat Pile, gnaws rotten floor into pits, floods the channels, splits into Rat Lawyers at 66% and 33% HP. Open a sluice while he wades and the drain does the rest.',
     boss: { title: 'and the Rat Bar Association', intro: 'A crowned knot of rats rises from the sewage, wearing a tiny wig. "The Court of Rats is now in session."', music: null },
   });
 
@@ -1084,5 +1143,6 @@
 
   // test hooks (read-only helpers for tests/content/bosses_act1.js)
   DD.RatKingBoss = { channels: channels, chanTiles: chanTiles, rotTiles: rotTiles, valves: valves, flood: flood, phaseOf: phaseOf,
-    FLUSH_DMG: FLUSH_DMG, VALVE_CD: VALVE_CD, LAWYER_CAP: LAWYER_CAP, SPLITS: SPLITS.slice(), PATTERNS: PATTERNS, cfg: CFG };
+    FLUSH_DMG: FLUSH_DMG, VALVE_CD: VALVE_CD, LAWYER_CAP: LAWYER_CAP, SPLITS: SPLITS.slice(), PATTERNS: PATTERNS,
+    SWARM_MAX: SWARM_MAX, GUARD_TURNS: GUARD_TURNS, cfg: CFG };
 })();

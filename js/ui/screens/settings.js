@@ -1,7 +1,7 @@
 /* Dungeons and Degenerates — js/ui/screens/settings.js
- * Settings: animation speed, sound effects + volume, screen shake, grid overlay, the "I'm the DM's Favorite"
- * unlock-everyone toggle, a controls reference and "Reset Progress" (confirm). Changes apply immediately
- * (DD.Main.applySettings → DD.FX.speed / DD.Audio) and persist via DD.Meta.save(). Params: { back: screenId }.
+ * Settings: animation speed, sound effects + volume, screen shake, grid overlay, map rotation snap (rotSnap), the
+ * "I'm the DM's Favorite" unlock-everyone toggle, a controls reference and "Reset Progress" (confirm). Changes apply
+ * immediately (DD.Main.applySettings → DD.FX.speed / DD.Audio) and persist via DD.Meta.save(). Params: { back: screenId }.
  */
 (function () {
   'use strict';
@@ -15,13 +15,18 @@
     ['7 – 0', 'Consumables'],
     ['E', 'Interact · Help Up'],
     ['Tab', 'Cycle heroes'],
-    ['Space', 'End turn · skip animations'],
+    ['Space', 'Roll for initiative · end turn · skip animations'],
     ['Z', 'Undo last move'],
     ['Enter', 'Use the armed skill on the hovered tile'],
     ['WASD / Arrows', 'Pan the camera'],
     ['Mouse wheel / + −', 'Zoom'],
-    ['Right / middle drag', 'Pan the camera'],
-    ['F / Home', 'Recenter the camera'],
+    ['Right / left drag', 'Pan the camera'],
+    ['Middle drag', 'Rotate the map to any angle'],
+    ['Q / R', 'Turn the map 90°'],
+    ['Shift + wheel', 'Rotate the map (or a sideways swipe)'],
+    ['Two-finger twist', 'Rotate the map (touch)'],
+    ['Home', 'Reset the view'],
+    ['F', 'Recenter the camera'],
   ];
 
   function save() {
@@ -58,7 +63,7 @@
 
   function resetProgress() {
     const UI = DD.UI;
-    UI.confirm('Burn every character sheet? This deletes <b>all unlocks, stats, codex entries and run history</b>, and abandons the current campaign. Your settings are kept. This cannot be undone. Like, actually.', { title: 'Reset Progress?', yes: 'Burn it all', no: 'Keep my stuff', danger: true, icon: '🔥' })
+    UI.confirm('Burn every character sheet? This deletes <b>all stats, codex entries and run history</b>, and abandons the current campaign. Your settings are kept. This cannot be undone. Like, actually.', { title: 'Reset Progress?', yes: 'Burn it all', no: 'Keep my stuff', danger: true, icon: '🔥' })
       .then(function (ok) {
         if (!ok) return;
         if (DD.Run && typeof DD.Run.clear === 'function') DD.safe('Run.clear', DD.Run.clear, DD.Run);
@@ -87,7 +92,7 @@
         params = params || {};
         const s = UI.settings();
         const back = function () { UI.show(params.back && UI.screens[params.back] ? params.back : 'title'); };
-        root.appendChild(UI.header('Settings', 'Knobs, sliders and one very special toggle.', UI.button('Back', back, { icon: '←', cls: 'ghost', hotkey: 'Escape', showKey: false })));
+        root.appendChild(UI.header('Settings', 'Knobs, sliders and absolutely no cheats. Allegedly.', UI.button('Back', back, { icon: '←', cls: 'ghost', hotkey: 'Escape', showKey: false })));
         const panel = el('div.settings-panel.panel.scroll');
 
         panel.appendChild(el('div.set-h', null, 'Game'));
@@ -104,6 +109,8 @@
         panel.appendChild(row('Animation speed', 'How fast combat plays out. 3× for people with somewhere to be.', seg));
         panel.appendChild(row('Screen shake', 'Big hits rattle the screen.', toggle(s.shake !== false, function (on) { s.shake = on; changed(); })));
         panel.appendChild(row('Show grid', 'Outline every tile on the battlefield.', toggle(s.showGrid !== false, function (on) { s.showGrid = on; changed(); })));
+        // map rotation (settings.rotSnap, read by DD.Render.endRotate; absent = on)
+        panel.appendChild(row('Snap rotation to the classic views', 'A middle-drag let go within 4° of a classic view lands on it. Hold Shift while letting go to leave it exactly where it is.', toggle(s.rotSnap !== false, function (on) { s.rotSnap = on; changed(); })));
 
         panel.appendChild(el('div.set-h', null, 'Audio'));
         const vol = el('input.slider', { type: 'range', min: '0', max: '100', step: '5', value: String(Math.round((s.volume !== undefined ? +s.volume : 0.6) * 100)) });
@@ -114,18 +121,22 @@
         panel.appendChild(row('Sound effects', 'Procedural blips, whooshes, corgi yips and raven caws.', toggle(s.sfx !== false, function (on) { s.sfx = on; volWrap.classList.toggle('off', !on); changed(); })));
         panel.appendChild(row('Volume', null, volWrap));
 
-        panel.appendChild(el('div.set-h', null, 'Cheats (Allegedly)'));
-        panel.appendChild(row('I\'m the DM\'s Favorite', 'Unlock every hero right now. The DM will pretend not to notice.', toggle(!!s.unlockAll, function (on) {
-          s.unlockAll = on;
-          changed();
-          UI.toast(on ? 'Every hero is now unlocked. Teacher\'s pet.' : 'Back to earning it the hard way.', { icon: on ? '🍎' : '🎲' });
-        })));
+        // v2 (integrator): every hero starts unlocked, so the unlock cheat only shows while some hero def has a lock
+        const anyLocks = UI.heroIds().some(function (id) { const h = DD.getHero(id); return h && h.unlock; });
+        if (anyLocks) {
+          panel.appendChild(el('div.set-h', null, 'Cheats (Allegedly)'));
+          panel.appendChild(row('I\'m the DM\'s Favorite', 'Unlock every hero right now. The DM will pretend not to notice.', toggle(!!s.unlockAll, function (on) {
+            s.unlockAll = on;
+            changed();
+            UI.toast(on ? 'Every hero is now unlocked. Teacher\'s pet.' : 'Back to earning it the hard way.', { icon: on ? '🍎' : '🎲' });
+          })));
+        }
 
         panel.appendChild(el('div.set-h', null, 'Controls'));
         panel.appendChild(el('div.controls', null, CONTROLS.map(function (c) { return el('div.ctrl', null, el('span.ctrl-key', null, c[0]), el('span.ctrl-desc', null, c[1])); })));
 
         panel.appendChild(el('div.set-h.danger', null, 'Danger Zone'));
-        panel.appendChild(row('Reset progress', 'Delete unlocks, stats, codex and history.', UI.button('Reset Progress', resetProgress, { cls: 'danger small', icon: '🔥' })));
+        panel.appendChild(row('Reset progress', anyLocks ? 'Delete unlocks, stats, codex and history.' : 'Delete stats, codex and history.', UI.button('Reset Progress', resetProgress, { cls: 'danger small', icon: '🔥' })));
         root.appendChild(el('div.settings-wrap', null, panel));
       },
     });

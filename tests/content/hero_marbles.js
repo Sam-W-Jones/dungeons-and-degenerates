@@ -119,24 +119,29 @@
     t.ok(/on their next turn they must attack him/.test(desc('mar_backinmyday')), 'Taunt desc: on their next turn they must attack him');
     t.ok(/Asleep for 2 turns/.test(desc('mar_lecture')), 'Lecture desc: Asleep for 2 turns');
     t.ok(/Vulnerable for their next turn/.test(desc('mar_scatter')), 'Scatter desc: Vulnerable for their next turn');
+    t.ok(/Grounded foes/.test(desc('mar_scatter')), 'Scatter desc: grounded foes only (flyers never slip)');
     t.ok(/on its next turn/.test(desc('mar_waxon', 3)), 'Wax On III: the AP comes on its next turn (v2 banking)');
     // barks
-    const KEYS = ['select', 'start', 'move', 'kill', 'hurt', 'lowhp', 'downed', 'revive', 'ally_down', 'levelup', 'victory', 'idle', 'signature'];
+    const KEYS = ['select', 'start', 'move', 'kill', 'hurt', 'lowhp', 'downed', 'revive', 'ally_down', 'levelup', 'victory', 'idle', 'signature',
+      'opportunity'];
     let all = '';
     KEYS.forEach(function (k) {
       const lines = h.barks[k] || [];
       t.ok(lines.length >= 4 && lines.length <= 6, 'barks.' + k + ': 4-6 lines (' + lines.length + ')');
       lines.forEach(function (b) { t.ok(typeof b === 'string' && b.length > 0 && b.length <= 70, 'bark ≤ 70 chars: ' + b); all += b + ' '; });
     });
-    const named = ['Josiah', 'Zarathor', 'Ellaria', 'Marwyn', 'Sparrow', 'Syllamin', 'Slate', 'Buga', 'Kiri', 'Betty', 'Basanos']
-      .filter(function (n) { return all.indexOf(n) >= 0; });
-    t.ok(named.length >= 8, 'barks mention other heroes (' + named.join(', ') + ')');
+    const named = ['Josiah', 'Zarathor', 'Ellaria', 'Marwyn', 'Sparrow', 'Syllamin', 'Slate', 'Buga', 'Kiri', 'Betty', 'Basanos',
+      'Valdris', 'Hjalmar', 'Pebbles'].filter(function (n) { return all.indexOf(n) >= 0; });
+    t.ok(named.length >= 10, 'barks mention other heroes (' + named.join(', ') + ')');
+    ['Valdris', 'Hjalmar', 'Pebbles'].forEach(function (n) { t.ok(all.indexOf(n) >= 0, 'barks greet the new party member ' + n); });
     t.ok(!/telegraph|\bguard\b|\bXP\b/i.test(all + ' ' + h.blurb + ' ' + h.role + ' ' + h.passive.desc), 'no v1 mechanics in barks / blurb / role / passive');
-    // pronouns (MEMORY: Kiri and Ellaria are she, Betty and Basanos he): the lines naming them use no wrong pronoun
+    t.ok(/walks off/.test(h.blurb), 'blurb: he punishes foes that walk away (attacks of opportunity)');
+    // pronouns (the user's list: Ellaria, Sparrow and Kiri are she; every other hero is he): the lines naming them use no
+    // wrong pronoun
     KEYS.forEach(function (k) {
       (h.barks[k] || []).forEach(function (b) {
-        if (/Kiri|Ellaria/.test(b)) t.ok(!/\b(he|him|his)\b/i.test(b), 'pronouns: ' + b);
-        if (/Betty|Basanos/.test(b)) t.ok(!/\b(she|her|hers)\b/i.test(b), 'pronouns: ' + b);
+        if (/Kiri|Ellaria|Sparrow/.test(b)) t.ok(!/\b(he|him|his|himself)\b/i.test(b), 'pronouns: ' + b);
+        if (/Betty|Basanos|Valdris|Hjalmar|Pebbles|Syllamin|Josiah|Zarathor|Marwyn|Slate|Buga|Corelos/.test(b)) t.ok(!/\b(she|her|hers|herself)\b/i.test(b), 'pronouns: ' + b);
       });
     });
     // passive, surface, statuses, items
@@ -169,7 +174,10 @@
     let u = me(), g = at(2, 2);
     t.ok(mine() && round() === 1 && u.ap === 3, 'his turn, round 1, 3 AP');
     blank(u);
-    t.ok(use(u, u.basic, 2, 2), 'jab used');
+    const keys = [], mb0 = DD.Act.maybeBark;
+    DD.Act.maybeBark = function (unit, key) { keys.push(key); return ''; };
+    try { t.ok(use(u, u.basic, 2, 2), 'jab used'); } finally { DD.Act.maybeBark = mb0; }
+    t.ok(keys.indexOf('opportunity') < 0, 'a jab on his own turn: no attack-of-opportunity bark');
     t.eq(g.hp, 9, 'jab: 5 damage');
     t.eq(u.ap, 2, 'jab: 1 AP');
     [1, 2, 3].forEach(function (lv) {
@@ -329,6 +337,13 @@
     g.flags.flying = false;
     t.ok(DD.Marbles.slip(g, tile(3, 1)) && has(g, 'vulnerable'), 'grounded enemy: slips');
     t.ok(!DD.Marbles.slip(g, tile(4, 1)), 'no marbles, no slip');
+    // cast on a flyer and a walker: only the grounded one slips (the desc says "Grounded foes")
+    fight({ w: 8, h: 5, me: { x: 1, y: 2 }, enemies: [{ id: 'test_grunt', x: 3, y: 2 }, { id: 'test_grunt', x: 3, y: 3 }] });
+    u = me();
+    const flyer = at(3, 2), walker = at(3, 3);
+    flyer.flags.flying = true;
+    t.ok(use(u, sock(u, 'mar_scatter', 1), 3, 2), 'scatter on a flyer');
+    t.ok(!has(flyer, 'vulnerable') && has(walker, 'vulnerable'), 'the flyer floats over the marbles; the walker next to it slips');
     // marbles run out: 3 rounds (surfaces count rounds)
     fight({ w: 9, h: 3, me: { x: 1, y: 1 }, enemies: [{ id: 'test_grunt', x: 8, y: 2 }] });
     u = me();
@@ -701,6 +716,26 @@
     let carrots = 0;
     for (let i = 0; i < 8; i++) { DD.Combat.endTurn(); const r = st(me(), 'mar_remembered'); if (r && r.data.ids[0] === 'mar_carrot') carrots++; }
     t.eq(carrots, 0, 'out of carrots: never remembered');
+    // silenced at his turn start (it lasts through that turn): his spell is not ready, so it is never the free skill
+    function hushRolls(silence) {
+      fight({ w: 9, h: 5, me: { x: 2, y: 2, skills: [{ id: 'mar_lecture', level: 1 }, { id: 'mar_whack', level: 1 }] }, enemies: [{ id: 'test_grunt', x: 7, y: 4 }], seed: 5 });
+      const out = { lecture: 0, whack: 0 };
+      for (let i = 0; i < 12; i++) {
+        const v = me();
+        v.skills.forEach(function (s) { s.cd = 0; s.fresh = false; });
+        A().removeStatus(v, 'silenced', { silent: true });
+        if (silence) A().addStatus(v, 'silenced', { turns: 1 });
+        DD.Combat.endTurn();
+        const r = st(me(), 'mar_remembered');
+        if (silence && !has(me(), 'silenced')) return null;
+        if (r && r.data.ids[0] === 'mar_lecture') out.lecture++;
+        if (r && r.data.ids[0] === 'mar_whack') out.whack++;
+      }
+      return out;
+    }
+    const loud = hushRolls(false), hushed = hushRolls(true);
+    t.ok(loud && loud.lecture > 0, 'control: not silenced, Lecture comes up (' + JSON.stringify(loud) + ')');
+    t.ok(hushed && hushed.lecture === 0 && hushed.whack === 12, 'silenced: Lecture (a spell) is never remembered, Walking Stick Whack every turn (' + JSON.stringify(hushed) + ')');
     // stunned / sheep at his turn start: no roll (a stun from an enemy costs his next turn)
     fight({ w: 9, h: 5, me: { x: 2, y: 2 }, enemies: [{ id: 'test_grunt', x: 7, y: 4 }], seed: 5 });
     u = me();
@@ -833,6 +868,16 @@
     g.x = 4;
     use(u, u.skills[0], 4, 2);
     t.ok(g.x === 2 && g.hp === 14 - 3, 'cane: the hook still lands it next to him (never past), round(3 × 1.1) = 3');
+    // pushes only (the desc says so): a 1-tile pull he is the source of (a pull Blessing such as Gravitational Ego)
+    // stays 1 tile
+    t.ok(/His pushes move units 1 tile further\.$/.test(DD.defs.items.mar_cane.desc) && !/pull/i.test(DD.defs.items.mar_cane.desc), 'cane desc: pushes only');
+    fight({ w: 10, h: 5, me: { x: 1, y: 2, items: ['mar_cane'] }, enemies: [{ id: 'test_grunt', x: 5, y: 2 }] });
+    u = me();
+    g = at(5, 2);
+    A().pull(u, g, { x: u.x, y: u.y }, 1);
+    t.eq(g.x, 4, 'cane: a 1-tile pull toward him still moves it 1 tile');
+    A().knockback(u, g, 1);
+    t.eq(g.x, 6, 'cane: a 1-tile push away from him moves it 2');
     // the knight pushing a foe gets no bonus (the cane only lengthens HIS pushes)
     fight({ w: 10, h: 5, me: { x: 1, y: 1, items: ['mar_cane'] }, allies: [{ id: 'test_knight', x: 1, y: 3, skills: [{ id: 'test_shield_bash', level: 1 }] }], enemies: [{ id: 'test_grunt', x: 2, y: 3 }] });
     DD.Combat.endTurn();
@@ -1048,6 +1093,150 @@
     t.ok(sane(t, 'edge cases'), 'state sane');
   });
 
+  // ---- attacks of opportunity (v2, DESIGN §4.2) ---------------------------------------------------------------
+  /** Run fn while recording 'opportunity:attack' events: [{ a: attacker defId, m: mover defId, skill }]. */
+  function opportunities(fn) {
+    const seen = [];
+    const off = DD.Events.on('opportunity:attack', function (e) { seen.push({ a: e.attacker.defId, m: e.mover.defId, skill: e.skillId }); });
+    try { fn(); } finally { off(); }
+    return seen;
+  }
+
+  T.suite('hero_marbles: attacks of opportunity (he holds the line; leaps, shoves and hooks never provoke)', function (t) {
+    if (!guard(t)) return;
+    // Marbles next to a grunt (Stab 4), a far knight so a down never ends the fight
+    function duel(extra) {
+      fight(Object.assign({ w: 9, h: 5, me: { x: 2, y: 2 }, allies: [{ id: 'test_knight', x: 8, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 2 }] }, extra || {}));
+      blank(me());
+      return { u: me(), g: at(3, 2) };
+    }
+    // 1. walking away from an adjacent foe provokes its free attack; the walk goes on; no undo
+    let d = duel();
+    let u = d.u, g = d.g;
+    const e = DD.Combat.reachable(u).get('0,2');
+    t.ok(e && e.provokes.length === 1 && e.provokes[0] === g.id, 'walking away from the grunt: the move preview says it provokes the grunt');
+    const pv = DD.Combat.provokes(u, 0, 2);
+    t.ok(pv.length === 1 && pv[0].skillId === 'test_grunt_stab' && pv[0].dmg === 4, 'Combat.provokes: its Stab, for 4 (' + JSON.stringify(pv) + ')');
+    let hp = u.hp;
+    let seen = opportunities(function () { t.ok(DD.Combat.move(u, 0, 2), 'he walks away'); });
+    t.ok(seen.length === 1 && seen[0].a === 'test_grunt' && seen[0].m === HERO, 'attack of opportunity: the grunt on him (' + JSON.stringify(seen) + ')');
+    t.ok(u.hp === hp - 4 && u.x === 0 && u.y === 2, 'stabbed for 4; the walk goes on to the tile');
+    t.ok(!DD.Combat.canUndo(), 'a move that provoked can\'t be undone');
+    // a lethal one: downed on the tile he tried to leave
+    d = duel();
+    d.u.hp = 3;
+    DD.Combat.move(d.u, 0, 2);
+    t.ok(d.u.downed && d.u.x === 2 && d.u.y === 2, 'a stab that downs him ends the walk where it started');
+    // 2. his mobility never provokes: Hare-Brained Leap (a leap), Walking Stick Whack (a shove), Vaudeville Hook (a pull)
+    d = duel();
+    hp = d.u.hp;
+    seen = opportunities(function () { t.ok(use(d.u, sock(d.u, 'mar_leap', 1), 0, 2), 'he leaps away from the grunt'); });
+    t.ok(!seen.length && d.u.hp === hp && d.u.x === 0 && !d.g.oppRound, 'Hare-Brained Leap: no attack of opportunity');
+    d = duel();
+    hp = d.u.hp;
+    seen = opportunities(function () { use(d.u, sock(d.u, 'mar_whack', 1), 3, 2); });
+    t.ok(!seen.length && d.g.x === 5 && !d.u.oppRound, 'Walking Stick Whack: the shoved grunt provokes nothing (pushes are no move action)');
+    t.eq(DD.Combat.reachable(d.u).get('0,2').provokes.length, 0, 'shoved out of reach: walking away is free now');
+    DD.Combat.move(d.u, 0, 2);
+    t.eq(d.u.hp, hp, 'no stab');
+    fight({ w: 9, h: 5, me: { x: 1, y: 2 }, allies: [{ id: 'test_knight', x: 3, y: 3 }], enemies: [{ id: 'test_grunt', x: 4, y: 2 }] });
+    u = me(); g = at(4, 2);
+    const kn = hero('test_knight');
+    seen = opportunities(function () { use(u, sock(u, 'mar_hook', 1), 4, 2); });
+    t.ok(!seen.length && g.x === 2 && g.hp === 14 - 3 && !kn.oppRound, 'Vaudeville Hook: yanked past the knight, no attack of opportunity on a pull');
+    t.ok(DD.AI.engaged(g).indexOf(u) >= 0, 'hooked next to him, the grunt is engaged: walking away would cost it a Jab');
+    // 3. he strikes foes that walk away from him: a free Doddering Jab, once per round
+    fight({ w: 9, h: 6, me: { x: 2, y: 2 }, allies: [{ id: 'test_knight', x: 8, y: 5 }], enemies: [{ id: 'test_grunt', x: 3, y: 2 }, { id: 'test_grunt', x: 2, y: 3 }] });
+    u = me();
+    const a = at(3, 2), b = at(2, 3);
+    t.ok(DD.Act.opportunitySlot(u) === u.basic, 'his attack of opportunity is his basic attack (Doddering Jab is melee)');
+    t.eq(DD.AI.opportunityDmg(u, a), 5, 'the AI prices it at 5');
+    const ap0 = u.ap;
+    const barked = [], mb0 = DD.Act.maybeBark;
+    DD.Act.maybeBark = function (unit, key) { if (unit === u) barked.push(key); return ''; };
+    try {
+      seen = opportunities(function () { DD.AI.moveTo(a, 6, 2); });
+    } finally { DD.Act.maybeBark = mb0; }
+    t.ok(seen.length === 1 && seen[0].a === HERO && seen[0].skill === 'mar_jab', 'the grunt walking away gets the Jab (' + JSON.stringify(seen) + ')');
+    t.ok(barked.indexOf('opportunity') >= 0, 'and maybe a "Class is NOT dismissed!" bark (' + barked.join(', ') + ')');
+    t.ok(a.hp === 14 - 5 && a.x === 6, '5 damage, and it walks on');
+    t.ok(u.ap === ap0 && !u.basic.cd, 'free: no AP, no cooldown');
+    t.eq(u.oppRound, round(), 'his reaction is spent for this round');
+    seen = opportunities(function () { DD.AI.moveTo(b, 0, 4); });
+    t.ok(!seen.length && b.hp === 14 && b.x === 0, 'a second grunt slips away the same round: at most one per round');
+    DD.Combat.endRound();
+    t.ok(mine() && round() === 2, 'round 2, his turn');
+    A().teleport(b, 2, 3);
+    seen = opportunities(function () { DD.AI.moveTo(b, 0, 4); });
+    t.ok(seen.length === 1 && b.hp === 14 - 5, 'a new round: he strikes again');
+    // the combo: a Vulnerable foe (Marble Scatter) takes round(5 × 1.25) = 6 from the Jab
+    d = duel();
+    use(d.u, sock(d.u, 'mar_scatter', 1), 3, 2);
+    t.ok(has(d.g, 'vulnerable'), 'the grunt slipped on the marbles');
+    DD.AI.moveTo(d.g, 6, 2);
+    t.eq(d.g.hp, 14 - 6, 'walking off the marbles: the Jab hits the Vulnerable grunt for 6');
+    // 4. no attack of opportunity while he is stunned / asleep / a sheep / downed, nor on his charmer
+    ['stun', 'sleep', 'sheep'].forEach(function (id) {
+      const v = duel();
+      A().addStatus(v.u, id, { turns: 1 });
+      t.eq(DD.Act.opportunityOf(v.u, v.g), null, id + ': he makes none');
+      DD.AI.moveTo(v.g, 6, 2);
+      t.eq(v.g.hp, 14, id + ': the grunt walks away unpunished');
+    });
+    d = duel();
+    A().addStatus(d.u, 'charmed', { turns: 1 }, d.g);
+    t.eq(DD.Act.opportunityOf(d.u, d.g), null, 'charmed by the grunt: no swing at his charmer');
+    d = duel();
+    d.u.hp = 1;
+    A().damage(null, d.u, 5, { cause: 'other' });
+    t.ok(d.u.downed, 'downed');
+    seen = opportunities(function () { DD.AI.moveTo(d.g, 6, 2); });
+    t.eq(seen.length, 0, 'downed: no attack of opportunity');
+    // 5. his control lets the party disengage for free: stunned, asleep and taunted foes don't strike the leavers
+    d = duel();
+    use(d.u, sock(d.u, 'mar_punch', 1), 3, 2);
+    hp = d.u.hp;
+    t.eq(DD.Combat.reachable(d.u).get('0,2').provokes.length, 0, 'Rabbit Punch: the stunned grunt can\'t strike');
+    DD.Combat.move(d.u, 0, 2);
+    t.eq(d.u.hp, hp, 'he strolls off untouched');
+    d = duel();
+    use(d.u, sock(d.u, 'mar_lecture', 3), 2, 2);
+    hp = d.u.hp;
+    DD.Combat.move(d.u, 0, 2);
+    t.ok(d.u.x === 0 && d.u.hp === hp && has(d.g, 'sleep'), 'Lecture: he tiptoes away from the sleeper (no stab, it sleeps on)');
+    function mageLeaves(taunt) {
+      fight({ w: 9, h: 6, me: { x: 2, y: 2 }, allies: [{ id: 'test_mage', x: 3, y: 3 }], enemies: [{ id: 'test_grunt', x: 3, y: 2 }] });
+      const v = me(), mage = hero('test_mage');
+      if (taunt) use(v, sock(v, 'mar_backinmyday', 1), 2, 2);
+      DD.Combat.endTurn();
+      const mhp = mage.hp;
+      const n = DD.Combat.current() === mage ? DD.Combat.reachable(mage).get('5,4').provokes.length : -1;
+      DD.Combat.move(mage, 5, 4);
+      return { n: n, lost: mhp - mage.hp, at: mage.x + ',' + mage.y };
+    }
+    const free = mageLeaves(false);
+    t.ok(free.n === 1 && free.lost === 4, 'control: the mage leaving the grunt is stabbed (' + JSON.stringify(free) + ')');
+    const tt = mageLeaves(true);
+    t.ok(tt.n === 0 && tt.lost === 0 && tt.at === '5,4', 'Back In My Day: the grunt taunted by him only strikes him, the mage walks away free (' + JSON.stringify(tt) + ')');
+    fight({ w: 9, h: 7, me: { x: 3, y: 3 }, allies: [{ id: 'test_knight', x: 8, y: 6 }],
+      enemies: [{ id: 'test_grunt', x: 4, y: 3, hpMult: 2 }, { id: 'test_grunt', x: 3, y: 4, hpMult: 2 }, { id: 'test_grunt', x: 2, y: 3, hpMult: 2 }] });
+    u = me();
+    DD.Combat.state.hype = 100;
+    use(u, u.signature, 3, 3);
+    hp = u.hp;
+    seen = opportunities(function () { DD.Combat.move(u, 3, 0); });
+    t.ok(!seen.length && u.hp === hp && u.y === 0, 'Forgot I Was Retired: three stunned foes, and he walks out of the middle of them for free');
+    // 6. reach-aware foes: a grunt engaged with him keeps swinging at him, not at the 4-HP mage two tiles away
+    fight({ w: 9, h: 5, me: { x: 2, y: 2 }, allies: [{ id: 'test_mage', x: 5, y: 2 }], enemies: [{ id: 'test_grunt', x: 3, y: 2 }], ai: true });
+    u = me();
+    const mage = hero('test_mage');
+    mage.hp = 4;
+    hp = u.hp;
+    DD.Combat.endRound();
+    t.ok(mage.hp === 4 && u.hp === hp - 4 && at(3, 2), 'he holds the line: the grunt stays and stabs him (mage ' + mage.hp + ' HP, Marbles −' + (hp - u.hp) + ')');
+    t.ok(sane(t, 'opportunity'), 'state sane');
+  });
+
   // ---- AutoPlay ------------------------------------------------------------------------------------------
   T.suite('hero_marbles: AutoPlay v2 battles at levels 1/3/5', function (t) {
     if (!guard(t)) return;
@@ -1131,6 +1320,67 @@
     t.ok(sane(t, 'autoplay reads'), 'state sane');
   });
 
+  // ---- v2 requests (user, Nov 3): heals on the downed, barrels, flyers --------------------------------------------
+  T.suite('hero_marbles: v2 requests — a carrot gets a downed ally up, his fists set barrels off, flyers float over marbles', function (t) {
+    if (!guard(t)) return;
+    // 1. Carrot Toss aimed at a downed ally: back up with the carrot's HP (preview "UP! N HP"), a charge spent, 1 AP
+    [1, 2, 3].forEach(function (lv) {
+      const Lv = L('mar_carrot', lv);
+      fight({ w: 8, h: 5, me: { x: 1, y: 2 }, allies: [{ id: 'test_knight', x: 4, y: 2 }], enemies: [{ id: 'test_grunt', x: 7, y: 4 }] });
+      const u = me(), k = hero('test_knight');
+      A().kill(k, null);
+      t.ok(k.downed, 'carrot L' + lv + ': knight down');
+      const sl = sock(u, 'mar_carrot', lv);
+      const tg = DD.Targeting.validTargets(u, sl).filter(function (q) { return q.x === 4 && q.y === 2; })[0];
+      t.ok(!!tg && tg.revive === true, 'carrot L' + lv + ': the downed knight is a target (revive)');
+      const pv = DD.Targeting.preview(u, sl, { x: 4, y: 2 });
+      const e = pv.perUnit[k.id];
+      t.ok(!!e && e.revived && e.heal === Lv.heal && e.text.indexOf('UP! ' + Lv.heal + ' HP') >= 0, 'carrot L' + lv + ': preview "UP! ' + Lv.heal + ' HP" (' + (e && e.text) + ')');
+      const ap0 = u.ap;
+      t.ok(use(u, sl, 4, 2), 'carrot L' + lv + ' thrown at the downed knight');
+      t.ok(!k.downed && k.hp === Lv.heal && k.ap === 0, 'carrot L' + lv + ': up at ' + Lv.heal + ' HP, 0 AP (' + k.hp + ')');
+      t.eq(ap0 - u.ap + '/' + sl.uses, '1/1', 'carrot L' + lv + ': 1 AP and one of his 3 carrots');
+      t.ok(DD.Combat.state.log.some(function (l) { return /back up \(\d+ HP\), thanks to Professor Marbles/.test(l.text); }), 'carrot L' + lv + ': the normal revive line');
+    });
+    // out of range stays out of range; his own Help Up skills are untouched (Help Up is an interaction)
+    fight({ w: 9, h: 5, me: { x: 1, y: 2 }, allies: [{ id: 'test_knight', x: 6, y: 2 }], enemies: [{ id: 'test_grunt', x: 8, y: 4 }] });
+    A().kill(hero('test_knight'), null);
+    t.ok(!DD.Targeting.isValidTarget(me(), sock(me(), 'mar_carrot', 1), 6, 2), 'carrot: a downed ally 5 tiles away is out of range');
+    // Wax On (a buff, no heal) can't be aimed at the downed
+    fight({ w: 8, h: 5, me: { x: 1, y: 2 }, allies: [{ id: 'test_knight', x: 3, y: 2 }], enemies: [{ id: 'test_grunt', x: 7, y: 4 }] });
+    A().kill(hero('test_knight'), null);
+    t.ok(!DD.Targeting.isValidTarget(me(), sock(me(), 'mar_waxon', 1), 3, 2), 'Wax On is not a heal: no target on the downed');
+
+    // 2. barrels: the Jab sets an adjacent one off (he is in the blast), the Hook one 2+ tiles away in a line
+    fight({ w: 8, h: 5, me: { x: 1, y: 2 }, enemies: [{ id: 'test_grunt', x: 3, y: 3 }, { id: 'test_grunt', x: 7, y: 4 }], objects: [{ x: 2, y: 3, id: 'barrel_explosive' }] });
+    let u = me();
+    const g = at(3, 3);
+    let sl = sock(u, 'mar_jab', 1);
+    t.ok(DD.Targeting.validTargets(u, sl).some(function (q) { return q.obj && q.x === 2 && q.y === 3; }) === false, 'Jab: a diagonal barrel is not adjacent');
+    u.x = 2; u.y = 4; // test setup: under the barrel
+    t.ok(DD.Targeting.validTargets(u, sl).some(function (q) { return q.obj && q.x === 2 && q.y === 3; }), 'Jab: an adjacent barrel is a target');
+    const pv = DD.Targeting.preview(u, sl, { x: 2, y: 3 });
+    t.ok(pv.detonates === 'barrel_explosive' && pv.perUnit[u.id] && pv.perUnit[u.id].dmg === 8 && pv.perUnit[g.id] && pv.perUnit[g.id].dmg === 8,
+      'preview: it blows up in his face too (8 each)');
+    t.ok(use(u, sl, 2, 3), 'Jab at the barrel');
+    t.ok(!tile(2, 3).obj && u.hp === u.maxHp - 8 && g.hp === 6, 'KABOOM: Marbles and the grunt next to it take 8 each');
+    fight({ w: 8, h: 5, me: { x: 1, y: 2 }, enemies: [{ id: 'test_grunt', x: 5, y: 1 }, { id: 'test_grunt', x: 7, y: 4 }], objects: [{ x: 4, y: 2, id: 'barrel_explosive' }] });
+    u = me();
+    sl = sock(u, 'mar_hook', 1);
+    t.ok(DD.Targeting.validTargets(u, sl).some(function (q) { return q.obj && q.x === 4 && q.y === 2; }), 'Hook: a barrel 3 tiles away in a line');
+    t.ok(use(u, sl, 4, 2) && !tile(4, 2).obj && at(5, 1).hp === 14 && u.hp === u.maxHp && sl.cd === 2, 'Hook at the barrel: it goes off where it stands (nothing yanked, a diagonal foe is outside radius 1), cooldown 2');
+
+    // 3. flyers: a flying foe pushed across his marbles never slips (the engine and his slip check agree)
+    fight({ w: 8, h: 5, me: { x: 1, y: 2 }, enemies: [{ id: 'test_grunt', x: 2, y: 2 }, { id: 'test_grunt', x: 7, y: 4 }],
+      surfaces: [{ x: 3, y: 2, id: 'mar_marbles', turns: 3 }, { x: 4, y: 2, id: 'mar_marbles', turns: 3 }] });
+    u = me();
+    const fl = at(2, 2);
+    fl.flags = Object.assign({}, fl.flags, { flying: true });
+    t.ok(use(u, sock(u, 'mar_whack', 1), 2, 2), 'whack a flyer across the marbles');
+    t.ok(fl.x === 4 && !has(fl, 'vulnerable'), 'it sails over both marble tiles: no slip (' + fl.x + ',' + fl.y + ')');
+    t.ok(sane(t, 'v2 requests'), 'state sane');
+  });
+
   // ---- balance sim (manual: tools/test.sh "suite=hero_marbles: zz&sim=1&n=3") ---------------------------------
   T.suite('hero_marbles: zz balance sim (sim=1 only)', function (t) {
     if (t.param('sim', '0') !== '1') { t.skip('sim=1 only'); return; }
@@ -1140,39 +1390,64 @@
       .filter(function (e) { return !/^(test_|mgt_|mg_)/.test(e.id) && e.kind !== 'boss'; });
     const pool = Object.keys(DD.defs.heroes).filter(function (k) { return k.indexOf('test_') !== 0 && k !== HERO; });
     const rng = DD.RNG('mar-sim:' + t.seed);
-    const tally = {};
-    let fights = 0, wins = 0;
-    encs.forEach(function (enc) {
-      for (let i = 0; i < n; i++) {
-        const others = pool.length >= 3 ? rng.sample(pool, 3) : ['test_knight', 'test_cleric', 'test_mage'];
-        const ids = rng.shuffle([HERO].concat(others));
-        // v2 slow leveling: about level 2 in act 1, 3-4 in act 2, 5 in act 3 (DESIGN §5)
-        const lvl = enc.act === 1 ? 2 : enc.act === 2 ? 3 : 5;
-        const party = ids.map(function (id) {
-          const h = DD.getHero(id);
-          const extra = (h.skillPool || []).filter(function (sid) { return h.startingSkills.indexOf(sid) < 0; });
-          const pick = rng.sample(extra, enc.act === 1 ? 1 : 2);
-          const sl = Math.min(3, 1 + Math.floor((lvl - 1) / 2));
-          return DD.Combat.makeRunHero({ id: id, level: lvl, skills: h.startingSkills.concat(pick).map(function (sid) { return { id: sid, level: sl }; }) });
-        });
-        const setup = DD.safe('build ' + enc.id, DD.Encounter.build, DD.Encounter, [enc, party, { rng: DD.RNG(rng.int(1, 1e9)), difficulty: 'normal', act: enc.act }]);
-        if (!setup || !setup.grid) continue;
-        DD.Combat.start(setup, { seed: rng.int(1, 1e9), headless: true, difficulty: 'normal', kind: enc.kind });
-        const res = DD.AutoPlay.runBattle(30);
-        const s = DD.Combat.state;
-        fights++;
-        if (res.result === 'victory') wins++;
-        s.units.filter(function (u) { return u.kind === 'hero'; }).forEach(function (u) {
-          const r = tally[u.defId] || (tally[u.defId] = { fights: 0, dmg: 0, kills: 0, downs: 0 });
-          const us = s.stats.units[u.id] || {};
-          r.fights++; r.dmg += us.dmg || 0; r.kills += us.kills || 0; r.downs += u.downed ? 1 : 0;
-        });
+    const tally = {}, uses = {}, sockets = {};
+    let fights = 0, wins = 0, free = 0, hisTurns = 0;
+    // his skill uses (and the free ones: the remembered skill), per fight in which the skill was socketed
+    const orig = DD.Combat.useSkill;
+    DD.Combat.useSkill = function (unit, slot) {
+      const ap0 = unit ? unit.ap : 0;
+      const ok = orig.apply(DD.Combat, arguments);
+      if (ok && unit && unit.defId === HERO && slot) {
+        uses[slot.id] = (uses[slot.id] || 0) + 1;
+        if (POOL.indexOf(slot.id) >= 0 && unit.ap === ap0) free++;
       }
+      return ok;
+    };
+    const offTurns = DD.Events.on('turn:start', function (e) { if (e.unit && e.unit.defId === HERO) hisTurns++; });
+    // attacks of opportunity: made by him (his Jab on foes walking off) and suffered by him (his own walks)
+    const opp = { by: 0, on: 0 };
+    const offOpp = DD.Events.on('opportunity:attack', function (e) {
+      if (e.attacker && e.attacker.defId === HERO) opp.by++;
+      if (e.mover && e.mover.defId === HERO) opp.on++;
     });
+    function oneFight(enc) {
+      const others = pool.length >= 3 ? rng.sample(pool, 3) : ['test_knight', 'test_cleric', 'test_mage'];
+      const ids = rng.shuffle([HERO].concat(others));
+      // v2 slow leveling: about level 2 in act 1, 3-4 in act 2, 5 in act 3 (DESIGN §5)
+      const lvl = enc.act === 1 ? 2 : enc.act === 2 ? 3 : 5;
+      const party = ids.map(function (id) {
+        const h = DD.getHero(id);
+        const extra = (h.skillPool || []).filter(function (sid) { return h.startingSkills.indexOf(sid) < 0; });
+        const pick = rng.sample(extra, enc.act === 1 ? 1 : 2);
+        const sl = Math.min(3, 1 + Math.floor((lvl - 1) / 2));
+        if (id === HERO) h.startingSkills.concat(pick).forEach(function (sid) { sockets[sid] = (sockets[sid] || 0) + 1; });
+        return DD.Combat.makeRunHero({ id: id, level: lvl, skills: h.startingSkills.concat(pick).map(function (sid) { return { id: sid, level: sl }; }) });
+      });
+      const setup = DD.safe('build ' + enc.id, DD.Encounter.build, DD.Encounter, [enc, party, { rng: DD.RNG(rng.int(1, 1e9)), difficulty: 'normal', act: enc.act }]);
+      if (!setup || !setup.grid) return;
+      DD.Combat.start(setup, { seed: rng.int(1, 1e9), headless: true, difficulty: 'normal', kind: enc.kind });
+      const res = DD.AutoPlay.runBattle(30);
+      const s = DD.Combat.state;
+      fights++;
+      if (res.result === 'victory') wins++;
+      s.units.filter(function (u) { return u.kind === 'hero'; }).forEach(function (u) {
+        const r = tally[u.defId] || (tally[u.defId] = { fights: 0, dmg: 0, kills: 0, downs: 0 });
+        const us = s.stats.units[u.id] || {};
+        r.fights++; r.dmg += us.dmg || 0; r.kills += us.kills || 0; r.downs += u.downed ? 1 : 0;
+      });
+    }
+    try {
+      encs.forEach(function (enc) { for (let i = 0; i < n; i++) oneFight(enc); });
+    } finally { DD.Combat.useSkill = orig; offTurns(); offOpp(); }
     Object.keys(tally).sort().forEach(function (id) {
       const r = tally[id];
       t.log(id + ': ' + r.fights + ' fights · dmg/fight ' + (r.dmg / r.fights).toFixed(1) + ' · kills/fight ' + (r.kills / r.fights).toFixed(2) + ' · downed ' + r.downs);
     });
+    t.log('Marbles uses per fight when socketed: ' + POOL.filter(function (id) { return sockets[id]; }).map(function (id) {
+      return DD.getSkill(id).name + ' ' + ((uses[id] || 0) / sockets[id]).toFixed(2) + ' (' + sockets[id] + ')';
+    }).join(' · '));
+    t.log('jab ' + (uses.mar_jab || 0) + ' · signature ' + (uses.mar_signature || 0) + ' · free (remembered) uses ' + free + ' in ' + hisTurns + ' of his turns');
+    t.log('attacks of opportunity: by him ' + opp.by + ' (' + (opp.by / Math.max(1, fights)).toFixed(2) + '/fight) · on him ' + opp.on + ' (' + (opp.on / Math.max(1, fights)).toFixed(2) + '/fight)');
     t.log('fights ' + fights + ', wins ' + wins);
     t.ok(fights > 0, 'simulated');
   });

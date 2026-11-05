@@ -2,9 +2,13 @@
  * ACT 2 regular enemies + encounters ("The Hauntwood & the Necromancy Academy (Accredited)": hauntwood, academy and
  * graveyard themes). Every id is prefixed 'a2_'.
  * v2 (initiative, no telegraphs): every enemy decides and acts on its own initiative turn, at once (move, then act).
- * Each def carries an `init` modifier and a `passive` line (the inspect panel's "what it does on its turn"). Leaps,
- * charges and the banshee's scream go off from where the unit stands at the start of its turn (no walk first), so
- * heroes counter them by where they end their own turn. The only announced wind-up is Mama Owlbear's Stomp (⏳).
+ * Each def carries an `init` modifier and a `passive` line (the inspect panel's "what it does on its turn", ending with
+ * how it picks its target). Leaps, charges and the banshee's scream go off from where the unit stands at the start of
+ * its turn (no walk first), so heroes counter them by where they end their own turn. The only announced wind-up is Mama
+ * Owlbear's Stomp (⏳). Targeting (DESIGN §8): brutes stick to the hero next to them, ranged and summoners keep their
+ * distance, only the wisp and the gargoyle are divers (they go for the weakest hero they can reach). Walks are move
+ * actions: they price the attacks of opportunity they would provoke (never a lethal one); leaps, charges, blinks, pulls
+ * and throws never provoke. Each enemy's first melee skill is its attack of opportunity.
  *   minion/normal: a2_skeleton_intern (Paper Cut Bleed, Coffee Run; leaves a Bone Pile that reassembles unless finished
  *     properly) · a2_zombie_unpaid (Grabby Hands: yank next to it + Root, then bites) · a2_brunch_cultist (Bottomless
  *     Mimosa heals, Scalding Latte burns, serves a2_hollandaise, which dies into an oil slick) · a2_wisp (teleports
@@ -38,11 +42,31 @@
   function nearestDist(p, list) { let d = Infinity; list.forEach(function (o) { d = Math.min(d, dist(p, o)); }); return d; }
   /** Still able to do something this turn (not dead, stunned or a sheep after a step onto a trap). */
   function canAct(u) { return active(u) && !DD.Combat.isStunned(u) && !has(u, 'sheep'); }
+  // v2 targeting styles (DESIGN §8 "Targeting", the engine's DD.AI.targetBonus): a brute sticks to the hero it is engaged
+  // with (next to it at the start of its turn), then weighs threat and damage; ranged / support units keep their distance
+  // (a melee hero next to them pins them); a diver goes for kills, the wounded and the squishy, wherever they stand
+  const BRUTE = { style: 'melee', keepDistance: 0 };
+  const SUPPORT = { style: 'support', keepDistance: 0 };
+  const PIXIE = { style: 'ranged', keepDistance: 2 };
+  const DIVER = { style: 'assassin', keepDistance: 0 };
   /** aiScore for leaps (Gutter Dive, Mama's Coming): they need a free tile next to the target, so never pick one that can't land. */
   function leapRoom(ctx) {
     const t = ctx.targetUnit, u = ctx.user;
     if (!t || !u) return 0;
     return dist(u, t) === 1 || DIRS.some(function (d) { return landable(t.x + d.x, t.y + d.y, u); }) ? 0 : -50;
+  }
+  /**
+   * aiScore part for area attacks that only hurt foes (strike foesOnly: the scream, the dive, glitter, Gary Throw).
+   * DD.AI's scoring takes 1.2 × its damage estimate off for every friend standing in an area (friendly fire; ai.js
+   * scoreAction) unless the skill is tagged 'safe', a tag the skill tooltip would print. This gives it back: without it
+   * Gary never threw at, and the banshee never screamed at, a hero a zombie was fighting (review v2).
+   */
+  function sparesFriends(ctx) {
+    const u = ctx.user, L = ctx.L;
+    if (!u || !L || !(L.dmg > 0)) return 0;
+    let back = 0;
+    (ctx.friends || []).forEach(function (o) { if (o !== u && active(o)) back += DD.AI.estimate(u, o, L.dmg, null) * 1.2; });
+    return back;
   }
 
   /**
@@ -66,7 +90,10 @@
     return out;
   }
 
-  /** BFS step distance from the targets over walkable tiles (units ignored): an approach field. */
+  /**
+   * BFS step distance from the targets over the tiles the unit could walk (an approach field): walkable terrain, steps
+   * it can climb, and no hostile unit in the way (a downed hero plugging a corridor too; friends can be passed).
+   */
   function fieldFrom(targets, unit) {
     const g = S().grid, d = new Array(g.w * g.h).fill(Infinity), q = [];
     targets.forEach(function (t) { const i = t.y * g.w + t.x; if (d[i] !== 0) { d[i] = 0; q.push(i); } });
@@ -74,7 +101,9 @@
       const i = q[h], x = i % g.w, y = (i / g.w) | 0;
       for (let k = 0; k < 4; k++) {
         const nx = x + DIRS[k].x, ny = y + DIRS[k].y;
-        if (!G().inBounds(nx, ny) || !G().isWalkable(nx, ny, unit)) continue;
+        if (!G().inBounds(nx, ny) || !G().isWalkable(nx, ny, unit) || !G().canStep(unit, { x: nx, y: ny }, { x: x, y: y })) continue;
+        const o = G().unitAt(nx, ny);
+        if (o && o !== unit && G().hostile(unit, o)) continue;
         const j = ny * g.w + nx;
         if (d[j] <= d[i] + 1) continue;
         d[j] = d[i] + 1;
@@ -91,14 +120,33 @@
     return A().teleport(unit, to.x, to.y);
   }
 
-  /** Move (once) toward the nearest foe, ideally ending `keep` tiles away; flyers may blink. */
+  /**
+   * Move (once) toward the nearest foe, ideally ending `keep` tiles away; flyers may blink. Melee (keep 1) heads for the
+   * nearest free tile next to a foe (a spot it can strike from), so friends crowding a hero send it round to the open
+   * side instead of queueing. A walk is a move action: the attacks of opportunity it would provoke are a cost
+   * (api.aooCost; a lethal one rules the tile out), so an enemy pinned by a melee hero stays put rather than stroll past
+   * it. A blink (teleport) provokes nothing.
+   */
   function closeIn(unit, api, keep, useBlink) {
     const foes = api.foes(unit);
     if (!foes.length || DD.Act.cantMove(unit)) return false;
-    const g = S().grid, field = fieldFrom(foes, unit), want = Math.max(1, keep || 1);
+    const g = S().grid, want = Math.max(1, keep || 1);
+    let goals = foes;
+    if (want === 1) {
+      const spots = [];
+      foes.forEach(function (f) {
+        DIRS.forEach(function (d) {
+          const x = f.x + d.x, y = f.y + d.y;
+          if ((x === unit.x && y === unit.y) || G().isFree(x, y, unit)) spots.push({ x: x, y: y });
+        });
+      });
+      if (spots.length) goals = spots;
+    }
+    const field = fieldFrom(goals, unit);
     const value = function (p) {
       let v = field[p.y * g.w + p.x];
       if (!isFinite(v)) v = 60 + nearestDist(p, foes);
+      if (goals !== foes) return v;   // steps to a striking spot
       const md = nearestDist(p, foes);
       return Math.abs(v - want) + (md < want ? (want - md) * 3 : 0);
     };
@@ -106,7 +154,9 @@
     let best = null, bestV = here;
     api.reachable(unit).forEach(function (e) {
       if (e.hazard || G().hazardAt(e.x, e.y, unit) || lethalPath(unit, e)) return;
-      const v = value(e) + e.cost * 0.01;
+      const aoo = useBlink ? 0 : api.aooCost(unit, e);
+      if (aoo === Infinity) return;
+      const v = value(e) + e.cost * 0.01 + aoo;
       if (v < bestV - 0.001) { best = e; bestV = v; }
     });
     if (!best) return false;
@@ -137,6 +187,18 @@
     return fire(unit, api, c);
   }
   function movedFrom(unit, start) { return unit.x !== start.x || unit.y !== start.y; }
+  /**
+   * A planner = DD.AI's reach-aware default turn in `style`, then, if it found nothing to do and did not move, one
+   * closeIn (keeping `keep` tiles) and an attack from there. The default approach's distance field ignores units, so a
+   * downed hero plugging a corridor stalls it in front of the plug; closeIn's field walks around (see fieldFrom).
+   */
+  function defaultThen(style, keep) {
+    return function (unit, api) {
+      const start = { x: unit.x, y: unit.y };
+      if (api.defaultTurn(unit, style) || !canAct(unit) || movedFrom(unit, start)) return;
+      if (closeIn(unit, api, keep) && canAct(unit)) fire(unit, api, api.bestAttack(unit, { noMove: true, style: style }));
+    };
+  }
 
   /** Shared straight-line charge path: up to L.len tiles, stops before walls/pits/cliffs/friends, ends on the first foe. */
   function chargeTiles(ctx) {
@@ -295,25 +357,61 @@
     }
   }
 
+  /**
+   * Map rotation (the machine is def.yawAware: its boxes stand on the view's ground quad): a point drawn at yaw 0 on its left
+   * ('L': the S side) or right ('R': the E side) face, put on that side's visible face f (exactly [px, py] at the default view).
+   */
+  function machinePt(f, side, px, py) {
+    if (DD.Iso.view().legacy) return [px, py];
+    const s = (side === 'L' ? px + 13 : px) / 13;
+    return f.at(s, 6.5 * (side === 'L' ? s : 1 - s) - py);
+  }
   function drawCoffeeMachine(g, obj, t) {
+    const c = g.ctx;
     g.ellipse(0, 3, 18, 8, 'rgba(0,0,0,0.3)');
     g.box(0, 0, 13, 6.5, 34, { top: '#c0392b', left: '#9aa1a8', right: '#7d848b' }, INK);   // steel body, red lid
     g.box(0, -34, 13, 6.5, 3, { top: '#d9493a', left: '#a5281c', right: '#8c2117' }, INK);
-    // the front (right) face: a menu screen, a glass pot, steam
-    g.poly([[2, -27.5], [11, -32], [11, -24], [2, -19.5]], '#1c2a2c', INK);
-    g.text('☕', 6.5, -25.6, 6, '#9fffb0');
-    const frac = obj && obj.maxHp ? obj.hp / obj.maxHp : 1;
-    g.circle(-6, -23, 2, frac > 0.5 ? '#59e08a' : frac > 0.25 ? '#ffd23f' : '#ff4a3a', INK);   // health light
-    g.rect(2.5, -14, 7, 8, 'rgba(200,230,240,0.55)', INK, 2);   // glass pot
-    g.rect(3, -11, 6, 4.6, 'rgba(110,62,26,0.95)', null, 1.5);
-    g.rect(3.4, -16, 5.2, 2, '#2a2a2a', null);
-    for (let i = 0; i < 2; i++) {
-      const p = (t * 0.7 + i / 2) % 1;
-      g.circle(5.5 + Math.sin(p * 7 + i) * 1.5, -17 - p * 18, 1.6 + p * 2, g.rgba('#ffffff', 0.45 * (1 - p)));
+    // each detail stays on its own side as the map turns (a side facing away hides it): the front (east; the right face by
+    // default) has the menu screen, the pot and the steam, the south side the health light and the sticky note
+    const fs = g.faces(0, 0, 13, 6.5);
+    let east = null, south = null;
+    fs.forEach(function (f) { if (f.dir === 'E') east = f; else if (f.dir === 'S') south = f; });
+    const PE = function (x, y) { return machinePt(east, 'R', x, y); }, PS = function (x, y) { return machinePt(south, 'L', x, y); };
+    // off the default view, upright billboards on the front narrow with it (k = its foreshortening)
+    const classic = DD.Iso.view().legacy, k = east ? Math.abs(east.x1 - east.x0) / 13 : 1;
+    if (east) {
+      g.poly([PE(2, -27.5), PE(11, -32), PE(11, -24), PE(2, -19.5)], '#1c2a2c', INK);
+      const m = PE(6.5, -25.6);
+      if (classic) g.text('☕', m[0], m[1], 6, '#9fffb0');
+      else { c.save(); c.translate(m[0], m[1]); c.scale(k, 1); g.text('☕', 0, 0, 6, '#9fffb0'); c.restore(); }
     }
-    g.poly([[-11, -21], [-5, -24], [-5, -19], [-11, -16]], '#ffe96a', null);   // sticky note: "LAST ONE. TOUCH IT AND DIE."
-    g.line(-10, -19.5, -6, -21.5, 'rgba(60,40,20,0.6)', 0.7);
-    if (frac <= 0.5) g.line(-3, -30, 1, -22, INK, 1);   // dented
+    const frac = obj && obj.maxHp ? obj.hp / obj.maxHp : 1;
+    if (south) { const p = PS(-6, -23); g.circle(p[0], p[1], 2, frac > 0.5 ? '#59e08a' : frac > 0.25 ? '#ffd23f' : '#ff4a3a', INK); }   // health light
+    if (east) {
+      const pot = PE(6, -6);
+      c.save();
+      if (classic) c.translate(pot[0] - 6, pot[1] + 6);
+      else { c.translate(pot[0], pot[1]); c.scale(k, 1); c.translate(-6, 6); }
+      g.rect(2.5, -14, 7, 8, 'rgba(200,230,240,0.55)', INK, 2);   // glass pot
+      g.rect(3, -11, 6, 4.6, 'rgba(110,62,26,0.95)', null, 1.5);
+      g.rect(3.4, -16, 5.2, 2, '#2a2a2a', null);
+      for (let i = 0; i < 2; i++) {
+        const p = (t * 0.7 + i / 2) % 1;
+        g.circle(5.5 + Math.sin(p * 7 + i) * 1.5, -17 - p * 18, 1.6 + p * 2, g.rgba('#ffffff', 0.45 * (1 - p)));
+      }
+      c.restore();
+    }
+    if (south) {
+      g.poly([PS(-11, -21), PS(-5, -24), PS(-5, -19), PS(-11, -16)], '#ffe96a', null);   // sticky note: "LAST ONE. TOUCH IT AND DIE."
+      const a = PS(-10, -19.5), b = PS(-6, -21.5);
+      g.line(a[0], a[1], b[0], b[1], 'rgba(60,40,20,0.6)', 0.7);
+    }
+    if (frac <= 0.5 && south && east) { const a = PS(-3, -30), b = PE(1, -22); g.line(a[0], a[1], b[0], b[1], INK, 1); }   // dented (the front corner)
+    // the back panel's vents (never seen from the default view): warranty void if peeked at
+    fs.forEach(function (f) {
+      if (f.dir !== 'N' && f.dir !== 'W') return;
+      for (let i = 0; i < 4; i++) { const a = f.at(0.25, 12 + i * 4), b = f.at(0.75, 12 + i * 4); g.line(a[0], a[1], b[0], b[1], 'rgba(40,42,48,0.75)', 1.2); }
+    });
   }
 
   // ---- objects -----------------------------------------------------------------------------------------
@@ -349,8 +447,9 @@
   DD.registerObject({
     id: PILE, name: 'Bone Pile', blocksMove: false, blocksLos: false, hp: 3, height: 0.35, color: '#e8e2cf', smashable: true,
     desc: 'A Skeleton Intern on its break. It stands back up (half HP) at the end of the next round, or the same round ' +
-      'while a Necromancer TA stands. A hero walking over it, a Smash or 3+ damage scatters it for good.',
-    autoplay: function (unit) { return unit && unit.side === 'hero' ? 9 : 0; },
+      'while a Necromancer TA stands. A hero walking over it (flying over it doesn\'t count), a Smash or 3+ damage scatters it for good.',
+    // a stomp is a floor effect (v2): flyers float over the pile
+    autoplay: function (unit) { return unit && unit.side === 'hero' && G().feelsFloor(unit) ? 9 : 0; },
     onEnter: function (unit, obj, tile) {
       if (!active(unit) || unit.side !== 'hero') return;
       DD.FX.text(tile, 'Crunch!', { color: '#fff4d0', size: 15 });
@@ -404,8 +503,9 @@
   });
 
   DD.registerObject({
-    id: 'a2_coffee_machine', name: 'Coffee Machine', blocksMove: true, blocksLos: false, hp: 24, height: 1.2, color: '#5a4a44',
-    desc: 'The last working coffee machine in the Academy (24 HP). If it breaks, finals week wins: defeat. Enemies will go for it.',
+    id: 'a2_coffee_machine', name: 'Coffee Machine', blocksMove: true, blocksLos: false, hp: 24, height: 1.2, color: '#5a4a44', yawAware: true,
+    desc: 'The last working coffee machine in the Academy (24 HP). If it breaks, finals week wins: defeat. Interns and zombies claw at it ' +
+      'from the tiles next to it: stand in their way.',
     onDestroyed: function () { A().log('The coffee machine dies. Somewhere, a wizard falls asleep mid-lecture, forever.', 'narrator'); },
     draw: drawCoffeeMachine,
   });
@@ -624,10 +724,10 @@
 
   DD.registerEnemy({ id: 'a2_skeleton_intern', name: 'Skeleton Intern', act: 2, tier: 'minion', hp: 13, mov: 4, armor: 0, init: 1,
     tags: ['undead', 'skeleton'], flags: {}, resist: { poison: 0 },
-    sprite: SPR.intern, skills: ['a2_intern_papercut', 'a2_intern_coffee'], ai: { style: 'melee' }, xp: 2, gold: [1, 2],
-    passive: { icon: '🦴', name: 'Reassembles', desc: 'Dies into a Bone Pile that stands back up at half HP at the end of the next round (the same round while a ' +
-      'Necromancer TA stands). Fire, holy damage, a fall, a hero stepping on the pile or a Smash end it for good. On its turn it walks up ' +
-      'and Paper Cuts, or lobs a Coffee Run from afar.' },
+    sprite: SPR.intern, skills: ['a2_intern_papercut', 'a2_intern_coffee'], ai: defaultThen(BRUTE, 1), aiStyle: 'melee', xp: 2, gold: [1, 2],
+    passive: { icon: '🦴', name: 'Reassembles', desc: 'Dies into a Bone Pile that stands back up at half HP at the end of the next round (same round while a ' +
+      'Necromancer TA stands). Fire or holy damage, a fall, stepping on the pile or a Smash end it. On its turn it Paper Cuts the hero ' +
+      'next to it (it sticks to that one) or lobs a Coffee Run.' },
     hooks: {
       onCombatStart: function (unit) { intro(unit, 0.15); },
       onDeath: function (unit, d) {
@@ -666,12 +766,29 @@
     flavor: 'Three hundred years, no raise, no weekends, one very long lunch break.',
     execute: function (ctx) { lunge(ctx); say(ctx); strike(ctx, ctx.L.dmg, { objects: true }); } });
 
+  /** The first unit between a straight-line grab's target and the zombie (the pull bonks the target into it), or null. */
+  function grabBlocker(user, t) {
+    const dx = Math.sign(user.x - t.x), dy = Math.sign(user.y - t.y);
+    if ((dx && dy) || (!dx && !dy)) return null;
+    for (let x = t.x + dx, y = t.y + dy; x !== user.x || y !== user.y; x += dx, y += dy) {
+      const o = G().unitAt(x, y);
+      if (o) return o;
+    }
+    return null;
+  }
   // v2: the grab is pull + Root (its 4 damage went: one verb, one rider). The bite comes on the zombie's next turn.
   eskill({ id: 'a2_zombie_grab', name: 'Grabby Hands', icon: '✋', kind: 'attack', tags: ['ranged', 'pull', 'root'], anchor: 'unit', cooldown: 2,
     levels: [{ pull: 3, turns: 1 }], target: { type: 'unit', range: [2, 4], filter: 'enemy', los: true, straight: true },
     desc: function (L) { return 'Yank a foe 2-4 tiles away in a straight line up to ' + L.pull + ' tiles toward it and Root it (it can\'t move on its next turn).'; },
     flavor: 'The new hire is always the first to be grabbed for a "quick task".',
-    aiScore: function (ctx) { const t = ctx.targetUnit; return !t || DD.Act.isImmovable(t) ? -50 : 2; },
+    // never through a coworker: the hero would only bonk into it (3 damage to both) and stay out of biting reach
+    // (review v2: a third of the grabs in sims did that, the zombie's friends crowding the hero it could not reach)
+    aiScore: function (ctx) {
+      const t = ctx.targetUnit, u = ctx.user;
+      if (!t || !u || DD.Act.isImmovable(t)) return -50;
+      const b = grabBlocker(u, t);
+      return b && !G().hostile(u, b) ? -50 : 2;
+    },
     execute: function (ctx) {
       const u = ctx.targetUnit, user = ctx.user;
       if (!active(u) || !active(user) || !G().hostile(user, u)) return;
@@ -683,9 +800,10 @@
 
   DD.registerEnemy({ id: 'a2_zombie_unpaid', name: 'Zombie (Unpaid)', act: 2, tier: 'normal', hp: 28, mov: 3, armor: 0, init: -2,
     tags: ['undead', 'zombie'], flags: {}, resist: { fire: 1.5, poison: 0 },
-    sprite: SPR.zombie, skills: ['a2_zombie_overtime', 'a2_zombie_grab'], ai: { style: 'melee' }, xp: 5, gold: [2, 4],
-    passive: { icon: '✋', name: 'Grab, Then Bite', desc: 'On its turn it bites a hero next to it (7). A hero 2-4 tiles away in a straight line gets yanked ' +
-      'toward it and Rooted instead, so the bite comes next turn. Slow (move 3), weak to fire.' },
+    sprite: SPR.zombie, skills: ['a2_zombie_overtime', 'a2_zombie_grab'], ai: defaultThen(BRUTE, 1), aiStyle: 'melee', xp: 5, gold: [2, 4],
+    passive: { icon: '✋', name: 'Grab, Then Bite', desc: 'On its turn it bites the hero next to it (7) and sticks to that one. A hero 2-4 tiles away in a ' +
+      'straight line gets yanked up to 3 tiles toward it and Rooted instead (never through a coworker): the bite comes next turn. Slow ' +
+      '(move 3), weak to fire.' },
     hooks: { onCombatStart: function (unit) { intro(unit, 0.15); } },
     barks: {
       spawn: ['Brainsss... and dental...', 'Clock... in...', 'Shift... starts... now...'],
@@ -693,7 +811,7 @@
       hurt: ['Not... the... face...', 'Workers\'... comp...', 'Ow. Probably.'],
       death: ['Finally... a... day... off...', 'Tell HR... I quit...', 'Weekend... at last...'],
     },
-    desc: 'Slow, but Grabby Hands yanks a hero 2-4 tiles away (in a straight line) next to it and Roots it; the bite follows. Weak to fire. ' +
+    desc: 'Slow, but Grabby Hands yanks a hero 2-4 tiles away (in a straight line) toward it and Roots it; the bite follows. Weak to fire. ' +
       'Has worked here for 300 years without a raise and no longer remembers what weekends are.' });
 
   // =====================================================================================================
@@ -738,9 +856,9 @@
 
   DD.registerEnemy({ id: 'a2_brunch_cultist', name: 'Cultist of the Forbidden Brunch', act: 2, tier: 'normal', hp: 26, mov: 3, armor: 0, init: 0,
     tags: ['human', 'cultist'], flags: {}, resist: {},
-    sprite: SPR.cultist, skills: ['a2_cultist_mimosa', 'a2_cultist_latte', 'a2_cultist_summon'], ai: { style: 'support' }, xp: 5, gold: [3, 5],
+    sprite: SPR.cultist, skills: ['a2_cultist_mimosa', 'a2_cultist_latte', 'a2_cultist_summon'], ai: defaultThen(SUPPORT, 2), aiStyle: 'support', xp: 5, gold: [3, 5],
     passive: { icon: '🥂', name: 'Brunch Host', desc: 'On its turn it heals the most hurt ally with a Bottomless Mimosa (8), serves a Hollandaise Horror ' +
-      '(twice per fight) or throws a Scalding Latte, keeping near its friends and out of melee.' },
+      '(twice per fight) or throws a Scalding Latte at a hero in range. It stays near its friends, out of melee.' },
     hooks: { onCombatStart: function (unit) { intro(unit, 0.2); } },
     barks: {
       spawn: ['Welcome to Brunch. You may never leave.', 'Mimosa? It\'s mandatory.', 'Have you accepted Eggs Benedict?'],
@@ -759,8 +877,9 @@
 
   DD.registerEnemy({ id: 'a2_hollandaise', name: 'Hollandaise Horror', act: 2, tier: 'minion', hp: 12, mov: 4, armor: 0, init: 1,
     tags: ['ooze', 'brunch'], flags: {}, resist: { fire: 1.5 },
-    sprite: SPR.hollandaise, skills: ['a2_hollandaise_slap'], ai: { style: 'melee' }, xp: 1, gold: [0, 1],
-    passive: { icon: '🧈', name: 'Broken Sauce', desc: 'Dies into a flammable oil slick (radius 1): bring fire. On its turn it oozes up and slaps.' },
+    sprite: SPR.hollandaise, skills: ['a2_hollandaise_slap'], ai: defaultThen(BRUTE, 1), aiStyle: 'melee', xp: 1, gold: [0, 1],
+    passive: { icon: '🧈', name: 'Broken Sauce', desc: 'Dies into a flammable oil slick (radius 1): bring fire. On its turn it slaps the hero next to it ' +
+      '(it sticks to that one) or oozes up to one.' },
     hooks: {
       onDeath: function (unit, d) {
         if (d.cause === 'fall') return;
@@ -779,11 +898,13 @@
   // =====================================================================================================
   // Will-o'-the-Wisp — teleports, chain lightning, Lure
   // =====================================================================================================
+  // v2: one jump (was two): without a telegraph to spread out from, a zap into a party holding the line hit three heroes
+  // every turn (18 damage a turn from a normal enemy)
   eskill({ id: 'a2_wisp_zap', name: 'Swamp Gas Zap', icon: '⚡', kind: 'spell', tags: ['ranged', 'lightning', 'chain'], anchor: 'unit',
     aiScore: hoverScore,
-    levels: [{ dmg: 6, jumps: 2, reach: 2 }], target: { type: 'unit', range: [1, 6], filter: 'enemy', los: true },
+    levels: [{ dmg: 6, jumps: 1, reach: 2 }], target: { type: 'unit', range: [1, 6], filter: 'enemy', los: true },
     area: { shape: 'custom', fn: chainTiles },
-    desc: function (L) { return 'Deal ' + L.dmg + ' lightning damage to the target, then the bolt jumps to the nearest other unit within ' + L.reach + ' tiles, up to ' + L.jumps + ' times (friend or foe).'; },
+    desc: function (L) { return 'Deal ' + L.dmg + ' lightning damage to the target, then the bolt jumps to the nearest other unit within ' + L.reach + ' tiles (friend or foe) for ' + L.dmg + ' more.'; },
     flavor: 'It\'s not a hazard, it\'s a light show. Spread out.',
     execute: function (ctx) {
       const user = ctx.user;
@@ -797,12 +918,16 @@
       });
     } });
 
-  /** Damage a hero would take from being swapped onto the wisp's tile: a fall (pit, deep water: 25% max HP) or lava (8). */
+  /**
+   * Damage a hero would take from being swapped onto the wisp's tile: a fall (pit, deep water: 25% max HP) or lava (8).
+   * A flyer just hovers there (v2: flyers ignore the floor), and lava that can't hurt the target is nothing.
+   */
   function lureValue(wisp, target) {
-    if (!wisp || !target) return 0;
+    if (!wisp || !target || G().isFlying(target)) return 0;
     if (G().isDrop(wisp.x, wisp.y)) return Math.max(1, Math.ceil(target.maxHp * 0.25));
     const t = G().tile(wisp.x, wisp.y);
-    if (t && G().terrain(t).liquid === 'lava') return 8;
+    const td = t ? G().terrain(t) : null;
+    if (td && td.liquid === 'lava' && !G().harmlessTo(td, null, target)) return 8;
     return 0;
   }
   /** A tile the wisp likes to end its turn over: a pit, deep water or lava (its next turn's Lure). */
@@ -814,8 +939,17 @@
     const sl = DD.Combat.slotsOf(u).filter(function (s) { return s.id === 'a2_wisp_lure'; })[0];
     return !!sl && (sl.cd || 0) <= 1;
   }
-  /** Zap aiScore: zap from over a pit / deep water / lava when the Lure is ready next turn (bestAttack scores each spot). */
-  function hoverScore(ctx) { return ctx.user && lureSpot(ctx.user.x, ctx.user.y) && lureSoon(ctx.user) ? 2 : 0; }
+  /**
+   * Zap aiScore, scored for every spot it could blink to (bestAttack places it there): it hovers 3+ tiles from every hero
+   * (−2 for each tile closer: a diver's pick from a sniper's distance), and over a pit / deep water / lava when the Lure
+   * is ready by its next turn (+2).
+   */
+  function hoverScore(ctx) {
+    const u = ctx.user;
+    if (!u) return 0;
+    const near = nearestDist(u, DD.AI.targetsFor(u));
+    return (lureSpot(u.x, u.y) && lureSoon(u) ? 2 : 0) - (near < 3 ? (3 - near) * 2 : 0);
+  }
   eskill({ id: 'a2_wisp_lure', name: 'Lure', icon: '🏮', kind: 'spell', tags: ['teleport', 'swap'], anchor: 'unit', cooldown: 3,
     levels: [{ r: 4 }], target: { type: 'unit', range: [1, 4], filter: 'enemy', los: false },
     desc: function (L) { return 'Swap places with a foe up to ' + L.r + ' tiles away: it lands where the wisp was hovering (pits and deep water included). Fails on immovable units.'; },
@@ -838,8 +972,9 @@
 
   /**
    * Its turn: hovering over a pit / deep water / lava with Lure ready → lure a hero within 4 into it (no blink first).
-   * Otherwise blink into zap range (preferring to end over such a tile, so next turn's Lure is a threat you can see) and
-   * zap; nobody in reach → drift closer.
+   * Otherwise blink into zap range of the weakest hero it can reach (a diver: kills, the wounded, the squishy), 3+ tiles
+   * from the heroes, preferring to end over such a tile (next turn's Lure is a threat you can see), and zap; nobody in
+   * reach → drift closer. Blinks are teleports: they never provoke attacks of opportunity (and flags.noProvoke says so).
    */
   function wispPlan(unit, api) {
     const start = { x: unit.x, y: unit.y };
@@ -853,10 +988,11 @@
   }
 
   DD.registerEnemy({ id: 'a2_wisp', name: 'Will-o\'-the-Wisp', act: 2, tier: 'normal', hp: 24, mov: 4, armor: 0, init: 3,
-    tags: ['fey', 'spirit'], flags: { flying: true }, resist: { lightning: 0, poison: 0, frost: 1.5 },
-    sprite: SPR.wisp, skills: ['a2_wisp_zap', 'a2_wisp_lure'], ai: wispPlan, aiStyle: { style: 'ranged', keepDistance: 3 }, xp: 5, gold: [2, 5],
-    passive: { icon: '🏮', name: 'Follow the Pretty Light', desc: 'Teleports instead of walking and likes to hover over pits and deep water. If its turn ' +
-      'starts over one with Lure ready, it swaps a hero within 4 tiles into it; otherwise it zaps. The zap chains to the nearest unit within 2, twice: spread out.' },
+    tags: ['fey', 'spirit'], flags: { flying: true, noProvoke: true }, resist: { lightning: 0, poison: 0, frost: 1.5 },
+    sprite: SPR.wisp, skills: ['a2_wisp_zap', 'a2_wisp_lure'], ai: wispPlan, aiStyle: 'skirmisher', xp: 5, gold: [2, 5],
+    passive: { icon: '🏮', name: 'Follow the Pretty Light', desc: 'Sneaky: on its turn it blinks (never provoking) to 3+ tiles from the heroes and zaps the ' +
+      'weakest one it can reach; the zap jumps on to the nearest unit within 2. If its turn starts over a pit or deep water with Lure ready, it ' +
+      'swaps a walking hero within 4 into it instead (flyers just hover).' },
     hooks: { onCombatStart: function (unit) { intro(unit, 0.2); } },
     barks: {
       spawn: ['Follow meeee!', 'Pretty, isn\'t it?', 'This way to treasure! Probably!'],
@@ -864,8 +1000,9 @@
       hurt: ['You can\'t hurt a feeling!', 'Flicker!', 'Ow, my glow!'],
       death: ['The light... was a lie...', '*fizzles out*', 'Don\'t follow... other... lights...'],
     },
-    desc: 'Teleports instead of walking. Swamp Gas Zap chains to the nearest unit within 2 tiles, twice: spread out. Lure swaps it with a hero, ' +
-      'so never end your turn within 4 tiles of a wisp hovering over a pit or deep water. Immune to lightning. Has a 0% success rate as a life coach.' });
+    desc: 'Teleports instead of walking, so it can\'t be pinned, and picks on the weakest hero. Swamp Gas Zap jumps on to the nearest unit within 2 ' +
+      'tiles: spread out. Lure swaps it with a hero, so never end your turn within 4 tiles of a wisp hovering over a pit or deep water (unless you fly). Immune to ' +
+      'lightning. Has a 0% success rate as a life coach.' });
 
   // =====================================================================================================
   // Owlbear Cub — charge
@@ -883,20 +1020,25 @@
     flavor: 'Teething. On you.',
     execute: function (ctx) { lunge(ctx); say(ctx); strike(ctx, ctx.L.dmg); } });
 
-  /** Its turn: a foe in a straight line from where it stands → CHARGE (no walk first); otherwise walk up and nibble. */
+  /**
+   * Its turn: a foe in a straight line from where it stands → CHARGE (no walk first; a dash, so it provokes nothing);
+   * otherwise walk up and nibble. A brute: the hero next to it is its first pick for either.
+   */
   function cubPlan(unit, api) {
-    const melee = { style: 'melee', keepDistance: 0 }, start = { x: unit.x, y: unit.y };
-    if (api.canUse(unit, 'a2_cub_charge') && fire(unit, api, api.bestAttack(unit, { skills: ['a2_cub_charge'], noMove: true, style: melee }))) return;
+    const start = { x: unit.x, y: unit.y };
+    if (api.canUse(unit, 'a2_cub_charge') && fire(unit, api, api.bestAttack(unit, { skills: ['a2_cub_charge'], noMove: true, style: BRUTE }))) return;
     if (!canAct(unit)) return;
-    if (api.canUse(unit, 'a2_cub_nibble') && go(unit, api, api.bestAttack(unit, { skills: ['a2_cub_nibble'], style: melee }), { style: melee })) return;
+    if (api.canUse(unit, 'a2_cub_nibble') && go(unit, api, api.bestAttack(unit, { skills: ['a2_cub_nibble'], style: BRUTE }), { style: BRUTE })) return;
     if (canAct(unit) && !movedFrom(unit, start)) closeIn(unit, api, 1);
   }
 
+  // the Nibble is listed first: it is the cub's attack of opportunity (the charge is not a reaction)
   DD.registerEnemy({ id: 'a2_owlbear_cub', name: 'Owlbear Cub', act: 2, tier: 'normal', hp: 26, mov: 4, armor: 0, init: 2,
     tags: ['beast', 'owlbear'], flags: {}, resist: {},
-    sprite: SPR.cub, skills: ['a2_cub_charge', 'a2_cub_nibble'], ai: cubPlan, aiStyle: 'melee', xp: 5, gold: [2, 4],
+    sprite: SPR.cub, skills: ['a2_cub_nibble', 'a2_cub_charge'], ai: cubPlan, aiStyle: 'melee', xp: 5, gold: [2, 4],
     passive: { icon: '🐻', name: 'Straight-Line Hugger', desc: 'On its turn it charges a hero in a straight line up to 4 tiles from where it stands ' +
-      '(stopped by walls, pits, objects and its friends). Nobody in line: it walks up and nibbles. End your turn off its lines.' },
+      '(stopped by walls, pits, objects and its friends), else it nibbles the hero next to it (it sticks to that one) or walks up to one. ' +
+      'End your turn off its lines.' },
     hooks: {
       onCombatStart: function (unit) { intro(unit, 0.2); },
       onDeath: function (unit, d) { unit.data.killerId = d.credit && d.credit !== unit ? d.credit.id : null; },
@@ -911,10 +1053,11 @@
       'Its mother is never far away. Do not make eye contact. Do not boop.' });
 
   // =====================================================================================================
-  // Banshee (Wants to Speak to the Manager) — wind-up cone stun
+  // Banshee (Wants to Speak to the Manager) — cone stun
   // =====================================================================================================
   // v2: no wind-up (normal enemies don't telegraph), so the cone shrank from 3 tiles to 2 and she screams from where she floats
   eskill({ id: 'a2_banshee_scream', name: 'Speak to the Manager', icon: '📢', kind: 'spell', tags: ['aoe', 'stun', 'cone'], anchor: 'self', cooldown: 3,
+    aiScore: sparesFriends,
     levels: [{ dmg: 6, len: 2, turns: 1 }], target: { type: 'dir' }, area: { shape: 'cone', size: function (L) { return L.len; } },
     desc: function (L) { return 'Deal ' + L.dmg + ' damage to foes in a ' + L.len + '-tile cone and Stun them (they lose their next turn).'; },
     flavor: 'She has been on hold since the Bronze Age.',
@@ -946,12 +1089,13 @@
     return !!sl && (sl.cd || 0) <= 1;
   }
   /**
-   * Her turn: heroes in her cone from where she floats → she screams (no move first). Otherwise she floats in and leaves
-   * a One-Star Review: to 2 tiles from a hero while her voice is ready (next turn's scream), else 3.
+   * Her turn: heroes in her cone from where she floats → she screams (no move first). Otherwise she keeps her distance
+   * (ranged): she floats to 2 tiles from a hero while her voice is ready (next turn's scream), else 3, and leaves a
+   * One-Star Review. A melee hero next to her pins her: floating off provokes, so she reviews (or screams at) him.
    */
   function bansheePlan(unit, api) {
     const start = { x: unit.x, y: unit.y };
-    if (api.canUse(unit, 'a2_banshee_scream') && fire(unit, api, api.bestAttack(unit, { skills: ['a2_banshee_scream'], noMove: true, style: { style: 'melee', keepDistance: 0 } }))) return;
+    if (api.canUse(unit, 'a2_banshee_scream') && fire(unit, api, api.bestAttack(unit, { skills: ['a2_banshee_scream'], noMove: true, style: BRUTE }))) return;
     if (!canAct(unit)) return;
     const style = { style: 'ranged', keepDistance: screamSoon(unit) ? 2 : 3 };
     if (api.canUse(unit, 'a2_banshee_review') && go(unit, api, api.bestAttack(unit, { skills: ['a2_banshee_review'], style: style }), { style: style })) return;
@@ -962,7 +1106,8 @@
     tags: ['undead', 'spirit'], flags: { flying: true }, resist: { poison: 0, holy: 1.5 },
     sprite: SPR.banshee, skills: ['a2_banshee_scream', 'a2_banshee_review'], ai: bansheePlan, aiStyle: { style: 'ranged', keepDistance: 2 }, xp: 6, gold: [3, 5],
     passive: { icon: '📢', name: 'Wants the Manager', desc: 'On her turn she screams at every hero in her 2-tile cone from where she floats (6 + Stun, ' +
-      'cooldown 3). Otherwise she floats up to 2-3 tiles from a hero and leaves a One-Star Review. Do not end your turn next to her.' },
+      'cooldown 3). Otherwise she keeps her distance: she floats to 2-3 tiles from a hero and leaves a One-Star Review. Don\'t end your turn ' +
+      'within 2 tiles of her.' },
     hooks: { onCombatStart: function (unit) { intro(unit, 0.35); } },
     barks: {
       spawn: ['I\'d like to speak to the manager.', 'Excuse me. EXCUSE ME.', 'Is this how you treat customers?'],
@@ -977,7 +1122,7 @@
   // Gargoyle — dive, then stone form
   // =====================================================================================================
   eskill({ id: 'a2_gargoyle_dive', name: 'Gutter Dive', icon: '🌧️', kind: 'attack', tags: ['aoe', 'leap'], anchor: 'unit',
-    aiScore: leapRoom,
+    aiScore: function (ctx) { return leapRoom(ctx) + sparesFriends(ctx); },
     levels: [{ dmg: 8 }], target: { type: 'unit', range: [1, 5], filter: 'enemy', los: false }, area: { shape: 'circle', size: 1 },
     desc: function (L) { return 'Swoop at a foe up to 5 tiles away: land on a free tile next to it and deal ' + L.dmg + ' damage to it and every foe next to it (no free tile: no dive).'; },
     flavor: 'Hired as a rain gutter. Promoted to "menace".',
@@ -1017,14 +1162,15 @@
     } });
 
   /**
-   * Its turn: a statue does nothing. Otherwise it dives on a hero within 5 tiles of its perch (no walk first) and turns
-   * to stone right after; nobody in reach → it walks closer.
+   * Its turn: a statue does nothing. Otherwise it dives (a leap: no attack of opportunity) on the weakest hero within 5
+   * tiles of its perch (a diver: kills, the wounded, the squishy; no walk first) and turns to stone right after; nobody
+   * in reach → it walks closer.
    */
   function gargoylePlan(unit, api) {
     stoneLook(unit);
     if (has(unit, 'a2_stoneform')) { DD.FX.text(unit, '🗿 ...', { color: '#c8ccd4', size: 14 }); return; }
     if (api.canUse(unit, 'a2_gargoyle_dive') && !DD.Act.cantMove(unit) &&
-        fire(unit, api, api.bestAttack(unit, { skills: ['a2_gargoyle_dive'], noMove: true, style: { style: 'melee', keepDistance: 0 } }))) {
+        fire(unit, api, api.bestAttack(unit, { skills: ['a2_gargoyle_dive'], noMove: true, style: DIVER }))) {
       if (canAct(unit) && api.canUse(unit, 'a2_gargoyle_stone')) api.act(unit, 'a2_gargoyle_stone', unit, {});
       return;
     }
@@ -1033,9 +1179,9 @@
 
   DD.registerEnemy({ id: 'a2_gargoyle', name: 'Gargoyle', act: 2, tier: 'normal', hp: 28, mov: 3, armor: 1, init: -1,
     tags: ['construct', 'stone'], flags: {}, resist: { poison: 0 },
-    sprite: SPR.gargoyle, skills: ['a2_gargoyle_dive', 'a2_gargoyle_stone'], ai: gargoylePlan, aiStyle: 'melee', xp: 6, gold: [3, 5],
-    passive: { icon: '🗿', name: 'Swoop, Then Statue', desc: 'On its turn it dives on a hero within 5 tiles of where it perches (8 to it and every hero ' +
-      'next to it), then turns to stone until the end of its next turn: 75% less damage, and that turn it does nothing. Hit it while it is flesh.' },
+    sprite: SPR.gargoyle, skills: ['a2_gargoyle_dive', 'a2_gargoyle_stone'], ai: gargoylePlan, aiStyle: 'assassin', xp: 6, gold: [3, 5],
+    passive: { icon: '🗿', name: 'Swoop, Then Statue', desc: 'Sneaky: on its turn it dives on the weakest hero within 5 tiles of where it perches (8 to it ' +
+      'and every hero next to it), then turns to stone until the end of its next turn: 75% less damage, and that turn it does nothing.' },
     hooks: {
       onCombatStart: function (unit) { intro(unit, 0.15); },
       onRoundStart: function (unit) { stoneLook(unit); },
@@ -1052,13 +1198,14 @@
       death: ['*crumbles into gravel*', 'Finally... a demolition permit...', 'Tell the pigeons... I\'m sorry...'],
       stone: ['*becomes extremely still*', 'I\'m a statue now. Move along.'],
     },
-    desc: 'Swoops down next to a hero within 5 tiles (hitting it and every hero next to it), then turns to stone until the end of its next turn: ' +
+    desc: 'Swoops down on the weakest hero within 5 tiles (hitting it and every hero next to it), then turns to stone until the end of its next turn: ' +
       '75% less damage, no attacks. Hit it while it\'s flesh, or shove the statue into a pit. The pigeons consider it their landlord.' });
 
   // =====================================================================================================
   // Pixie Swarm — dazzle, swarm
   // =====================================================================================================
   eskill({ id: 'a2_pixie_glitter', name: 'Glitter Bomb', icon: '✨', kind: 'spell', tags: ['aoe', 'ranged', 'dazzle'], anchor: 'unit', cooldown: 1,
+    aiScore: sparesFriends,
     levels: [{ dmg: 5, turns: 1 }], target: { type: 'unit', range: [1, 5], filter: 'enemy', los: false }, area: { shape: 'circle', size: 1 },
     desc: function (L) { return 'Throw glitter at a foe up to 5 tiles away: ' + L.dmg + ' damage to it and every foe next to it, and Dazzle them (−1 range on their next turn).'; },
     flavor: 'Glitter is forever. So is this fight, apparently.',
@@ -1081,9 +1228,9 @@
 
   DD.registerEnemy({ id: 'a2_pixie_swarm', name: 'Pixie Swarm', act: 2, tier: 'normal', hp: 24, mov: 4, armor: 0, init: 4,
     tags: ['fey', 'swarm'], flags: { flying: true }, resist: {},
-    sprite: SPR.pixies, skills: ['a2_pixie_glitter', 'a2_pixie_bite'], ai: { style: 'ranged', keepDistance: 2 }, xp: 5, gold: [2, 5],
-    passive: { icon: '🧚', name: 'Swarm', desc: 'Single-target skills deal half damage to it; area attacks hit in full. On its turn it throws a Glitter ' +
-      'Bomb from 2+ tiles away (every other turn); in between it flies in and bites.' },
+    sprite: SPR.pixies, skills: ['a2_pixie_glitter', 'a2_pixie_bite'], ai: defaultThen(PIXIE, 2), aiStyle: PIXIE, xp: 5, gold: [2, 5],
+    passive: { icon: '🧚', name: 'Swarm', desc: 'Single-target skills deal half damage to it; area attacks hit in full. On its turn it keeps its distance ' +
+      'and throws a Glitter Bomb from 2+ tiles away (every other turn); in between it flies in and bites.' },
     hooks: {
       onCombatStart: function (unit) { intro(unit, 0.2); },
       modifyIncomingDamage: function (d) { if (d.cause === 'skill' && singleTarget(d.skill)) d.mult *= 0.5; },
@@ -1183,19 +1330,20 @@
     return DD.AI.targetsFor(unit).filter(function (f) { return dist(f, unit) <= r; }).length;
   }
   /**
-   * Her turn: a Pounce from where she stands (no walk first) or walk up and Maul, whichever hurts more. Then, with 2+
-   * foes within 2 tiles, she winds up the Stomp (her one announced attack): it lands at the start of her next turn.
+   * Her turn: a Pounce from where she stands (a leap: no walk first, nothing provoked) or walk up and Maul, whichever
+   * hurts more; a brute, so the hero next to her comes first (a Vendetta trumps that). Then, with 2+ foes within 2
+   * tiles, she winds up the Stomp (her one announced attack): it lands at the start of her next turn.
    */
   function mamaPlan(unit, api) {
-    const melee = { style: 'melee', keepDistance: 0 };   // the pounce's reach must not make her hang back like an archer
     const start = { x: unit.x, y: unit.y };
-    let best = api.canUse(unit, 'a2_mama_maul') ? api.bestAttack(unit, { skills: ['a2_mama_maul'], style: melee }) : null;
+    // BRUTE: the pounce's reach must not make her hang back like an archer
+    let best = api.canUse(unit, 'a2_mama_maul') ? api.bestAttack(unit, { skills: ['a2_mama_maul'], style: BRUTE }) : null;
     if (api.canUse(unit, 'a2_mama_pounce') && !DD.Act.cantMove(unit)) {
       // compared on the action alone: the pounce's own leap puts her next to its target anyway
-      const p = api.bestAttack(unit, { skills: ['a2_mama_pounce'], noMove: true, style: melee });
+      const p = api.bestAttack(unit, { skills: ['a2_mama_pounce'], noMove: true, style: BRUTE });
       if (p && (!best || p.actionScore > best.actionScore)) best = p;
     }
-    if (!go(unit, api, best, { style: melee }) && canAct(unit) && !movedFrom(unit, start)) closeIn(unit, api, 1);
+    if (!go(unit, api, best, { style: BRUTE }) && canAct(unit) && !movedFrom(unit, start)) closeIn(unit, api, 1);
     if (canAct(unit) && api.canUse(unit, 'a2_mama_stomp') && crowd(unit) >= 2) {
       api.windUp(unit, 'a2_mama_stomp', unit, { anchor: 'self', banner: 'Mama Owlbear rears up! Get clear, or Stun her.' });
       A().maybeBark(unit, 'stomp', 0.7);
@@ -1205,8 +1353,9 @@
   DD.registerEnemy({ id: 'a2_mama_owlbear', name: 'Mama Owlbear', act: 2, tier: 'elite', hp: 110, mov: 4, armor: 1, init: 1,
     tags: ['beast', 'owlbear'], flags: { large: true, immovable: true }, resist: {},
     sprite: SPR.mama, skills: ['a2_mama_maul', 'a2_mama_pounce', 'a2_mama_stomp'], ai: mamaPlan, aiStyle: 'melee', xp: 16, gold: [10, 15],
-    passive: { icon: '😡', name: 'Mama Bear', desc: 'On her turn she pounces on a hero within 5 tiles of where she stands, or walks up and mauls. With 2+ ' +
-      'heroes within 2 tiles she rears up: ⏳ the Stomp lands at the start of her next turn. Kill a cub and she swears a Vendetta on you.' },
+    passive: { icon: '😡', name: 'Mama Bear', desc: 'On her turn she mauls the hero next to her (she sticks to that one), walks up to maul, or pounces on ' +
+      'a hero within 5 tiles of where she stands. With 2+ heroes within 2 tiles she then rears up: ⏳ the Stomp lands at the start of her next ' +
+      'turn. Kill a cub and she swears a Vendetta on you.' },
     hooks: {
       onCombatStart: function (unit) { intro(unit, 1); },
       onAllyDeath: function (unit, dead) {
@@ -1247,13 +1396,17 @@
       if (active(u)) A().addStatus(u, 'vulnerable', { turns: ctx.L.turns }, ctx.user);
     } });
 
+  /** Raise Dead's tiles: the target, then the nearest empty tiles to it that are still within the skill's range of the TA. */
   function raiseTiles(ctx) {
-    const t = ctx.target, out = [];
+    const t = ctx.target, u = ctx.user, out = [];
     if (!t) return out;
     out.push({ x: t.x, y: t.y });
     const n = (ctx.L && ctx.L.n) || 2;
+    const rg = u ? DD.Targeting.range(u, ctx.skill, ctx.level) : null;
     G().emptyTilesNear(t.x, t.y, 2).forEach(function (p) {
-      if (out.length < n && (p.x !== t.x || p.y !== t.y) && !G().isDrop(p.x, p.y) && !G().hazardAt(p.x, p.y)) out.push(p);
+      if (out.length >= n || (p.x === t.x && p.y === t.y) || G().isDrop(p.x, p.y) || G().hazardAt(p.x, p.y)) return;
+      if (rg && (dist(p, u) < rg[0] || dist(p, u) > rg[1])) return;   // "1-3 tiles away" (review v2: the second one could land 4-5 off)
+      out.push(p);
     });
     return out;
   }
@@ -1303,19 +1456,12 @@
     })[0] || null;
   }
   /**
-   * His turn: the Red Pen (walking into range first, keeping 2+ tiles away), then one spell if one is ready: Raise Dead
-   * when there are Bone Piles or fewer than 2 interns, else Detention on the closest hero within 3.
+   * His turn, one thing (v2: he used to Red Pen AND cast every turn): Raise Dead when it is ready and there are Bone
+   * Piles or fewer than 2 interns; else Detention on the closest hero within 3; else the Red Pen (walking into range
+   * first, keeping 2+ tiles away).
    */
   function taPlan(unit, api) {
     const style = { style: 'summoner', keepDistance: 2 };
-    const start = { x: unit.x, y: unit.y };
-    const penned = api.canUse(unit, 'a2_ta_redpen') && go(unit, api, api.bestAttack(unit, { skills: ['a2_ta_redpen'], style: style }), { style: style });
-    if (!canAct(unit)) return;
-    if (!penned && !movedFrom(unit, start)) {
-      closeIn(unit, api, 3);
-      if (canAct(unit) && api.canUse(unit, 'a2_ta_redpen')) fire(unit, api, api.bestAttack(unit, { skills: ['a2_ta_redpen'], noMove: true, style: style }));
-    }
-    if (!canAct(unit)) return;
     const interns = DD.Combat.active('enemy').filter(function (u) { return u.defId === 'a2_skeleton_intern'; }).length;
     if (api.canUse(unit, 'a2_ta_raise') && (pileTiles().length > 0 || interns < 2)) {
       const spot = raiseSpot(unit, api);
@@ -1324,15 +1470,21 @@
     if (api.canUse(unit, 'a2_ta_detention')) {
       const pest = api.foes(unit).filter(function (f) { return dist(f, unit) <= 3; })
         .sort(function (a, b) { return dist(a, unit) - dist(b, unit) || b.hp - a.hp; })[0];
-      if (pest) api.act(unit, 'a2_ta_detention', pest, {});
+      if (pest && api.act(unit, 'a2_ta_detention', pest, {})) return;
+    }
+    const start = { x: unit.x, y: unit.y };
+    if (api.canUse(unit, 'a2_ta_redpen') && go(unit, api, api.bestAttack(unit, { skills: ['a2_ta_redpen'], style: style }), { style: style })) return;
+    if (canAct(unit) && !movedFrom(unit, start)) {
+      closeIn(unit, api, 3);
+      if (canAct(unit) && api.canUse(unit, 'a2_ta_redpen')) fire(unit, api, api.bestAttack(unit, { skills: ['a2_ta_redpen'], noMove: true, style: style }));
     }
   }
 
   DD.registerEnemy({ id: 'a2_necro_ta', name: 'Necromancer TA', act: 2, tier: 'elite', hp: 100, mov: 3, armor: 0, init: 0,
     tags: ['human', 'necromancer'], flags: {}, resist: {},
     sprite: SPR.ta, skills: ['a2_ta_redpen', 'a2_ta_raise', 'a2_ta_detention'], ai: taPlan, aiStyle: { style: 'summoner', keepDistance: 2 }, xp: 16, gold: [10, 15],
-    passive: { icon: '📚', name: 'Office Hours', desc: 'While he stands, Bone Piles stand back up at the end of the same round. On his turn he Red Pens a ' +
-      'hero, then, if ready, raises the dead (twice per fight) or puts the closest hero within 3 tiles in Detention.' },
+    passive: { icon: '📚', name: 'Office Hours', desc: 'While he stands, Bone Piles stand back up at the end of the same round. On his turn he does one ' +
+      'thing: raises the dead (twice per fight), puts the closest hero within 3 tiles in Detention, or Red Pens a hero, keeping his distance.' },
     hooks: { onCombatStart: function (unit) { intro(unit, 1); } },
     barks: {
       spawn: ['Office hours are by appointment.', 'You\'re late. That\'s a zero.', 'Did anyone even READ the syllabus?'],
@@ -1341,8 +1493,8 @@
       death: ['I never... got... tenure...', 'Class... dismissed...', 'Grades... are... final...'],
       raise: ['Interns! Back to work!', 'Attendance is mandatory. Even for corpses.', 'Group project time!'],
     },
-    desc: 'Mini-boss. While he stands, Bone Piles reassemble at the end of the same round. Red Pen every turn; Raise Dead adds 2 Skeleton Interns ' +
-      'and stands every pile up; Detention walls in whoever gets close. Grading on a curve. The curve is a scythe.' });
+    desc: 'Mini-boss. While he stands, Bone Piles reassemble at the end of the same round. One thing a turn: Raise Dead adds 2 Skeleton Interns ' +
+      'and stands every pile up, Detention walls in whoever gets close, otherwise the Red Pen. Grading on a curve. The curve is a scythe.' });
 
   // =====================================================================================================
   // Flesh Golem Gary (elite) — lightning heals him, throws
@@ -1369,12 +1521,13 @@
       strike(ctx, ctx.L.dmg).forEach(function (u) { if (active(u)) A().push(ctx.user, u, ctx.dir, ctx.L.push); });
     } });
 
-  eskill({ id: 'a2_gary_throw', name: 'Gary Throw', icon: '🪨', kind: 'attack', tags: ['ranged', 'aoe', 'throw'], anchor: 'unit',
+  // v2: cooldown 2 (was none): an 11-damage area throw every turn, with no telegraph to scatter from, was 80 damage a fight
+  eskill({ id: 'a2_gary_throw', name: 'Gary Throw', icon: '🪨', kind: 'attack', tags: ['ranged', 'aoe', 'throw'], anchor: 'unit', cooldown: 2,
     levels: [{ dmg: 11 }], target: { type: 'unit', range: [2, 6], filter: 'enemy', los: false }, area: { shape: 'circle', size: 1 },
     desc: function (L) { return 'Hurl an adjacent ally (or a spare limb) at a foe 2-6 tiles away: ' + L.dmg + ' damage to it and every foe next to it. A thrown ally lands beside it.'; },
     flavor: 'Gary has six spare arms. Gary is not sure whose.',
     // he would rather throw a coworker than a spare limb: from a tile next to one (the AI scores each spot it could walk to)
-    aiScore: function (ctx) { return ctx.user && throwableAlly(ctx.user) ? 1.5 : 0; },
+    aiScore: function (ctx) { return (ctx.user && throwableAlly(ctx.user) ? 1.5 : 0) + sparesFriends(ctx); },
     execute: function (ctx) {
       const user = ctx.user, tgt = ctx.target;
       if (!active(user) || !tgt) return;
@@ -1397,14 +1550,16 @@
       strike(ctx, ctx.L.dmg, { foesOnly: true });
     } });
 
-  /** His turn: one attack, the best one: walk up and Clobber, or Gary Throw from range; nothing in reach → lumber closer. */
+  /**
+   * His turn: one attack, the best one (a brute: the hero next to him first): walk up and Clobber, or Gary Throw from
+   * range; nothing in reach → lumber closer.
+   */
   function garyPlan(unit, api) {
-    const melee = { style: 'melee', keepDistance: 0 };
     const start = { x: unit.x, y: unit.y };
-    if (go(unit, api, api.bestAttack(unit, { style: melee }), { style: melee })) return;
+    if (go(unit, api, api.bestAttack(unit, { style: BRUTE }), { style: BRUTE })) return;
     if (!canAct(unit) || movedFrom(unit, start)) return;
     closeIn(unit, api, 1);
-    if (canAct(unit)) fire(unit, api, api.bestAttack(unit, { noMove: true, style: melee }));
+    if (canAct(unit)) fire(unit, api, api.bestAttack(unit, { noMove: true, style: BRUTE }));
   }
 
   // v2: GARY ANGRY is Inspired for good (the old "and a second attack every round" went: one rule, readable numbers)
@@ -1412,7 +1567,8 @@
     tags: ['construct', 'flesh'], flags: { large: true, immovable: true }, resist: { fire: 1.5, poison: 0 },
     sprite: SPR.gary, skills: ['a2_gary_clobber', 'a2_gary_throw'], ai: garyPlan, aiStyle: 'melee', xp: 18, gold: [12, 16],
     passive: { icon: '⚡', name: 'IT\'S ALIVE!', desc: 'Lightning heals him instead of hurting. Below half HP: GARY ANGRY (Inspired for good: +25% damage). ' +
-      'On his turn he walks up and Clobbers, or throws whatever stands next to him at a hero 2-6 tiles away.' },
+      'On his turn he Clobbers the hero next to him (he sticks to that one) or walks up to one, or (every third turn) throws whatever stands ' +
+      'next to him at a hero 2-6 tiles away.' },
     hooks: {
       onCombatStart: function (unit) { intro(unit, 1); },
       modifyIncomingDamage: function (d) {
@@ -1501,8 +1657,8 @@
   DD.registerEnemy({ id: 'a2_tesla_coil', name: 'Tesla Coil', act: 2, tier: 'minion', hp: 12, mov: 0, armor: 0, init: 2,
     tags: ['construct', 'machine'], flags: { immovable: true }, resist: { lightning: 0, poison: 0 },
     sprite: SPR.coil, skills: ['a2_coil_arc', 'a2_coil_overcharge'], ai: coilPlan, aiStyle: 'ranged', xp: 2, gold: [1, 3],
-    passive: { icon: '🔌', name: 'Live Wire', desc: 'On its turn it arcs into the nearest unit within 4 tiles, friend or foe (Gary first: it heals him; ' +
-      'lightning-immune units are skipped). Nobody in reach: it Overcharges (+50% on its next arc). Never moves.' },
+    passive: { icon: '🔌', name: 'Live Wire', desc: 'On its turn it arcs into the nearest unit within 4 tiles, friend or foe (Gary wins ties: it heals ' +
+      'him; lightning-immune units are skipped). Nobody in reach: it Overcharges (+50% on its next arc). Never moves.' },
     barks: {
       spawn: ['*bzzzzt*', '*crackle*'],
       attack: ['*ZAP*', '*BZZRT*'],
@@ -1538,7 +1694,8 @@
   enc({ id: 'a2_cub_scouts', kind: 'normal', name: 'Cub Scouts', minDepth: 0,
     intro: 'Two owlbear cubs are earning their Mauling badge. You are the badge. A pixie rave is supervising.',
     map: { theme: 'hauntwood', w: 9, h: 10, features: ['trees', 'hills'], density: 1 },
-    enemies: [{ id: 'a2_owlbear_cub', n: 3 }, { id: 'a2_pixie_swarm', n: 2 }, { id: 'a2_wisp', n: 1 }],
+    // v2: two cubs, as the intro says (three cubs + two swarms + a wisp was the hardest normal fight with real heroes)
+    enemies: [{ id: 'a2_owlbear_cub', n: 2 }, { id: 'a2_pixie_swarm', n: 2 }, { id: 'a2_wisp', n: 1 }],
     objective: { type: 'killAll' } });
 
   enc({ id: 'a2_follow_the_lights', kind: 'normal', name: 'Don\'t Follow the Lights', minDepth: 1,
@@ -1555,16 +1712,19 @@
     reinforcements: [{ round: 3, enemies: [{ id: 'a2_hollandaise', n: 2 }], edge: 'zone', text: 'The buffet is replenished. The sauce has opinions.' }],
     objective: { type: 'destroy', objId: 'a2_chafing_dish', count: 3, flavor: 'Health inspectors approve.' } });
 
+  // v2: the machine sits by the heroes' end of the break room, 5+ steps from every spawn: no intern or zombie can claw it
+  // before the heroes' first turns (with no telegraphs, the old middle spot lost it to initiative luck in round 1)
   enc({ id: 'a2_last_coffee', kind: 'normal', name: 'The Last Coffee Machine', minDepth: 1, weight: 0.8,
-    intro: 'Finals week. The Academy\'s last working coffee machine is under siege by undead interns. Protect it. Civilization depends on it.',
+    intro: 'Finals week. The Academy\'s last working coffee machine is under siege by undead interns. Stand between them and the coffee. Civilization depends on it.',
     map: { theme: 'academy', layout: [
       '##b##b##b##',
-      '#E..E.E..E.',
-      '#....E.....',
+      '#E.E.E.E.E.',
+      '#.E...E....',
       '#.d.....d..',
+      '#..........',
       '#...c.c....',
-      '#....K.....',
-      '#.d.....d..',
+      '#..........',
+      '#.d..K..d..',
       '#..H.H.H...',
       '#...H.H....',
       '#..........',

@@ -5,8 +5,11 @@
  *   { terrain: id, melt: id }         change terrain (melt = terrain restored when the ice melts)
  *   { shock: true }                   electrify the connected water body       { destroy: true } destroy the object
  * Extra def fields read by the engine: hazard (AI/HUD avoid), hazardDmg / hazardEnd (immediate damage on entering /
- * damage for ending a turn there: the AI's risk estimate, never walks to a death), airborne (surface also affects
- * flyers), slide (pushed units slide +1), init(obj) (instance defaults), available(obj, unit) (interaction shown?).
+ * damage for ending a turn there: the AI's risk estimate, never walks to a death), hazardElement / hazardStatus (what
+ * the hazard does: a unit that ignores all of it — resist 0, immune — is not warned), airborne (a CLOUD: the surface
+ * also touches flyers; v2: flyers ignore everything else on the floor), slide (pushed units slide +1), init(obj)
+ * (instance defaults), available(obj, unit) (interaction shown?), volatile (the object explodes when destroyed:
+ * single-target attacks can be aimed at it to set it off).
  */
 (function () {
   'use strict';
@@ -62,8 +65,9 @@
     desc: 'Impassable. Pushed units sink: enemies drown, heroes and bosses lose 25% max HP. Frost freezes a path.',
     react: { fire: { surface: 'steam', turns: 1 }, frost: { terrain: 'ice', melt: 'deep_water' }, lightning: { shock: true } } });
   DD.registerTerrain({ id: 'lava', name: 'Lava', walkable: true, cost: 1, liquid: 'lava', hazard: true, hazardDmg: 8, hazardEnd: 8,
+    hazardElement: 'fire', hazardStatus: 'burn',
     colors: C('#ff5a1f', '#c2410c', '#9a3412'),
-    desc: 'Entering or ending a turn here: 8 fire damage and Burn 2. Water cools it to obsidian.',
+    desc: 'Entering or ending a turn here: 8 fire damage and Burn 2. Water cools it to obsidian. Flyers just get warm feet.',
     react: { water: { terrain: 'obsidian' } },
     onEnter: function (unit) { scorch(unit); },
     onTurnEnd: function (unit) { scorch(unit); } });
@@ -86,8 +90,8 @@
     desc: 'Destructible cover. Contains nothing. It is always nothing.' });
   obj({ id: 'barrel', name: 'Barrel', blocksMove: true, blocksLos: false, hp: 5, height: 0.85, color: '#8a5a2b',
     desc: 'Destructible cover. Sloshes suspiciously.' });
-  obj({ id: 'barrel_explosive', name: 'Explosive Barrel', blocksMove: true, blocksLos: false, hp: 3, height: 0.85, color: '#c0392b',
-    desc: 'Explodes when destroyed or set alight: 8 fire damage around it and fire on the floor.',
+  obj({ id: 'barrel_explosive', name: 'Explosive Barrel', blocksMove: true, blocksLos: false, hp: 3, height: 0.85, color: '#c0392b', volatile: true,
+    desc: 'Explodes when destroyed, set alight or shot (aim any single-target attack at it): 8 fire damage around it and fire on the floor.',
     react: { fire: { destroy: true } },
     onDestroyed: function (o, tile, src) { DD.Act.explode(src, tile.x, tile.y, { radius: 1, dmg: 8, element: 'fire', surface: 'fire', turns: 2 }); } });
   obj({ id: 'keg', name: 'Ale Keg', blocksMove: true, blocksLos: false, hp: 6, height: 0.8, color: '#9b6a35',
@@ -120,7 +124,7 @@
     desc: 'Blocks movement and line of sight. Destructible. Overdue.' });
   obj({ id: 'candles', name: 'Candles', blocksMove: true, blocksLos: false, hp: 1, height: 0.5, color: '#f3e3b0',
     desc: 'Destructible. Knocking them over sets their tile on fire.',
-    onDestroyed: function (o, tile) { DD.Act.setSurface(tile.x, tile.y, 'fire', 2); DD.Act.applyElement(tile.x, tile.y, 'fire', null); } });
+    onDestroyed: function (o, tile) { DD.Act.setSurface(tile.x, tile.y, 'fire', 2); DD.Act.applyElement(tile.x, tile.y, 'fire', null, { floor: true }); } });
   obj({ id: 'd20', name: 'Giant d20', blocksMove: true, blocksLos: true, hp: 0, height: 1.3, color: '#c0392b',
     desc: 'Blocks movement and line of sight. It always lands on 1 when you need it.' });
   obj({ id: 'soda_can', name: 'Soda Can Tower', blocksMove: true, blocksLos: true, hp: 8, height: 1.8, color: '#3fbf3f',
@@ -222,7 +226,7 @@
         const t = DD.Grid.tile(x, y);
         if (!t || DD.Grid.terrain(t).walkable === false && !DD.Grid.terrain(t).liquid) break;
         DD.Act.setSurface(x, y, 'fire', 2);
-        DD.Act.applyElement(x, y, 'fire', unit);
+        DD.Act.applyElement(x, y, 'fire', unit, { floor: true });   // spilled on the floor: flyers above it don't catch fire
       }
       DD.Act.log(unit.name + ' kicks over the brazier. Fire safety is for cowards.', 'hero');
     } } });
@@ -236,13 +240,15 @@
   }
 
   // ---- surfaces ----------------------------------------------------------------------------------
-  DD.registerSurface({ id: 'fire', name: 'Fire', color: 'rgba(255,110,20,0.55)', turns: 3, hazard: true, hazardDmg: 0, hazardEnd: 1, airborne: true,
-    desc: 'Entering: Burn 2. Ending a turn here: Burn 1. Water or frost puts it out.',
+  // v2 (user request): flyers ignore everything on the floor. Only CLOUDS are `airborne` (steam, smoke, gases): they
+  // touch flyers too. hazardStatus / hazardElement say what a hazard does, so DD.Grid knows who it can't hurt.
+  DD.registerSurface({ id: 'fire', name: 'Fire', color: 'rgba(255,110,20,0.55)', turns: 3, hazard: true, hazardDmg: 0, hazardEnd: 1, hazardStatus: 'burn',
+    desc: 'Entering: Burn 2. Ending a turn here: Burn 1. Water or frost puts it out. Flyers float over it.',
     react: { water: { surface: null }, frost: { surface: null } },
     onEnter: function (unit) { DD.Act.addStatus(unit, 'burn', { stacks: 2 }, null); },
     onTurnEnd: function (unit) { DD.Act.addStatus(unit, 'burn', { stacks: 1 }, null); } });
-  DD.registerSurface({ id: 'poison', name: 'Poison Puddle', color: 'rgba(110,200,40,0.5)', turns: 3, hazard: true, hazardDmg: 0, hazardEnd: 1, airborne: true,
-    desc: 'Entering: Poison 2. Ending a turn here: Poison 1. Fire burns it away.',
+  DD.registerSurface({ id: 'poison', name: 'Poison Puddle', color: 'rgba(110,200,40,0.5)', turns: 3, hazard: true, hazardDmg: 0, hazardEnd: 1, hazardStatus: 'poison',
+    desc: 'Entering: Poison 2. Ending a turn here: Poison 1. Fire burns it away. Flyers float over it.',
     react: { fire: { surface: 'fire', turns: 1 } },
     onEnter: function (unit) { DD.Act.addStatus(unit, 'poison', { stacks: 2 }, null); },
     onTurnEnd: function (unit) { DD.Act.addStatus(unit, 'poison', { stacks: 1 }, null); } });
@@ -258,25 +264,25 @@
     react: { fire: { surface: 'water', turns: 3 } } });
   DD.registerSurface({ id: 'blood', name: 'Blood', color: 'rgba(150,10,25,0.5)', turns: 4,
     desc: 'Gross. Some blood mages find it relaxing.' });
-  DD.registerSurface({ id: 'web', name: 'Web', color: 'rgba(235,235,235,0.45)', turns: 4, airborne: true,
-    desc: 'Entering: Rooted for 1 turn. Fire burns it.',
+  DD.registerSurface({ id: 'web', name: 'Web', color: 'rgba(235,235,235,0.45)', turns: 4,
+    desc: 'Entering: Rooted for 1 turn. Fire burns it. Flyers float over it.',
     react: { fire: { surface: 'fire', turns: 1 } },
     onEnter: function (unit) { DD.Act.addStatus(unit, 'root', { turns: 1 }, null); } });
-  DD.registerSurface({ id: 'steam', name: 'Steam', color: 'rgba(235,240,245,0.55)', turns: 1, blocksLos: true,
-    desc: 'Blocks line of sight. Spa day.' });
-  DD.registerSurface({ id: 'smoke', name: 'Smoke', color: 'rgba(90,90,100,0.55)', turns: 2, blocksLos: true,
-    desc: 'Blocks line of sight. Cough.' });
-  DD.registerSurface({ id: 'holy', name: 'Holy Ground', color: 'rgba(255,240,150,0.45)', turns: 3, airborne: true,
-    desc: 'Heroes ending a turn here heal 3. Undead ending a turn here take 3 damage.',
+  DD.registerSurface({ id: 'steam', name: 'Steam', color: 'rgba(235,240,245,0.55)', turns: 1, blocksLos: true, airborne: true,
+    desc: 'A cloud: blocks line of sight, flyers included. Spa day.' });
+  DD.registerSurface({ id: 'smoke', name: 'Smoke', color: 'rgba(90,90,100,0.55)', turns: 2, blocksLos: true, airborne: true,
+    desc: 'A cloud: blocks line of sight, flyers included. Cough.' });
+  DD.registerSurface({ id: 'holy', name: 'Holy Ground', color: 'rgba(255,240,150,0.45)', turns: 3,
+    desc: 'Heroes ending a turn here heal 3. Undead ending a turn here take 3 damage. Flyers are above all that.',
     onTurnEnd: function (unit) {
       if (unit.side === 'hero') DD.Act.heal(null, unit, 3);
       else if ((unit.tags || []).indexOf('undead') >= 0) DD.Act.damage(null, unit, 3, { element: 'holy', cause: 'surface' });
     } });
-  DD.registerSurface({ id: 'electric', name: 'Live Current', color: 'rgba(120,200,255,0.55)', turns: 1, hazard: true, hazardDmg: 3,
-    desc: 'Entering: 3 lightning damage.',
+  DD.registerSurface({ id: 'electric', name: 'Live Current', color: 'rgba(120,200,255,0.55)', turns: 1, hazard: true, hazardDmg: 3, hazardElement: 'lightning',
+    desc: 'Entering: 3 lightning damage. Flyers float over it.',
     onEnter: function (unit) { DD.Act.damage(null, unit, 3, { element: 'lightning', cause: 'surface' }); } });
   DD.registerSurface({ id: 'cheeto', name: 'Cheeto Dust', color: 'rgba(255,140,0,0.5)', turns: 4,
-    desc: 'Entering: Slowed on your next turn. Highly flammable (it\'s mostly cheese).',
+    desc: 'Entering: Slowed on your next turn. Highly flammable (it\'s mostly cheese). Flyers float over it.',
     react: { fire: { surface: 'fire', turns: 2, spread: true } },
     // turns: 1 = its next turn (v2: walking in during its own turn skips that turn's tick, see DD.Combat decay)
     onEnter: function (unit) { DD.Act.addStatus(unit, 'slow', { turns: 1 }, null); } });

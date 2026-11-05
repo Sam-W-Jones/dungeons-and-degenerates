@@ -64,14 +64,33 @@
   /** His move without the werewolf bonus. */
   function baseMov(u) { const d = peek(u); return (u.mov || 0) - ((d && d.mov) || 0); }
 
-  /** Swap the drawn sprite in step with FX playback (the logical override is set at once; previews skip this). */
+  /**
+   * Swap the sprite: the logical override (unit.sprite) changes at once; on screen the old look is pinned
+   * (unit.vis.sprite) until FX playback reaches the change, then the pin is dropped so unit.sprite shows again — also
+   * when other content re-wrapped it meanwhile (the Party Balloons item does). Previews skip the visual part.
+   */
+  const looks = new WeakMap();          // unit → number of queued look changes (cosmetic, never part of a dry run)
   function showSprite(u, spec) {
-    const before = u.sprite || HUMAN_SPRITE;
+    const before = (u.vis && u.vis.sprite) || u.sprite || HUMAN_SPRITE;
     if (spec) u.sprite = spec; else delete u.sprite;
-    if (A().simulating) return;
-    if (u.vis && !u.vis.sprite) u.vis.sprite = before;
-    const shown = spec || HUMAN_SPRITE;
-    DD.FX.call(function () { if (u.vis) u.vis.sprite = shown; });
+    if (A().simulating || !u.vis) return;
+    if (!u.vis.sprite) u.vis.sprite = before;
+    const n = (looks.get(u) || 0) + 1, shown = spec || HUMAN_SPRITE;
+    looks.set(u, n);
+    DD.FX.call(function () { if (u.vis) u.vis.sprite = looks.get(u) === n ? null : shown; });
+  }
+
+  /**
+   * Swap the basic attack slot. It is still one attack slot, so its bookkeeping carries over: "first basic attack this
+   * turn", the use count (a fresh 0 reads as refunded uses to AutoPlay's cooldown valuation) and the cooldown.
+   */
+  function setBasic(u, id, level) {
+    const old = u.basic || {};
+    u.basic = A().makeSlot(id, level);
+    u.basic.usedThisTurn = !!old.usedThisTurn;
+    u.basic.uses = old.uses || 0;
+    u.basic.cd = old.cd || 0;
+    u.basic.fresh = !!old.fresh;
   }
 
   /** Make the bookkeeping match the bas_wolf status (it can also vanish by a dispel or when he is downed). */
@@ -83,16 +102,24 @@
       d.wolf = true;
       d.mov = WOLF_MOV;
       u.mov = (u.mov || 0) + WOLF_MOV;
-      u.basic = A().makeSlot(CLAW, transformLevel(u));
+      setBasic(u, CLAW, transformLevel(u));
       showSprite(u, WOLF_SPRITE);
     } else if (!wolf && d.wolf) {
       d.wolf = false;
+      d.dire = false;
       u.mov = Math.max(1, (u.mov || 0) - (d.mov || 0));
       d.mov = 0;
-      u.basic = A().makeSlot(SWORD, 1);
+      setBasic(u, SWORD, 1);
       showSprite(u, null);
     } else return;
     A().touch();
+  }
+  /** Blood Moon's huge dire-wolf look fades at the end of that turn (cosmetic: the form is the same werewolf). */
+  function endDireLook(u) {
+    const d = peek(u);
+    if (!d || !d.dire) return;
+    d.dire = false;
+    if (isWolf(u)) showSprite(u, WOLF_SPRITE);
   }
 
   /** Into the werewolf. why: 'skill' (Transform) | 'trigger' (Hair Trigger) | 'signature' (Blood Moon). */
@@ -123,6 +150,23 @@
       A().bark(u, 'human');
     }
     return true;
+  }
+
+  /** Hair Trigger's rule, checked after he lost HP: still standing, below half HP and not yet the werewolf. */
+  function hairTrigger(u) {
+    if (active(u) && u.hp > 0 && u.hp * 2 < u.maxHp && !isWolf(u)) becomeWolf(u, 'trigger');
+  }
+  /**
+   * syncForm, plus a pending Hair Trigger: a hit that took him to 0 HP is checked here, because the engine asks
+   * onTakeDamage before it decides the down, and something (Plot Armor) may refuse it and leave him standing at 1 HP.
+   */
+  function settle(u) {
+    if (!u) return;
+    syncForm(u);
+    const d = peek(u);
+    if (!d || !d.pending) return;
+    d.pending = false;
+    hairTrigger(u);
   }
 
   /** canUse gate of a form-tagged skill. */
@@ -201,46 +245,81 @@
   }
 
   // ---- sprites -------------------------------------------------------------------------------------------
-  /** Human: a few too many scratches on the cheek and a moon pendant he swears is ironic. */
+  const COAT_COL = '#3e4a63', MAIL = '#9aa3ae', SILVER = '#e8eef5';
+  /** Human: a grey streak in his hair (the wolf showing), a few too many scratches, a crescent pendant "worn ironically". */
   function humanOverlay(g) {
     const H = g.head;
     if (!H) return;
-    const r = H.r, red = '#c0392b';
-    g.line(H.x + r * 0.35, H.y + r * 0.1, H.x + r * 0.62, H.y + r * 0.42, red, Math.max(0.6, r * 0.07));
-    g.line(H.x + r * 0.5, H.y + r * 0.02, H.x + r * 0.76, H.y + r * 0.34, red, Math.max(0.6, r * 0.07));
-    g.circle(H.x + r * 0.15, H.y + r * 1.32, r * 0.16, '#f3e6b3', g.shade('#f3e6b3', -0.5));
+    const r = H.r, red = '#c0392b', lw = Math.max(0.6, r * 0.065);
+    // a grey streak from the crown down the fringe
+    g.path(function (c) {
+      c.moveTo(H.x - r * 0.3, H.y - r * 0.98);
+      c.quadraticCurveTo(H.x - r * 0.02, H.y - r * 0.72, H.x + r * 0.02, H.y - r * 0.3);
+      c.quadraticCurveTo(H.x - r * 0.16, H.y - r * 0.62, H.x - r * 0.46, H.y - r * 0.9);
+      c.closePath();
+    }, '#a9a6b4', null);
+    // three claw scratches across the cheek
+    for (let i = 0; i < 3; i++) {
+      const x = H.x + r * (0.36 + i * 0.12);
+      g.line(x, H.y + r * 0.06, x + r * 0.17, H.y + r * 0.4, red, lw);
+    }
+    // crescent-moon pendant on the chest
+    const px = H.x + r * 0.18, py = H.y + r * 1.34, pr = r * 0.2;
+    g.path(function (c) {
+      c.arc(px, py, pr, -Math.PI / 2, Math.PI / 2, true);
+      c.quadraticCurveTo(px - pr * 0.55, py, px, py - pr);
+      c.closePath();
+    }, SILVER, g.shade(SILVER, -0.55), Math.max(0.5, r * 0.05));
   }
-  /** Werewolf: a long muzzle with a black nose and fangs, over the humanoid head. */
+  /** Werewolf: a long grey snout poking out past the face, pale muzzle, black nose, fangs (the jaw drops when he bites). */
   function wolfOverlay(g) {
     const H = g.head;
     if (!H) return;
-    const r = H.r, fur = g.pal.skin, light = g.shade(fur, 0.22);
+    const r = H.r, fur = g.pal.skin, pale = '#dcd7e2';
     const atk = g.pose === 'attack';
-    const mx = H.x + r * 0.72, my = H.y + r * 0.34 + (atk ? r * 0.04 : 0);
-    g.ellipse(mx, my, r * 0.66, r * 0.4, light, undefined, -0.1);
-    g.ellipse(mx + r * 0.58, my - r * 0.17, r * 0.2, r * 0.15, '#17121a', null);
-    const fang = '#fffaf0';
-    g.poly([[mx - r * 0.02, my + r * 0.3], [mx + r * 0.07, my + r * (atk ? 0.62 : 0.55)], [mx + r * 0.16, my + r * 0.3]], fang, null);
-    g.poly([[mx + r * 0.3, my + r * 0.27], [mx + r * 0.38, my + r * (atk ? 0.56 : 0.5)], [mx + r * 0.46, my + r * 0.26]], fang, null);
-    if (atk) g.line(mx - r * 0.3, my + r * 0.36, mx + r * 0.55, my + r * 0.3, '#3a1418', Math.max(0.6, r * 0.08));
+    const L = r * 0.72;                                      // half-length of the muzzle
+    const mx = H.x + r * 0.82, my = H.y + r * 0.5;          // snout centre (the face sits r * 0.24 right of the head's)
+    const jaw = atk ? r * 0.2 : 0;
+    if (atk) g.ellipse(mx - r * 0.04, my + r * 0.16, L * 0.8, r * 0.16 + jaw * 0.5, '#3a1418', null);
+    // lower jaw, then the snout: fur on the bridge, pale underneath
+    g.ellipse(mx - r * 0.06, my + r * 0.14 + jaw, L * 0.76, r * 0.13, g.shade(pale, -0.12));
+    g.ellipse(mx, my, L, r * 0.24, pale, undefined, -0.06);
+    g.path(function (c) {
+      c.moveTo(mx - L * 0.96, my - r * 0.02);
+      c.quadraticCurveTo(mx - L * 0.2, my - r * 0.36, mx + L * 0.9, my - r * 0.14);
+      c.quadraticCurveTo(mx + L * 0.2, my - r * 0.06, mx - L * 0.96, my - r * 0.02);
+      c.closePath();
+    }, fur, null);
+    g.ellipse(mx + L * 0.86, my - r * 0.1, r * 0.14, r * 0.11, '#17121a', null);
+    g.circle(mx + L * 0.8, my - r * 0.13, r * 0.035, '#8a8494', null);
+    // fangs over the lip
+    const fang = '#fffaf0', fy = my + r * 0.12;
+    g.poly([[mx - L * 0.45, fy], [mx - L * 0.35, fy + r * 0.2 + jaw * 0.6], [mx - L * 0.24, fy]], fang, null);
+    g.poly([[mx + L * 0.2, fy - r * 0.02], [mx + L * 0.29, fy + r * 0.16 + jaw * 0.6], [mx + L * 0.38, fy - r * 0.02]], fang, null);
   }
 
   const HUMAN_SPRITE = {
     base: 'humanoid', scale: 1, build: 'normal', outfit: 'coat',
-    palette: { skin: '#e6bb93', cloth: '#6b5240', cloth2: '#9aa3ae', hair: '#4a3324', metal: '#e8eef5', eye: '#3a2a1e',
-      accent: '#c9a24a', outline: '#1b1418', leather: '#5a3d28', belt: '#3b2a1e', beard: '#4a3324' },
-    head: { hair: 'wild', beard: 'stubble', eyes: 'sleepy', mouth: 'frown', blush: false },
+    palette: { skin: '#e6bb93', cloth: COAT_COL, cloth2: MAIL, pants: '#4a3a2e', boots: '#2e2420', hair: '#3b2a20',
+      beard: '#3b2a20', metal: SILVER, eye: '#3a2a1e', accent: '#c9a24a', outline: '#1b1418', leather: '#5a3d28', belt: '#2b1f17' },
+    head: { hair: 'long', beard: 'stubble', eyes: 'sleepy', mouth: 'frown', blush: false },
     mainhand: 'sword', offhand: 'none', extras: ['belt', 'pouches'],
     overlay: humanOverlay,
   };
   const WOLF_SPRITE = {
     base: 'humanoid', scale: 1.12, build: 'stocky', outfit: 'rags', hunch: 0.45,
-    palette: { skin: '#8f8c98', cloth: '#5e4838', cloth2: '#3f4a57', hair: '#5d5a68', metal: '#e8eef5', eye: '#ffd23f',
-      accent: '#ffd23f', outline: '#151219', ear: '#7f7c89', inner: '#4a4553', tail: '#7f7c89', belt: '#3b2a1e' },
+    palette: { skin: '#8f8c98', cloth: COAT_COL, cloth2: MAIL, hair: '#5d5a68', metal: SILVER, eye: '#ffd23f',
+      accent: '#ffd23f', outline: '#151219', ear: '#7f7c89', inner: '#4a4553', tail: '#7f7c89', belt: '#2b1f17' },
     head: { ears: 'cat', hair: 'wild', eyes: 'glow', mouth: 'none', blush: false },
     tail: 'dog', mainhand: 'none', offhand: 'none', extras: ['belt'],
     overlay: wolfOverlay,
   };
+  /** Blood Moon's look for the rest of that turn: a huge red-eyed dire wolf (cosmetic: the form is the same werewolf). */
+  const DIRE_SPRITE = Object.assign({}, WOLF_SPRITE, {
+    scale: 1.34, hunch: 0.55,
+    palette: Object.assign({}, WOLF_SPRITE.palette, { skin: '#7f7b8a', hair: '#4a4656', eye: '#ff3b30', ear: '#6f6b7a', tail: '#6f6b7a' }),
+    aura: { kind: 'glow', color: MOON },
+  });
 
   // ---- status: the werewolf form ------------------------------------------------------------------------
   DD.registerStatus({
@@ -267,7 +346,7 @@
   });
 
   DD.registerSkill({
-    id: CLAW, name: 'Claw', owner: HERO, icon: '🐾', kind: 'attack', tags: ['melee', 'wolf', 'bleed'],
+    id: CLAW, name: 'Claw', owner: HERO, icon: '🐺', kind: 'attack', tags: ['melee', 'wolf', 'bleed'],
     ap: 1, cooldown: 0,
     levels: CLAW_LV.map(function (c) { return { dmg: c.dmg, bleed: c.bleed }; }),
     target: { type: 'unit', range: [1, 1], filter: 'enemy' },
@@ -325,7 +404,7 @@
   DD.registerSkill({
     id: 'bas_shoulder_check', name: 'Shoulder Check', owner: HERO, icon: '💥', kind: 'attack', tags: ['melee', 'human', 'push'],
     ap: 1, cooldown: 1,
-    levels: [{ dmg: 4, push: 1 }, { dmg: 5, push: 1 }, { dmg: 6, push: 2 }],
+    levels: [{ dmg: 5, push: 1 }, { dmg: 6, push: 1 }, { dmg: 7, push: 2 }],
     target: { type: 'unit', range: [1, 1], filter: 'enemy' },
     canUse: gate('human'),
     desc: function (L) { return 'Human form: deal ' + L.dmg + ' damage to an adjacent foe and push it ' + plural(L.push, 'tile') + '.'; },
@@ -340,9 +419,9 @@
   });
 
   DD.registerSkill({
-    id: 'bas_hold_the_line', name: 'Hold the Line', owner: HERO, icon: '🛡️', kind: 'buff', tags: ['human', 'taunt', 'block'],
+    id: 'bas_hold_the_line', name: 'Hold the Line', owner: HERO, icon: '🛡️', kind: 'utility', tags: ['human', 'taunt', 'block'],
     ap: 1, cooldown: 2,
-    levels: [{ r: 1, block: 4 }, { r: 1, block: 6 }, { r: 2, block: 6 }],
+    levels: [{ r: 2, block: 4 }, { r: 2, block: 5 }, { r: 3, block: 6 }],
     target: { type: 'self' },
     area: { shape: 'circle', size: function (L) { return L.r; } },
     canUse: gate('human'),
@@ -409,11 +488,12 @@
   }
 
   DD.registerSkill({
-    id: 'bas_pounce', name: 'Pounce', owner: HERO, icon: '🐺', kind: 'attack', tags: ['melee', 'wolf', 'stun', 'leap'],
+    id: 'bas_pounce', name: 'Pounce', owner: HERO, icon: '💨', kind: 'attack', tags: ['melee', 'wolf', 'stun', 'leap'],
     ap: 2, cooldown: 3,
     levels: [{ dmg: 4, range: 3 }, { dmg: 6, range: 4 }, { dmg: 8, range: 5 }],
     target: {
       type: 'unit', range: function (L) { return [1, L.range]; }, los: true, filter: 'enemy',
+      objects: false,   // a pounce lands next to a foe; he does not leap onto barrels (Claw pops an adjacent one)
       canTarget: function (ctx) { return landingTile(ctx.user, ctx.targetUnit) ? true : 'No room to land.'; },
     },
     canUse: gate('wolf'),
@@ -521,6 +601,7 @@
       DD.FX.banner('BLOOD MOON', { sub: 'He did say sorry in advance', color: MOON });
       DD.FX.shake(10, 500);
       becomeWolf(u, 'signature');
+      if (isWolf(u)) { showSprite(u, DIRE_SPRITE); dataOf(u).dire = true; }
       DD.FX.particles(u, { kind: 'blood', count: 26 });
       ctx.foes.slice().sort(function (a, b) { return dist(a, u) - dist(b, u) || byPos(a, b); }).forEach(function (f) {
         if (!active(f) || !active(u)) return;
@@ -535,18 +616,42 @@
   const PASSIVE = {
     name: 'Hair Trigger',
     desc: 'When damage leaves him below half HP, he turns into the werewolf for free (+' + WOLF_MOV + ' move, Claw basic attack, ' +
-      'wolf skills; human skills locked until he Transforms back). Sorry in advance.',
+      'wolf skills). Sorry in advance.',
     hooks: {
       onTakeDamage: function (d) {
         const u = d && d.target;
-        if (!active(u) || !(d.dealt > 0) || !(u.hp > 0) || u.hp * 2 >= u.maxHp || isWolf(u)) return;
-        becomeWolf(u, 'trigger');
+        if (!u) return;
+        settle(u);
+        if (!active(u) || !(d.dealt > 0)) return;
+        // at 0 HP the down is decided after this hook: if it is refused, settle() lets the wolf out at the next chance
+        if (!(u.hp > 0)) { dataOf(u).pending = true; return; }
+        hairTrigger(u);
       },
+      // the bookkeeping (move, basic attack, sprite) follows the bas_wolf status, which a dispel can also take away
+      // ("OBJECTION!"): re-checked whenever something happens to him
       onCombatStart: function (u) { dataOf(u); syncForm(u); },
-      onTurnStart: function (u) { syncForm(u); },
-      onTurnEnd: function (u) { syncForm(u); },
-      onSkillUsed: function (ctx) { if (ctx && ctx.user) syncForm(ctx.user); },
-      onDowned: function (u) { syncForm(u); },
+      onRoundStart: function (u) { settle(u); },
+      onTurnStart: function (u) { settle(u); },
+      onTurnEnd: function (u) { settle(u); endDireLook(u); },
+      onStatusApplied: function (u) { settle(u); },
+      onHealed: function (u) { settle(u); },
+      onSkillUsed: function (ctx) { if (ctx && ctx.user) settle(ctx.user); },
+      onOpportunityAttack: function (o) {
+        if (o && o.attacker && o.attacker.defId === HERO) settle(o.attacker);
+        if (o && o.mover && o.mover.defId === HERO) settle(o.mover);
+      },
+      onDowned: function (u) { const d = peek(u); if (d) d.pending = false; syncForm(u); },
+      // his attack of opportunity is the basic of the form he is in, even before a hook re-synced the slot (a dispel
+      // with nothing after it): pure, it only swaps the slot this query resolves
+      modifyOpportunity: function (o) {
+        const u = o && o.attacker;
+        if (!u || u.defId !== HERO || !o.skill || (o.skill.id !== SWORD && o.skill.id !== CLAW)) return;
+        const id = isWolf(u) ? CLAW : SWORD;
+        if (o.skill.id === id) return;
+        o.level = id === CLAW ? transformLevel(u) : 1;
+        o.slot = A().makeSlot(id, o.level);
+        o.skill = DD.getSkill(id);
+      },
     },
   };
 
@@ -587,7 +692,7 @@
         'Done. Can we not mention the howling?', 'Victory. I need a bath and a very long nap.'],
       idle: ['Marwyn, please stop calling me "pup".', 'Ellaria, your corgis keep sniffing me. Make it stop.',
         'Professor Marbles, I don\'t chase rabbits. I promise.', 'Mayor Buga, put the squeaky toy away.',
-        'Sparrow, stop offering me bones. They\'re... fine. Thanks.', 'Slate, you\'re the only one who doesn\'t flinch. I like that.'],
+        'Pebbles, we are NOT sniffing each other. We\'re coworkers.', 'Valdris, I don\'t need a silver collar. Stop measuring me.'],
       signature: ['The moon is red. Run.', 'I\'m so sorry about what happens next.', 'BLOOD MOON! AWOOOOO!', 'No more holding back! RAAAH!',
         'Everyone behind me! WAY behind me!'],
       wolf: ['Grrr... sorry. GRRRR.', 'Stand back. It\'s happening.', 'Off comes the coat.', 'Here, doggy. That\'s me.'],
@@ -637,7 +742,7 @@
   // ---- test / debug API ---------------------------------------------------------------------------------------
   DD.Basanos = {
     WOLF: WOLF, WOLF_MOV: WOLF_MOV, CLAW_LV: CLAW_LV, COAT_HEAL: COAT_HEAL,
-    HUMAN_SPRITE: HUMAN_SPRITE, WOLF_SPRITE: WOLF_SPRITE,
+    HUMAN_SPRITE: HUMAN_SPRITE, WOLF_SPRITE: WOLF_SPRITE, DIRE_SPRITE: DIRE_SPRITE,
     isWolf: isWolf, becomeWolf: becomeWolf, becomeHuman: becomeHuman, syncForm: syncForm, transformLevel: transformLevel,
     formOf: formOf, formValue: formValue, transformScore: transformScore, landingTile: landingTile, baseMov: baseMov,
   };

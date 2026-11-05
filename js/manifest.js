@@ -61,6 +61,9 @@ window.DD_MANIFEST = [
   'js/data/heroes/kiri.js',
   'js/data/heroes/betty.js',
   'js/data/heroes/basanos.js',
+  'js/data/heroes/valdris.js',
+  'js/data/heroes/hjalmar.js',
+  'js/data/heroes/pebbles.js',
 
   // enemies + encounters
   'js/data/enemies/act1.js',
