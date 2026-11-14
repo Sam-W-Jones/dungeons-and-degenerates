@@ -358,3 +358,20 @@ Suite: `hero_marbles: v2 requests — …`. Rules: `docs/notes/rules.md` "v2 req
   off where it stands (nothing yanked).
 - **Flyers.** Loose Marbles already skipped flyers in `slip()`; the surface is a floor surface, so the engine keeps
   flyers off it too (a flyer whacked across two marble tiles: no slip, tested). Descs already say "grounded".
+
+## Rules run (Nov 6) — breaking objects (CONTENT SWEEP)
+
+Walking Stick Whack can now be aimed at the adjacent crate (the engine's rule: every object with HP is a target for the
+attacks that can aim at barrels). "hero_marbles: Doddering Jab and Walking Stick Whack" checks the adjacent foe is the
+only unit target and the crate a breakable one for the whack's listed damage. No kit change.
+
+## Playtest fixes (Nov 12)
+
+- **heroes-2 (Marbles part, fixed)**: Walking Stick Whack's text includes the Cane of Unsolicited Advice's extra tile
+  ("push it 3 tiles" with the Cane at I-II, 4 at III; `wears()` reads combat units and party sheets alike). Suite
+  `hero_marbles: playtest fixes (Nov 12)`.
+- **text-tone-8 (polish, fixed)**: his downed bark "Tell my marbles... I loved them..." (a near-twin of Zarathor's rings)
+  → "I appear to have... finally lost... my marbles...".
+- **text-tone-2**: his ally_down helper lines name standing helpers (Ellaria, Basanos, Valdris); the engine-side filter
+  (no line naming the downed hero) fixes the rare misfire.
+- **heroes-v1 (fixed)**: the target-range numbers in his descs follow his real reach (range items, Dazzle) through `reach()` → `DD.Targeting.reach`; details and the cross-hero suite in hero-kiri.md.

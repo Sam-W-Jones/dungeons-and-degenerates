@@ -32,6 +32,15 @@
   function plural(n, w) { return n + ' ' + w + (n === 1 ? '' : 's'); }
   function hasItem(u, id) { return !!u && Array.isArray(u.items) && u.items.indexOf(id) >= 0; }
   function ownerOf(u) { return u && u.ownerId != null && DD.Combat ? DD.Combat.byId(u.ownerId) : null; }
+  /** Item check for descs: combat units (items array) and RunHeroes (slot object) alike. */
+  function wears(u, id) {
+    if (!u) return false;
+    if (Array.isArray(u.items)) return u.items.indexOf(id) >= 0;
+    if (u.items && typeof u.items === 'object') { for (const k in u.items) if (u.items[k] === id) return true; }
+    return !!(u.runHero && u.runHero !== u && wears(u.runHero, id));
+  }
+  /** The Good Stick's +2 on corgi attacks, for the texts (user: Ellaria or one of her corgis; playtest heroes-2). */
+  function stick(user) { return wears(user, STICK) || wears(ownerOf(user), STICK) ? 2 : 0; }
   function isCorgiOf(u, owner) { return !!u && !!owner && u.defId === CORGI && u.ownerId === owner.id; }
   function byPos(a, b) { return a.y - b.y || a.x - b.x; }
   function heroLevel(u) { return u && u.level > 0 ? Math.floor(u.level) : 1; }
@@ -364,7 +373,7 @@
     levels: [{ heal: 5 }, { heal: 6 }, { heal: 8 }],
     target: { type: 'tile', range: [0, 4], los: true, filter: 'any' },
     area: { shape: 'circle', size: 1 },
-    desc: function (L) { return 'Heal yourself and allies in radius 1 for ' + L.heal + ' HP; puddles (Wet) fill the rest of the area.'; },
+    desc: function (L) { return 'Heal allies in radius 1, yourself too if inside, for ' + L.heal + ' HP; puddles (Wet) fill the rest of the area.'; },
     flavor: 'Locally sourced, organic, and only slightly full of tadpoles. Conducts lightning beautifully.',
     execute: function (ctx) {
       const u = ctx.user, L = ctx.L;
@@ -457,7 +466,7 @@
     ap: 1, cooldown: 2,
     levels: [{ dmg: 3, pull: 2 }, { dmg: 4, pull: 3 }, { dmg: 5, pull: 3 }],
     target: { type: 'unit', range: [1, 6], los: false, filter: 'enemy',
-      // never at an explosive barrel: the corgi's dash and drag would not happen, so it was a free sight-free blast at 6
+      // never at an object (a barrel, a crate): the corgi's dash and drag would not happen, so it was a free sight-free hit at 6
       objects: false,
       // the corgi needs somewhere to stand: already next to the foe, or a free safe tile beside it
       canTarget: function (ctx) {
@@ -466,8 +475,8 @@
         return dist(c, f) === 1 || besideTiles(f, null).length ? true : 'No room for a corgi next to it.';
       } },
     canUse: needsAble,
-    desc: function (L) {
-      return 'The corgi nearest the foe dashes in, bites it for ' + L.dmg + ' damage and drags it up to ' + plural(L.pull, 'tile') + ' toward you.';
+    desc: function (L, user) {
+      return 'The corgi nearest the foe dashes in, bites it for ' + (L.dmg + stick(user)) + ' damage and drags it up to ' + plural(L.pull, 'tile') + ' toward you.';
     },
     flavor: 'She threw a stick. The corgi brought back a goblin. Close enough.',
     execute: function (ctx) {
@@ -517,8 +526,8 @@
       });
       return near ? true : 'No foe next to a corgi.';
     },
-    desc: function (L) {
-      return 'Each foe next to one of your corgis takes ' + L.dmg + ' damage and is pushed ' + plural(L.push, 'tile') + ' away from it.';
+    desc: function (L, user) {
+      return 'Each foe next to one of your corgis takes ' + (L.dmg + stick(user)) + ' damage and is pushed ' + plural(L.push, 'tile') + ' away from it.';
     },
     flavor: '3 a.m. energy, weaponized. Point the pack at a pit for best results.',
     execute: function (ctx) {
@@ -602,8 +611,8 @@
     canUse: function (ctx) {
       return DD.Combat.foesOf(ctx.user).some(function (f) { return besideTiles(f, null).length > 0; }) ? true : 'No room next to any foe.';
     },
-    desc: function (L) {
-      return 'A corgi pounces beside each of up to ' + L.n + ' foes (nearest first), bites it for ' + L.dmg + ' damage and Taunts it.';
+    desc: function (L, user) {
+      return 'A corgi pounces beside each of up to ' + L.n + ' foes (nearest first), bites it for ' + (L.dmg + stick(user)) + ' damage and Taunts it.';
     },
     flavor: 'Somewhere, a dog park is suddenly very quiet.',
     execute: function (ctx) {
@@ -638,7 +647,7 @@
     ap: 1, cooldown: 0,
     levels: [{ dmg: BITE }],
     target: { type: 'unit', range: [1, 1], filter: 'enemy' },
-    desc: function (L) { return 'Deal ' + L.dmg + ' damage to an adjacent foe.'; },
+    desc: function (L, user) { return 'Deal ' + (L.dmg + stick(user)) + ' damage to an adjacent foe.'; },
     flavor: 'Herding instinct: mostly ankles.',
     execute: function (ctx) {
       const u = ctx.user, f = ctx.targetUnit;
@@ -762,34 +771,35 @@
       'ell_switcheroo', 'ell_wildshape'],
     summons: [CORGI],
     barks: {
-      select: ['The corgis and I are listening.', 'Yes? Biscuit was just asking the same thing.', 'Nature provides. Mostly corgis.',
+      select: ['The corgis and I are listening.', 'Yes? The corgi was just asking the same thing.', 'Nature provides. Mostly corgis.',
         'Shh. The grass is telling me a secret.', 'Did someone say walkies?', 'Pebbles and the corgis signed a ceasefire. Mostly.'],
-      start: ['Corgis, assemble! Gently. GENTLY.', 'Roll for initiative! Biscuit rolled a 20. With his nose.',
+      start: ['Corgis, assemble! Gently. GENTLY.', 'Roll for initiative! The fluffiest corgi rolled a 20. With his nose.',
         'Nature finds a way. The way is corgis.', 'Everyone stay calm. And nobody pet the goblins.', 'Who\'s ready for walkies? Violent walkies?',
         'Corgis, herd them. Nobody leaves without a nip.'],
+      swap: ['Scoot over, {ally}. The corgis want the window seat.', 'Switch with me, {ally}. Nature abhors a queue.'],
       move: ['Walkies!', 'Coming, little ones. Mind the paws.', 'The moss says this way.', 'Heel. No, not you, Marwyn.', 'Pardon me, mushrooms.',
-        'Biscuit, keep him busy while I tiptoe away.'],
+        'Good dog, keep him busy while I tiptoe away.'],
       kill: ['Returned to the earth. With love.', 'You\'re compost now. Beautiful compost.', 'Good boys. GOOD boys.',
         'Nature is healing. You are not.', 'That one was a bad dog.'],
       hurt: ['Ow! Rude!', 'The corgis saw that. They will remember.', 'Not the flower crown!', 'I\'m composting that grudge.',
         'Ow! I provoked that one, didn\'t I?'],
-      lowhp: ['I may need to lie down in a meadow.', 'Biscuit... tell the others I loved them...', 'Someone heal me! Or pet me! Either!',
+      lowhp: ['I may need to lie down in a meadow.', 'Good dogs... I loved you all... equally... mostly...', 'Someone heal me! Or pet me! Either!',
         'Wilting... a bit... over here.'],
       downed: ['Tell the corgis... they were all good boys...', 'Returning to the earth... briefly...', 'Feed the dogs... twice a day...',
         'Who\'s a good... ugh.'],
       revive: ['Photosynthesis! I\'m back!', 'The corgis licked me back to life.', 'Nature always returns. Like a boomerang.',
         'Back on my paws. Feet. Paws.'],
       ally_down: ['No! Corgis, protect them!', 'Someone get them a treat! Or a healer!', 'That\'s it. Nobody gets belly rubs.',
-        'Josiah, do the thing with the leeches!', 'Captain Loaf, sit on them until they feel better!',
+        'Josiah, do the thing with the leeches!', 'Corgis, sit on them until they feel better!',
         'Valdris, hammer them back into shape! Gently!'],
       levelup: ['I\'ve learned the true name of every corgi.', 'Stronger roots, fluffier friends.', 'The pack grows!',
         'My power grows. So does the dog hair.'],
       victory: ['Everyone gets a treat! Even you, Slate.', 'Walkies are over. Nap time.', 'Peace, love and corgis.',
         'Good fight. Now, who wants belly rubs?', 'The earth thanks you. The corgis thank you more.',
         'Treats for everyone! A fireproof one for Pebbles.'],
-      idle: ['Waffles, no. We do not eat the Mayor.', 'Zarathor, the corgis are not "bling".', 'Professor Marbles, they chase you out of love.',
+      idle: ['No. Bad corgi. We do not eat the Mayor.', 'Zarathor, the corgis are not "bling".', 'Professor Marbles, they chase you out of love.',
         'Betty, those are the corgis\' treats. Put them down.', 'Basanos, they just want to sniff you. You know why.',
-        'Hjalmar, give Biscuit his collar back. And my crown.'],
+        'Hjalmar, give the corgi his collar back. And my crown.'],
       signature: ['RELEASE THE CORGIS!', 'Every dog has its day. Today is that day!', 'THE PACK IS UPON YOU!',
         'Cry havoc and let slip the corgis of war!', 'Loaves! Out of the oven!'],
     },

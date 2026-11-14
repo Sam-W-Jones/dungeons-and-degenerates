@@ -281,3 +281,35 @@ suite pass; no swallowed errors.
   archer's line; Ghost Arrow at a barrel behind a wall (preview = reality, 1 AP), Pinning Shot lists it, Arrow from
   Beyond does not.
 - **Requests**: none (the `cloud` flag request above is done: `airborne`).
+
+## Playtest fixes (Nov 12)
+
+- **heroes-2 (Kiri part) / heroes-v1, fixed**: every range number in her descs is the range she really has: `reach(user,
+  id, base)` → `DD.Targeting.reach` (fix:engine's helper: base + what range items, Dazzle and modifyRange hooks add to
+  the skill's max range; no user → the listed number). With the Ghostwood Longbow: Ghost Arrow "within 6", Mark 7,
+  Arrow from Beyond 8, Banishing Shot 5, Phase Shot "a straight line of 6 tiles" (its line already followed the range),
+  Ethereal Step, Haunted Volley, Mist and the signature too. Suite `hero_kiri: playtest fixes (Nov 12)`.
+- **heroes-v1 across the eleven heroes fix:content owns + the generic skills**: the same `reach()` helper (one copy per
+  file, delegating to `DD.Targeting.reach`) now prints the target range in Zarathor (9 skills), Syllamin (6), Marbles
+  (4), Josiah (8), Mayor Buga (11), Betty (Ramming Speed!, Mountain Goat, the G.O.A.T.), Valdris (6), Pebbles (3), Kiri
+  (10) and the generic skills (Throw Chair, Dodge Roll, Pocket Sand, Come At Me Bro, Barrel Toss, Tactical Retreat).
+  Ellaria and Corelos print no target range. Area sizes ("foes within 2 of the target", "within r tiles of you") are
+  not target ranges and stay. Cross-hero suite: `kit: playtest fixes (Nov 12) — descs give the range a +range item
+  really gives (heroes-v1)` (every skill level whose desc prints its max range prints max+1 with +1 range).
+  Not done: Slate, Basanos, Sparrow, Marwyn and Hjalmar (deferred files this run) and the consumables (static desc
+  strings: the Ice Bucket's "within 2", the Thunder Jar's "within 4"…; the post-balance finish run can make them
+  functions). Checked Nov 12 (~20:10): a consumable's card never contradicts its own text today, because
+  `UI.consumableTooltipHtml` / `consumableCard` take no user (the 🎯 line says "Range 1–4", the text "within 4"); only
+  the real range in a fight is 1 more with a +range item. A user-aware desc needs the UI to pass the holder and to
+  call a desc function (rewards.js / consumableCard read `d.desc` as a string), so it is a pair change:
+  **Request (fix:ui or the post-balance finish run, heroes-v1)**: pass the holder to the consumable tooltip / card and
+  render `typeof d.desc === 'function' ? DD.skillDesc(d, 1, holder) : d.desc`; then consumables.js switches its seven
+  ranged descs (Ice Bucket, Flask of Bad Decisions, Scroll of Yeet, Bag of d4s, Holy Water, Frost Flask, Thunder Jar)
+  to `DD.Targeting.reach`.
+
+## Review (finish, Nov 14) — REVIEWER
+
+- D3 re-played with her real kit: Fade Out (Stealthed), then Ghost Arrow at a crate → "Revealed!"; at an explosive
+  barrel → revealed too. The Stealth tooltip now says "Breaks when it deals damage or attacks an object."
+- Arrow from Beyond stays a D1 opt-out (it lands next turn); her other single-target damage skills hit a crate for
+  exactly their 🔨 number (probe `.tmp/wf14/rev/d1.js`).

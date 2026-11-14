@@ -1,13 +1,16 @@
 /* Dungeons and Degenerates — js/data/consumables.js
- * Consumables (ids con_*): 14 single-use drinks, bombs and dubious scrolls for the party's pockets (3 by default),
+ * Consumables (ids con_*): 15 single-use drinks, bombs, buckets and dubious scrolls for the party's pockets (3 by default),
  * sold in shops for 20-35 gold and looted after fights. Each costs 1 AP, can't be used by summons, and its `desc` is
  * the exact effect. v2: one effect and at most one rider each; durations count the owner's own turns ("until the end
  * of their next turn" = turns: 1), AP for an ally outside its turn arrives on its next turn, nothing grants Block.
  * Registers the surface con_d4s ("Loose d4s", from the Bag of d4s): the first enemy to step on a tile of dice takes 4
  * damage and kicks them away; heroes and flyers are safe; fire melts them.
  * v2 requests: a healing drink (tag 'heal': the Red Drinks, the Antidote) aimed at a DOWNED adjacent ally gets them back
- * up with the healed HP (DD.Act.heal on ctx.reviveTarget); the Thunder Jar, like any single-target attack, can be thrown
- * at an explosive barrel to set it off (the engine detonates it; the chain never happens).
+ * up with the healed HP (DD.Act.heal on ctx.reviveTarget); the Thunder Jar, like any single-target damage skill, can be thrown
+ * at an explosive barrel to set it off (the engine detonates it; the chain never happens), and (rules run) at any breakable
+ * object, which takes its `objectDmg` 8 (its damage lives in execute, so it says so).
+ * Balance pass 1: the Bucket of Ice Water (a revive only a downed ally can be targeted with) is every party's starting
+ * kit (DD.Balance.start.consumables; D9: the kit is a revive, not a heal).
  * Helpers shared with js/data/skills_generic.js live on DD.Kit (pushPath etc.).
  */
 (function () {
@@ -23,6 +26,8 @@
   function G() { return DD.Grid; }
   function active(u) { return !!u && !u.dead && !u.downed; }
   function key(p) { return p.x + ',' + p.y; }
+  /** [playtest heroes-v1] The target range in a desc: the holder's range items when shown for one (DD.Targeting.reach). */
+  function within(def, L, user, n) { return 'within ' + (DD.Targeting && DD.Targeting.reach ? DD.Targeting.reach(def, L, user, n) : n); }
   function unholy(u) { return !!u && (u.tags || []).some(function (t) { return UNHOLY.indexOf(t) >= 0; }); }
 
   /**
@@ -145,13 +150,33 @@
     },
   });
 
+  // ---- 2b. Bucket of Ice Water (balance pass: every party starts with one, DD.Balance.start) --------------------------
+  // A revive anyone can carry: only a DOWNED ally is a target (filter 'downedAlly'), so it waits for the moment it matters.
+  const BUCKET_PCT = 50;
+  cons({
+    id: 'con_ice_bucket', name: 'Bucket of Ice Water', icon: '🪣', rarity: 'common', price: 25, ap: 1, tags: ['heal', 'revive'],
+    target: { type: 'unit', range: [1, 2], filter: 'downedAlly', los: false },
+    desc: function (L, user) { return 'Splash a downed ally ' + within(this, L, user, 2) + ': they get back up with ' + BUCKET_PCT + '% of their max HP.'; },
+    flavor: 'Wakes anyone up. Ends most friendships. Keep it away from the wizard\'s spellbook.',
+    execute: function (ctx) {
+      const u = ctx.user, t = ctx.targetUnit;
+      if (!active(u) || !t || !t.downed || t.dead) return;
+      toss(u, t, '#9fd8ff', 'flask');
+      DD.FX.particles(t, { kind: 'bubbles', color: '#bfe8ff', count: 14 });
+      DD.FX.text(t, 'SPLOOSH!', { color: '#cfefff', size: 15 });
+      A().revive(t, BUCKET_PCT / 100, { by: u });
+    },
+  });
+
   // ---- 3. Flask of Bad Decisions -------------------------------------------------------------------------------
   cons({
     id: 'con_bad_decisions', name: 'Flask of Bad Decisions', icon: '🍾', rarity: 'rare', price: 30, ap: 1, tags: ['fire', 'aoe'],
     target: { type: 'tile', range: [1, 4], los: false },
     area: { shape: 'circle', size: 1 },
-    desc: 'Lob it at a tile within 4: 8 fire damage to everyone within 1, allies too, and the floor there burns for 2 rounds. ' +
-      'Sets off oil, webs and barrels.',
+    desc: function (L, user) {
+      return 'Lob it at a tile ' + within(this, L, user, 4) + ': 8 fire damage to everyone within 1, allies too, and the floor there burns for 2 ' +
+        'rounds. Sets off oil, webs and barrels.';
+    },
     flavor: 'Shake well. Throw better. Apologize to the cleric afterwards.',
     execute: function (ctx) {
       const u = ctx.user, c = ctx.target;
@@ -263,8 +288,10 @@
         return out.concat(DD.Kit.pushPath(t, DD.util.dirTo(ctx.user, t), 3, ctx.user));
       },
     },
-    desc: 'Read it at a unit, friend or foe, within 4 in a straight line: it is YEETED 3 tiles away from you. A crash deals 5 ' +
-      'damage to it and what it hits.',
+    desc: function (L, user) {
+      return 'Read it at a unit, friend or foe, ' + within(this, L, user, 4) + ' in a straight line: it is YEETED 3 tiles away from you. A crash ' +
+        'deals 5 damage to it and what it hits.';
+    },
     flavor: 'Ancient Draconic for "go away, but faster".',
     execute: function (ctx) {
       const u = ctx.user, t = ctx.targetUnit;
@@ -280,8 +307,10 @@
     id: 'con_bag_of_d4s', name: 'Bag of d4s', icon: '🎲', rarity: 'common', price: 22, ap: 1, tags: ['trap', 'aoe'],
     target: { type: 'tile', range: [1, 3], los: false },
     area: { shape: 'circle', size: 1 },
-    desc: 'Scatter d4s on the dry floor within 1 of a tile within 3, for 3 rounds. The first enemy on each tile of dice takes ' +
-      D4_DMG + ' damage (ignores armor). Heroes and flyers are safe.',
+    desc: function (L, user) {
+      return 'Scatter d4s on the dry floor within 1 of a tile ' + within(this, L, user, 3) + ', for 3 rounds. The first enemy on each tile of dice ' +
+        'takes ' + D4_DMG + ' damage (ignores armor). Heroes and flyers are safe.';
+    },
     flavor: 'Nature\'s caltrop. The only die that hurts more off the table than on it.',
     execute: function (ctx) {
       const u = ctx.user, c = ctx.target;
@@ -308,8 +337,10 @@
     id: 'con_holy_water', name: 'Holy Water', icon: '😇', rarity: 'common', price: 24, ap: 1, tags: ['holy', 'aoe'],
     target: { type: 'tile', range: [1, 3], los: false },
     area: { shape: 'circle', size: 1 },
-    desc: 'Splash a tile within 3: undead, devils and demons within 1 take 10 holy damage, and the dry floor there is Holy ' +
-      'Ground for 3 rounds (grounded heroes ending a turn on it heal 3).',
+    desc: function (L, user) {
+      return 'Splash a tile ' + within(this, L, user, 3) + ': undead, devils and demons within 1 take 10 holy damage, and the dry floor there ' +
+        'is Holy Ground for 3 rounds (grounded heroes ending a turn on it heal 3).';
+    },
     flavor: 'Blessed by a priest. It is tap water, but the priest was very sincere.',
     execute: function (ctx) {
       const u = ctx.user, c = ctx.target;
@@ -328,8 +359,10 @@
     id: 'con_frost_flask', name: 'Frost Flask', icon: '🧊', rarity: 'common', price: 25, ap: 1, tags: ['frost', 'aoe'],
     target: { type: 'tile', range: [1, 4], los: false },
     area: { shape: 'circle', size: 1 },
-    desc: 'Lob it at a tile within 4: every foe within 1 takes 5 frost damage and is Slowed (−2 move) through its next turn. ' +
-      'Wet foes freeze solid; water there freezes and fire goes out.',
+    desc: function (L, user) {
+      return 'Lob it at a tile ' + within(this, L, user, 4) + ': every foe within 1 takes 5 frost damage and is Slowed (−2 move) through its next ' +
+        'turn. Wet foes freeze solid; water there freezes and fire goes out.';
+    },
     flavor: 'Keep away from children, fire elementals and your tongue.',
     execute: function (ctx) {
       const u = ctx.user, c = ctx.target;
@@ -368,8 +401,12 @@
   cons({
     id: 'con_thunder_jar', name: 'Thunder Jar', icon: '🌩️', rarity: 'rare', price: 32, ap: 1, tags: ['lightning', 'ranged', 'chain'],
     target: { type: 'unit', range: [1, 4], filter: 'enemy', los: true },
-    desc: 'Hurl it at a foe within 4: 8 lightning damage, then it jumps to up to 2 more foes (each within 2 of the last) for 4. ' +
-      'Water under a struck foe is electrified: 4 damage and Stunned for everyone in it, heroes too.',
+    // rules run: thrown at a breakable object (a crate, a totem) it hits it for its first strike's 8; there is nothing to chain to
+    objectDmg: 8,
+    desc: function (L, user) {
+      return 'Hurl it at a foe ' + within(this, L, user, 4) + ': 8 lightning damage, then it jumps to up to 2 more foes (each within 2 of the last) ' +
+        'for 4. Water under a struck foe is electrified: 4 damage and Stunned for everyone in it, heroes too.';
+    },
     flavor: 'Do not shake. Do not open. Definitely do not lick. Throw.',
     execute: function (ctx) {
       const u = ctx.user, t = ctx.targetUnit;
@@ -471,7 +508,8 @@
   const Kit = (DD.Kit = DD.Kit || {});
   Kit.CONSUMABLE_IDS = ['con_red_drink', 'con_big_red_drink', 'con_bad_decisions', 'con_smoke_bomb', 'con_energy_drink',
     'con_antidote', 'con_liquid_courage', 'con_scroll_of_yeet', 'con_bag_of_d4s', 'con_holy_water', 'con_frost_flask',
-    'con_thunder_jar', 'con_pocket_sand', 'con_mystery_potion'];
+    'con_thunder_jar', 'con_pocket_sand', 'con_mystery_potion', 'con_ice_bucket'];
+  Kit.BUCKET_PCT = BUCKET_PCT;
   Kit.D4_DMG = D4_DMG;
   Kit.coverable = coverable;
   Kit.chainNext = chainNext;

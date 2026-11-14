@@ -161,7 +161,9 @@
               if (!R('tavernRecruit')) return;
               const res = DD.safe('Run.tavernRecruit', R('tavernRecruit'), DD.Run, [id, replaceIdx]);
               done(res, 'summon');
-              const bark = res && res.ok && d.barks && d.barks.select && d.barks.select.length ? DD.util.pick(d.barks.select, DD.rng) : '';
+              // [playtest text-tone-6] only lines that name heroes in the party (the recruit included)
+              const sel = res && res.ok && d.barks && Array.isArray(d.barks.select) ? UI.partyLines(d.barks.select) : [];
+              const bark = sel.length ? DD.util.pick(sel, DD.rng) : '';
               if (bark) UI.toast('<b>' + UI.esc(d.name) + ':</b> ' + UI.esc(bark), { html: true, cls: 'bark', ms: 3000 });
             },
           };

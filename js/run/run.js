@@ -43,6 +43,11 @@
   }
   function startGold() { return Math.max(0, Math.round(num(bal('gold', 'start'), 60))); }
   function healOf(key) { return Math.max(0, num(bal('heal', key), FALLBACK_BAL.heal[key])); }
+  /** [balance] Ids every new run starts with: DD.Balance.start.consumables / .items (none without them). */
+  function startKit(key) {
+    const st = DD.Balance && DD.Balance.start;
+    return st && Array.isArray(st[key]) ? st[key].filter(function (id) { return typeof id === 'string'; }) : [];
+  }
   const DIFFICULTIES = ['casual', 'normal', 'brutal'];
   const SLOTS = ['weapon', 'armor', 'trinket'];
   const FALLBACK_STATS = { hp: 24, ap: 3, mov: 4, armor: 0 };
@@ -452,6 +457,9 @@
     // "Session Zero character quirks": one roll per hero on the Table of Questionable Blessings, never cursed, kept
     S.party.forEach(function (rh) { autoRoll(rh, 'start', { noCursed: true }); });
     S.maxConsumables = computeMaxConsumables();
+    // [balance] the starting kit (DD.Balance.start): consumables into the pockets, items equipped like loot
+    startKit('consumables').forEach(function (id) { addConsumable(id); });
+    startKit('items').forEach(function (id) { if (addItem(id)) autoEquip(id); });
     S.map = makeMap(1);
     touch();
     show('map', { act: 1, intro: true, text: narr('run_start') });
@@ -467,6 +475,16 @@
     const out = Math.floor(exact + 1e-9);
     S.goldCarry = clamp(exact - out, 0, 0.999999);
     return out;
+  }
+  /**
+   * [finish desc-sweep-9] What Run.addGold(n) would add right now: income gets the party's passive gold bonus (Trust
+   * Fund) and its carried fraction; pure. Reward cards and hints state this number ("Gain 38 gold").
+   */
+  function goldPreview(n) {
+    const amount = Math.round(num(+n, 0));
+    if (!S || !(amount > 0)) return amount;
+    const m = DD.Passives ? DD.Passives.goldMult(S) : 1;
+    return m === 1 ? amount : Math.floor(amount * m + num(S.goldCarry, 0) + 1e-9);
   }
   /** Add (or with n < 0, remove) gold, clamped at 0. Income (n > 0) gets the party's passive gold bonus unless
    *  opts.raw. Returns the actual change. */
@@ -1363,7 +1381,6 @@
     const info = applyOutcome(result, cs, { countDowns: failed && !!bal('objectiveFailed', 'countDowns') });
     if (cs && Array.isArray(cs.units)) markSeenUnits(cs.units);
     if (def && S.fought.indexOf(def.id) < 0) S.fought.push(def.id);
-    S.stats.combats++;
     if (failed && aliveIdx().length) {
       S.stats.failed = (S.stats.failed || 0) + 1;
       const failedNode = p.nodeId ? S.map.nodes[p.nodeId] : null;
@@ -1386,6 +1403,8 @@
       const sum = endRun('defeat', { killedBy: def ? def.name : null, kind: p.kind });
       return { result: 'defeat', outcome: 'gameover', summary: sum };
     }
+    // [playtest first-hour-3] 'Fights won' (game over, Hall of Fame, the map chip): victories only
+    S.stats.combats++;
     if (p.kind === 'elite') S.stats.elites++;
     if (p.kind === 'boss') S.stats.bosses++;
     const node = p.nodeId ? S.map.nodes[p.nodeId] : null;
@@ -1557,7 +1576,20 @@
   function choiceText(def, c, key) {
     let v = c[key];
     if (typeof v === 'function') v = DD.safe(key + ' of a choice in event ' + def.id, v, c, [S]);
-    return v === undefined || v === null ? '' : String(v);
+    return v === undefined || v === null ? '' : key === 'hint' ? goldHint(String(v)) : String(v);
+  }
+  /**
+   * [finish review, desc-sweep-9] An event hint states the gold the party would really get: the api's gold (Run.addGold)
+   * pays the gold Blessings (Trust Fund) on top, so "Gain 50 gold" reads "Gain 55 gold" while one is held. Income
+   * phrases only ("gain / win N gold", "pays N", "N gold each"); costs ("Pay 25 gold") and losses stay as written.
+   */
+  function goldHint(text) {
+    if (!S || !DD.Passives || DD.Passives.goldMult(S) === 1) return text;
+    const pv = function (n) { return String(goldPreview(+n)); };
+    return text
+      .replace(/\b(gain|gains|win|wins) (\d+) gold\b/gi, function (m, verb, n) { return verb + ' ' + pv(n) + ' gold'; })
+      .replace(/\bpays (\d+)\b/g, function (m, n) { return 'pays ' + pv(n); })
+      .replace(/\b(\d+) gold each\b/g, function (m, n) { return pv(n) + ' gold each'; });
   }
 
   /** The pending event for the event screen: { id, def, title, icon, text, choices: [{ index, label, hint,
@@ -2192,8 +2224,8 @@
     // party
     heroStats: heroStats, makeRunHero: makeRunHero, heroName: heroName, hero: heroAt, indexOf: idxOf,
     aliveHeroes: aliveIdx, partyLevel: partyLevel, recruitLevel: recruitLevel,
-    addGold: addGold, spendGold: spendGold, addItem: addItem, equip: equip, unequip: unequip, canEquip: canEquip,
-    autoEquip: autoEquip, addConsumable: addConsumable, removeConsumable: removeConsumable,
+    addGold: addGold, goldPreview: goldPreview, spendGold: spendGold, addItem: addItem, equip: equip, unequip: unequip,
+    canEquip: canEquip, autoEquip: autoEquip, addConsumable: addConsumable, removeConsumable: removeConsumable,
     maxConsumables: function () { return S ? S.maxConsumables : BASE_CONSUMABLES; },
     healParty: healParty, healHero: healHero, damageHero: damageHero, addScar: addScar, removeScar: removeScar,
     // progression (v2: one level-up per won fight through the rotation; grantXp / grantHeroXp are XP-era aliases)

@@ -441,7 +441,7 @@
   // ---- v2 requests (Nov 3, user): barrels, heals on the downed, the turning map — across every content file ----------
   T.suite('integration: v2 requests — exploding objects are volatile, aimed heals get the downed up, no screen-direction words', function (t) {
     if (!fullRoster() || !DD.getEnemy('test_grunt')) { t.skip('needs every hero file and tests/fixtures.js (isolated run)'); return; }
-    // 1. an object that explodes when destroyed says so (volatile): any hero's single-target attack can set it off
+    // 1. an object that explodes when destroyed says so (volatile): any hero's single-target damage skill can set it off
     vals(DD.defs.objects).forEach(function (o) {
       if (isTest(o.id) || typeof o.onDestroyed !== 'function' || !/\bexplode\s*\(/.test(String(o.onDestroyed))) return;
       t.ok(o.volatile === true, o.id + ': it explodes when destroyed, so it is volatile');
@@ -518,6 +518,58 @@
       t.ok(g.hp < g.maxHp, 'Smite: the ' + (fly ? 'flying' : 'wading') + ' grunt is struck');
       t.eq(DD.Act.hasStatus(m, 'stun'), !fly, 'Smite: the mage in the same pool is ' + (fly ? 'not shocked (a flyer stands in no water)' : 'shocked'));
     });
+  });
+
+  // ---- rules run (Nov 6, user: "objects should be targetable to break them") — across every content file ----------
+  // The core objects (js/data/terrain.js) are the engine's; everything else with HP was placed by a content author.
+  const CORE_OBJECTS = ['crate', 'barrel', 'barrel_explosive', 'keg', 'pillar', 'rock', 'tree', 'dead_tree', 'bush', 'mushroom',
+    'gravestone', 'coffin', 'statue', 'bookshelf', 'candles', 'd20', 'soda_can', 'pencil', 'gold_pile', 'bones', 'fence', 'pipe',
+    'totem', 'spikes', 'pressure_plate', 'lever', 'valve', 'mirror', 'chest', 'fountain', 'brazier'];
+  T.suite('integration: rules run — every breakable content object decides targetable, its desc says so, and the party\'s aim agrees', function (t) {
+    if (!fullRoster() || !DD.getEnemy('dungeon_master') || !DD.getHero('test_mage')) { t.skip('needs every content file and tests/fixtures.js (isolated run)'); return; }
+    const Tg = DD.Targeting;
+    const own = vals(DD.defs.objects).filter(function (o) { return !isTest(o.id) && CORE_OBJECTS.indexOf(o.id) < 0; });
+    const breakables = own.filter(function (o) { return Number(o.hp) > 0; });
+    t.ok(breakables.length >= 10, breakables.length + ' breakable content objects: ' + breakables.map(function (o) { return o.id; }).join(', '));
+    const targets = [], optOuts = [];
+    breakables.forEach(function (o) {
+      const desc = String(o.desc || '');
+      if (o.volatile) {
+        // the barrel rule (Nov 5): aimed at, it goes off; nothing to decide
+        t.ok(/explode/i.test(desc), o.id + ': volatile, and its desc says it explodes');
+        return;
+      }
+      if (!t.ok(o.targetable === true || o.targetable === false, o.id + ': states its targetable decision (' + o.targetable + ')')) return;
+      t.ok(new RegExp('\\b' + o.hp + ' HP\\b').test(desc), o.id + ': its desc gives its ' + o.hp + ' HP');
+      if (o.targetable) t.ok(/any single-target damage skill can break it/i.test(desc), o.id + ': its desc says any single-target damage skill can break it (D1)');
+      else t.ok(/can't be aimed|never aimed|never aim/i.test(desc), o.id + ': its desc says attacks are never aimed at it');
+      (o.targetable ? targets : optOuts).push(o.id);
+      // in play: the test mage's 4-damage bolt (range 1-5), from next to it and from 3 tiles away
+      [1, 3].forEach(function (d) {
+        const s = DD.Combat.sandbox({ w: 7, h: 5, seed: 'int-break:' + o.id + ':' + d, noPlan: true,
+          heroes: [{ id: 'test_mage', x: 0, y: 2 }], enemies: [{ id: 'test_grunt', x: 6, y: 4 }] });
+        const m = s.units.filter(function (u) { return u.defId === 'test_mage'; })[0];
+        const label = o.id + ' ' + d + ' tile' + (d === 1 ? '' : 's') + ' away';
+        if (!t.ok(!!DD.Act.placeObject(d, 2, o.id), label + ': placed')) return;
+        const q = Tg.validTargets(m, m.basic).filter(function (p) { return p.x === d && p.y === 2; })[0];
+        if (!o.targetable) { t.ok(!q, label + ': no target for the party (' + JSON.stringify(q || null) + ')'); return; }
+        if (!t.ok(!!q && q.obj === o.id && q.dmg === 4 && q.breaks === (o.hp <= 4), label + ': a breakable target for the bolt\'s 4 (' + JSON.stringify(q || null) + ')')) return;
+        const pv = Tg.preview(m, m.basic, q);
+        const left = Math.max(0, o.hp - 4);
+        t.ok(!!pv && !!pv.breaks && pv.breaks.left === left && pv.breaks.text.indexOf('Break: ' + o.name) === 0,
+          label + ': the preview reads "' + (pv && pv.breaks && pv.breaks.text) + '"');
+        if (d !== 3) return;
+        const hit = DD.Combat.useSkill(m, m.basic, d, 2);
+        const after = DD.Grid.tile(d, 2).obj;
+        t.ok(!!hit && (left > 0 ? !!after && after.id === o.id && after.hp === left : !after || after.id !== o.id),
+          label + ': the bolt does what the preview said (' + (after && after.id === o.id ? after.hp + ' HP left' : 'broken') + ')');
+      });
+    });
+    t.log('content objects the party can aim at: ' + targets.join(', ') + ' · opted out: ' + optOuts.join(', '));
+    // the decisions that make the puzzles: the DM's screen and the objects the party protects are no targets; the
+    // destroy objectives and the Lich's shelves are
+    ['dm_screen_panel', 'a2_coffee_machine', 'a3_snack_bowl'].forEach(function (id) { t.ok(optOuts.indexOf(id) >= 0, id + ' is opted out'); });
+    ['a1_strike_fund', 'a2_chafing_dish', 'lich_shelf', 'grim_cabinet', 'a2_bone_pile'].forEach(function (id) { t.ok(targets.indexOf(id) >= 0, id + ' is a target'); });
   });
 
   T.suite('integration: whole campaigns with real heroes under AutoPlay (smoke)', function (t) {

@@ -362,7 +362,7 @@
   });
 
   // ---------------------------------------------------------------------------------------------------------------
-  T.suite('enemies_act1: elite skills (tongue, CHOMP, the Lid Slam wind-up, throws, stools, engulf)', function (t) {
+  T.suite('enemies_act1: elite skills (tongue, Gold Digger, the Lid Slam wind-up, throws, stools, engulf)', function (t) {
     const from = DD.problems.length;
     // Mimic: tongue in a straight line pulls next to it (v2: no Root); out of line it misses
     sb({ heroes: [{ id: 'test_mage', x: 5, y: 4 }], enemies: [{ id: 'a1_mimic', x: 1, y: 4 }] });
@@ -378,18 +378,18 @@
     act(function () { DD.Act.teleport(h, 4, 5); });
     act(function () { DD.AI.executeIntent(m2, it); });
     t.ok(h.hp === hp && h.x === 4 && h.y === 5, 'tongue: a target out of line is missed');
-    // CHOMP: 9 + swallows up to 4 gold; it all comes back when the mimic dies
+    // Gold Digger: 9 + swallows up to 4 gold; it all comes back when the mimic dies
     sb({ gold: 10, heroes: [{ id: 'test_mage', x: 2, y: 4 }], enemies: [{ id: 'a1_mimic', x: 3, y: 4 }] });
     h = H('test_mage'); hp = h.hp;
     const m3 = U('a1_mimic');
     fire(m3, 'a1_mimic_chomp', h);
-    t.eq(hp - h.hp, 9, 'CHOMP: 9');
-    t.eq(DD.Act.gold(), 6, 'CHOMP: party gold 10 → 6');
-    t.eq(m3.data.gold, 4, 'CHOMP: the mimic holds 4 gold');
+    t.eq(hp - h.hp, 9, 'Gold Digger: 9');
+    t.eq(DD.Act.gold(), 6, 'Gold Digger: party gold 10 → 6');
+    t.eq(m3.data.gold, 4, 'Gold Digger: the mimic holds 4 gold');
     DD.Combat.state.sandboxGold = 2;
     act(function () { DD.Act.heal(null, h, 20); });
     fire(m3, 'a1_mimic_chomp', h);
-    t.ok(DD.Act.gold() === 0 && m3.data.gold === 6, 'CHOMP: a broke party loses what it has (2)');
+    t.ok(DD.Act.gold() === 0 && m3.data.gold === 6, 'Gold Digger: a broke party loses what it has (2)');
     act(function () { DD.Act.kill(m3, h); });
     t.eq(DD.Act.gold(), 6, 'dead mimic coughs up all 6 swallowed gold');
 
@@ -417,7 +417,7 @@
     sb({ heroes: [{ id: 'test_mage', x: 5, y: 4 }, { id: 'test_cleric', x: 3, y: 3 }], enemies: [{ id: 'a1_mimic', x: 4, y: 4 }] });
     a = H('test_mage'); b = H('test_cleric'); mm = U('a1_mimic');
     ha = a.hp; hb = b.hp;
-    t.ok(DD.Combat.provokes(a, 7, 4).some(function (p) { return p.unitId === mm.id && p.skillId === 'a1_mimic_chomp'; }), 'walking away from the Mimic provokes a CHOMP');
+    t.ok(DD.Combat.provokes(a, 7, 4).some(function (p) { return p.unitId === mm.id && p.skillId === 'a1_mimic_chomp'; }), 'walking away from the Mimic provokes a Gold Digger');
     act(function () { DD.AI.windUp(mm, 'a1_mimic_slam', mm, { anchor: 'self', label: 'Lid Slam' }); });
     t.eq(DD.Combat.provokes(a, 7, 4).length, 0, 'lid open: stepping out of the slam provokes nothing');
     t.ok(DD.Combat.move(a, 7, 4) && a.hp === ha && a.x === 7, 'lid open: the mage walks out for free');
@@ -560,10 +560,10 @@
       r = walkAway(id, 4, 7);
       t.ok(r.pv.length === 0 && r.strikes === 0 && r.lost === 0 && r.h.y === 7, id + ': no attack of opportunity (no melee basic)');
     });
-    // the Mimic CHOMPs the leaver (9 + gold)
+    // the Mimic bites the leaver (Gold Digger, 9 + gold)
     r = walkAway('a1_mimic', 4, 7, { gold: 10 });
-    t.ok(r.strikes === 1 && r.lost === 9 && DD.Act.gold() === 6, 'mimic: CHOMP on the way out (9, 4 gold swallowed)');
-    t.ok(DD.Combat.state.log.some(function (l) { return /swallows 4 gold coins/.test(l.text); }), 'mimic: the log says what the reaction CHOMP took (review)');
+    t.ok(r.strikes === 1 && r.lost === 9 && DD.Act.gold() === 6, 'mimic: Gold Digger on the way out (9, 4 gold swallowed)');
+    t.ok(DD.Combat.state.log.some(function (l) { return /swallows 4 gold coins/.test(l.text); }), 'mimic: the log says what the reaction Gold Digger took (review)');
     // the Bouncer's attack of opportunity is the throw: grabbed on the way out and thrown 3 tiles away from him
     r = walkAway('a1_bugbear', 4, 7);
     t.ok(r.pv.length === 1 && r.pv[0].skillId === 'a1_bugbear_bounce' && r.pv[0].dmg === 7, 'bugbear: the move preview names the throw (7)');
@@ -636,6 +636,16 @@
     t.ok(!DD.Combat.state.result, 'one fund left: not won yet');
     act(function () { DD.Act.damageObject(h, 4, 2, 8); });
     t.eq(DD.Combat.state.result, 'victory', 'all strike funds destroyed: victory');
+    // rules run: a destroy objective is the point of shooting things — two bolts (4 + 4) from 4 tiles away do it
+    sb({ gold: 0, heroes: [{ id: 'test_mage', x: 1, y: 4 }], enemies: [{ id: 'a1_gob_grunt', x: 8, y: 8 }],
+      objects: [{ x: 5, y: 4, id: 'a1_strike_fund' }], objective: { type: 'destroy', objId: 'a1_strike_fund', count: 1 }, encounter: null });
+    h = H('test_mage');
+    const fq = DD.Targeting.validTargets(h, h.basic).filter(function (q) { return q.x === 5 && q.y === 4; })[0];
+    t.ok(!!fq && fq.obj === 'a1_strike_fund' && fq.dmg === 4 && fq.hp === 8, 'strike fund: a target for the mage\'s bolt from 4 tiles (' + JSON.stringify(fq) + ')');
+    t.ok(DD.Combat.useSkill(h, h.basic, 5, 4) && DD.Grid.tile(5, 4).obj.hp === 4, 'strike fund: shot once (8 → 4 HP)');
+    t.ok(DD.Combat.useSkill(h, h.basic, 5, 4) && !DD.Grid.tile(5, 4).obj && DD.Act.gold() === 3, 'strike fund: shot twice, broken, 3 gold');
+    t.eq(DD.Combat.state.result, 'victory', 'strike fund: shooting the last one wins the fight');
+    t.ok(/any single-target damage skill can break it/.test(DD.getObject('a1_strike_fund').desc) && DD.getObject('a1_strike_fund').targetable === true, 'strike fund: the desc says any single-target damage skill can break it (D1)');
     noErrors(t, from, 'mechanics');
   });
 
@@ -733,7 +743,7 @@
     const c2h = cl2.hp;
     const slam = mi.intents.filter(function (i) { return i.skillId === 'a1_mimic_slam'; })[0];
     t.ok(!!slam && slam.windup && slam.turnsLeft === 1 && mi.x === 4 && mi.y === 4, 'mimic: crowded, it winds up the Lid Slam where it stands');
-    t.ok(mg.hp === mh && cl2.hp === c2h, 'mimic: nothing else that turn (no CHOMP)');
+    t.ok(mg.hp === mh && cl2.hp === c2h, 'mimic: nothing else that turn (no Gold Digger)');
     t.ok(DD.Combat.move(mg, 1, 4) && mg.hp === mh, 'the mage steps out of the slam for free');
     const slamHits = {};
     DD.Act.addRule({ id: 'a1_slam_watch', name: 'Slam watch', hooks: { onTakeDamage: function (d) {
@@ -741,14 +751,14 @@
     } } });
     DD.Combat.endRound();
     t.ok(slamHits.test_cleric === 7 && !slamHits.test_mage, 'the slam lands on the cleric who stayed (' + JSON.stringify(slamHits) + '), not on the mage');
-    // a hero in a straight line 2-4 away and nobody to CHOMP: it walks up and licks them in
+    // a hero in a straight line 2-4 away and nobody to bite: it walks up and licks them in
     sb({ ai: true, initiative: 'enemiesFirst', heroes: [{ id: 'test_mage', x: 4, y: 8 }], enemies: [{ id: 'a1_mimic', x: 4, y: 1 }] });
     mi = U('a1_mimic'); mg = H('test_mage');
     t.ok(mg.maxHp - mg.hp === 4 && mi.x === 4 && DD.Grid.dist(mi, mg) === 1, 'mimic: walks into line and reels the mage in (' + key(mi) + ' → mage ' + key(mg) + ')');
-    // it walks up and CHOMPs a hero it can reach (a plain bite: no hop)
+    // it walks up and bites a hero it can reach (a plain bite: no hop)
     sb({ ai: true, initiative: 'enemiesFirst', gold: 10, heroes: [{ id: 'test_mage', x: 6, y: 5 }], enemies: [{ id: 'a1_mimic', x: 3, y: 4 }] });
     mg = H('test_mage');
-    t.ok(mg.maxHp - mg.hp === 9 && DD.Grid.dist(U('a1_mimic'), mg) === 1 && DD.Act.gold() === 6, 'mimic: walks up and CHOMPs (−9, 4 gold)');
+    t.ok(mg.maxHp - mg.hp === 9 && DD.Grid.dist(U('a1_mimic'), mg) === 1 && DD.Act.gold() === 6, 'mimic: walks up and bites with Gold Digger (−9, 4 gold)');
     // elites walk around walls toward the party (walking distance, not as the crow flies)
     sb({ ai: true, initiative: 'enemiesFirst', heroes: [{ id: 'test_mage', x: 1, y: 7 }], enemies: [{ id: 'a1_mimic', x: 1, y: 1 }],
       terrain: function (tl) { if (tl.y === 3 && tl.x < 7) tl.t = 'wall'; } });
@@ -929,11 +939,11 @@
     const shown = DD.AI.windups()[0];
     DD.Combat.endRound();
     t.ok(shown && shown.dmg === 7 && hp - h.hp === 7, 'lid slam into a wall: shows 7, deals 7 (' + (hp - h.hp) + ')');
-    // CHOMP is a plain bite now: a target 2 tiles away is out of reach (the planner walks up instead)
+    // Gold Digger is a plain bite now: a target 2 tiles away is out of reach (the planner walks up instead)
     sb({ heroes: [{ id: 'test_mage', x: 5, y: 4 }], enemies: [{ id: 'a1_mimic', x: 3, y: 4 }] });
     h = H('test_mage'); hp = h.hp;
     const far = fire(U('a1_mimic'), 'a1_mimic_chomp', h);
-    t.ok(h.hp === hp && U('a1_mimic').x === 3 && !(far && far.resolved), 'CHOMP from 2 tiles: no hop, no bite');
+    t.ok(h.hp === hp && U('a1_mimic').x === 3 && !(far && far.resolved), 'Gold Digger from 2 tiles: no hop, no bite');
     // Engulf: a second meal does not reset the "10 damage frees everyone" count
     sb({ heroes: [{ id: 'test_mage', x: 3, y: 4 }, { id: 'test_cleric', x: 5, y: 4 }, { id: 'test_knight', x: 4, y: 3 }], enemies: [{ id: 'a1_cube', x: 4, y: 4 }] });
     const cb = U('a1_cube'), e1 = H('test_mage'), e2 = H('test_cleric'), kn = H('test_knight');
@@ -1081,7 +1091,9 @@
     t.ok(agg.aoo.hero > 0 && agg.aoo.enemy > 0, kind + ': attacks of opportunity happen both ways');
     if (kind === 'elite' && SIM.normal) {
       const mean = SIM.normal.pct / SIM.normal.total, elite = agg.pct / agg.total;
-      t.ok(elite >= 1.2 * mean, 'elites hurt clearly more than normal fights (' + elite.toFixed(1) + '% vs ' + mean.toFixed(1) + '% of the party HP)');
+      // balance pass 1 raised act 1's regular fights (DD.Balance.act[1].normal, ×1.3 / ×1.15 since the sustain refit) and
+      // its elites less (act[1].elite ×1.2 / ×1.05); without the elite row the fixture gap inverts (pass 1: 46% vs 51%)
+      t.ok(elite >= 1.1 * mean, 'elites hurt more than normal fights (' + elite.toFixed(1) + '% vs ' + mean.toFixed(1) + '% of the party HP)');
       t.ok(agg.rounds / agg.total >= SIM.normal.rounds / SIM.normal.total, 'elites last at least as long as normal fights');
     }
     noErrors(t, from, kind + ' sims');
@@ -1137,5 +1149,31 @@
       t.ok(rat.dead || rat.hp < ratHp, 'the rat next to it is caught in the blast (' + (rat.dead ? 'dead' : ratHp - rat.hp) + ')');
     }
     noErrors(t, from, 'v2 requests');
+  });
+
+  // Display names: an enemy or boss skill never borrows a hero-side name (heroes, hero summons, generic skills), so the
+  // log, the inspect panel and the codex never mix up "Pounce" (Basanos) with the hell hound's leap. Hero names stay;
+  // the enemy side got its own (docs cleanup, Nov 5). Compared loosely: case, punctuation and "&" / "and" ignored.
+  T.suite('enemies_act1: (all acts) no enemy or boss skill shares a display name with a hero-side skill', function (t) {
+    const norm = function (s) { return String(s || '').toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, ''); };
+    const enemySide = {};
+    Object.keys(DD.defs.enemies).forEach(function (id) {
+      if (/^test_/.test(id)) return;
+      (DD.defs.enemies[id].skills || []).forEach(function (sid) { enemySide[sid] = true; });
+    });
+    Object.keys(DD.defs.skills).forEach(function (sid) { if (DD.defs.skills[sid].owner === 'enemy' && !/^test_/.test(sid)) enemySide[sid] = true; });
+    const heroNames = {};
+    Object.keys(DD.defs.skills).forEach(function (sid) {
+      const s = DD.defs.skills[sid];
+      if (enemySide[sid] || /^test_/.test(sid) || /^test/.test(String(s.owner || ''))) return;
+      (heroNames[norm(s.name)] = heroNames[norm(s.name)] || []).push(sid);
+    });
+    const clashes = [];
+    Object.keys(enemySide).forEach(function (sid) {
+      const s = DD.getSkill(sid);
+      if (s && heroNames[norm(s.name)]) clashes.push(sid + ' "' + s.name + '" = ' + heroNames[norm(s.name)].join('/'));
+    });
+    t.ok(Object.keys(enemySide).length > 0, Object.keys(enemySide).length + ' enemy-side skills checked against ' + Object.keys(heroNames).length + ' hero-side names');
+    t.eq(clashes.length, 0, 'no shared display names' + (clashes.length ? ': ' + clashes.join('; ') : ''));
   });
 })();

@@ -319,3 +319,18 @@ Suite: `hero_ellaria: v2 requests — …`. Rules: `docs/notes/rules.md` "v2 req
   "caught" hit is aimed at the area, so it still hits a flyer standing in it. Descs are exact now: Brambles "Grounded
   foes that enter … (flyers pass over)"; Entangling Roots "Foes caught, and grounded foes entering, take N damage and are
   Rooted." `safeFree` / the starting corgi use `hazardAt(x, y, null)` (corgis walk): unchanged.
+
+## Playtest fixes (Nov 12)
+
+Text-only (D11: "Leave Ellaria alone": no number, kit or item changes; desc fixes are fine):
+- **heroes-2 (Ellaria part, fixed)**: with The Good Stick the corgi texts include its +2: Fetch!, Zoomies, Release the
+  Corgis and the corgis' own Bite (`stick(user)`: Ellaria or one of her corgis whose owner holds it).
+- **heroes-7 (polish, fixed)**: Healing Spring: "Heal allies in radius 1, yourself too if inside, for N HP; puddles (Wet)
+  fill the rest of the area." (20 words; she is healed only when she stands in the circle, as the code does).
+- **text-tone-7 (polish, fixed)**: corgis get random names, so no bark names one any more ("The corgi was just asking…",
+  "The fluffiest corgi rolled a 20", "Good dog, keep him busy…", "Good dogs... I loved you all...", "Corgis, sit on them…",
+  "No. Bad corgi. We do not eat the Mayor.", "give the corgi his collar back"). The passive's "AVENGE BISCUIT!" stays
+  (DESIGN quotes it; the death shout uses the real name).
+- **heroes-5**: Wet → lightning is a DESIGN / lead call (deferred: DESIGN.md is held by the docs owner); nothing changed
+  in her kit.
+- Suite `hero_ellaria: playtest fixes (Nov 12)`.

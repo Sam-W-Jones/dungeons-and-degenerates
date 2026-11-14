@@ -10,6 +10,13 @@
  *   element       — the element of the damage it deals (resist 0 to it: the status can't hurt the unit, so hazards
  *                   that only apply it are no hazard for that unit, DD.Grid.harmlessTo)
  *   flying        — true | (st, unit) => bool: the unit flies while it has the status (DD.Grid.isFlying)
+ *   takenMult     — number | (st, unit) => number: damage-taken multiplier (applied next to Vulnerable)
+ *   takenFlat     — number | (st, unit, d) => number: flat damage-taken change per hit (−2 = 2 less), applied with d.flat
+ *                   for every cause (a function can read d.cause); both are read by DD.AI.estimate too
+ *   onRemove      — (unit, st, reason) when it leaves the unit ('removed' | 'expired' | 'cleansed'), then the hook
+ *                   onStatusRemoved(unit, st, reason) on the unit's sources
+ *   logVerb       — how the log line reads as it lands: 'Basanos <logVerb> <name>' (default: 'is' for adjectives and the
+ *                   core statuses below, 'gains' for nouns — DD.Act's statusVerb; playtest text-tone-10)
  */
 (function () {
   'use strict';
@@ -27,7 +34,10 @@
     return st && st.source && DD.Combat && DD.Combat.byId ? DD.Combat.byId(st.source) : null;
   }
 
-  DD.registerStatus({
+  // the core statuses are adjectives ("Zarathor is Stunned."): DD.Act logs them with 'is'
+  function core(def) { def.core = true; return DD.registerStatus(def); }
+
+  core({
     id: 'burn', name: 'Burning', icon: '🔥', color: '#ff7a1a', type: 'debuff', stacking: 'stack', maxStacks: 20, element: 'fire',
     decay: 'never', defaultTurns: -1,
     desc: function (st) { return 'Takes ' + st.stacks + ' fire damage at the end of its turn, then Burn −1. Water or Wet puts it out.'; },
@@ -39,7 +49,7 @@
     },
   });
 
-  DD.registerStatus({
+  core({
     id: 'poison', name: 'Poisoned', icon: '☠️', color: '#7bd23c', type: 'debuff', stacking: 'stack', maxStacks: 20, element: 'poison',
     decay: 'never', defaultTurns: -1,
     desc: function (st) { return 'Takes ' + st.stacks + ' poison damage at the start of its turn (ignores Block), then Poison −1.'; },
@@ -51,7 +61,7 @@
     },
   });
 
-  DD.registerStatus({
+  core({
     id: 'bleed', name: 'Bleeding', icon: '🩸', color: '#c0122c', type: 'debuff', stacking: 'stack', maxStacks: 20,
     decay: 'never', defaultTurns: -1,
     desc: function (st) { return 'Each move or push: takes ' + st.stacks + ' damage and leaves blood. Bleed −1 at the end of its turn.'; },
@@ -60,31 +70,31 @@
     },
   });
 
-  DD.registerStatus({
+  core({
     id: 'stun', name: 'Stunned', icon: '💫', color: '#ffe14d', type: 'debuff', stacking: 'refresh', maxStacks: 1,
     decay: 'turnEnd', defaultTurns: 1, stunLike: true,
     desc: function (st) { return 'Loses its next turn (no AP) and any wind-up is interrupted.' + left(st); },
   });
 
-  DD.registerStatus({
+  core({
     id: 'root', name: 'Rooted', icon: '🌿', color: '#5aa83a', type: 'debuff', stacking: 'refresh', maxStacks: 1,
     decay: 'turnEnd', defaultTurns: 1,
     desc: function (st) { return "Can't take move actions (can still be pushed)." + left(st); },
   });
 
-  DD.registerStatus({
+  core({
     id: 'weak', name: 'Weakened', icon: '🥀', color: '#a08cbf', type: 'debuff', stacking: 'refresh', maxStacks: 1,
     decay: 'turnEnd', defaultTurns: 2,
     desc: function (st) { return 'Deals 25% less damage.' + left(st); },
   });
 
-  DD.registerStatus({
+  core({
     id: 'vulnerable', name: 'Vulnerable', icon: '💔', color: '#ff5c8a', type: 'debuff', stacking: 'refresh', maxStacks: 1,
     decay: 'turnEnd', defaultTurns: 2,
     desc: function (st) { return 'Takes 25% more damage.' + left(st); },
   });
 
-  DD.registerStatus({
+  core({
     id: 'taunt', name: 'Taunted', icon: '😤', color: '#ff3b30', type: 'debuff', stacking: 'refresh', maxStacks: 1,
     decay: 'turnEnd', defaultTurns: 1,
     desc: function (st) {
@@ -94,19 +104,19 @@
     },
   });
 
-  DD.registerStatus({
+  core({
     id: 'haste', name: 'Hasted', icon: '🏃', color: '#4fd1ff', type: 'buff', stacking: 'refresh', maxStacks: 1,
     decay: 'turnEnd', defaultTurns: 2,
     desc: function (st) { return 'Heroes: +1 AP at the start of their turn. Enemies: +2 move.' + left(st); },
   });
 
-  DD.registerStatus({
+  core({
     id: 'slow', name: 'Slowed', icon: '🐌', color: '#8a9bb0', type: 'debuff', stacking: 'refresh', maxStacks: 1,
     decay: 'turnEnd', defaultTurns: 2,
     desc: function (st) { return 'Heroes: −1 AP at the start of their turn (min 1). Enemies: −2 move (min 1).' + left(st); },
   });
 
-  DD.registerStatus({
+  core({
     id: 'regen', name: 'Regenerating', icon: '💚', color: '#3ddc84', type: 'buff', stacking: 'refresh', maxStacks: 20,
     decay: 'turnEnd', defaultTurns: 3,
     desc: function (st) { return 'Heals ' + st.stacks + ' HP at the start of its turn.' + left(st); },
@@ -115,31 +125,34 @@
     },
   });
 
-  DD.registerStatus({
+  core({
     id: 'stealth', name: 'Stealthed', icon: '👤', color: '#6b6f8a', type: 'buff', stacking: 'refresh', maxStacks: 1,
     decay: 'turnEnd', defaultTurns: 2,
-    desc: function (st) { return "Can't be targeted by enemy single-target skills; enemies ignore it. Breaks when it deals damage." + left(st); },
+    // [finish review, D3] attacking an object ends it too (DD.Act.damageObject), so the tooltip says so
+    desc: function (st) { return "Can't be targeted by enemy single-target skills; enemies ignore it. Breaks when it deals damage or attacks an object." + left(st); },
   });
 
-  DD.registerStatus({
+  core({
     id: 'marked', name: 'Marked', icon: '🎯', color: '#ff9f1a', type: 'debuff', stacking: 'stack', maxStacks: 30,
     decay: 'never', defaultTurns: -1,
     desc: function (st) { return 'The next damage it takes is increased by ' + st.stacks + ', then the mark is removed.'; },
   });
 
-  DD.registerStatus({
+  core({
     id: 'dazzled', name: 'Dazzled', icon: '✨', color: '#fff3a3', type: 'debuff', stacking: 'refresh', maxStacks: 1,
     decay: 'turnEnd', defaultTurns: 1,
-    desc: function (st) { return 'Enemy: its attacks land 1 tile off in a random direction. Hero: −1 max range.' + left(st); },
+    desc: function (st) { return 'Enemy: its attacks land 1 tile off in a random direction (a pending wind-up\'s marked tiles move to show where). ' +
+      'Hero: −1 max range.' + left(st); },
   });
 
-  DD.registerStatus({
+  core({
     id: 'confused', name: 'Confused', icon: '😵', color: '#d77bff', type: 'debuff', stacking: 'refresh', maxStacks: 1,
     decay: 'turnEnd', defaultTurns: 1,
-    desc: function (st) { return 'Enemy: its attacks turn a random quarter turn (may hit friends). Hero: moving costs 2 AP.' + left(st); },
+    desc: function (st) { return 'Enemy: its attacks turn a random quarter turn (may hit friends; a pending wind-up\'s marked tiles turn to show ' +
+      'where). Hero: moving costs 2 AP.' + left(st); },
   });
 
-  DD.registerStatus({
+  core({
     id: 'charmed', name: 'Charmed', icon: '💘', color: '#ff6fb5', type: 'debuff', stacking: 'refresh', maxStacks: 1,
     decay: 'turnEnd', defaultTurns: 1,
     desc: function (st) {
@@ -148,57 +161,57 @@
     },
   });
 
-  DD.registerStatus({
+  core({
     id: 'inspired', name: 'Inspired', icon: '🌟', color: '#ffd23f', type: 'buff', stacking: 'refresh', maxStacks: 1,
     decay: 'turnEnd', defaultTurns: 2,
     desc: function (st) { return 'Deals 25% more damage.' + left(st); },
   });
 
-  DD.registerStatus({
+  core({
     id: 'wet', name: 'Wet', icon: '💧', color: '#3aa0ff', type: 'debuff', stacking: 'refresh', maxStacks: 1,
     decay: 'turnEnd', defaultTurns: 2,
     desc: function (st) { return "Can't Burn. Takes +50% lightning damage. Frost freezes it solid." + left(st); },
   });
 
-  DD.registerStatus({
+  core({
     id: 'silenced', name: 'Silenced', icon: '🤐', color: '#9aa4b5', type: 'debuff', stacking: 'refresh', maxStacks: 1,
     decay: 'turnEnd', defaultTurns: 1,
     desc: function (st) { return "Can't use spells (a spell wind-up fizzles)." + left(st); },
   });
 
-  DD.registerStatus({
+  core({
     id: 'sleep', name: 'Asleep', icon: '💤', color: '#8fb7ff', type: 'debuff', stacking: 'refresh', maxStacks: 1,
     decay: 'turnEnd', defaultTurns: 2, stunLike: true,
     desc: function (st) { return 'Loses its turns like Stun (interrupts wind-ups), but wakes up when damaged.' + left(st); },
   });
 
-  DD.registerStatus({
+  core({
     id: 'invulnerable', name: 'Invulnerable', icon: '🛡️', color: '#f5f5f5', type: 'buff', stacking: 'refresh', maxStacks: 1,
     decay: 'turnEnd', defaultTurns: 1,
     desc: function (st) { return 'Takes no damage.' + left(st); },
   });
 
-  DD.registerStatus({
+  core({
     id: 'frozen', name: 'Frozen', icon: '🧊', color: '#a8e6ff', type: 'debuff', stacking: 'refresh', maxStacks: 1,
     decay: 'turnEnd', defaultTurns: 1, stunLike: true,
     desc: function (st) { return 'Loses its next turn like Stun. Takes +50% physical damage; fire damage thaws it.' + left(st); },
   });
 
-  DD.registerStatus({
+  core({
     id: 'thorns', name: 'Thorny', icon: '🌵', color: '#7fae4a', type: 'buff', stacking: 'stack', maxStacks: 20,
     decay: 'turnEnd', defaultTurns: 2,
     desc: function (st) { return 'When an adjacent attacker damages it, deals ' + st.stacks + ' damage back.' + left(st); },
   });
 
-  DD.registerStatus({
+  core({
     id: 'empowered', name: 'Empowered', icon: '💪', color: '#ff8c42', type: 'buff', stacking: 'none', maxStacks: 1,
     decay: 'never', defaultTurns: -1,
     desc: function () { return 'Its next damaging skill deals +50% damage (then this is used up).'; },
   });
 
-  DD.registerStatus({
+  core({
     id: 'sheep', name: 'Sheep', icon: '🐑', color: '#f2efe6', type: 'debuff', stacking: 'refresh', maxStacks: 1,
-    decay: 'turnEnd', defaultTurns: 2,
+    decay: 'turnEnd', defaultTurns: 2, logVerb: 'turns into a',
     desc: function (st) { return 'Polymorphed: can only move (move 2), no skills; interrupts wind-ups. Baa.' + left(st); },
   });
 })();

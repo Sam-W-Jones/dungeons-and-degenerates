@@ -16,8 +16,9 @@
     'The DM is fine. The DM has had four energy drinks.',
     'Based on a true campaign. Names unchanged to embarrass the guilty.',
     'Featuring a bard who will flirt with the final boss. Probably.',
-    // v2 (integrator): no telegraphs any more, only boss wind-ups; fallback tips follow the v2 rules (narrator tips)
-    'Nobody telegraphs anything. Except the bosses. You will still stand in it.',
+    // v2: no telegraphs, only wind-ups (bosses and a few elites: playtest text-tone-17); fallback tips follow narrator tips.
+    // Review (finish): one line like the others (≤ 76 characters), or the rotating tagline jumps between one and two lines
+    'Nobody telegraphs. Bosses and a few elites wind up. You still stand in it.',
   ];
 
   const TIP_FALLBACK = [
@@ -113,6 +114,7 @@
       scene: 'title',
       cls: 'full',
       history: false,
+      taglines: TAGLINES.slice(),   // read-only copy for tests (the rotating title quips)
       mount: function (root) {
         const UI = DD.UI, el = UI.el;
         timers = [];
@@ -160,7 +162,7 @@
         if (cont) item('Continue Campaign', cont.text, continueRun, 'primary', 'c');
         item('New Campaign', 'Session Zero awaits. Bring snacks.', startNew, cont ? '' : 'primary', 'n');
         item('Hall of Fame', 'Your many glorious failures, archived.', function () { UI.show('hall', { back: 'title' }); }, '', 'h');
-        item('Settings', 'Knobs, sliders and one very special toggle.', function () { UI.show('settings', { back: 'title' }); }, '', 's');
+        item('Settings', 'Knobs, sliders and the controls cheat sheet.', function () { UI.show('settings', { back: 'title' }); }, '', 's');
         item('Credits', 'Blame these people.', showCredits, '', null);
         wrap.appendChild(menu);
         root.appendChild(wrap);

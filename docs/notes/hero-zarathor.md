@@ -328,3 +328,23 @@ Suite: `hero_zarathor: v2 requests — …`. Rules: `docs/notes/rules.md` "v2 re
 - **Flyers.** Nothing of his implements a floor effect in a hook. His fire lane (Fabulous Strut) and fireball fire are
   core `fire` surfaces: flyers cross them unburned and see no hazard there (tested); walkers still catch fire.
 - **Heals.** None of his skills heal (Gold Plating is Block, Rebuke a ward).
+
+## Playtest fixes (Nov 12)
+
+- **combat-controls-5 (Zarathor part, fixed)**: Fabulous Strut passes through allies like any walk (`strutPath`: a friendly
+  unit on an intermediate tile is fine, a foe or a unit on the last tile stops it); `fireTrail` already leaves no fire
+  under the ally. Test: the Strut suite (not onto the ally, but past him; fire behind him, none under the knight).
+- **text-tone-11 / heroes-8 (statue part, fixed)**: "Unveil an 18-HP gold statue" (level II; the article follows the
+  number). The Switcheroo "Range 1–40" part is fix:ui's (rangeLabel says "Anywhere").
+- **text-tone-23 (polish, fixed)**: "Careful. The rings are insured." (was load-bearing).
+- **text-tone-2**: his ally_down helper lines ("Betty! Stop eating the loot!", "Professor Marbles, wake up!", "Pebbles,
+  fetch help!") stay: they name a STANDING helper. They misfire only when that helper is the one down, which the engine
+  side fixes (request in hero-syllamin.md / text-tone-2: pick no ally_down line that names the downed hero).
+- **heroes-v1 (fixed)**: the target-range numbers in his descs follow his real reach (range items, Dazzle) through `reach()` → `DD.Targeting.reach`; details and the cross-hero suite in hero-kiri.md.
+
+## Review (finish, Nov 14) — REVIEWER
+
+- D2 and the Tasteful Statue (move 0, immovable): an ally trying to swap with it now reads "<name> is immovable: you
+  can't move it." — the engine no longer adds "it can start a swap" for a unit that never moves (the UI reviewer's
+  request; `engine: finish review — a statue that never moves …`). Throw Money At It stays a D1 opt-out (its gold is paid
+  in execute).

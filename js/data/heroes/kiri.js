@@ -19,6 +19,16 @@
   // ---- helpers ------------------------------------------------------------------------------------
   function active(u) { return !!u && !u.dead && !u.downed; }
   function has(u, id) { return DD.Act.hasStatus(u, id); }
+  /**
+   * A range number in a desc as targeting resolves it for this user: the Ghostwood Longbow and the generic range items
+   * (+1 on skills reaching 2+), Dazzle, modifyRange hooks (playtest heroes-2 / heroes-v1). No user: the listed number.
+   */
+  function reach(user, id, base) {
+    const d = DD.getSkill(id);
+    if (!user || !d || !DD.Targeting) return base;
+    if (typeof DD.Targeting.reach === 'function') return DD.Targeting.reach(d, null, user, base);
+    return Math.max(0, base + DD.Targeting.range(user, d, 1)[1] - DD.Targeting.range(null, d, 1)[1]);
+  }
   function sky(p) { return { x: p.x - 1, y: p.y - 1, h: 9 }; }
 
   /** A ghost arrow from the user to a point (projectile + a little ectoplasm where it lands). */
@@ -245,7 +255,7 @@
     ap: 1, cooldown: 0,
     levels: [{ dmg: 5 }],
     target: { type: 'unit', range: [1, 5], los: false, filter: 'enemy' },
-    desc: function (L) { return 'Deal ' + L.dmg + ' damage to a foe within 5, through walls and cover.'; },
+    desc: function (L, user) { return 'Deal ' + L.dmg + ' damage to a foe within ' + reach(user, 'kir_basic', 5) + ', through walls and cover.'; },
     flavor: 'It goes through the wall, then through you. Nothing personal. It is barely even physical.',
     execute: function (ctx) {
       const u = ctx.user, t = ctx.targetUnit;
@@ -263,7 +273,7 @@
     levels: [{ dmg: 4, len: 5 }, { dmg: 5, len: 5 }, { dmg: 6, len: 5 }],
     target: { type: 'tile', range: function (L) { return [1, L.len]; }, los: false, filter: 'any', straight: true },
     area: { shape: 'custom', fn: phaseLine },
-    desc: function (L) { return 'Deal ' + L.dmg + ' damage to every foe in a straight line of ' + L.len + ' tiles, through walls and units.'; },
+    desc: function (L, user) { return 'Deal ' + L.dmg + ' damage to every foe in a straight line of ' + reach(user, 'kir_phase', L.len) + ' tiles, through walls and units.'; },
     flavor: 'The arrow has places to be. You are merely on the way.',
     execute: function (ctx) {
       const u = ctx.user, end = ctx.tiles[ctx.tiles.length - 1];
@@ -285,8 +295,8 @@
     ap: 1, cooldown: 1,
     levels: [{ len: 3 }, { len: 4 }, { len: 5 }],
     target: { type: 'tile', range: function (L) { return [1, L.len]; }, los: false, filter: 'empty', straight: true },
-    desc: function (L) {
-      return 'Teleport to an empty tile up to ' + L.len + ' tiles away in a straight line, through walls and units.';
+    desc: function (L, user) {
+      return 'Teleport to an empty tile up to ' + reach(user, 'kir_step', L.len) + ' tiles away in a straight line, through walls and units.';
     },
     flavor: 'Excuse me. Coming through. Through the wall. Through you. No, you don\'t get a free swing.',
     execute: function (ctx) {
@@ -307,7 +317,7 @@
     ap: 1, cooldown: 1,
     levels: [{ mark: 5 }, { mark: 7 }, { mark: 9 }],
     target: { type: 'unit', range: [1, 6], los: false, filter: 'enemy' },
-    desc: function (L) { return 'Mark a foe within 6: the next damage it takes is +' + L.mark + '.'; },
+    desc: function (L, user) { return 'Mark a foe within ' + reach(user, 'kir_mark', 6) + ': the next damage it takes is +' + L.mark + '.'; },
     flavor: 'She marks it on both planes, so it can hide in neither.',
     execute: function (ctx) {
       const u = ctx.user, t = ctx.targetUnit;
@@ -324,8 +334,8 @@
     ap: 2, cooldown: 2,
     levels: [{ dmg: 7, turns: 1 }, { dmg: 9, turns: 1 }, { dmg: 10, turns: 2 }],
     target: { type: 'unit', range: [1, 5], los: false, filter: 'enemy' },
-    desc: function (L) {
-      return 'Deal ' + L.dmg + ' damage to a foe within 5 and Root it for its next ' + (L.turns > 1 ? L.turns + ' turns' : 'turn') + '.';
+    desc: function (L, user) {
+      return 'Deal ' + L.dmg + ' damage to a foe within ' + reach(user, 'kir_pin', 5) + ' and Root it for its next ' + (L.turns > 1 ? L.turns + ' turns' : 'turn') + '.';
     },
     flavor: 'Stay. Stay. Good monster.',
     execute: function (ctx) {
@@ -343,7 +353,7 @@
     ap: 1, cooldown: 2,
     levels: [{ dmg: 3, push: 2 }, { dmg: 4, push: 2 }, { dmg: 5, push: 3 }],
     target: { type: 'unit', range: [1, 4], los: false, filter: 'enemy' },
-    desc: function (L) { return 'Deal ' + L.dmg + ' damage to a foe within 4 and push it ' + L.push + ' tiles away from Kiri.'; },
+    desc: function (L, user) { return 'Deal ' + L.dmg + ' damage to a foe within ' + reach(user, 'kir_banish', 4) + ' and push it ' + L.push + ' tiles away from Kiri.'; },
     flavor: 'Not a push. A firm suggestion that it exist somewhere else.',
     execute: function (ctx) {
       const u = ctx.user, t = ctx.targetUnit;
@@ -361,7 +371,7 @@
     levels: [{ dmg: 4 }, { dmg: 5 }, { dmg: 6 }],
     target: { type: 'tile', range: [1, 5], los: false, filter: 'any' },
     area: { shape: 'circle', size: 1 },
-    desc: function (L) { return 'Deal ' + L.dmg + ' damage to every foe within 1 of a tile within 5.'; },
+    desc: function (L, user) { return 'Deal ' + L.dmg + ' damage to every foe within 1 of a tile within ' + reach(user, 'kir_volley', 5) + '.'; },
     flavor: 'Arrows from both sides of reality. Mostly this side. Still hurts.',
     execute: function (ctx) {
       const u = ctx.user, p = ctx.target;
@@ -382,9 +392,9 @@
     id: 'kir_beyond', name: 'Arrow from Beyond', icon: '☄️', kind: 'attack', tags: ['ranged', 'arrow', 'delayed'],
     ap: 3, cooldown: 2,
     levels: [{ arrow: 18 }, { arrow: 22 }, { arrow: 26 }],
-    // objects: false — its arrow lands on her next turn; a barrel is a job for Ghost Arrow
+    // objects: false — its arrow lands on her next turn; barrels and crates are a job for Ghost Arrow
     target: { type: 'unit', range: [1, 7], los: false, filter: 'enemy', objects: false },
-    desc: function (L) { return 'A foe within 7 takes ' + L.arrow + ' damage at the start of Kiri\'s next turn, wherever it is.'; },
+    desc: function (L, user) { return 'A foe within ' + reach(user, 'kir_beyond', 7) + ' takes ' + L.arrow + ' damage at the start of Kiri\'s next turn, wherever it is.'; },
     flavor: 'She fired it yesterday, spiritually. It has been on its way the whole time.',
     aiScore: function (ctx) {
       const t = ctx.targetUnit, L = ctx.L || {};
@@ -428,8 +438,8 @@
     target: { type: 'tile', range: [0, 5], los: false, filter: 'any' },
     area: { shape: 'circle', size: function (L) { return L.r; } },
     // one breath: the surface skip is said, Kiri seeing through it is her passive (and the flavor)
-    desc: function (L) {
-      return 'Ghost mist blocks line of sight around a tile within 5 (radius ' + L.r + ', for ' + L.turns +
+    desc: function (L, user) {
+      return 'Ghost mist blocks line of sight around a tile within ' + reach(user, 'kir_mist', 5) + ' (radius ' + L.r + ', for ' + L.turns +
         ' rounds, not over other surfaces).';
     },
     flavor: 'Enemies cannot see through it. Kiri never needed to.',
@@ -451,7 +461,7 @@
     levels: [{ dmg: 16 }],
     target: { type: 'tile', range: [0, 6], los: false, filter: 'any' },
     area: { shape: 'circle', size: 2 },
-    desc: function (L) { return 'Deal ' + L.dmg + ' damage to every foe within 2 of a tile within 6, ignoring Block and armor.'; },
+    desc: function (L, user) { return 'Deal ' + L.dmg + ' damage to every foe within 2 of a tile within ' + reach(user, 'kir_signature', 6) + ', ignoring Block and armor.'; },
     flavor: 'Every arrow she ever lost in the ethereal plane, returned at once. With interest.',
     execute: function (ctx) {
       const u = ctx.user, p = ctx.target;
@@ -532,6 +542,7 @@
         'I\'ll be over there. Or through there.', 'Ranger reporting. Don\'t ask which half.'],
       start: ['They brought cover. Adorable.', 'Nobody move. I\'m aiming through the wall.', 'Stay out of my line. Or don\'t. It goes through you.',
         'Roll for initiative. I already know mine.', 'Someone explain the plan to Marwyn. Slowly.'],
+      swap: ['Your spot, {ally}. I was never there anyway.', 'Swap, {ally}. Fewer faces where I\'m going.'],
       move: ['Excuse me. Coming through. Literally.', 'Walls are a suggestion.', 'I was never here.', 'Repositioning. Quietly. Unlike some people.'],
       kill: ['Didn\'t see it coming. Nobody does.', 'Through and through.', 'Clean shot. Next.', 'That one\'s on the other side now. Say hi.',
         'The wall didn\'t help you, did it?'],

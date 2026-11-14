@@ -15,6 +15,12 @@
  * rounds, short wins, fights with downs, signatures, Hype by source, attacks of opportunity, boss wind-ups), encounter
  * table, downs by cause, per-hero run
  * wins, skill usage, gold flow. Counting wrappers (Combat.useSkill etc.) are installed on this page only.
+ * Stalls (balance audit, audit-4): a fight that hits the round cap is a STALL, neither a win nor a loss. timeout= only
+ * decides how the run goes on; every win rate (encounters, fight kinds, bosses, the campaign, hero shares) leaves stalls
+ * out of both sides, and the "== stalls" section lists each one. A run is a stalled run when its result hangs on a
+ * stall's call (it won after one, or it ended on one); a run lost to a real fight after a stall is still a loss.
+ * The tallies and the report are exposed as window.DD_SIM (tools suite in tests/docs_tests.js); the sim only starts on
+ * a page with a <pre id="out"> (tests/sim/sim.html), so the test page can load this file.
  * Policies: level-ups learn until 4 skills then upgrade (15% random); loot by a simple score; gear upgrades equipped;
  * shop: heal under 60% HP, items that beat a hero's gear (best rarity first), tomes for heroes with < 4 skills,
  * consumables with spare gold, a Blessing re-roll when rich; tavern: recruit over the dead, rest under 75% HP or with
@@ -23,8 +29,8 @@
 (function () {
   'use strict';
   const DD = window.DD;
-  document.addEventListener('dd:loaded', function () { setTimeout(start, 30); });
-  const P = DD.params;
+  document.addEventListener('dd:loaded', function () { if (document.getElementById('out')) setTimeout(start, 30); });
+  const P = DD.params || {};
   const SEEDS = +(P.seeds || 4), FROM = +(P.from || 0), DIFF = P.diff || 'normal', MAXR = +(P.maxr || 30);
   const ON_TIMEOUT = P.timeout || 'victory';
   const ROUTE = P.route || 'smart';
@@ -71,15 +77,29 @@
   }
 
   // ---- tallies -----------------------------------------------------------------------------------------------------
-  const G = {
-    runs: 0, wins: 0, actEnter: [0, 0, 0, 0], actClear: [0, 0, 0, 0], lossAt: {}, lossTo: {}, fights: 0, timeouts: 0,
-    levelsAtBoss: { 1: [], 2: [], 3: [] }, enc: {}, downs: {}, downsByAct: [0, 0, 0, 0], deaths: 0, heroes: {}, skills: {},
-    socketed: {}, cons: {}, gold: { earned: 0, shopSpent: 0, shopVisits: 0, shopGoldIn: 0, eventDelta: 0, endGold: [], finalBossGold: [], bought: {}, fined: 0 },
-    failed: 0, rewardsTaken: {}, levelChoices: {}, errors: [], warns: {}, dumps: [], bossFights: {}, fightMs: 0, runMs: [],
-    kinds: {}, hypeBy: {}, dmgBy: {},
-  };
+  // timeouts = stalled fights (they hit the round cap); stalledRuns = runs whose result hangs on one; stalls = the list
+  function newTally() {
+    return {
+      runs: 0, wins: 0, stalledRuns: 0, actEnter: [0, 0, 0, 0], actClear: [0, 0, 0, 0], lossAt: {}, lossTo: {}, fights: 0, timeouts: 0,
+      levelsAtBoss: { 1: [], 2: [], 3: [] }, enc: {}, downs: {}, downsByAct: [0, 0, 0, 0], deaths: 0, heroes: {}, skills: {},
+      socketed: {}, cons: {}, gold: { earned: 0, shopSpent: 0, shopVisits: 0, shopGoldIn: 0, eventDelta: 0, endGold: [], finalBossGold: [], bought: {}, fined: 0 },
+      failed: 0, rewardsTaken: {}, levelChoices: {}, errors: [], warns: {}, dumps: [], stalls: [], bossFights: {}, fightMs: 0, runMs: [],
+      kinds: {}, hypeBy: {}, dmgBy: {},
+    };
+  }
+  let G = newTally();
   let curRun = null;      // per-run scratch
   let curFight = null;    // per-fight scratch
+
+  /** A fight's outcome: 'stall' when it hit the round cap (whatever timeout= then called it), else 'win' | 'loss'. */
+  function fightOutcome(result, timeout) { return timeout ? 'stall' : result === 'victory' ? 'win' : 'loss'; }
+  /** A run's outcome: 'stall' when its result hangs on a stall's call (won after one, or ended on one). */
+  function runOutcome(won, stalls, endedOnStall) {
+    if (stalls > 0 && (won || endedOnStall)) return 'stall';
+    return won ? 'win' : 'loss';
+  }
+  /** Win rate over the decided fights / runs of a tally { n, wins, timeouts }: stalls count on neither side. */
+  function winPct(wins, n, stalls) { return pct(wins, n - (stalls || 0)); }
 
   function heroOf(u) {
     if (!u) return null;
@@ -391,8 +411,7 @@
     let result = cs.result;
     let timeout = false;
     if (DD.Run.inCombat()) {
-      timeout = true;
-      G.timeouts++;
+      timeout = true;   // a stall (recordFight counts it)
       // dump=1: what a capped fight looked like (units left, the last log lines) for stall hunting
       if (P.dump === '1') {
         const left = cs.units.filter(function (u) { return !u.dead; }).map(function (u) {
@@ -412,38 +431,15 @@
     const st = cs.stats && cs.stats.units || {};
     const taken = heroes1.reduce(function (a, u) { return a + ((st[u.id] && st[u.id].taken) || 0); }, 0);
     const lost = max0 ? (hp0 - hp1) / max0 : 0;
-    const e = G.enc[encId] || (G.enc[encId] = { act: act, kind: kind, n: 0, wins: 0, rounds: 0, short: 0, timeouts: 0, hpLost: 0, lvl: 0, downs: 0, withDowns: 0, hype100: 0, hypeMax: 0, maxRounds: 0, sigs: 0 });
-    e.n++; if (result === 'victory') e.wins++;
-    e.hypeMax += curFight.hypeMax; if (curFight.hypeMax >= 100) e.hype100++;
-    e.maxRounds = Math.max(e.maxRounds, cs.round);
-    e.rounds += cs.round; if (cs.round <= 2 && result === 'victory') e.short++;
-    if (timeout) e.timeouts++;
-    e.hpLost += lost;
-    e.lvl += lvl; e.downs += curFight.downs; if (curFight.downs) e.withDowns++;
-    e.sigs += curFight.sigs;
-    const k = K(kind), ka = K('a' + act + ' ' + kind);
-    [k, ka].forEach(function (x) {
-      x.n++; if (result === 'victory') x.wins++;
-      x.hpStart = (x.hpStart || 0) + (max0 ? hp0 / max0 : 0);
-      x.hpLost.push(lost); x.taken.push(max0 ? taken / max0 : 0); x.rounds.push(cs.round);
-      if (cs.round <= 2 && result === 'victory') x.short++;
-      if (curFight.downs) x.withDowns++;
-      x.downs += curFight.downs; x.sigs += curFight.sigs; x.hype += curFight.hypeMax; if (curFight.hypeMax >= 100) x.hype100++;
-      if (timeout) x.timeouts++;
-      x.oppHero += curFight.opp.hero; x.oppEnemy += curFight.opp.enemy; x.oppDmgH += curFight.opp.dmgOnHeroes; x.oppDmgE += curFight.opp.dmgOnEnemies;
-      x.wuStart += curFight.wu.start; x.wuCancel += curFight.wu.cancel; x.wuLand += curFight.wu.land; x.wuHit += curFight.wu.hit; x.wuDmg += curFight.wu.dmg;
+    const outcome = recordFight({
+      seed: curRun.seed, act: act, kind: kind, encId: encId, result: result, timeout: timeout, round: cs.round,
+      lost: lost, taken: max0 ? taken / max0 : 0, start: max0 ? hp0 / max0 : 0, lvl: lvl,
+      downs: curFight.downs, sigs: curFight.sigs, hypeMax: curFight.hypeMax, hype: curFight.hype, opp: curFight.opp, wu: curFight.wu,
+      healer: heroes0.some(function (u) { return HEALERS.indexOf(u.defId) >= 0; }), runOver: !!DD.Run.state.over,
+      left: timeout ? cs.units.filter(function (u) { return !u.dead; }).map(function (u) { return u.name + ' ' + u.hp + '/' + u.maxHp + (u.downed ? ' DOWN' : ''); }).join(', ') : '',
     });
-    Object.keys(curFight.hype).forEach(function (r) { const hk = kind + ':' + r; G.hypeBy[hk] = (G.hypeBy[hk] || 0) + curFight.hype[r]; });
-    if (kind === 'boss') {
-      const b = G.bossFights[encId] || (G.bossFights[encId] = { n: 0, wins: 0, hp: 0, h: { n: 0, wins: 0 }, x: { n: 0, wins: 0 } });
-      b.n++; if (result === 'victory') b.wins++;
-      b.hp += max0 ? hp0 / max0 : 0;
-      // split by a starting healer in the party (healers=ellaria,josiah by default: the two heroes who start with an ally heal)
-      const hb = heroes0.some(function (u) { return HEALERS.indexOf(u.defId) >= 0; }) ? b.h : b.x;
-      hb.n++; if (result === 'victory') hb.wins++;
-    }
-    if (result !== 'victory' && kind !== 'boss' && !DD.Run.state.over) G.failed++;
-    G.fights++;
+    if (outcome === 'stall') curRun.stalls++;
+    curRun.lastStalled = outcome === 'stall';
     // per-hero numbers from the combat stats (summons credited to their owner)
     cs.units.forEach(function (u) {
       const hid = heroOf(u);
@@ -459,9 +455,81 @@
       if (u.signature) { const kk = u.defId + ':' + u.signature.id; G.socketed[kk] = (G.socketed[kk] || 0) + 1; }
       if (u.basic) { const kk = u.defId + ':' + u.basic.id; G.socketed[kk] = (G.socketed[kk] || 0) + 1; }
     });
-    if (P.json === '1') records.push({ seed: curRun.seed, act: act, kind: kind, enc: encId, result: result, rounds: cs.round, lost: r2(lost), downs: curFight.downs, sigs: curFight.sigs, hype: curFight.hype, lvl: r1(lvl) });
+    if (P.json === '1') records.push({ seed: curRun.seed, act: act, kind: kind, enc: encId, result: result, outcome: outcome, rounds: cs.round, lost: r2(lost), downs: curFight.downs, sigs: curFight.sigs, hype: curFight.hype, lvl: r1(lvl) });
     curRun.fightLog.push(encId + (result === 'victory' ? '' : '!') + (timeout ? '(T)' : '') + ':' + cs.round);
     curFight = null;
+  }
+
+  /**
+   * Count one fight into the tallies. f: { seed, act, kind, encId, result ('victory' | 'defeat'), timeout (it hit the
+   * round cap), round, lost, taken, start (party HP fractions), lvl, downs, sigs, hypeMax, hype {reason: n}, opp, wu,
+   * healer (a starting healer in the party), runOver, left (who was standing, for the stall list) }. A stall counts in
+   * n and timeouts but never in wins: every win rate is wins / (n − timeouts). Returns the outcome.
+   */
+  function recordFight(f) {
+    const outcome = fightOutcome(f.result, f.timeout);
+    const win = outcome === 'win';
+    const opp = f.opp || { hero: 0, enemy: 0, dmgOnHeroes: 0, dmgOnEnemies: 0 }, wu = f.wu || { start: 0, cancel: 0, land: 0, hit: 0, dmg: 0 };
+    const e = G.enc[f.encId] || (G.enc[f.encId] = { act: f.act, kind: f.kind, n: 0, wins: 0, rounds: 0, short: 0, timeouts: 0, hpLost: 0, lvl: 0, downs: 0, withDowns: 0, hype100: 0, hypeMax: 0, maxRounds: 0, sigs: 0 });
+    e.n++; if (win) e.wins++;
+    e.hypeMax += f.hypeMax || 0; if (f.hypeMax >= 100) e.hype100++;
+    e.maxRounds = Math.max(e.maxRounds, f.round);
+    e.rounds += f.round; if (f.round <= 2 && win) e.short++;
+    if (outcome === 'stall') e.timeouts++;
+    e.hpLost += f.lost || 0;
+    e.lvl += f.lvl || 0; e.downs += f.downs || 0; if (f.downs) e.withDowns++;
+    e.sigs += f.sigs || 0;
+    const k = K(f.kind), ka = K('a' + f.act + ' ' + f.kind);
+    [k, ka].forEach(function (x) {
+      x.n++; if (win) x.wins++;
+      x.hpStart = (x.hpStart || 0) + (f.start || 0);
+      x.hpLost.push(f.lost || 0); x.taken.push(f.taken || 0); x.rounds.push(f.round);
+      if (f.round <= 2 && win) x.short++;
+      if (f.downs) x.withDowns++;
+      x.downs += f.downs || 0; x.sigs += f.sigs || 0; x.hype += f.hypeMax || 0; if (f.hypeMax >= 100) x.hype100++;
+      if (outcome === 'stall') x.timeouts++;
+      x.oppHero += opp.hero; x.oppEnemy += opp.enemy; x.oppDmgH += opp.dmgOnHeroes; x.oppDmgE += opp.dmgOnEnemies;
+      x.wuStart += wu.start; x.wuCancel += wu.cancel; x.wuLand += wu.land; x.wuHit += wu.hit; x.wuDmg += wu.dmg;
+    });
+    Object.keys(f.hype || {}).forEach(function (r) { const hk = f.kind + ':' + r; G.hypeBy[hk] = (G.hypeBy[hk] || 0) + f.hype[r]; });
+    if (f.kind === 'boss') {
+      const b = G.bossFights[f.encId] || (G.bossFights[f.encId] = { n: 0, wins: 0, timeouts: 0, hp: 0, h: { n: 0, wins: 0, timeouts: 0 }, x: { n: 0, wins: 0, timeouts: 0 } });
+      b.n++; if (win) b.wins++; if (outcome === 'stall') b.timeouts++;
+      b.hp += f.start || 0;
+      // split by a starting healer in the party (healers=ellaria,josiah by default: the two heroes who start with an ally heal)
+      const hb = f.healer ? b.h : b.x;
+      hb.n++; if (win) hb.wins++; if (outcome === 'stall') hb.timeouts++;
+    }
+    if (outcome === 'loss' && f.kind !== 'boss' && !f.runOver) G.failed++;
+    if (outcome === 'stall') {
+      G.timeouts++;
+      G.stalls.push({ seed: f.seed, act: f.act, kind: f.kind, enc: f.encId, round: f.round, as: f.result, left: f.left || '' });
+    }
+    G.fights++;
+    return outcome;
+  }
+
+  /**
+   * Count one finished run. r: { seed, party: [ids], won, stalls (its stalled fights), endedOnStall, act, cleared,
+   * lastEnc (the last fight's encounter id), deaths, dead: [ids], goldEarned, gold }. Act clears count progress as the
+   * run went (a stall's call included); the run's win / loss leaves out a stalled run. Returns the run's outcome.
+   */
+  function finishRun(r) {
+    const outcome = runOutcome(r.won, r.stalls || 0, r.endedOnStall);
+    if (outcome === 'win') { G.wins++; r.party.forEach(function (id) { H(id).wins++; }); }
+    else if (outcome === 'stall') {
+      G.stalledRuns++;
+      r.party.forEach(function (id) { const h = H(id); h.runs--; h.stalled = (h.stalled || 0) + 1; });
+    } else {
+      G.lossAt[(r.act || '?') + ''] = (G.lossAt[(r.act || '?') + ''] || 0) + 1;
+      G.lossTo[r.lastEnc || '?'] = (G.lossTo[r.lastEnc || '?'] || 0) + 1;
+    }
+    for (let a = 1; a <= 3; a++) if ((r.cleared || 0) >= a) G.actClear[a]++;
+    G.deaths += r.deaths || 0;
+    (r.dead || []).forEach(function (id) { H(id).deaths++; });
+    G.gold.earned += r.goldEarned || 0;
+    G.gold.endGold.push(r.gold || 0);
+    return outcome;
   }
 
   function playStep(r) {
@@ -503,7 +571,7 @@
     DD.Meta.reset(false);
     DD.Meta.data.unlocked = all.slice();
     DD.Run.newRun(party, DIFF, 'isim' + seed);
-    curRun = { seed: seed, party: party, act: 1, cleared: 0, fightLog: [], recruits: 0 };
+    curRun = { seed: seed, party: party, act: 1, cleared: 0, fightLog: [], recruits: 0, stalls: 0, lastStalled: false };
     party.forEach(function (id) { H(id).runs++; });
     G.runs++;
     G.actEnter[1]++;
@@ -520,25 +588,21 @@
     }
     const s = S();
     const cleared = s ? (s.stats.actsCleared || 0) : 0;
-    const won = s && (s.over === 'victory' || (STOP < 3 && cleared >= STOP));
-    if (won) { G.wins++; party.forEach(function (id) { H(id).wins++; }); }
-    else {
-      G.lossAt[(s ? s.act : '?') + ''] = (G.lossAt[(s ? s.act : '?') + ''] || 0) + 1;
-      const last = curRun.fightLog[curRun.fightLog.length - 1] || '?';
-      const enc = last.split(/[!:(]/)[0];
-      G.lossTo[enc] = (G.lossTo[enc] || 0) + 1;
-    }
-    for (let a = 1; a <= 3; a++) if (cleared >= a) G.actClear[a]++;
-    G.deaths += s ? s.stats.deaths || 0 : 0;
-    s.party.forEach(function (h) { if (h.dead) H(h.id).deaths++; });
-    G.gold.earned += s ? s.stats.goldEarned || 0 : 0;
-    G.gold.endGold.push(s ? s.gold : 0);
-    lines.push('seed ' + seed + ' [' + party.join(',') + '] ' + (won ? 'WIN' : 'LOSS act ' + s.act) + ' · levels ' + s.party.map(function (h) { return h.level; }).join('/') +
+    const won = !!s && (s.over === 'victory' || (STOP < 3 && cleared >= STOP));
+    const last = curRun.fightLog[curRun.fightLog.length - 1] || '?';
+    const outcome = finishRun({
+      seed: seed, party: party, won: won, stalls: curRun.stalls, endedOnStall: !won && curRun.lastStalled && !!s && !!s.over,
+      act: s ? s.act : '?', cleared: cleared, lastEnc: last.split(/[!:(]/)[0], deaths: s ? s.stats.deaths || 0 : 0,
+      dead: s ? s.party.filter(function (h) { return h.dead; }).map(function (h) { return h.id; }) : [],
+      goldEarned: s ? s.stats.goldEarned || 0 : 0, gold: s ? s.gold : 0,
+    });
+    const label = outcome === 'stall' ? 'STALL (' + (won ? 'won' : 'lost act ' + s.act) + ' on a capped fight\'s call)' : won ? 'WIN' : 'LOSS act ' + s.act;
+    lines.push('seed ' + seed + ' [' + party.join(',') + '] ' + label + ' · levels ' + s.party.map(function (h) { return h.level; }).join('/') +
       ' · deaths ' + (s.stats.deaths || 0) + ' · gold ' + s.gold + ' (earned ' + (s.stats.goldEarned || 0) + ')' + ' · ' + curRun.fightLog.join(' '));
   }
 
   function kindLine(label, x) {
-    return '  ' + label.padEnd(10) + ' n ' + String(x.n).padStart(4) + ' · win ' + pct(x.wins, x.n).padStart(4) +
+    return '  ' + label.padEnd(10) + ' n ' + String(x.n).padStart(4) + ' · win ' + winPct(x.wins, x.n, x.timeouts).padStart(4) +
       ' · start HP ' + Math.round(100 * (x.hpStart || 0) / Math.max(1, x.n)) + '%' +
       ' · HP lost ' + Math.round(100 * avg(x.hpLost)) + '% (gross ' + Math.round(100 * avg(x.taken)) + '%)' +
       ' · rounds ' + r1(avg(x.rounds)) + ' · ≤2-round wins ' + pct(x.short, x.n) + ' · fights with downs ' + pct(x.withDowns, x.n) +
@@ -550,12 +614,18 @@
         ', hit someone ' + r1(x.wuHit / x.n) + ', ' + r1(x.wuDmg / x.n) + ' HP+Block)' : '');
   }
 
-  function report(overrides) {
+  /** "w/n" of the decided fights, plus "(+k stalled)" when some hit the round cap. */
+  function decided(x) { return x.wins + '/' + (x.n - (x.timeouts || 0)) + (x.timeouts ? ' (+' + x.timeouts + ' stalled)' : ''); }
+
+  /** The report lines (also DD_SIM.reportText). Win rates leave stalls out of both sides (audit-4). */
+  function reportLines(overrides) {
     out.length = 0;
-    const ci = wilson(G.wins, G.runs);
+    const runsDecided = G.runs - G.stalledRuns;
+    const ci = wilson(G.wins, runsDecided);
     out.push('runs ' + G.runs + ' · difficulty ' + DIFF + ' · route ' + ROUTE + (STOP < 3 ? ' · stop after act ' + STOP : '') +
-      ' · wins ' + G.wins + ' (' + pct(G.wins, G.runs) + ', 95% CI ' + Math.round(100 * ci[0]) + '–' + Math.round(100 * ci[1]) + '%)' +
-      ' · fights ' + G.fights + ' · timeouts ' + G.timeouts + ' (cap ' + MAXR + ', as ' + ON_TIMEOUT + ') · avg fight ' + r1(G.fightMs / Math.max(1, G.fights)) + ' ms');
+      ' · wins ' + G.wins + ' (' + pct(G.wins, runsDecided) + ', 95% CI ' + Math.round(100 * ci[0]) + '–' + Math.round(100 * ci[1]) + '%)' +
+      ' · stalled runs ' + G.stalledRuns + ' (in no win rate)' +
+      ' · fights ' + G.fights + ' · timeouts ' + G.timeouts + ' (cap ' + MAXR + ', as ' + ON_TIMEOUT + ': stalls, in no win rate) · avg fight ' + r1(G.fightMs / Math.max(1, G.fights)) + ' ms');
     out.push('overrides: ' + (overrides.length ? overrides.join(' ') : 'none'));
     for (let a = 1; a <= 3; a++) out.push('act ' + a + ': entered ' + G.actEnter[a] + ', cleared ' + G.actClear[a] + ' (' + pct(G.actClear[a], G.actEnter[a]) + ')');
     out.push('losses by act: ' + JSON.stringify(G.lossAt) + ' · lost to: ' + JSON.stringify(G.lossTo) + ' · objectives failed: ' + G.failed);
@@ -563,10 +633,10 @@
       const l = G.levelsAtBoss[a];
       out.push('party level at act ' + a + ' boss: avg ' + (l.length ? r1(avg(l)) : '-') + ' (n ' + l.length + ', min ' + (l.length ? Math.min.apply(null, l) : '-') + ', max ' + (l.length ? Math.max.apply(null, l) : '-') + ')');
     });
-    out.push('boss fights: ' + Object.keys(G.bossFights).map(function (k) { const b = G.bossFights[k]; return k + ' ' + b.wins + '/' + b.n; }).join(' · '));
+    out.push('boss fights: ' + Object.keys(G.bossFights).map(function (k) { return k + ' ' + decided(G.bossFights[k]); }).join(' · '));
     out.push('boss fights by a starting healer (' + HEALERS.join('/') + ') in the party · party HP at the start: ' + Object.keys(G.bossFights).map(function (k) {
       const b = G.bossFights[k];
-      return k + ' with ' + b.h.wins + '/' + b.h.n + ' (' + pct(b.h.wins, b.h.n) + '), without ' + b.x.wins + '/' + b.x.n + ' (' + pct(b.x.wins, b.x.n) + ') · start HP ' + Math.round(100 * b.hp / Math.max(1, b.n)) + '%';
+      return k + ' with ' + decided(b.h) + ' (' + winPct(b.h.wins, b.h.n, b.h.timeouts) + '), without ' + decided(b.x) + ' (' + winPct(b.x.wins, b.x.n, b.x.timeouts) + ') · start HP ' + Math.round(100 * b.hp / Math.max(1, b.n)) + '%';
     }).join(' · '));
     out.push('\n== by fight kind (party HP lost = start HP − end HP over max, downed = 0; gross = HP damage taken over max)');
     ['normal', 'elite', 'boss'].forEach(function (k) { if (G.kinds[k]) out.push(kindLine(k, G.kinds[k])); });
@@ -583,8 +653,8 @@
     out.push('\n== encounters (n, win%, avg rounds, ≤2-round wins, timeouts, avg party HP lost, avg level, downs/fight, fights with downs, signatures/fight)');
     Object.keys(G.enc).sort(function (a, b) { const x = G.enc[a], y = G.enc[b]; return x.act - y.act || (x.kind < y.kind ? -1 : x.kind > y.kind ? 1 : 0) || (a < b ? -1 : 1); }).forEach(function (k) {
       const e = G.enc[k];
-      const flag = (e.wins < e.n ? ' LOSSES' : '') + (e.timeouts ? ' TIMEOUTS' : '') + (e.short / e.n > 0.1 ? ' SHORT' : '') + (e.rounds / e.n > 12 ? ' LONG' : '');
-      out.push('  a' + e.act + ' ' + e.kind.padEnd(6) + ' ' + k.padEnd(28) + ' n ' + String(e.n).padStart(3) + ' · win ' + pct(e.wins, e.n).padStart(4) + ' · ' + r1(e.rounds / e.n) + ' rds (max ' + e.maxRounds + ') · short ' + pct(e.short, e.n) +
+      const flag = (e.wins < e.n - e.timeouts ? ' LOSSES' : '') + (e.timeouts ? ' TIMEOUTS' : '') + (e.short / e.n > 0.1 ? ' SHORT' : '') + (e.rounds / e.n > 12 ? ' LONG' : '');
+      out.push('  a' + e.act + ' ' + e.kind.padEnd(6) + ' ' + k.padEnd(28) + ' n ' + String(e.n).padStart(3) + ' · win ' + winPct(e.wins, e.n, e.timeouts).padStart(4) + ' · ' + r1(e.rounds / e.n) + ' rds (max ' + e.maxRounds + ') · short ' + pct(e.short, e.n) +
         ' · to ' + e.timeouts + ' · HP lost ' + Math.round(100 * e.hpLost / e.n) + '% · L' + r1(e.lvl / e.n) + ' · downs ' + r1(e.downs / e.n) + ' (' + pct(e.withDowns, e.n) + ') · sig ' + r2(e.sigs / e.n) + ' · hype ' + Math.round(e.hypeMax / e.n) + flag);
     });
     let totalDowns = 0;
@@ -609,7 +679,7 @@
       const share = h.runs ? h.wins / h.runs : 0;
       out.push('  ' + k.padEnd(9) + ' runs ' + String(h.runs).padStart(3) + ' · wins ' + pct(h.wins, h.runs).padStart(4) + ' (' + (share >= median ? '+' : '') + Math.round(100 * (share - median)) + ') · fights ' + String(h.fights).padStart(4) + ' · dmg ' + r1(h.dmg / f) +
         ' (summons ' + r1(h.summonDmg / f) + ') · kills ' + r1(h.kills / f) + ' · taken ' + r1(h.taken / f) + ' · heals ' + r1(h.heals / f) + ' · downs ' + r2(h.downs / f) + ' · deaths ' + h.deaths +
-        ' · AoO ' + r2(h.oppMade / f) + '/' + r2(h.oppTaken / f));
+        ' · AoO ' + r2(h.oppMade / f) + '/' + r2(h.oppTaken / f) + (h.stalled ? ' · stalled runs ' + h.stalled : ''));
     });
     out.push('\n== skill usage per hero (uses per fight socketed; * = never used while socketed ≥ 10 fights)');
     const byHero = {};
@@ -629,14 +699,32 @@
       ' · gold at the final boss ' + r1(avg(gg.finalBossGold)) + ' (n ' + gg.finalBossGold.length + ') · gold left at the end ' + r1(avg(gg.endGold)) + ' · bought ' + JSON.stringify(gg.bought));
     const errs = G.errors.slice(0, 15);
     out.push('\n== errors (' + G.errors.length + '): ' + errs.join(' | '));
+    // audit-4: every fight that hit the round cap, for the gate (always printed; dump=1 adds the logs below)
+    out.push('\n== stalls (' + G.stalls.length + ' fights hit the round cap ' + MAXR + ' and count as neither a win nor a loss; ' + G.stalledRuns + ' stalled runs)');
+    G.stalls.forEach(function (x) {
+      out.push('  seed ' + x.seed + ' · a' + x.act + ' ' + x.kind + ' ' + x.enc + ' · round ' + x.round + ' · called a ' + (x.as || ON_TIMEOUT) + (x.left ? ' · standing: ' + x.left : ''));
+    });
     if (G.dumps.length) out.push('\n== capped fights (dump=1)\n  ' + G.dumps.join('\n  '));
     const probs = Object.keys(G.warns).sort(function (a, b) { return G.warns[b] - G.warns[a]; }).slice(0, 25);
     out.push('== DD.warn lines (' + probs.length + ' distinct):');
     probs.forEach(function (k) { out.push('  ' + G.warns[k] + '× ' + k); });
     if (P.verbose === '1') { out.push('\n== runs'); lines.forEach(function (l) { out.push('  ' + l); }); }
+    return out.slice();
+  }
+
+  function report(overrides) {
+    reportLines(overrides);
     document.getElementById('out').textContent = out.join('\n');
     if (P.json === '1') document.getElementById('json').textContent = JSON.stringify(records);
   }
+
+  // the tallies and the report, for the tools suite (tests/docs_tests.js): reset() starts a fresh tally
+  window.DD_SIM = {
+    fightOutcome: fightOutcome, runOutcome: runOutcome, recordFight: recordFight, finishRun: finishRun,
+    reset: function () { G = newTally(); return G; }, tally: function () { return G; },
+    startRun: function (party) { G.runs++; G.actEnter[1]++; (party || []).forEach(function (id) { H(id).runs++; }); },
+    reportText: function (overrides) { return reportLines(overrides || []).join('\n'); },
+  };
 
   function start() {
     DD.headless = true;

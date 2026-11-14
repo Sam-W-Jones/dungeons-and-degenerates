@@ -166,10 +166,10 @@ lost, rolls, hooks, shoves, rocks, trains, phase2, phase3}`), `lanes(dm)`, `dive
   `canUse: scripted` slots over-estimate their threat in AutoPlay and the HUD shading.
 - **BOSSES ACT 2 (beholder.js, FYI)**: the same dead-hint pattern as my switch — `mirrorHint` keeps `iris_eye_beam`
   intents with `!(it.delay > 0)`, never true for a v2 wind-up. The v2 test: `it.windup && (it.turnsLeft || 1) <= 1`.
-- **Lead (DESIGN §5 / §9)**: the DM is now 400 HP (review; outside the v1 act-3 band 420-520; tuned for level-5
+- ~~**Lead (DESIGN §5 / §9)**: the DM is now 400 HP (review; outside the v1 act-3 band 420-520; tuned for level-5
   heroes) with 20-damage rolls; §9's DM line could note the v2 shape (one action + one wind-up a turn, two in phase 3;
   Plot Hook finds hiding heroes; the switch works on the train he winds up; stuns push the doom back a turn; he makes no
-  attacks of opportunity).
+  attacks of opportunity).~~ Done (Nov 5 docs cleanup): DESIGN §5 lists the shipped bosses, §9 the DM's v2 shape.
 - **HUD (review, optional)**: on the default camera (1280×720 and 1600×900) the DM's head and his wind-up badge
   (`⏳ 🪨 26`, `⏳3 ☠ 60`) sit under the semi-transparent objective panel, right behind its subtitle — the phase-3
   subtitle ("ROCKS FALL in 3 of his turns… Cite all 3 Player's Handbooks (0/3)…") is the hardest to read. Any back-row
@@ -296,6 +296,18 @@ Still open (not in this file's power): the engine's "Get out of the red." on the
 objective-panel overlap (HUD request), `readySkills` / `reachOf` ignoring `canUse` (AUTOPLAY FYI), and the healer
 cameo (Known issues).
 
+## Rules run (Nov 6) — breaking objects: the DM Screen is laminated (CONTENT SWEEP)
+
+User: "objects should be targetable to break them" (engine rule: `docs/notes/rules.md` "Rules run"). Every object with HP
+is now a target for the party's single-target attacks — except `dm_screen_panel`, which says **`targetable: false`**.
+Shot from range the whole screen fell in round 1 (engine probe: the real-hero sim 13/16 → 16/16, failing "not always";
+campaign DM fights 7.0 → 6.3 rounds), so phase 1 stopped being about walking up to his table. With the opt-out: 14/16
+(88%), screen down in round 2 every fight, as before the run. A panel still takes Smash (1 AP, 5 damage), blasts, bumps
+and throws; Betty's Family Hammer and Slate's Hard Pass (tile-aimed) leave it alone like every aimed attack. Desc:
+"Destructible (10 HP), but laminated: attacks can't be aimed at it. Adjacent heroes can Smash it (1 AP, 5 damage); blasts
+and anything shoved or thrown into it hurt it too." The other props have no HP (stacks, switches, handbooks: interactions).
+Test: "boss_dm: the DM Screen" (panels opt out; the knight next to one can't aim at it; the desc says so).
+
 ## History (v1, before initiative)
 
 - v1 author + review (2026-10-31): 480 HP, telegraphed intents planned per round (2 Fudged Rolls + Rocks Fall or a
@@ -305,3 +317,66 @@ cameo (Known issues).
   outlives its round, the countdown subtitle matches the badge.
 - Phase 4 (engine requests): Plot Armor clamps in `modifyFinalDamage`; the house rule carries a rule-level
   `telegraphFlat`; Exposed is a declared `takenMult`. All still in use.
+
+## Playtest fixes (Nov 12)
+
+Confirmed playtest findings (`.tmp/wf12/confirmed-findings.json`) that live in dm.js (fix:content):
+- **bosses-objectives-7 (fixed, content part)**: the Track Switch's AutoPlay hint was a flat 34. Now `switchValue(dm)`:
+  34 − 30 per hero-side unit on his row with no turn of its own left before his next turn (`stuckOnRow`: it acts after
+  him or already acted this round, or is Rooted / held / stunned; a summon moves on its owner's turn; the switcher
+  himself counts as able to step off: AutoPlay's dry run prices that), and 0 if the train (`N.train` × the fight's
+  damage factor) would knock one out. Exported as `DD.BossDM.stuckOnRow / switchValue`. Test: the switch suite (a
+  team-mate on his row who already acted: 4; one it would knock out: 0; a Rooted one: 4). fix:engine has the same id
+  for AutoPlay's own dry run (autoplay.js); nothing more is needed from content.
+- **robustness-3 (fixed)**: `dm_rocks_fall`, `dm_railroad`, `dm_tpk` carry `windupOnly: true` (they were already kept out
+  of reach estimates by `canUse: scripted`; now the content advisory is quiet and the flag says what they are).
+- **text-tone-11 (fixed)**: the house-rule chip reads "(Rolled an 8 / an 11 / an 18 …)" (`aOrAn`); the `dm_rule`
+  narration says "The DM rolls on his House Rules table and gets {n}: {name}." (no article to get wrong).
+- **text-tone-19 (fixed)**: the Random Encounter log counts and joins cameo names (`listOf`): "two Skeletal Backup
+  Dancers", "Gary, Mimic and Owlbear" (was "X and X", "A and B and C").
+- **text-tone-23 (polish, fixed)**: the cameo skeleton's "That was load-bearing!" → "Not the funny bone!"; the DM-screen
+  narration keeps its load-bearing joke (one of the two kept).
+- Suite: `boss_dm: playtest fixes (Nov 12) — wind-ups are not instant reach, articles, cameo lists`.
+- Balance impact: AutoPlay stops running the diverted train over team-mates who can't leave his row (5 of 21 downs in
+  the playtest's 16 DM fights, one loss). The DM sims get somewhat easier for the party; re-measure.
+
+## Review (playtest fixes) — adversarial review (REVIEWER role, Nov 12 ~20:45)
+
+- **bosses-objectives-7 was partly fixed.** Re-run (`enc=boss_dm&n=16&from=700&level=5`, the playtest's repro): 0 downs from
+  the diverted train, but 7 hits on heroes (105 damage): `switchValue` left 4 (34 − 30) for one stuck ally, and the hero who
+  threw the switch never counted (the current turn always "gets a turn"), so 3 of 5 switches ran over the switcher.
+  Now: `switchValue` is 0 while any hero-side unit is stuck on his row (34 otherwise), and `stuckOnRow` counts the unit
+  whose turn it is as stuck unless it has 3+ AP (walk up, 1 AP to switch, one step off). After: 3 hits (41 damage), 0
+  downs, 13/16 won (unchanged). Suite `boss_dm: track switches divert the train …` (updated values + the switcher case).
+
+## Balance row (sustain refit 2, Nov 13)
+
+In a campaign the DM fights with his own `DD.Balance.encounters` row (`js/data/balance.js`): ×1.35 HP / ×1.6 damage (his
+Fudged Roll 20 → 32). At ×1 a campaign party won 98-99%; with the row 72.0% (225 fights; with a starting healer 77%,
+without 60%), ~9.7 rounds: the hardest boss for the party that reaches him (the act 2 bosses 81-83%). He responds to
+damage far more than to HP (his phases and Plot Armor pace the fight). Nothing in `dm.js` changed; this file's sims
+(`bare`) drop the row. Details: `docs/notes/balance.md` "Sustain refit - acts 2-3".
+
+## Finish (Nov 14) — FIX: CONTENT
+
+- **bosses-objectives-7**: not reproduced — `switchValue` (pre-balance fix) returns 0 while any hero-side unit is stuck
+  on his row (`stuckOnRow`), and `boss_dm` tests it.
+- **desc-sweep-3 (fixed)**: the phase-3 announcement gives the doom as this fight deals it (`doomDmg(dm)` →
+  DD.AI.fightLevel: 96 at ×1.6, not the raw 60); the Track Switch quotes no raw number ("runs him over (the train's full
+  damage, as its wind-up shows, …)": an object desc is a plain string, so it can't follow the fight). Suite `boss_dm:
+  finish — his own numbers in texts …`.
+- **FF-5 (fixed): his mercy.** His roll lands for 32 at ×1.6, so a squishy hero at full HP could go down to one roll. A
+  whole-fight rule "Fudged in Your Favour" (a rule chip; `modifyFinalDamage`, so previews and dry runs play it): a
+  Fudged Roll / Roll Behind the Screen never takes a hero with 75%+ of their HP straight to 0, at worst it leaves 1 HP.
+  Both roll descs say so. 200 scratch-harness DM fights (level 5, same seeds): won 40% → 40%, rolls downing a hero at
+  90%+ HP 6 → 0, downs a fight 4.01 → 3.92. Suite `boss_dm: finish — his mercy …`.
+- **FF-2 (the DM loop, seed 43358)**: the seed no longer reproduces; the cause (Ultra Instinct invisible to the AI) is
+  fixed in passives.js (docs/notes/passives-table.md "Finish"). 200 DM fights in the harness: 0 at the round cap.
+
+## Review (finish, Nov 14) — REVIEWER
+
+- FF-5 read and re-checked: "Fudged in Your Favour" is a whole-fight rule (a chip), added once at his combat start; its
+  `modifyFinalDamage` touches only his two rolls (`dm_fudged_roll`, `dm_secret_roll`) on heroes at 75%+ HP and leaves
+  them at least 1 HP after Block; both roll descs say "A hero with 75%+ of their HP keeps at least 1 (he fudges it)."
+  desc-sweep-3 (scaled doom log, no raw number in Track Switch) holds. DESIGN still lacks the mercy rule (docs request,
+  open).

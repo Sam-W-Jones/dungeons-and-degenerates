@@ -20,7 +20,7 @@
   // ---- stat scars -------------------------------------------------------------------------
   DD.registerScar({
     id: 'scar_trick_knee', name: 'Trick Knee', icon: '🦵',
-    desc: '-1 move.',
+    desc: '−1 move.',
     flavor: 'It can predict rain with 60% accuracy. It cannot predict stairs.',
     stats: { mov: -1 },
   });
@@ -34,14 +34,14 @@
 
   DD.registerScar({
     id: 'scar_glass_jaw', name: 'Glass Jaw', icon: '🥛',
-    desc: '-4 max HP.',
+    desc: '−4 max HP.',
     flavor: 'Technically still a jaw. Mostly a vibe now.',
     stats: { hp: -4 },
   });
 
   DD.registerScar({
     id: 'scar_tinnitus', name: 'Tinnitus', icon: '🔔',
-    desc: '-1 range on skills with range 2 or more.',
+    desc: '−1 range on skills with range 2 or more.',
     flavor: 'The bard says it is the sound of their talent. It is not.',
     stats: { range: -1 },
   });
@@ -49,7 +49,7 @@
   // ---- hook scars -------------------------------------------------------------------------
   DD.registerScar({
     id: 'scar_stage_fright', name: 'Stage Fright', icon: '😰',
-    desc: 'Start each combat Weak (deal 25% less damage) during your first turn.',
+    desc: 'Start each combat Weakened (deal 25% less damage) during your first turn.',
     flavor: 'Rehearsed the battle cry in the mirror. Forgot it anyway.',
     hooks: {
       onCombatStart: function (unit) { addStatus(unit, 'weak', { stacks: 1, turns: 1 }); },
@@ -58,7 +58,7 @@
 
   DD.registerScar({
     id: 'scar_hangover', name: 'Permanent Hangover', icon: '🍺',
-    desc: '-1 AP on your first turn of each combat.',
+    desc: '−1 AP on your first turn of each combat.',
     flavor: 'One drink at the Leaky Flagon. One. Six weeks ago.',
     hooks: {
       onTurnStart: function (unit) {

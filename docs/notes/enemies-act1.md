@@ -31,7 +31,7 @@ range, melee feel weak" → attacks of opportunity + reach-aware targeting; diff
   reacts to walkers (below).
 - **Attacks of opportunity** (engine rule: the first ready melee skill; review: Pack Tactics and the spider's webbed-prey
   +3 ride on the reaction's `o.flat` via `modifyOpportunity`, so the move preview shows the real bite): rat Ankle Nibble (2 + Bleed), grunt Pointy
-  Stick (6, the leaver's tile only), slimelet Glorp (3), spider Sticky Snack (5/8), critic Lute (6), Mimic CHOMP (9 + 4
+  Stick (6, the leaver's tile only), slimelet Glorp (3), spider Sticky Snack (5/8), critic Lute (6), Mimic Gold Digger (9 + 4
   gold) **except while its lid is open** (Lid Slam wound up: `modifyOpportunity` cancels it, so stepping out of the slam is
   a real, free window), **Bugbear: the throw** ("walking out on him gets you thrown out": 7 + 3-tile throw, ends the walk),
   **Cube: Engulf** while it is ready (7 + Engulfed, ends the walk). None: the kid, the Rep, the Spore Bro and the **slime**
@@ -41,7 +41,7 @@ range, melee feel weak" → attacks of opportunity + reach-aware targeting; diff
   it and add `DD.AI.targetValue` (engaged first, threat, kills). E.g. he steps around a knight (eating the slash) to
   throw him into a pit, but not just for a wall bump.
 - **Simplified skills** (one verb + at most one rider; done in the first v2 pass, kept and tested): Bear Hug removed;
-  Sticky Tongue = damage + pull (no Root); CHOMP = a plain bite (no hop); Engulf = damage + one status (`a1_engulfed`:
+  Sticky Tongue = damage + pull (no Root); Gold Digger = a plain bite (no hop); Engulf = damage + one status (`a1_engulfed`:
   can't move, 3 acid at the start of each of the victim's turns, 10 damage to the Cube frees everyone; no AP drain, no
   separate Root); Sporesplosion leaves no cloud (only a Spore Bro killed by someone else pops); Web Spit = Root + webs (no
   damage); Strike Action = Inspired only (no Block).
@@ -68,11 +68,11 @@ range, melee feel weak" → attacks of opportunity + reach-aware targeting; diff
 | `a1_spore_bro` Spore Bro | normal | 15 / 4 / 0 | −1 | kamikaze | Sporesplosion 6 poison to adjacent units, dies; killed otherwise: poison cloud (Poison 2) | — |
 | `a1_spider` Cellar Spider | normal | 16 / 4 / 1 | +2 | **skirmisher** | Web Spit: cross, Root 1 + webs 3 rounds, lobbed 2-5, cd 2 · Sticky Snack 5, +3 vs Rooted / web-standing prey | bite |
 | `a1_critic` Bandit Bard Critic | normal | 17 / 3 / 0 | +1 | ranged 3 | Bad Review 4 + Weak 2, range 1-6 LOS, cd 1, spell · Lute 6 | lute |
-| `a1_mimic` Mimic | elite | 68 / 3 / 2 | +2 | custom (melee) | Sticky Tongue 4 + pull 3, straight 2-4, cd 2 · CHOMP 9 + 4 gold · **Lid Slam** wind-up: 7 to the 3×3, knockback 1, cd 3 | CHOMP (not while the lid is open) |
+| `a1_mimic` Mimic | elite | 68 / 3 / 2 | +2 | custom (melee) | Sticky Tongue 4 + pull 3, straight 2-4, cd 2 · Gold Digger 9 + 4 gold · **Lid Slam** wind-up: 7 to the 3×3, knockback 1, cd 3 | Gold Digger (not while the lid is open) |
 | `a1_bugbear` Bugbear Bouncer | elite | 70 / 3 / 2 | −1 | custom (melee) | You're Not On The List 7 + throw 3 (bump 4 both, pits) · Bar Stool 6 r1, lobbed 2-5, cd 2 | the throw |
 | `a1_cube` Gelatinous Cube | elite | 70 / 2 / 2 | −3 | custom (melee) | Engulf 7 + Engulfed 2, cd 2 · Spit 4 lobbed 1-5 + bones, cd 1 · Jiggle Slam 8 to the 3×3, cd 3 (2+ foes around) | Engulf (when ready) |
 
-Elite planners: Mimic — crowded by 2+ foes (diagonals count) it winds up the Lid Slam (its whole turn), else CHOMPs a hero
+Elite planners: Mimic — crowded by 2+ foes (diagonals count) it winds up the Lid Slam (its whole turn), else bites (Gold Digger) a hero
 it can walk up to, else licks one in a straight line, else walks closer by walking distance. Bugbear — the best throw
 (walls, friends, explosive barrels, pits; he walks around his victim if it pays) or a stool into a group, else walks
 closer. Cube — Jiggle Slam when 2+ foes are around, else Engulf, else spit; it never moves while digesting and never
@@ -118,7 +118,7 @@ Real heroes (random 4 of the 16, L1-2, starting kit + 1 skill at L2; probe, 12 f
 96/96, 4.8 rounds, **20.1%** of the party's HP lost, 0.10 downs a fight (openers: slime_time 6%, rats 9%; hardest: union
 35%, open mic 32%, ambush 27%); elites won 36/36, 7.4 rounds, **38.4%**, 0.42 downs (last_call 48%, mimic 34%, cube 33%).
 The Last Keg ended at 12-30 of 30 HP (never lost). Landing rates (fired → hit a hero-side unit): bounce 100%, stool 100%,
-poke 93%, rock 100%, sling 99%, CHOMP 96%, tongue 93%, nibble 100%, spider bite 100%, engulf 94%, Jiggle Slam 100%,
+poke 93%, rock 100%, sling 99%, Gold Digger 96%, tongue 93%, nibble 100%, spider bite 100%, engulf 94%, Jiggle Slam 100%,
 **Lid Slam 1 of 6** (AutoPlay always steps out of the marked square: the counterplay works; it costs the party tempo).
 Attacks of opportunity per fight (fixture sims): heroes 0.1, enemies 0.6 — brutes stay engaged, so heroes rarely get to
 punish walkers; enemies punish heroes who walk away.
@@ -134,19 +134,19 @@ attacks of opportunity happen both ways, elites cost ≥ 1.2× the normal fights
 registry (DESIGN bands, explicit init and AI style per enemy, `DD.AI.styleOf` / `isDiver` / `Act.opportunitySlot` on
 real units, tooltips "On its turn …", no telegraph wording, only the Lid Slam says "Wind-up", waves in rounds 2-5, no
 start-of-fight scripting) · sprites · every skill fired at once (`DD.AI.useNow`: damage == desc, riders, friendly fire,
-Inspired +25%) · elite skills (tongue, CHOMP and gold, the Lid Slam wind-up: announced, listed, 3×3, lands at the
-Mimic's next turn start, knockback without bump, a stun interrupts it, no CHOMP while the lid is open; throws, stool at
+Inspired +25%) · elite skills (tongue, Gold Digger and gold, the Lid Slam wind-up: announced, listed, 3×3, lands at the
+Mimic's next turn start, knockback without bump, a stun interrupts it, no Gold Digger while the lid is open; throws, stool at
 once, Engulf in the real turn flow) · attacks of opportunity with every act 1 skill (preview names and numbers, the throw,
 Engulf, the slime / kid / Rep / Spore Bro make none, a cooling-down Engulf makes none) · splits, pops, Hazard Pay at turn
 start · AI turns (every enemy acts 3 rounds with only its own skills and no pending action; brutes stick to the knight; the
 spider dives the wounded mage through the knight's attack of opportunity but not into a lethal one; the kid shoots from
 range and is pinned by the knight; the Spore Bro hugs two heroes; the Rep buffs / memos; the critic reviews a non-Weak hero;
 the spider webs out of reach; the Mimic winds up when crowded (the mage steps out free, the cleric eats 7), licks in a
-straight line, walks up and CHOMPs, walks around walls; the Bugbear's pit throw, wall-vs-pit attack-of-opportunity pricing,
+straight line, walks up and bites (Gold Digger), walks around walls; the Bugbear's pit throw, wall-vs-pit attack-of-opportunity pricing,
 stool; the Cube digests in place) · HUD previews (splits, cooked slimes, spores, Engulf release, Mimic gold, the move
 preview's "provokes" damage == the real attacks of opportunity) · odd states (10 statuses × 12 enemies × 2 rounds; empty /
 no target / dead user) · gimmicks in the turn flow (a rat pack arriving bites 2 + 3 + 4, webbed bite 8 after the Root wore
-off, tongue / slam / CHOMP range, two-meal Engulf, a grunt pokes the keg, the east-door wave) · encounters on 12 seeds ×
+off, tongue / slam / Gold Digger range, two-meal Engulf, a grunt pokes the keg, the east-door wave) · encounters on 12 seeds ×
 2 difficulties · AutoPlay sims (normal / elite, fixture L1-2, area-honesty watch).
 Mutation-checked: the spider as `melee`, the Bugbear ignoring the attack-of-opportunity cost and the Mimic biting while
 its lid is open each fail their tests. Isolated runs pass on seeds 1-3 (with the generic `content:` enemy / encounter
@@ -157,7 +157,7 @@ passives, narrative XP, integration unlocks, act 2 sim bands).
 ### Deviations
 
 - The Mimic makes **no attacks of opportunity while the Lid Slam is wound up** (its `modifyOpportunity` hook): without it,
-  "step away" (the wind-up's counterplay) cost the first hero a 9-damage CHOMP, so standing in the slam was usually the
+  "step away" (the wind-up's counterplay) cost the first hero a 9-damage Gold Digger, so standing in the slam was usually the
   better choice for a lone hero. Stated in the passive and the skill desc.
 - The Bugbear's attack of opportunity is his throw and the Cube's is Engulf (the engine picks the first ready melee skill);
   kept on purpose (it is their joke) and stated in the tooltips. The slime makes none (its Splorch targets itself).
@@ -182,8 +182,8 @@ passives, narrative XP, integration unlocks, act 2 sim bands).
   0.4 downs). If "someone often goes down" is the target for regular fights, the cheapest per-encounter knobs here are
   the openers (`a1_slime_time` 6%, `a1_rats_in_the_cellar` 9%: one more wave or enemy), Hazard Pay's Block, the keg's
   HP, and the Lid Slam (dodged 5 of 6 times). All numbers are in one place per enemy / encounter.
-- **Lead (DESIGN §8 Act 1)**: could name the Cellar Spider as the act's diver and the Mimic's Lid Slam as its one elite
-  wind-up.
+- ~~**Lead (DESIGN §8 Act 1)**: could name the Cellar Spider as the act's diver and the Mimic's Lid Slam as its one elite
+  wind-up.~~ Done (Nov 5).
 
 ## Known issues
 
@@ -235,10 +235,10 @@ An interrupted earlier attempt (`.tmp/a1rev2/`, probes only, no edits) was reuse
   number fired at once (`DD.AI.useNow`), in the turn flow and as attacks of opportunity; Taunt (−50% to others),
   Weak (−25%), Inspired (+25%), Bleed, the spore cloud (Poison 2 puddle, cross radius 1) as the descs say.
 - **v2 turns**: every enemy acts once on its own turn (move, then one skill); the only pending action after a turn is the
-  Mimic's Lid Slam (wound up, lands at its next turn start, then it acts that turn: e.g. slam 7 + CHOMP 9 on a hero who
+  Mimic's Lid Slam (wound up, lands at its next turn start, then it acts that turn: e.g. slam 7 + Gold Digger 9 on a hero who
   stayed; stepping out is free while the lid is open); cooldowns: cd 1 = every other turn (Rock Toss, Bad Review, Spit).
 - **Attacks of opportunity**: the right skill per enemy (rat nibble, grunt spear on the leaver's tile only, slimelet,
-  spider, critic lute, Mimic CHOMP except while the lid is open, Bugbear throw, Cube Engulf while ready; none for the
+  spider, critic lute, Mimic Gold Digger except while the lid is open, Bugbear throw, Cube Engulf while ready; none for the
   kid, Rep, Spore Bro, slime); Engulf by reaction ends the walk next to the Cube; hero reactions on act 1 movers.
 - **Targeting**: taunted elites aim their custom planners at the taunter (Bar Stool / tongue / Spit at a far taunter);
   charmed elites fight their own side; brutes stick when engaged; unengaged brutes pick the hero they can hurt most
@@ -247,7 +247,7 @@ An interrupted earlier attempt (`.tmp/a1rev2/`, probes only, no edits) was reuse
 - **Idle turns** (real heroes, 132 fights): rats 68%, slimes 83%, Spore Bros 88% of turns without a skill — traced
   (p3 / p8 board dumps): walking (mov 3-5 across 10×10-11×11 maps), queueing at channel bridges / chokepoints behind
   friends, out of reach; 1-3% "could attack but didn't". Not a planner bug.
-- **Visuals**: `g_enemies.png` (all 12 sprites), `i_mimic.png` (inspect panel: tooltip, "Holds the line: … CHOMP ≈9",
+- **Visuals**: `g_enemies.png` (all 12 sprites), `i_mimic.png` (inspect panel: tooltip, "Holds the line: … Gold Digger ≈9",
   Engaged chip on Marwyn), `w_mimic2.png` (Lid Slam: 3×3 hatched square + "Lid Slam 7" + ⏳ on the tracker),
   `c_web.png` (webs; a rat Rooted by its own team's web — funny, kept).
 - Real-hero census (L1-2, normal, 132 fights): won 132/132, 5.3 rounds, 23.3% of party HP lost, 0.12 downs a fight,
@@ -268,7 +268,7 @@ An interrupted earlier attempt (`.tmp/a1rev2/`, probes only, no edits) was reuse
 2. **Tooltips said "the nearest hero"** for the rat and the Sewer Slime; the reach-aware targeting does not pick the
    nearest (probe p1: a rat runs past the nearer knight to bite the mage). Now "a hero it can reach (whoever it can hurt
    most)" / "a hero it can reach …, sticking to the one it is next to".
-3. **A reaction CHOMP swallowed gold silently** (the log line was gated on `ctx.isIntent`, which reactions don't set).
+3. **A reaction Gold Digger swallowed gold silently** (the log line was gated on `ctx.isIntent`, which reactions don't set).
    It now logs "swallows N gold coins" on attacks of opportunity too (test asserts the line).
 
 ### Deviations
@@ -292,13 +292,69 @@ An interrupted earlier attempt (`.tmp/a1rev2/`, probes only, no edits) was reuse
 
 -----------------------------------------------------------------------------------------------------------------------
 
+## Docs and content cleanup (Nov 5)
+
+- **Renamed** (a hero skill had the same display name): the Mimic's CHOMP is now **Gold Digger** (`a1_mimic_chomp`,
+  id unchanged; Ellaria's Wild Shape keeps "Chomp"). Its passive line and codex text say "bites (Gold Digger)"; the
+  act 1 suites' labels follow. New cross-act suite `enemies_act1: (all acts) no enemy or boss skill shares a display
+  name with a hero-side skill` (case, punctuation and "&"/"and" ignored) guards every act and the bosses.
+- The Lead request above (DESIGN §8: the Cellar Spider as the diver, the Lid Slam as the act's one elite wind-up) is
+  done.
+
+## Review (balance run)
+
+- **Verified by grep and in the browser**: the eight renamed enemy-side skills (Gold Digger, Fairy Dust-Up, Lap Dog,
+  Ankle Biter, Please Hold, OVERRULED!, Strike That!, Temporary Injunction) are the registered names; the old names survive
+  only as hero-side skills (Buga's Red Tape, Basanos' Pounce, Pebbles' Chew Toy, Syllamin's Glitter Bomb, Corelos'
+  Cease & Desist and his Infernal Lawyer's Objection!, Ellaria's corgi's Chomp), as FX / item text ("CHOMP!" on an item
+  proc, "OBJECTION! (p. N)" on the DM's floor puzzle, Grimble's "Objection! Audit called off") and in comments. The
+  guard suite passes; no hero-side name is shared within the hero side either. Explicit `init` on the eight boss-fight
+  enemies equals the tier default they used (checked: grim_intern 1, rat_plaintiff 1, rat_lawyer 0, lichtenstein 2,
+  lich_intern 1, lich_mimic 0, dr_iris 2, iris_floater 1), so no number moved. Nothing to fix.
+
+## Rules run (Nov 6) — breaking objects (CONTENT SWEEP)
+
+User: "objects should be targetable to break them" (engine rule: `docs/notes/rules.md` "Rules run"). `a1_strike_fund` is a
+destroy objective, so shooting it is the point: `targetable: true`, desc "Destructible (8 HP): hit it with any single-target
+attack, or Smash it from next to it…". The Union Meeting intro says "Break the Strike Funds (shoot them, or Smash them up
+close)". Engine probe: Union Meeting 5.8 → 5.0 rounds. The Last Keg (core `keg`, the protect objective) is never a target
+(engine rule). "enemies_act1: deaths, splits, pops and strike funds" shoots a fund twice from 4 tiles (3 gold, victory).
+
+## Balance pass 1 (Nov 10) — act 1's regular fights hurt
+
+No enemy or encounter number in `act1.js` changed. The levers are rows in `js/data/balance.js` (`DD.Balance.act[1]`):
+every act 1 **normal** fight is ×1.4 enemy damage and ×1.15 enemy HP, every act 1 **elite** fight ×1.2 / ×1.05, and the
+act 1 bosses ×1.2 damage; every party starts with a First-Aid Fanny Pack and a Bucket of Ice Water (`docs/notes/balance.md`
+"Pass 1"). Real-hero sims, act 1 only, 300 runs (seeds 7000+), before → after: normal fights won 100% → 99% (X parties
+98%), a hero goes down in 18% → 30% of them (X parties 25% → 37%), HP lost 13% → 14% net (31% gross: the pack heals much
+of it back). Elites: won 100% → 99%, HP lost 17% → 12% net (32% gross), a down in 25% → 20%. The run's first fight: 20%
+HP lost, a down in 19%. The openers stay the gentlest (rats_in_the_cellar, slime_time, big_flush: 3-15% of fights with a
+down); goblin_ambush, open_mic and union_meeting the hardest (48-71%; union_meeting is won 94%). Per-encounter knobs: `DD.Balance.encounters.<id>`.
+Test: the fixture guard "elites hurt more than normal fights" is ≥ 1.1× the normal fights' HP share (was 1.2×): 57% vs
+51% with the elite row, 46% vs 51% without it (why the elite row exists).
+
 ## History (v1, before initiative) — condensed
 
 The v1 roster, encounters and review fixes (honest telegraph numbers via a skill-level `telegraphFlat`, the spider's
-webbed-prey bonus, the tongue's no-bump pull, Engulf's "first meal" counter, the Mimic's tracked CHOMP, the keg raid,
+webbed-prey bonus, the tongue's no-bump pull, Engulf's "first meal" counter, the Mimic's tracked Gold Digger, the keg raid,
 the Big Flush waves) are described in this file's git history. Still relevant in v2: the core fix in `DD.AI.intentDmg`
 (a skill def may declare a pure `telegraphFlat(unit, intent)` added to a wind-up's number; act 1 keeps it on
 `a1_rat_nibble` / `a1_spider_bite` for content that winds them up), the `a1_engulfed` / `a1_strike_fund` defs and the
 three handcrafted layouts. Deviations kept from v1: the Spore Bro's toadstool cap is an `overlay` painter; `last_call` is
 procedural and `union_meeting` the third layout (every fund reachable down open chair columns); lobbed shots
 (`los: false`) and tracked shots with min range 1 are deliberate.
+
+## Playtest fixes (Nov 12)
+
+Confirmed playtest findings that live in act1.js (fix:content):
+- **robustness-3 (act 1 part, fixed)**: the Mimic's Lid Slam carries `windupOnly: true` (its planner winds it up through
+  `api.windUp`; reach estimates and AutoPlay no longer read it as an instant hit).
+- **text-tone-24 (act 1 part, polish, fixed)**: the Bandit Bard Critic's passive says "Weakened" (the status's name),
+  not "Weak".
+- **text-tone-9 (act 1 part, fixed)**: the Strike Fund no longer repeats the engine's "… is destroyed." line; its own
+  line only adds the spill ("3 gold rolls out of the wreckage, along with the union's dignity."). The engine's
+  lower-casing ("The strike fund is destroyed.") is fix:engine's.
+- **bosses-objectives-9 (keg part)**: nothing to change in act1.js (the Last Keg's 30 HP and label are deliberate); the
+  keg desc's "(6 HP)" is terrain.js and the objective's object name is combat/encounter (fix:engine). Both fixed there
+  (rules.md: the keg desc states no HP number; "Protect The Last Keg…" uses the placed object's label).
+- **text-tone-8 (polish)**: no act 1 change (the Rat's cheese line and the Bugbear's "I quit" stay as the originals).

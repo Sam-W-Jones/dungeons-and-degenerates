@@ -18,7 +18,9 @@
     'modifyCost', 'modifyRange', 'modifyOutgoingDamage', 'modifyIncomingDamage', 'onDealDamage', 'onTakeDamage', 'onKill', 'onDeath',
     'onDowned', 'onHealed', 'onStatusApplied', 'onAllyDeath', 'modifyStatus', 'modifyPush',
     'modifyFinalDamage', 'preventDeath', 'onAnyDeath', 'onAllyDowned', 'modifyHeal', 'modifyMoveCost', 'modifyOutgoingPush', 'onCostPaid',
-    'modifyInitiative', 'modifyOpportunity', 'onOpportunityAttack'];
+    'modifyInitiative', 'modifyOpportunity', 'onOpportunityAttack',
+    // the AI's pure estimate queries (ARCHITECTURE §5.3: DD.AI.estimate fires them; finish FF-2: Ultra Instinct)
+    'estimateTaken', 'estimateDealt'];
   const STAT_KEYS = ['hp', 'ap', 'mov', 'armor', 'dmg', 'heal', 'range', 'block', 'hype', 'init'];
   const MOD_KEYS = ['gold', 'xp', 'price', 'heal'];
   // runMods bounds: fractions, except xp = the extra weight in the DM's level-up roll (Teacher's Pet III counts as 3 heroes)
@@ -248,6 +250,11 @@
       t.ok(o && o.id === 'rock' && o.label === 'Rocky' && o.hp === 10 && o.maxHp === 10, tag + ': Rocky (10 HP) appears beside the hero (north; the nearest foe is east)');
       t.ok(!tile(2, 4).obj, tag + ': not between the hero and the nearest foe');
       t.ok(!DD.Grid.blocksLos(1, 3) && DD.Grid.isWalkable(1, 3), tag + ': Rocky blocks nothing (not sight, not movement)');
+      // rules run: objects with HP are targets, but not the party's pet
+      if (DD.Targeting.objectTargetable) {
+        t.ok(!DD.Targeting.objectTargetable(o) && !DD.Targeting.validTargets(u, u.basic).some(function (q) { return q.x === 1 && q.y === 3; }),
+          tag + ': nobody aims an attack at Rocky (targetable: false), not even from next to him');
+      }
       t.eq(u.block, 3 + L.block, tag + ': round 1 Block = 3 (Overly Prepared) + ' + L.block + ' (Rocky)');
       endTurn();
       t.eq(u.block, L.block, tag + ': round 2 Block from Rocky: ' + L.block);
@@ -257,7 +264,7 @@
       endTurn();
       const r = rocks();
       t.ok(r.length === 1 && dist(r[0], u) === 1, tag + ': next turn he is somehow beside you again (at ' + (r[0] && r[0].x) + ',' + (r[0] && r[0].y) + ')');
-      t.ok(r.length === 1 && r[0].obj.hp === 6 && r[0].obj.maxHp === 10, tag + ': the very same Rocky (6/10 HP)');
+      t.ok(r.length === 1 && r[0].obj.hp === 6 && r[0].obj.maxHp === 10 && r[0].obj.targetable === false, tag + ': the very same Rocky (6/10 HP, still no target)');
       t.ok(!tile(1, 3).obj, tag + ': and his old spot is empty');
       t.eq(u.block, L.block, tag + ': +' + L.block + ' Block');
       endTurn();
@@ -1253,8 +1260,11 @@
     rp_ultra_instinct: function (t, lv, L, tag) {
       const a = arena('rp_ultra_instinct', lv, { hpMult: 5, enemies: [{ id: 'test_grunt', x: 8, y: 8, hpMult: 5 }, { id: 'test_grunt', x: 8, y: 0, hpMult: 5 }] });
       const u = bare(a.me), f = bare(a.foe);
+      // [finish FF-2] the AI knows: before the round's first hit an estimate on him is 0 (no phantom kill every round)
+      t.eq(DD.AI.estimate(f, u, 6, null), 0, tag + ': AI.estimate before the first hit this round: 0');
       t.eq(lost(u, function () { hit(f, u, 6); }), 0, tag + ': the first enemy hit this round: nothing');
       t.eq(f.maxHp - f.hp, L.counter, tag + ': the attacker takes ' + L.counter + ' back');
+      t.eq(DD.AI.estimate(f, u, 6, null), 6, tag + ': AI.estimate once it is spent: the full 6');
       t.eq(lost(u, function () { hit(f, u, 6); }), 6, tag + ': the second one lands');
       DD.Combat.endTurn();
       u.block = 0;

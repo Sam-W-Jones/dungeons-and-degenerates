@@ -1,5 +1,295 @@
 # AUTOPLAY notes
 
+## Rules run — walking through allies, swaps, breaking objects (ENGINE + AUTOPLAY role, Nov 6)
+
+The user's two newest rules (`docs/notes/rules.md` "Rules run" has the rules and the engine side). What AutoPlay does:
+
+- **Walking through allies**: nothing to fix — its walks come from `Combat.reachable` (allies passed, never ended on) and
+  `walkFrom` (allies passable, foes walls). Suite: `autoplay: rules run — a melee hero walks through its allies in a
+  corridor to reach the foe`.
+- **Swaps** (`bestSwap`, executed by `DD.Combat.swap`; switch `AP.swap = false`): every adjacent ally it can swap with
+  (`Combat.swapTargets`) is priced like a plain move onto that tile — what its AP can still do there (`fpAt`, computed
+  with both units moved), the danger there, progress, tempo, the attacks of opportunity of leaving its tile
+  (`walkCost`) — plus what the swap does to the others' danger (a threat model with both moved; the ally's arrival
+  hazard) and `SWAP_COST` 0.5 on top of a move's 0.5. A cheap bound (the ally's whole danger lifted, today's danger at
+  the new tile) skips hopeless candidates before the threat model. No ping-pong: never back onto a tile it stood on this
+  turn (`ctx.seen`), and the same pair doesn't swap again this round or the next (`swapLog`, per fight). Suite: `…
+  swaps: a melee hero takes the one tile next to the foe from a ranged ally (corridor; with AP.swap = false it can't reach
+  the grunt); a tank steps in for a hurt one` (open floor, the brute acting before the mage: 8.4 vs 8.5 for a plain move
+  when she acts first — she can step away herself — 10.1 vs 8.9 when the brute acts first).
+- **Breaking objects** (`breakValue` in the quick pass; the exact pass replays the real use): an attack aimed at a
+  breakable object is worth its destroy-objective / puzzle-hint value (`objectValue`: damage + 15 for an objective
+  object destroyed; hint objects dmg × 0.5 + the hint), plus — when the hit breaks an object that does something when
+  destroyed — a dry run of the break credited to the actor (foes hurt / killed as for a barrel, allies hurt × 1.5,
+  `surfaceGain`, loot at `GOLD` = 0.4 a gold piece from the fight's `goldGained`). Plain cover (a crate, a barrel, a
+  shelf) is worth 0, so it is never shot. Object-aimed options add the loot in the exact pass too (other options:
+  unchanged). Suite: `… breaks objects when it pays (objective, blast, loot), never plain cover` (a destroy-objective
+  totem from range, a pinata between two minions, a piggy bank for 6 gold when rooted with nothing in reach, crates /
+  barrels / shelves next to a fight untouched, the protected keg never a target). Mutation-checked: `breakValue` → 0
+  fails the pinata and the piggy bank.
+
+## Review (balance run) — adversarial review of the rules run, AutoPlay side (REVIEWER role, Nov 10)
+
+Verified by running a 100-run campaign sim (`seeds=100&from=3000&diff=normal`, live files) with reviewer counters
+(`.tmp/wf10/rv/counters.js`, page `.tmp/wf10/rv/sim.html`): 935 fights, **0 errors, 0 round-cap fights**.
+- **Swaps**: 387 (0.41 a fight, 90 by summons). **0 by enemies, 0 ping-pong** (the same pair again within a round),
+  **0 that provoked** an attack of opportunity, 1 that put the ally in a hazard. 89 swaps were the mover's last action that
+  turn (a tank stepping in front, mostly).
+- **Aimed object hits**: 577 (571 by heroes, 6 by summons, **0 by enemies**), 451 broke the object: bone piles 236, Strike
+  Funds 140, totems 66, braziers 38, chafing dishes 38, spore pods 26, Restricted Section shelves 14 (revealed ones:
+  unrevealed shelves are worth 0), bushes 7, bone walls 6, candles 5, a dead tree 1. Plain crates, barrels, shelves: 0.
+  Barrel detonations by aim: 172.
+- **Never two units on a tile** (checked at every turn end): 0 violations.
+- First boss 61 / 100 (Grimble 55%, Rat King 66%), campaign 32%, the DM 32 / 34 in 7.4 rounds (the panels opted out: back
+  to the pre-run 7.0, not the 6.3 of shootable panels).
+
+Not changed: a flyer still values a bone pile at 0 (its hint is the stomp's), so AutoPlay's flyers neither shoot nor Smash
+one (content request, optional; a hint argument "aimed" would be the clean way). No AutoPlay code changed in this review.
+
+## Review (balance run) — adversarial review of AutoPlay pass 3 and the engine / AI requests (REVIEWER role, Nov 6)
+
+Scope: `js/engine/autoplay.js` (pass 3) and the engine / AI requests (`docs/notes/rules.md` "Engine requests", reviewed
+in its own "Review (balance run)" section). Everything was checked by running code: headless suites, scratch probes
+(`.tmp/rv11/`: `probe.js` on top of the AP3 metrics sim — revives undone and by whom, enemy turns that did nothing,
+stun-locks, squeezes, flyers vs the floor; `scratch_tests.js`; `test_mut*.html` = suites against the fix-pass AutoPlay),
+and whole-campaign sims. An earlier attempt at this review was cut off after three fixes in `autoplay.js` and their
+suites; I re-checked them (fixes 2-4 below), kept them and finished the job.
+
+### Verified (held)
+
+- **Determinism**: the same seeds give byte-identical per-fight records (`json=1`, two runs of 8 seeds), a seed run
+  alone equals the same seed inside a batch (no state leaks between fights: the learned hit rates and the revive memory
+  are per fight state), and every batch of this pass reproduced the authors' and the earlier attempt's reports exactly.
+  No `Math.random` / clock in a decision.
+- **No new unfairness from the smarter AI** (normal, 100 runs, ~17,000 enemy turns): downed heroes can't be damaged at
+  all (`Act.damage` ignores them), so there is no focus fire on the fallen; enemy turns that did nothing 3.3% (3.7-3.9%
+  before the engine pass), mostly by design (a gargoyle in Stone Form, zombies still rising, charmed units with nobody
+  of theirs in reach); heroes losing 2+ own turns in a row to stun-likes: 3 fights in 1,029 (one 3-turn sleep); round-cap
+  timeouts 0 in every batch (normal, act 1, casual).
+- **The Help-Up loop** is broken on the seeds that looped (casual 4016 DM, 4029 and 4032 Rat King: no capped fight; 40
+  act-1 runs of 4029's party: 0 timeouts) and in the fixture boss suites (`sims=60`: Rat King 39/60, Grimble 47/60, 0
+  timeouts). Fix 1 closes the last two-in-a-row I found.
+- **Flyers** (probe wrapping every object, terrain and non-cloud surface `onEnter`): over 3,000+ fights no floor effect
+  ever fired for a flying unit; flyers pocketed loot 17-33 times per 100 runs.
+- **Read end to end** (boss and act-1 fight logs): barrels shot when the blast pays (round 1 at Last Call: two barrels,
+  the bouncer, no ally hurt), aimed heals and Help Ups, summons first (the corgi pulling a loophole lever in Grimble's
+  vault puzzle), signatures fire in 84-100% of the fights where one is ready (Hype-bound, as the authors say).
+- **Speed**: 0.21 s per fight (normal, 100 runs in 211 s wall), 0.25 s act 1; `DD.AI.threatMap` 0.9 ms and a fresh
+  AutoPlay danger read 0.3 ms on a 16×14 map with 10 enemies.
+
+### Fixed (each with a regression suite, all mutation-checked: they fail on the fix-pass AutoPlay / engine)
+
+1. **Help-Up loop, diluted evidence.** `safeToRevive` weighed an undone revive as undone / tried, so earlier revives of
+   that ally that *held* diluted a fresh one: casual seed 4032, the Rat King re-downed Kiri before her turn in rounds 15
+   and 16 while Valdris spent both turns picking her up. Now: the LAST revive of that ally undone by an enemy that still
+   stands and acts → no revive (older evidence keeps the undone / tried weighing). Suite `autoplay: review — the Help-Up
+   loop: earlier revives that held don't dilute the last one coming undone`.
+2. **(earlier attempt, kept)** A revive undone on no enemy's turn (the party's own blast: Marwyn downing Marbles at Last
+   Coffee) counted as evidence with no culprit to wait out and blocked that ally's revives for the rest of the fight.
+   Suite `… a revive undone on no enemy's turn … does not block later revives`.
+3. **(earlier attempt, kept)** "No going back" (A → B → A) also blocked the step back into cover after striking (hit and
+   run), leaving a hero on a lethal tile; the list now restarts after any action. Suite `… hit and run …`.
+4. **(earlier attempt, kept)** Flyers never walked to a hinted loot pile (the plate rule caught loot too). Suite `… a
+   flyer still goes for a hinted loot pile`.
+5. **Danger model vs `windupOnly` / `fromStand`** (the engine author's request): `readySkills` skips wind-up-only skills
+   and a `fromStand` skill only hits from where the enemy stands, like `DD.AI.reachOf`. Latent today (the shipped
+   wind-ups are outside `def.skills`), needed once content adopts the flags. Suite `… skips wind-up-only skills and reads
+   fromStand ones from where the foe stands`.
+6. Coverage only (no bug): deterrents declared by content — `o.stop` in a pure `modifyOpportunity`, Hall Monitor III
+   (not II), none once the hero's reaction is spent this round. Suite `… deterrents declared by content …`.
+
+### Measurements (normal unless noted; "fix pass" = the authors' AutoPlay + engine, same seeds)
+
+| batch | fix pass | review (final) |
+|---|---|---|
+| normal 100 (1000+): campaign / act 1 | 42% / 68% | 39% / 69% |
+| ... Rat King / Grimble | 42/54 / 26/44 | 39/54 / 30/44 |
+| normal 100 (2000+): campaign / act 1 | 47% / 68% | 41% / 62% |
+| ... Rat King / Grimble | 40/56 / 28/43 | 33/56 / 29/43 |
+| act 1 only 150 (5000+): act 1 / Rat King / Grimble | 69% / 48/68 / 55/81 | 74% / 55/68 / 56/81 |
+| casual 60 (4000+): campaign / act 1 / timeouts | 77% / 92% / 0 | 82% / 90% / 0 |
+| act-1 boss, all three normal batches | 239/346 (69.1%) | 242/346 (69.9%): Rat King 127/178 (71%), Grimble 115/168 (68%) |
+| boss fights (normal, 2 × 100): win · downs | 82% · 1.62 / 82% · 1.56 | 81% · 1.70 / 79% · 1.71 |
+| fights with 4+ Help Ups on one hero (normal 1000+ / act 1 / casual) | 2 / 1 / 1 | 1 / 0 / 0 (normal 2000+: 3; no two revives in a row undone by the same acting enemy any more) |
+
+Per-batch swings are trajectory noise (a changed decision re-rolls the rest of a run); pooled, the act-1 boss moved
++0.8 points. Fix 1's A/B on its own (act 1, 150 runs) is neutral (74% vs 75% with the loop breaker off entirely; with
+it, 5 more heroes per 150 runs stay down to the end of a fight they would have been picked up in). The balance pass can
+start from the "review (final)" column: act-1 boss ~70% (target 60-70%), Grimble and the Rat King about level.
+Melee walk-only turns 19-21% (Slate 32%, Betty 30%, Marwyn 24%: the stand-offs the authors describe); boss signatures
+0.02-0.09 a fight.
+
+### Requests
+
+- **hero-marwyn** (unchanged from pass 3): `tests/content/hero_marwyn.js` "AutoPlay battles, act 1" — the totems fight
+  is won in round 1 before Marwyn's turn; accept a fight that is over before his first turn. It is the only failing
+  section in the full run.
+- **bosses-act1 / balance pass**: the Rat King's Swelling Ranks grows by 1 every round with no cap (+16 damage by round
+  18 in seed 4032): a long Rat King fight becomes unwinnable however it is played, which is what the Help-Up loop
+  really was. A cap (or a reset when he splits) is a balance knob, not an AutoPlay one.
+- Lead: ARCHITECTURE §5.7 already describes pass 3 (the earlier attempt); this review added fix 1 and the
+  `windupOnly` / `fromStand` reading there.
+
+### Could not verify
+
+- Debt pricing (`cor_debt`, `debtCost`) has no regression suite: a Corelos scene where Dark Bargain's value flips with
+  his HP depends on too many other terms to pin down; sims show Dark Bargain at 0.91 uses per socketed fight.
+- Human play: AutoPlay's listeners (learned hit rates, revive memory) run in human games too; they only read the board
+  and write their own module state, but I did not drive a human game to watch them.
+- Per-batch noise: 100-run batches move the act-1 boss by ±7 wins; pooled numbers are the ones to trust.
+
+## Pass 3 — play like a good human (AUTOPLAY role, Nov 5)
+
+Task: v2-digest §5 "AutoPlay" — the balance pass treats AutoPlay as "a well-played party". Files (mine only):
+`js/engine/autoplay.js`, `tests/autoplay_tests.js` (7 new suites `autoplay: pass 3 — …`, one ported premise), this file.
+No game numbers changed. Scratch (not shipped): `.tmp/ap3/` — `sim.js` (a copy of `tests/sim/sim.js` + an "AP3
+metrics" block: hero turns that only walked / idled / acted for melee and ranged heroes, signatures vs. fights where one
+was ready, Help Ups per downed hero, barrel shots, aimed heals that got someone up, summon skill uses, combo skills per
+socketed fight, `probe=1` traces of walk-only turns, `ap=k:v` AutoPlay switches), `sim.html` / `simbefore.html`
+(`autoplay_before.js` = the file this pass started from, loaded over the shipped one) / `simab.html` (A/B snapshots),
+`page.sh`, `extract.sh`, `test_before.html` + `test_page.sh` (any suite against the before AutoPlay), `test_knobs.html`,
+`perf.html` / `perfbefore.html` + `run.sh` (real-time decision timing), `runs/` (all outputs).
+
+### What changed (by gap)
+
+- **Signatures.** Measured first: a ready signature was already fired in 78-100% of the fights where one was ready; the
+  real limit is Hype (100 reached with a turn left in ~17% of normal fights, 5% of boss fights). Changes: Hype is worth
+  0.3 a point (was 0.15) while 2+ foes stand and a hero with a signature is up (kills, multi-hits, barrels feed the
+  meter); the gate is "gain + danger taken off the party ≥ 10" (was gain ≥ 12, which never let a buff / taunt / heal
+  signature through: BEHOLD, Divine Forge, Green Build); `bigMoment` also accepts 2+ allies affected (was 3) and an elite
+  hit for 20+; the hold-it reserve is 4 / 2 / 0 (was 10 / 4 / 0): Hype stops at 100 and resets every fight, so holding
+  a ready signature wastes every point earned meanwhile. A lone minion still never gets one.
+- **Melee heroes walking.** (1) *Closing in*: when no attack is in reach after one move but two moves + a skill fit the
+  AP, the tiles a second (real) walk reaches near the foes get a quick pass (`engageOptions`, ≤ 12 tiles, the best 3
+  get exact dry runs as if the hero stood there with the AP left); choosing one walks the first leg and decides again
+  (`kind: 'engage'`). (2) *Tempo*: a melee / short-reach hero values its end tile by what it can hit next turn from it
+  (`tempoAt`: best melee hit per AP × the AP left after the 0-2 moves it needs × 0.35, against where it stands), so
+  retreating from a fight it must fight anyway costs something. (3) The approach field ("nothing in reach → walk toward
+  the fight") now asks for an *attack* in reach: a self-buff or a heal in reach (quick value 3) no longer switched the
+  walk-toward-the-fight value off. (4) No dithering: a plain move never goes back to a tile the unit stood on this
+  turn (A → B → A seen in traces).
+- **Summons before their hero** (`takeTurn`; `AP.summonsFirst = false` restores hero first), and the summon plays its
+  half of the combo: `comboAt` adds half of the owner's quick value of its ready self-centred area skills tagged with the
+  summon's kind (`corgi`, `raven`: Zoomies, Murder of Crows) from the summon's end tile, so a corgi bites from the gap
+  between two foes and Ellaria's Zoomies hits both.
+- **Two-step disengage.** An option that does nothing but reposition (Tactical Retreat, a skill walk) was dropped as a
+  no-op when the tile it reaches is as dangerous *to end the turn on* as the old one — even though from there the next
+  walk away provokes nothing. Now it counts when the end value at the new tile (hit-and-run escape included) beats the
+  old tile's with the same AP (> 1).
+- **Deterrents** (`pinned`): an enemy next to a hero whose attack of opportunity stops walkers (the Polearm of Passive
+  Aggression when the hit draws blood, Hall Monitor III, or content setting `o.stop` in a pure `modifyOpportunity`)
+  walks nowhere in the danger model: it strikes from its tile or not at all. Body-blocking with such a hero is worth more.
+  *Acting first*: the turn plan already prices hitting a foe before it acts (finish / stun the one acting next); Cheap
+  Shot Artist's bonus shows in the exact dry runs. Loaded Dice changes the roll, not a decision.
+- **Next-turn buff term.** Buffs on friends are worth the hits the holder lands while they last (`hitsWhileBuffed`: the
+  actor's AP left, anyone else its next turn's `Combat.turnAp`, 0 when stunned / downed, one hit for a "next damaging
+  skill" buff): Inspired used the ally's AP *now* (0 for anyone not acting); a status with `modifyOutgoingDamage` hooks
+  is probed inside the dry run (`outgoingPerHit`: the holder's hooks on a probe hit, with and without it) unless the skill
+  prices it itself (Forge Weapon, Bedazzle and Divine Forge carry aiScores: counted once).
+- **Debt** (`cor_debt`): new stacks cost the HP they will take when it comes due (× HURT × 0.9; never below 1 HP), +4
+  when that leaves Corelos at a quarter of his HP or less (was −2 per stack, capped at −6, whatever the HP).
+- **The Help-Up loop.** AutoPlay remembers per fight the revives it made (Help Up, heals aimed at a downed ally) and the
+  ones undone before that ally's next turn started, with the enemy whose turn it was. While such an enemy still stands
+  and acts, `safeToRevive` mixes that evidence into its odds: p = (p + undone) / (1 + max(undone, tried)) — one undone
+  revive already says "not now"; the party hits the boss instead. A stunned / dead culprit lifts it.
+- **New tools** (barrels, heals aimed at the downed, flyers, per-unit hazards): kept from the v2 requests pass; measured
+  below (barrel shots, aimed-heal revives).
+- **Tried and dropped**: "deferred danger" (stepping out of an enemy's reach only until its next walk: 40% of that hit
+  kept on the actor's own end tile). A/B over 150 act-1 runs: act-1 boss 66% with it vs 70% without, and it broke the
+  turn-order suite (a 4-HP cleric smote instead of stepping out of the reach of the enemy acting next). Removed.
+
+### Measurements (same seeds, same content; before = `.tmp/ap3/autoplay_before.js` over the shipped file)
+
+`.tmp/ap3/page.sh simbefore|sim "<query>"` (outputs `.tmp/ap3/runs/before_*`, `ab1_before`, `after_*`). Walk-only = a
+hero's own turn with a move and no skill / consumable / interaction; melee = basic attack range 1. "Ready signature" =
+a hero turn starting with 100 Hype and a signature socketed.
+
+| | normal 100 runs (1000+) | act 1 only, 150 runs (5000+) | casual 60 runs (4000+, the loop seeds) |
+|---|---|---|---|
+| campaign wins / act 1 cleared | 40% → **42%** / 64% → **68%** | — / 64% → **69%** | 78% → 77% / 87% → **92%** |
+| act-1 boss wins | 66% → **69%** (Rat King 33/54 → **42/54**, Grimble 31/43 → 26/44) | 66% → **69%** (Rat King 40/64 → **48/68**, Grimble 56/81 → 55/81) | 87% → **92%** |
+| all boss wins (rounds, downs/fight) | 80% → **82%** (8.4 → 7.8, 1.82 → **1.62**) | (8.9 → 8.3, 2.83 → **2.62**) | 93% → **96%** (7.2 → 6.6, 0.86 → **0.60**) |
+| other bosses | Lich 24/24 → 24/25, Iris 23/26 → 25/28, DM 40/41 → 42/43 | — | Lich 26/27 → 24/25, Iris 24/24 → 25/25, DM 47/49 → 46/46 |
+| normal / elite fights won (downs/fight) | 97% → 97% (0.71 → **0.64**) / 95% → **97%** (0.90 → **0.75**) | 99% → 100% (0.29 → 0.31) / 99% → 100% (0.44 → 0.38) | 99% → 99% / 99% → 98% |
+| boss party HP lost | 43% → **40%** | 57% → **54%** | 31% → **26%** |
+| walk-only hero turns: melee / ranged / all | 22% → **19%** / 6% → 5% / 13% → **11%** | 24% → **21%** / 6% → 5% / 15% → **13%** | 22% → **19%** / 5% → 5% / 15% → **13%** |
+| melee: idle turns, AP left at turn end, actions a turn | 3% → 3%, 0.48 → **0.39**, 1.16 → **1.22** | 5% → **4%**, 0.59 → **0.48**, 1.06 → **1.14** | 3% → 3%, 0.47 → **0.42**, 1.20 → 1.24 |
+| signatures / fight: normal · elite · boss | 0.16 · 0.10 · 0.05 → 0.14 · 0.09 · 0.02 | 0.17 · 0 · 0.11 → **0.20** · 0 · 0.05 | 0.10 · 0.14 · 0.01 → 0.12 · 0.06 · 0.01 |
+| fights with a ready signature (fired in) | normal 17% (78%) → 15% (**82%**), boss 5% → 2% | normal 17% (80%) → **22%** (81%), boss 12% → 6% | normal 12% (72%) → 13% (73%) |
+| Murder of Crows / Zoomies / Switcheroo (per socketed fight) | 0.03 / 0.21 / 0.25 → **0.59 / 0.35 / 0.56** | 0.13 / 0.27 / 0.42 → **0.60 / 0.38 / 0.56** | 0.14 / 0.15 / 0.41 → **0.63 / 0.44 / 0.65** |
+| Fetch! / Raven Dive / Evil Twin | 1.39 / 2.17 / 1.73 → 1.01 / 2.09 / 1.42 | 1.41 / 1.88 / 1.48 → 1.00 / 1.82 / 1.35 | 1.31 / 2.32 / 1.60 → 0.95 / 1.97 / 1.39 |
+| Tactical Retreat (per socketed fight) | 0.13 → **0.17** | 0.16 → **0.24** | 0.06 → **0.62** |
+| fights with 4+ Help Ups on one hero / round-cap timeouts | 3 → **2** / 0 → 0 | 3 → **1** / 0 → 0 | 4 → **1** / 0 → 0 |
+| barrel shots / aimed heals that got someone up | 188 / 65 → 160 / 67 | 206 / 31 → 211 / 32 | 118 / 24 → 114 / 19 |
+
+- **The Help-Up loop** (the digest's 3 casual capped fights came from older content; these seeds no longer cap): the
+  isolated fixture Rat King suite (`tools/test.sh "suite=rat%20king%20autoplay&isolate=bosses&sims=20"`): before 16/20
+  won, **1 timeout** (fight #9: 31 rounds, 36 downs — the knight and the mage helped the cleric and the rogue up every
+  round, the King downed both again before they acted); after 16/20 won, **0 timeouts**, downs 4.4 → **2.7** a fight.
+- **A/B of the parts** (act 1 only, 150 runs, act-1 boss wins): before 66% · all of pass 3 69% · without tempo 69% ·
+  without closing in 69% (idle melee turns 4% → 6%, one elite fight hit the cap) · hero first 69% · with the dropped
+  deferred danger 66%. The parts are each within noise; together they move the boss fights by ~3 points and cut boss
+  downs by ~10-25%.
+- **Signatures** fire in ~80% of the fights where one is ready (was 78-80%); boss fights are shorter now (8.9 → 8.3
+  rounds), so fewer of them reach 100 Hype with a turn left — boss signature use went down, not up (Known issues 2).
+- **Speed** (`.tmp/ap3/run.sh perfbefore.html|perf.html "seeds=9&turns=24"`, real time, alternated twice): per hero turn
+  median 9.8 / 9.7 ms → 9.9 / 9.7 ms, p90 19.6 / 20.1 → 18.1 / 18.9 ms, per decision step 3.5 / 3.3 → 3.4 / 3.4 ms;
+  the whole perf batch 2.60 / 2.54 s → 2.44 / 2.42 s (72 rounds played vs 66). Sim wall clock per fight (machine shared
+  with other agents' Chrome runs, so loose): normal 0.38 → 0.48 s, act-1 0.34 → 0.37 s, casual 0.34 → 0.39 s.
+- **Full `tools/test.sh`**: 900 suites, 1 failing section, not mine: `hero_marwyn: AutoPlay battles, act 1` (Requests).
+
+### Tests (`tests/autoplay_tests.js`)
+
+7 new suites, each mutation-checked against the before AutoPlay (`.tmp/ap3/test_page.sh`: all 7 fail there):
+`pass 3 — a melee hero two moves away closes in and attacks in the same turn` (also: with `AP.engage = false` it walks
+once and stops), `— two-step disengage: a Tactical Retreat out of reach of attacks of opportunity, then away`, `— the
+Help-Up loop: a revive undone before the ally could act is not repeated while its killer acts` (a hidden sniper re-downs
+the cleric on the grunt's turn; round 2 no Help Up; the grunt stunned → round 3 Help Up), `— summons act before their
+hero` (the hound first; Ellaria's corgi steps into the gap between two grunts, then Zoomies hits both), `— a ready
+signature fires when it is worth it (Hype stops at 100), a party heal too`, `— a damage buff goes to the ally who will
+hit with it on its next turn` (Pep Talk on the rogue next to a grunt, not on the stunned knight), `— deterrents: a foe
+next to a hero whose attack of opportunity stops walkers stays put (Polearm)`. Ported: the archer-LOS suite's premise
+about the engine's rough reach (`DD.AI.reachOf` now respects sight there) is logged instead of asserted.
+
+### API / switches (additive)
+
+`DD.AutoPlay.engage = false` (no closing-in options), `.summonsFirst = false` (hero first, no combo term), `.tempo = 0`
+(no next-turn potential); all default on. Nothing else changed in §5.7's API.
+
+### Deviations
+
+- `takeTurn` plays the summons of the current turn before their hero (was hero first). Still only on their owner's turn.
+- AutoPlay also listens to `unit:downed` (read-only, outside dry runs) for the Help-Up loop breaker.
+- Content ids read by the engine module: `cor_debt` (Debt), `passive_aggressive_polearm` and `rp_hall_monitor` (`L.stop`)
+  for deterrents — until content declares them (Requests). A pure `modifyOpportunity` that sets `o.stop` is honoured.
+
+### Requests
+
+- **hero-marwyn** (`tests/content/hero_marwyn.js` "AutoPlay battles, act 1"): `test_a1_totems` is now won in round 1
+  before Marwyn's slot (the knight and the cleric each walk to a totem and smash it twice), so "Marwyn takes turns in
+  every fight" fails 4/5. Accept a fight that is over before his first turn, as `hero_betty`'s battle suite does.
+- **items (Polearm of Passive Aggression) / passives (Hall Monitor III)**: also set `o.stop = true` in a pure
+  `modifyOpportunity` (the Polearm: when its hit will draw blood) so AutoPlay drops its id checks and `DD.AI.aooCost` /
+  the HUD can see the deterrent too (the enemy AI still walks into it blind).
+- **hero-corelos** (optional): a status-level `autoplayCost(st, unit)` (or similar) for Debt so the engine doesn't name it.
+- **Lead**: ARCHITECTURE §5.7 — add "summons act before their hero; it searches two moves + a skill when nothing is in
+  reach after one; melee heroes value the hits their end tile allows next turn; a revive undone before the ally could
+  act is not repeated while the enemy that did it acts; enemies next to a hero whose attack of opportunity stops walkers
+  are pinned" and the three switches. v2-digest §5 "AutoPlay" and §6 (Help-Up loop) can point here.
+- **Balance pass**: the numbers below are the new baseline (same seeds as the digest's §3).
+
+### Known issues
+
+1. Melee walk-only turns fell only a little (table): most of what is left are stand-offs the danger model chooses on
+   purpose — out of reach of goblin rock-throwers (reach 9), spore bros and the cube until they come closer — and act-1
+   melee heroes whose foes die before they arrive. A stronger pull (deferred danger) was tried and lost boss fights.
+2. Signatures stay Hype-bound: boss fights reach 100 Hype with a turn left in ~5-10% of fights, so boss signature use
+   barely moves; AutoPlay can't make Hype.
+3. Combo coordination covers self-centred area skills tagged with the summon's kind (Zoomies, Murder of Crows). Fetch!,
+   the Ol' Switcheroo and Raven Dive move the summon themselves; Who's a Good Boy? on a corgi now comes after its bite.
+4. The futile-revive rule trusts what it saw: a revive undone by a one-off (a crit) also waits until that enemy is
+   stunned or dead. It never blocks a revive once the culprit can't act.
+
 ## v2 requests — barrels, heals that revive, flyers and per-unit hazards (ENGINE role)
 
 Rules: `docs/notes/rules.md` "v2 requests — …". What changed in `js/engine/autoplay.js`:
@@ -498,3 +788,62 @@ Whole-campaign harness (`.tmp/autoplay/sim.html` = integrate's harness + skill t
    runes) look like hazards to heroes too.
 5. Josiah's Smelling Salts is still never used — heroes rarely stay down now (Help Up first; and a downed ally lying in a
    lethal telegraph is left down for a round, since downed heroes take no damage and get up with 0 AP).
+
+## Playtest fixes (Nov 12) — fix:engine
+
+Full record: `docs/notes/rules.md` "Playtest fixes (Nov 12)".
+
+- **bosses-objectives-8** (fixed): the stalemate breaker (`quietRounds` / `caution`) counts only the bosses (and
+  damageable objects) while a boss is up: adds that keep coming and dying (Dr. Iris's Eye Floaters, often killed by her
+  own beams) no longer reset the streak, so a party picking off floaters in a corner engages again after 3 quiet rounds
+  past round 6. Iris (24 fights, seeds 600-623, level 3): longest quiet streak 5 → 3 rounds, wins 18 → 17 (noise); A/B
+  on Rat King / Grimble / Lich (24 each): neutral. Suite `autoplay: playtest fixes — bosses-objectives-8 …`.
+- **bosses-objectives-7** (no AutoPlay change): fix:content's Track Switch hint (`switchValue`, dm.js) prices the allies
+  stuck on the DM's row; a hint of 0 never makes an offer here.
+- Indirect: AutoPlay now dodges the skewed tiles of a Dazzled / Confused boss's wind-up (AI.intentTiles, rules.md) and
+  its swap pricing reads the dry-run attack-of-opportunity numbers (`Combat.swapInfo`).
+
+## Review (playtest fixes) — adversarial review (REVIEWER role, Nov 12 ~20:45)
+
+- **Fixed**: `addWindups` still halved a Dazzled / Confused unit's wind-up (fuzzy 0.5), though since bosses-objectives-2 the
+  drawn tiles are where it lands. Now only an intent whose skew is not rolled yet is a coin flip. Suite `autoplay:
+  playtest review — bosses-objectives-2: a Dazzled boss's wind-up is priced in full on the tiles drawn`.
+- **Correction** to the line above: AutoPlay's swap pricing does NOT read the dry-run numbers; it prices who provokes with
+  `DD.AI.aooCost` estimates (unchanged; the HUD reads the dry run).
+- bosses-objectives-7: the Track Switch hint was still 4 (34 − 30) with one stuck ally, and the switcher itself (1 AP
+  left after walking up and switching) never counted: 7 diverted-train hits on heroes in 16 DM fights. dm.js now gives 0
+  while anyone is stuck on his row, and the switcher counts as stuck without 3 AP: 3 hits, 0 downs, wins 13/16 (boss-dm.md).
+- bosses-objectives-8 re-measured: Dr. Iris 17/24, longest quiet streak 3 rounds.
+
+## Finish (Nov 14) — fix:engine (AutoPlay part)
+
+Full record: `docs/notes/rules.md` "Finish (Nov 14)". AutoPlay changes, each with a suite `autoplay: finish — …`
+(mutation-checked):
+
+- **D5** (bone piles for everyone): object hints get a 5th argument `how` — 'break' when AutoPlay prices a hit on the
+  object (an aimed hit, a Smash, an area: `objectValue`), 'interact' for its interaction, 'step' for walking onto it
+  (`howFor` picks one when asking in general). The Bone Pile's own hint must use it (request to the act 2 owner).
+- **audit-3** (round-cap loop, seed 43220): in a stalemate (caution 0) foes a hit calls in (a boss split) weigh
+  `STALL_SPAWN` = 0.25 in `simGain`; AutoPlay's model of the enemies' targeting passes `last` (`DD.AI.endsFight`) to
+  `AI.targetBonus`, like the AI itself (+30 for the kill that ends the fight).
+- **audit-7** (Slate's hold): the danger model's `src.mov` is 0 only while the foe is still held at the start of its
+  next turn (`DD.Act.cantMoveNext`; a status's `heldThrough`).
+- **FF-3** (round-cap stall, seed 80183): a unit no walk takes to a tile to attack from breaks its way out —
+  `breakOut(unit)` (approach field with breakable blockers as dearer tiles, cached per board state), `progressAt` /
+  `approachMove` follow that field, `objectValue` gives a GATE 2 + half the damage (+4 when it breaks). With a way out,
+  cover is worth 0 as before (`autoplay: rules run — breaks objects when it pays …` still passes).
+- D1 widened what can be aimed at objects (spells too); AutoPlay reads `validTargets` / `aimsAtObjects`, so its object
+  hits and dry runs follow without code here.
+- Seeds: 43220 no longer caps (an act 1 loss, Rat King); 80183's Web of Lies ends in 12 rounds (0 timeouts). Balance:
+  `docs/notes/rules.md` "Finish (Nov 14)" → Balance.
+
+## Review (finish, Nov 14) — REVIEWER
+
+- **D5 finished on the content side**: `how` reached the Bone Pile's hint, but the hint ignored it (0 to flyers). It now
+  answers 9 for 'break' to any hero and for 'step' to walkers (`enemies_act2: finish review — D5 …`, the real pile).
+- **audit-7 finished**: Slate's Grappled answers `heldThrough` (hero-slate.md), so `cantMoveNext` / the danger model /
+  `AI.reachOf` predict his holds instead of treating them as a snapshot.
+- Re-played: seed 43220 (audit-3) and seed 80183 (FF-3) on the current files, and same-seed determinism of whole runs
+  (numbers in docs/notes/balance.md "Finish" → "Review (finish)").
+- Not changed (polish, noted): AutoPlay's swap pricing doesn't know that Slate swapping away frees the foe he holds; the
+  review-open-16 swap / Engulf dry-run half stays as fix:content skipped it.

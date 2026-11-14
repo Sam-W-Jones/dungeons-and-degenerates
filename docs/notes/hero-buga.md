@@ -370,3 +370,13 @@ Shield swaps, Red Tape pulls) and party tempo (Campaign Promise +AP, Photo Op In
 - **Tests**: `hero_buga: v2 requests — …`: the flag, a fine on his own barrel (aimable, preview KO, gold = kickbacks
   only, 0 AutoPlay gold), the mage's basic on it (kickbacks + 2 credit), crumbs under / around a flyer (never Slowed).
 - **Requests**: none.
+
+## Playtest fixes (Nov 12)
+
+- **heroes-2 (Buga part, fixed)**: with the Mightier-Than-the-Sword Pen, Campaign Pamphlet reads "… and Mark it: the next
+  hit it takes deals +2 damage." (`wears()`; the Pen's hook is unchanged). Its "within 4" follows his real reach
+  (range items; heroes-v1, `reach()` → `DD.Targeting.reach`). Suite `hero_buga: playtest fixes (Nov 12)`.
+- **heroes-v1 (fixed)**: the target-range numbers in his descs follow his real reach (range items, Dazzle) through `reach()` → `DD.Targeting.reach`; details and the cross-hero suite in hero-kiri.md.
+- **text-tone-8 (polish, fixed)**: his downed bark "Tell the voters... I loved them... mostly their gold..." (a twin of
+  Zarathor's "Tell my rings... I loved them...") → "This... does not... count as... a term limit...". Asserted in the
+  playtest suite.

@@ -29,7 +29,7 @@ run per round under initiative (suite "objectives and waves").
 | Enemy | init | style (who it picks) | its attack of opportunity | inspect-panel line (`def.passive`) |
 |---|---|---|---|---|
 | `a3_imp_influencer` minion 18 | +3 | **assassin** (the act's diver: weakest hero it can reach); blinks ≈3 tiles from the heroes, `flags.noProvoke` | none | Blink |
-| `a3_hell_hound` 34 | +2 | melee (sticks to the hero next to it) | Chew Toy (9) | Off the Leash |
+| `a3_hell_hound` 34 | +2 | melee (sticks to the hero next to it) | Ankle Biter (9) | Off the Leash |
 | `a3_mind_flayer` 36 | +1 | ranged, keeps 2 | none | Life Coaching |
 | `a3_eyeball_intern` 30 | +2 | ranged, keeps 3 | none | Unpaid Overtime |
 | `a3_rules_lawyer` 34 | 0 | melee | Motion to Dismiss (8 + push 2: the walk ends there) | Rules As Written |
@@ -52,7 +52,7 @@ custom `approach`, `bestWithin` (the dragon's leash), `goHome` (the dragon settl
 `plan` uses `api.bestAttack` (the engine's reach-aware scoring) and re-aims with `noMove` when a reaction cut its walk
 short. `bestWithin` scores a virtually placed unit, which makes the engine measure "engaged" from that spot:
 `engagedFix` re-bases the focus bonus on the tile the turn began on (`DD.AI.targetValue(…, 0, style, origin)`), so the
-hoard-bound dragon still sticks to the hero next to it. Leaps (Pounce, Greedy Bite's swoop, Kick Ball Change), blinks
+hoard-bound dragon still sticks to the hero next to it. Leaps (Lap Dog, Greedy Bite's swoop, Kick Ball Change), blinks
 and the chain's pull never provoke (rule). Mutation-checked: without `engagedFix`, without the AoO cost in
 `monologueSpot` or in `approach`, the targeting suite fails.
 
@@ -160,8 +160,14 @@ None. No core file was edited.
   status defs to declare "damage at the owner's turn start" would help (Poison-like content statuses).
 - **MAPGEN (carried over, still applies as far as I know)**: a `protect` object is placed 2-4 tiles from the hero zone
   with no minimum distance from the enemy zone (Snack Heist was widened to 12×10 for it).
-- **Lead (DESIGN §8 act-3 list, optional)**: the Imp Influencer is the act's diver (assassin targeting); the Rules
-  Lawyer, Golem, Kobold, hounds, Death Knight and Pit Fiend hold the line (attacks of opportunity).
+- ~~**Lead (DESIGN §8 act-3 list, optional)**: the Imp Influencer is the act's diver (assassin targeting); the Rules
+  Lawyer, Golem, Kobold, hounds, Death Knight and Pit Fiend hold the line (attacks of opportunity).~~ Done (Nov 5).
+- **ACT 3 OWNER (`js/data/enemies/act3.js`, Hoard Pile; from the Nov 5 docs cleanup)**: the design call is in —
+  loot is not a floor effect, so flyers DO pocket gold piles and Hoard Piles (DESIGN §4.3). The engine side is in: an
+  object flagged `loot` (def or instance, `DD.Grid.isLoot`) is picked up by flyers too; `gold_pile` has it. The
+  `a3_hoard_pile` def needs `loot: true`, its desc still says "Flyers can't reach down that far." and its `autoplay`
+  hint returns 0 for a unit that `!feelsFloor`; all three should follow (the docs cleanup owns only display names, barks
+  and init values in this file, so it left them alone).
 
 ## Known issues
 
@@ -255,16 +261,43 @@ elite 33/36 — the same band as the pass's 24-seed table.
 - **ENGINE (`actions.js` ~1427)**: the element chain log prints the surface id ("The jos_miasma goes up in a line of
   flames!"); use the surface's name.
 - **BALANCE**: the Succubus Dating Coach idles about half her turns once her allies are Inspired (Pickup Line
-  cooldown 1, pep talk cooldown 3: 83 idle of 168 turns); the Lawyer about half (Objection cooldown 2, the Motion only
+  cooldown 1, pep talk cooldown 3: 83 idle of 168 turns); the Lawyer about half (OVERRULED! cooldown 2, the Motion only
   up close). Fine for "hard but fair", dull to watch; a cheap knob is a small off-turn action.
 
 **Known issues (left)**: the hound-in-lava stall above (engine); the author's open items (Lawyer push not in the move
 preview, Debt invisible to AutoPlay, long elite fights) stand.
 
+## Docs and content cleanup (Nov 5)
+
+- **Renamed** (each had a hero skill's display name; ids unchanged): the Hell Hound's Pounce is now **Lap Dog**
+  (`a3_hound_pounce`; Basanos keeps Pounce) and its Chew Toy **Ankle Biter** (`a3_hound_bite`; Pebbles keeps Chew Toy);
+  the Rules Lawyer's OBJECTION! is now **OVERRULED!** (`a3_lawyer_objection`; Corelos' imp lawyer keeps Objection!) —
+  its FX text, its attack bark, the passive line ("OVERRULES a hero up to 6 tiles away") and the codex text ("Silence
+  him first: OVERRULED! is a spell") follow. The trial-by-combat wave text "Objection overruled." is a courtroom joke,
+  not the skill, and stays. The act 3 suites' labels follow; the cross-act guard is `enemies_act1: (all acts) no enemy
+  or boss skill shares a display name with a hero-side skill`.
+- DESIGN §8 now names the Imp Influencer as the act's diver and the three elite wind-ups (Hoard Breath, Villain
+  Monologue, Hostile Audit).
+- Request (above, ACT 3 OWNER): the Hoard Pile's `loot` flag, flyer text and AutoPlay hint after the "flyers pocket loot"
+  call.
+- Seen in the Nov 5 full run (not caused by the renames): `enemies_act3: elites shrug off back-to-back stuns` fails at
+  "...so the second breath stands" — the engine agent's new rule (a stunned unit starts no wind-up, `DD.AI.windUp`)
+  refuses the second Hoard Breath, which the test winds up while the dragon is still stunned. The test should clear the
+  stun (end the lost turn) before the second wind-up; the Unshakeable window it checks is unchanged.
+
+## Rules run (Nov 6) — breaking objects (CONTENT SWEEP)
+
+User: "objects should be targetable to break them" (engine rule: `docs/notes/rules.md` "Rules run"). `a3_snack_bowl` says
+**`targetable: false`** (the protect objective; desc "Your heroes would never aim an attack at the snacks."); hounds still
+chew it (their script). The Kobold Pep Rally's core totems are targets (engine: 7.0 → 5.5 rounds); its intro says "Break
+the totems (any attack will do)". The Hoard Pile has no HP. (Still open from Nov 5, not part of this run: the Hoard Pile's
+`loot` flag and "Flyers can't reach down that far".) Suite "enemies_act3: rules run — Pep Rally totems are attack
+targets; the DM's Snack Bowl never is".
+
 ## Earlier history (v1 → v2, condensed)
 
 - **v1 + adversarial review (2026-10-31)**: the roster, layouts and sprites above; must-answer threats with long
-  sight-free reach (Go Live!, OBJECTION!, the golem's lob, the invoice), gap-closers (Pounce, Swoop, Come Hither),
+  sight-free reach (Go Live!, OVERRULED!, the golem's lob, the invoice), gap-closers (Lap Dog, Swoop, Come Hither),
   5-6 enemies per normal fight, elite tenacity against stun-locks and a positional hoard (piles only count within 3
   tiles, the dragon guards and settles back on its gold). Fixed then: Greedy Bite stole from Invulnerable targets
   (theft now needs the bite to land; Thief +4 in its wind-up number), dancers never hit (now a 2-tile shimmy-kick; no
@@ -279,3 +312,46 @@ preview, Debt invisible to AutoPlay, long elite fights) stand.
   fire floors "until the end of next round", suites rewritten for v2 (registry incl. init and no telegraph wording,
   damage == desc for every skill as an action, statuses per own turn, every enemy's turns under `watchAreas`, previews,
   odd conditions + mid-fight cameos, encounters under initiative, no round-1 one-shots, fixture sims at levels 4-6).
+
+## Playtest fixes (Nov 12)
+
+Confirmed playtest findings that live in act3.js (fix:content):
+- **text-tone-1 (blocker) / robustness-2 (major), fixed**: the Hoard Pile is `loot: true` (the user's flyer rule: flyers
+  pocket gold piles AND Hoard Piles; picking up is not a floor effect). A flyer entering it pockets the gold and is
+  branded a Thief like a walker; its desc now says "Walk or fly a hero over it to pocket the gold (and be branded a
+  Thief). Flyers swoop down for it too: gold is not a floor effect, it is a lifestyle."; the AutoPlay hint values it
+  for every hero (10 near a living dragon, else 3). The old "flyer floats over" assertions in the v2-requests suite are
+  flipped (walker and flyer both pocket 6 gold and become Thieves; `DD.Grid.isLoot`). The content advisory "objects
+  that hand out gold … not flagged loot" is quiet. The request above (ACT 3 OWNER, Nov 5) is done.
+  DESIGN §4.3's "the act 3 Hoard Pile still lacks…" sentence and v2-digest's open items are the docs owner's (deferred).
+- **robustness-3 (fixed)**: Hoard Breath, Villain Monologue and Hostile Audit carry `windupOnly: true`: AI.reachOf /
+  threat shading / AutoPlay no longer read them as instant hits (the dragon's 16 nine tiles away is gone). Their
+  planners name them explicitly (`api.canUse` / `plan({ skills })` / `api.windUp`), so they still wind them up.
+- **text-tone-3 (act 3 part, fixed)**: the Unshakeable line takes the elite's own pronoun: "for its next 2 turns" on
+  the dragon, "for his next 2 turns" on the Death Knight and the Pit Fiend (`unshakeableLine(poss)`).
+- **text-tone-11 (act 3 part, fixed)**: the Natural 1 Golem "rolls an 8 / an 11 / an 18".
+- **text-tone-8 (polish, fixed)**: duplicate death barks rewritten: Eyeball Intern ("Put this... in my... performance
+  review...", "I only ever had... one eye... on the job..."), Kobold Dragonshield ("The dragon... is going to... hear
+  about this..."), Young Red Dragon ("Nobody... touch... my stuff...").
+- Suite: `enemies_act3: playtest fixes (Nov 12) — wind-ups are not instant reach, pronouns, the golem's articles`.
+- Balance impact: hero-side flyers (Syllamin, Onyx, anyone with Party Balloons) can now take Hoard Piles in the Hoarder's
+  Lair (less dragon Block, a Thief hunted by the dragon): slightly easier for flyer parties. The windupOnly flags only
+  change estimates (AutoPlay stops avoiding a breath zone that doesn't exist): act 3 elite sims a little easier.
+
+## Finish (Nov 14) — FIX: CONTENT
+
+- **text-tone-1 / robustness-2 (Hoard Pile)**: not reproduced on the current files — `a3_hoard_pile` is `loot: true`
+  since the pre-balance fixes (Nov 12): walkers and flyers pocket it and are branded a Thief, the desc says "Walk or fly
+  a hero over it … Flyers swoop down for it too", the AutoPlay hint values it for flyers; `enemies_act3: v2 requests
+  (Nov 3)` guards it, and the content advisory "objects that hand out gold … not flagged loot" lists nothing. The two
+  open entries above (Requests, and "Requests (Nov 3) … Hoard Pile") are done. DESIGN §4.3 already reads right.
+- **desc-sweep-4 (fixed)**: the Rules Lawyer's and the Natural 1 Golem's rule lines read the fight's numbers
+  (`liveLvl`: DD.AI.fightLevel): casual "(6 damage, pushed 2 tiles", "(7 to each foe; a 20 deals 14"; brutal 19 for the
+  golem's 20. Suite `enemies_act3: finish …`.
+
+## Review (finish, Nov 14) — REVIEWER
+
+- "Not reproduced" for text-tone-1 / robustness-2 holds: `a3_hoard_pile` is `loot: true`, its AutoPlay hint values it for
+  every hero (`guarded ? 10 : 3`), and the engine pockets it for flyers too. FF-6 re-played in code: Burning carries
+  `element: 'fire'`, so a Hell Hound (fire resist 0) never takes a stack; poison-immune undead and oozes take no Poisoned
+  stacks either (they took 0 damage from them before; now they show none).

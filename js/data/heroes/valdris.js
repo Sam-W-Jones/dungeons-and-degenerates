@@ -13,6 +13,16 @@
 (function () {
   'use strict';
   const DD = window.DD;
+  /**
+   * A range number in a desc as targeting resolves it for this user (range items such as the Yardstick of Reach, Dazzle,
+   * modifyRange hooks: what the card's Range pill says; playtest heroes-v1) via DD.Targeting.reach. No user: the number.
+   */
+  function reach(user, id, base) {
+    const d = DD.getSkill(id);
+    if (!user || !d || !DD.Targeting) return base;
+    if (typeof DD.Targeting.reach === 'function') return DD.Targeting.reach(d, null, user, base);
+    return Math.max(0, base + DD.Targeting.range(user, d, 1)[1] - DD.Targeting.range(null, d, 1)[1]);
+  }
 
   const HERO = 'valdris';
   const IRON = 3;                        // Strike While the Iron's Hot: +3 damage to Burning foes
@@ -285,7 +295,7 @@
     ap: 1, cooldown: 1,
     levels: [{ burn: 3 }, { burn: 4 }, { burn: 5 }],
     target: { type: 'unit', range: [0, 3], los: false, filter: 'allyOrSelf' },
-    desc: function (L) { return 'Valdris or an ally within 3: its next damaging skill sets each foe it hits Burning ' + L.burn + '.'; },
+    desc: function (L, user) { return 'Valdris or an ally within ' + reach(user, 'val_flame_edge', 3) + ': its next damaging skill sets each foe it hits Burning ' + L.burn + '.'; },
     flavor: 'Folded a thousand times, quenched in holy oil, then set on fire again. On purpose.',
     // the Burn lands later (on the ally's hit), so the dry run can't see it: worth it on someone with foes to hit
     aiScore: function (ctx) {
@@ -305,13 +315,13 @@
     },
   });
 
-  // Forge Armour (starter): Block
+  // Forge Armor (starter): Block. Playtest text-tone-25: US spelling like the Armor stat it sits next to (id unchanged)
   skill({
-    id: 'val_forge_armour', name: 'Forge Armour', icon: '🛡️', kind: 'buff', tags: ['buff', 'block', 'forge'],
+    id: 'val_forge_armour', name: 'Forge Armor', icon: '🛡️', kind: 'buff', tags: ['buff', 'block', 'forge'],
     ap: 1, cooldown: 1,
     levels: [{ block: 6 }, { block: 8 }, { block: 10 }],
     target: { type: 'unit', range: [0, 3], los: false, filter: 'allyOrSelf' },
-    desc: function (L) { return 'Valdris or an ally within 3 gains ' + L.block + ' Block (until the start of its next turn).'; },
+    desc: function (L, user) { return 'Valdris or an ally within ' + reach(user, 'val_forge_armour', 3) + ' gains ' + L.block + ' Block (until the start of its next turn).'; },
     flavor: 'Measured, hammered, riveted and polished in four seconds flat. The polishing took three of them.',
     execute: function (ctx) {
       const u = ctx.user, f = ctx.targetUnit;
@@ -328,7 +338,7 @@
     ap: 1, cooldown: 1,
     levels: [{ bonus: 2 }, { bonus: 3 }, { bonus: 4 }],
     target: { type: 'unit', range: [1, 3], los: false, filter: 'ally' },
-    desc: function (L) { return 'An ally within 3 deals +' + L.bonus + ' damage with every hit until the end of its next turn.'; },
+    desc: function (L, user) { return 'An ally within ' + reach(user, 'val_forge_weapon', 3) + ' deals +' + L.bonus + ' damage with every hit until the end of its next turn.'; },
     flavor: 'He sharpens your sword mid-swing. Please stop sharpening the sword mid-swing.',
     // the bonus pays on the ally's hits next turn, not in this dry run: about two hits, three for an area attacker
     aiScore: function (ctx) {
@@ -355,7 +365,7 @@
     ap: 1, cooldown: 1,
     levels: [{ thorns: 3 }, { thorns: 4 }, { thorns: 5 }],
     target: { type: 'unit', range: [0, 3], los: false, filter: 'allyOrSelf' },
-    desc: function (L) { return 'Valdris or an ally within 3 gains Thorns ' + L.thorns + ' through its next turn: adjacent attackers that hurt it take ' + L.thorns + '.'; },
+    desc: function (L, user) { return 'Valdris or an ally within ' + reach(user, 'val_spiked', 3) + ' gains Thorns ' + L.thorns + ' through its next turn: adjacent attackers that hurt it take ' + L.thorns + '.'; },
     flavor: 'He added spikes. To the pauldrons, the gauntlets, the boots and, worryingly, the codpiece.',
     execute: function (ctx) {
       const u = ctx.user, f = ctx.targetUnit;
@@ -379,7 +389,7 @@
         return f && f.downed && !(ctx.L && ctx.L.heal > 0) ? 'Only Temper III mends. Help them up first.' : true;
       },
     },
-    desc: function (L) { return 'Valdris or an ally within 3 sheds all its debuffs' + (L.heal ? ' and heals ' + L.heal + ' HP.' : '.'); },
+    desc: function (L, user) { return 'Valdris or an ally within ' + reach(user, 'val_temper', 3) + ' sheds all its debuffs' + (L.heal ? ' and heals ' + L.heal + ' HP.' : '.'); },
     flavor: 'Heat, hammer, quench. Your curse is now structurally sound and slightly steamy.',
     execute: function (ctx) {
       const u = ctx.user, f = ctx.targetUnit;
@@ -446,7 +456,7 @@
     ap: 3, cooldown: 3,
     levels: [{ dmg: 10 }, { dmg: 13 }, { dmg: 16 }],
     target: { type: 'unit', range: [1, 4], los: true, filter: 'enemy' },
-    desc: function (L) { return 'A holy anvil falls on a foe within 4: ' + L.dmg + ' damage, and it is Stunned (loses its next turn).'; },
+    desc: function (L, user) { return 'A holy anvil falls on a foe within ' + reach(user, 'val_anvil', 4) + ': ' + L.dmg + ' damage, and it is Stunned (loses its next turn).'; },
     flavor: 'The forge god answers prayers in the traditional manner: from directly above, at speed.',
     execute: function (ctx) {
       const u = ctx.user, t = ctx.targetUnit;
@@ -601,6 +611,7 @@
       start: ['Roll for initiative. I\'ll roll up my sleeves.', 'Check your straps, everyone. Kiri, yours are loose.',
         'Stand behind me. Not too close. The hair.', 'The forge is lit. Let\'s make something.',
         'Weapons out. I\'ll sharpen them as we go.'],
+      swap: ['Shift over, {ally}. A smith needs the anvil side.', 'Swapping in, {ally}. Mind the armour.'],
       move: ['Coming through. Mind the hair.', 'A smith goes where the dents are.', 'Heavy armour, heavier faith. Walking.',
         'Repositioning the forge.'],
       kill: ['Hammered flat.', 'Strike while the iron\'s hot!', 'Quenched.', 'Another one for the scrap pile.',

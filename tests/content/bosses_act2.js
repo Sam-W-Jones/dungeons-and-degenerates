@@ -61,10 +61,20 @@
       enemyAi: opts.ai ? undefined : false });
     return DD.Combat.state;
   }
-  /** A real fight as the game runs it (deployment, rolled initiative): for AutoPlay. */
+  /**
+   * A real fight as the game runs it (deployment, rolled initiative): for AutoPlay. The boss's own DD.Balance row
+   * (balance pass 2: it pays for a campaign party's items, Blessings and starting kit) is left out: these parties are
+   * bare, so the sims measure the boss's own numbers (docs/notes/balance.md). balance=1 keeps the row.
+   */
   function realFight(encId, seed, party) {
     const setup = DD.Encounter.build(DD.getEncounter(encId), party || partyAt(BAND), { rng: DD.RNG('bosses_act2:' + encId + ':' + seed), difficulty: 'normal', act: 2 });
-    DD.Combat.start(setup, { seed: seed, headless: true, difficulty: 'normal', kind: 'boss' });
+    const rows = DD.Balance && DD.Balance.encounters, row = rows && rows[encId];
+    if (row && DD.params.balance !== '1') delete rows[encId];
+    try {
+      DD.Combat.start(setup, { seed: seed, headless: true, difficulty: 'normal', kind: 'boss' });
+    } finally {
+      if (row) rows[encId] = row;
+    }
     return DD.Combat.state;
   }
   function units(defId) { return DD.Combat.state.units.filter(function (u) { return u.defId === defId && !u.dead && !u.downed; }); }
@@ -587,12 +597,13 @@
     t.eq(L().fees(lich), N.feeRate + 2, '+' + N.feeRate + ' at the end of his turn, +1 per living skeleton (2)');
     killAll('lich_intern');
     DD.Combat.giveTurnTo(lich);
-    t.eq(L().fees(lich), 2 * N.feeRate + 2, '+' + N.feeRate + ' with no skeleton left');
+    t.eq(L().fees(lich), Math.min(N.feeCap, 2 * N.feeRate + 2), '+' + N.feeRate + ' with no skeleton left (up to the cap, ' + N.feeCap + ')');
     t.ok(new RegExp('His attacks deal \\+' + L().fees(lich) + ' damage').test(DD.getStatus('lich_late_fees').desc(st())), 'status desc shows the live bonus');
     const growth = 'gains ' + N.feeRate + ' more at the end of each of his turns (' + N.feeRate2 + ' below half HP), +1 per living';
     t.ok(DD.getStatus('lich_late_fees').desc(st()).indexOf(growth) >= 0, 'and how it grows');
     // below half HP (FINAL NOTICE) they grow faster
     L().data(lich).phase = 2;
+    L().waiveFees(lich);
     const f1 = L().fees(lich);
     DD.Combat.giveTurnTo(lich);
     t.eq(L().fees(lich) - f1, N.feeRate2, 'FINAL NOTICE: +' + N.feeRate2 + ' a turn');
@@ -614,10 +625,17 @@
     DD.Act.addStatus(lich, 'weak', { turns: 1 }, mage);
     t.eq(DD.AI.describe(lich, it).dmg, Math.round(N.bookfall * 0.75) + L().fees(lich), 'a Weakened lich: ' + (Math.round(N.bookfall * 0.75) + L().fees(lich)) + ' (fees after the multiplier, like the pipeline)');
     DD.Act.removeStatus(lich, 'weak', { silent: true });
-    // no cap: the fees are his clock (shredding resets them, see the puzzle suite)
-    const f0 = L().fees(lich);
+    // [finish FF-1] the fees are his clock, but it stops at N.feeCap (uncapped they downed full-HP heroes with one
+    // notice); shredding still resets them (see the puzzle suite)
+    t.ok(N.feeCap > 0 && N.feeCap <= 16, 'a cap: ' + N.feeCap);
     L().addFees(lich, 30);
-    t.eq(L().fees(lich), f0 + 30, 'no cap');
+    t.eq(L().fees(lich), N.feeCap, 'they stop at ' + N.feeCap);
+    t.eq(L().addFees(lich, N.feeRate), 0, 'at the cap nothing more is added');
+    t.ok(DD.getStatus('lich_late_fees').desc(st()).indexOf('up to ' + N.feeCap) >= 0, 'the status says the cap');
+    mage.maxHp = mage.hp = 99;
+    hp = mage.hp;
+    now(lich, 'lich_overdue_notice', mage, { anchor: 'unit' });
+    t.eq(hp - mage.hp, N.notice + N.feeCap, 'a capped notice deals ' + N.notice + ' + ' + N.feeCap + ' at most (here, with no boss row)');
     t.ok(L().waiveFees(lich) && L().fees(lich) === 0, 'waived');
     t.eq(DD.AI.describe(lich, it).dmg, N.bookfall, 'the wind-up shows the plain number again');
     DD.AI.clearIntents(lich, false);
@@ -1887,4 +1905,91 @@
     t.ok(l0.n > 10 && l180.n > 10 && l0.x > 80 && l180.x < 80, 'the exam lamp swings round with the chair (x ' + l0.x.toFixed(1) + ' -> ' + l180.x.toFixed(1) + ')');
     t.eq(DD.problems.slice(n0).filter(function (p) { return /^Error in /.test(p); }).length, 0, 'no swallowed errors');
   }, { tags: ['render'] });
+
+  // Explicit initiative (docs cleanup, Nov 5): both bosses and their helpers state their modifier instead of leaning on
+  // the tier default; the values are the effective ones from before (bosses +2, minions +1, the Bookshelf Mimic 0).
+  T.suite('bosses_act2: every boss-fight enemy states its initiative (same values as before)', function (t) {
+    const WANT = { lichtenstein: 2, lich_intern: 1, lich_mimic: 0, dr_iris: 2, iris_floater: 1 };
+    Object.keys(WANT).forEach(function (id) {
+      const d = DD.getEnemy(id);
+      if (!d) { t.log(id + ' not loaded'); return; }
+      t.ok(typeof d.init === 'number' && d.init === WANT[id], id + ': init ' + d.init + ' (want ' + WANT[id] + ')');
+    });
+  });
+
+  // ---- rules run (user: "objects should be targetable to break them") ------------------------------------------------
+  T.suite('bosses_act2: rules run — a Restricted Section Shelf can be shot open (8 HP of attacks: phylactery or mimic); props cannot', function (t) {
+    if (!L() || !DD.getObject('lich_shelf')) { t.skip('lich not loaded'); return; }
+    const Tg = DD.Targeting, sdef = DD.getObject('lich_shelf');
+    t.ok(sdef.targetable === true && /any single-target damage skill can break it/.test(sdef.desc), 'the shelf says any single-target damage skill can break it (targetable: true; D1)');
+    t.ok(['lich_catalog', 'lich_desk'].every(function (id) { return !(DD.getObject(id).hp > 0); }), 'the Card Catalog and the desk have no HP: interact, don\'t shoot');
+    // a phylactery shelf: two bolts from the mage next to it shred it, credited to her
+    const f = lichFight(11);
+    const mage = hero('test_mage'), lich = f.lich;
+    parkHeroes([mage]);
+    const sh = shelvesWith('phylactery')[0];
+    const spot = nextTo(sh.x, sh.y);
+    put(mage, spot.x, spot.y);
+    DD.Combat.giveTurnTo(mage);
+    mage.ap = 3;
+    const q = Tg.validTargets(mage, mage.basic).filter(function (e) { return e.x === sh.x && e.y === sh.y; })[0];
+    t.ok(!!q && q.obj === 'lich_shelf' && q.hp === 8 && q.dmg === 4, 'the phylactery shelf is a target (' + JSON.stringify(q) + ')');
+    const n0 = L().fight().shredded || 0, hp0 = lich.hp;
+    const lines = [];
+    const off = DD.Events.on('combat:log', function (e) { lines.push(e.text); });
+    try {
+      DD.Combat.useSkill(mage, mage.basic, sh.x, sh.y);
+      DD.Combat.useSkill(mage, mage.basic, sh.x, sh.y);
+    } finally { off(); }
+    t.ok(!tile(sh.x, sh.y).obj || tile(sh.x, sh.y).obj.id !== 'lich_shelf', 'two bolts break the shelf');
+    t.eq((L().fight().shredded || 0) - n0, 1, 'the phylactery is shredded');
+    t.ok(lines.some(function (l) { return /^Wizzy McTest shreds /.test(l); }), 'credited to the shooter (' + lines.filter(function (l) { return /shred/.test(l); }).join(' | ') + ')');
+    t.ok(lich.hp < hp0, 'and it hurts him (' + hp0 + ' → ' + lich.hp + ')');
+    // a mimic shelf: shooting it still lets the mimic out (no surprise bite on a shooter who is not next to it)
+    lichFight(12);
+    const m2 = hero('test_mage');
+    parkHeroes([m2]);
+    const mim = shelvesWith('mimic')[0];
+    const sp2 = nextTo(mim.x, mim.y);
+    put(m2, sp2.x, sp2.y);
+    DD.Combat.giveTurnTo(m2);
+    m2.ap = 3;
+    DD.Combat._action(function () { DD.Act.damageObject(m2, mim.x, mim.y, 4); });
+    DD.Combat.useSkill(m2, m2.basic, mim.x, mim.y);
+    t.ok(units('lich_mimic').length === 1, 'a shot mimic shelf: the mimic climbs out all the same');
+  });
+
+  // ---- finish (Nov 14): review-open-15 -----------------------------------------------------------------------------------
+  T.suite('bosses_act2: finish — a Bookshelf Mimic never Roots a hero under the Lich\'s pending wind-up (no pinned hero under the books)', function (t) {
+    const n0 = DD.problems.length;
+    const f = lichFight(6), lich = f.lich;
+    const mage = hero('test_mage'), knight = hero('test_knight');
+    const m = DD.Act.spawn('lich_mimic', 1, 1);
+    put(mage, 4, 7); put(knight, 6, 7);
+    // a Bookfall wound up on the mage's tile only
+    const it = DD.AI.windUp(lich, 'lich_bookfall', { x: mage.x, y: mage.y }, { tiles: [{ x: mage.x, y: mage.y }], label: 'Bookfall' });
+    t.ok(!!it, 'a Bookfall is pending on ' + mage.x + ',' + mage.y);
+    put(m, 4, 6);
+    now(m, 'lich_mimic_chomp', mage);
+    t.ok(!DD.Act.hasStatus(mage, 'root') && mage.hp < mage.maxHp, 'the mage under the books: bitten, not Rooted (she can still step out)');
+    put(m, 6, 6);
+    now(m, 'lich_mimic_chomp', knight);
+    t.ok(DD.Act.hasStatus(knight, 'root'), 'the knight on a free tile: bitten and Rooted, as before');
+    t.ok(/about to land/.test(DD.skillDesc(DD.getSkill('lich_mimic_chomp'), 1, null)), 'its text says so');
+    DD.AI.clearIntents(lich, false);
+    t.eq(DD.problems.slice(n0).filter(function (p) { return /^Error in /.test(p); }).length, 0, 'no swallowed errors');
+  });
+})();
+
+// ---- playtest fixes (Nov 12) ----------------------------------------------------------------------------------------
+(function () {
+  'use strict';
+  const T = window.DD_TEST, DD = window.DD;
+  if (!T || !DD) return;
+  T.suite('bosses_act2: playtest fixes (Nov 12) — the Slate cameo is a he, and knows when Slate is in the party', function (t) {
+    if (!DD.getEnemy('lichtenstein')) { t.skip('lich not loaded'); return; }
+    const v = DD.defs.narration.lich_victory || [], vs = DD.defs.narration.lich_victory_slate || [];
+    t.ok(v.length > 0 && v.every(function (l) { return !/\bits\b/.test(l) && !/follows you out/.test(l); }), 'lich_victory: no "its" for the golem, no "follows you out"');
+    t.ok(vs.length > 0 && vs.every(function (l) { return /Slate/.test(l) && /\bhis\b/.test(l); }), 'lich_victory_slate: Slate by name, his desk / badge');
+  });
 })();

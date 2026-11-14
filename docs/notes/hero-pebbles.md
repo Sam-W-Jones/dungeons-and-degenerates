@@ -273,3 +273,7 @@ failures are other areas mid-flight: bosses_act1 (18), bosses_act2 (17), boss_dm
   HP", N HP, Inspired, 1 AP, it acts on its own slot with full AP), Spicy Nibble at a barrel (preview = reality,
   Pebbles unhurt).
 - **Requests**: none.
+
+## Playtest fixes (Nov 12)
+
+- **heroes-v1 (fixed)**: the target-range numbers in his descs (Zoomies, Fetch, Puppy Eyes) follow his real reach (range items, Dazzle) through `reach()` → `DD.Targeting.reach`; details and the cross-hero suite in hero-kiri.md.

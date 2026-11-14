@@ -40,7 +40,9 @@
         el('div.psd-name', null, def.name),
         def.epithet ? el('div.psd-epithet', null, def.epithet) : null,
         el('div.psd-class', null, [def.race, def.cls].filter(Boolean).join(' ')),
-        el('div.psd-role', null, el('span.role-tag', null, def.role || 'Adventurer'), el('span.psd-cx', null, 'Complexity ', UI.stars(def.complexity || 1, 3)))));
+        el('div.psd-role', null, el('span.role-tag', null, def.role || 'Adventurer'), el('span.psd-cx', null, 'Complexity ', UI.stars(def.complexity || 1, 3)),
+          // [playtest heroes-9] v2 turn order matters: the initiative modifier (Kiri +3, Slate −2)
+          el('span.psd-init', { title: 'Initiative modifier: added to the d20 when a fight starts' }, '🎲 Init ' + (typeof UI.initText === 'function' ? UI.initText((def.stats || {}).init || 0) : String((def.stats || {}).init || 0))))));
     panel.appendChild(head);
     if (locked) panel.appendChild(el('div.psd-locked', null, '🔒 ', UI.unlockHint(def)));
     if (def.blurb) panel.appendChild(el('div.psd-blurb', null, def.blurb));

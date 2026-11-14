@@ -9,7 +9,8 @@ Files: `js/run/meta.js`, `js/run/run.js`, `js/run/runmap.js`, `js/run/rewards.js
   starter, `{ act: N }` = first clear of act N, DESIGN fallback map for unregistered ids, `settings.unlockAll` and
   `?debug=1&unlockall=1`), lifetime stats, codex `seen`, last 20 run summaries. Loaded in `afterLoad` (order -100).
 - **DD.RunMap** (§9.3): 7 rows of 2-4 nodes + boss row. Row 0 combat, row 6 taverns, elites from row 2, ≤1 shop per row,
-  at least one fight per row, at least one shop / elite / event per act, no shop/elite/treasure/tavern directly after the
+  at least one fight per row, at least one elite / event and `DD.Balance.map.minShops` shops per act (2 since sustain
+  refit 3, Nov 13: ~98% of maps have room for both; the rest get one), no shop/elite/treasure/tavern directly after the
   same type. Links are a monotone staircase between consecutive rows: never cross, every node reachable and leads to the
   boss (validated over 900 maps per test run). Encounters/events are pre-assigned when registries have them; travel
   re-validates and assigns lazily otherwise. Maps are seeded per act from the run seed.
@@ -138,3 +139,23 @@ they belong to a reward screen.
   over. Tests: `integration: losing a protect objective …` and `integration: the HUD hands a lost objective …`; the
   run/HUD defeat suites now down every hero first (a real TPK).
 - The victory rewards text is a `hero_death` line when a hero was written out in that fight.
+
+## Economy (sustain refit 3, Nov 13) — data only
+
+No code in `js/run/*.js` changed; the economy moved through `DD.Balance` (owner: the balance passes):
+`map.minShops` 1 → 2 (`runmap.js` already read it), boss gold 80-100 → 50-70, regular-fight gold no longer grows per act
+(+6 → 0), Mystery Stew (`heal.reward`) 0.3 → 0.35. `tests/run_tests.js`: the loot-table suite reads the gold rows from
+`DD.Balance.gold` instead of DESIGN's old numbers, and the reward-apply suite reads the Stew's fraction (and checks its
+desc names it). The measurements and the rejected levers (act price inflation, a bigger stock, more shop weight) are in
+`docs/notes/balance.md` "Sustain refit - difficulties and economy". The "Gold income vs. prices has not been tuned"
+known issue above is superseded by it.
+
+## Finish (Nov 14) — fix:engine
+
+- `DD.Run.goldPreview(n)` (new, pure): the gold `Run.addGold(n)` would add now, Blessings included; the reward card uses it
+  (desc-sweep-9, `docs/notes/run-v2.md`). Nothing else in the meta / run layer changed.
+
+## Review (finish, Nov 14) — REVIEWER
+
+- `Run.goldPreview` re-played (card text = gold added, Trust Fund I / III). Event hints now print it too while a gold
+  Blessing is held (`goldHint` in run.js; `docs/notes/run-v2.md` "Review (finish)").

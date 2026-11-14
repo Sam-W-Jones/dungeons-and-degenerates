@@ -6,13 +6,24 @@
  * squishies, Rude Shove and the chair's knockback feed pits and lava, Barrel Toss lights everybody else's oil, Rally the
  * Troops pays off a big round, Dodge Roll and Tactical Retreat leave melee without provoking anything.
  * v2 requests: First Aid aimed at a downed ally gets them back up with the healed HP; Throw Chair and Sucker Punch, like
- * every single-target attack, can be aimed at an explosive barrel to set it off (the engine detonates it, no riders).
+ * every single-target damage skill (D1), can be aimed at an explosive barrel to set it off (the engine detonates it, no riders),
+ * and (rules run) at any breakable object, which takes their listed damage (no knockback, no riders).
  * None of them is a spell, so Silence never stops them. DD.Kit (shared with js/data/consumables.js) holds the pure
  * path helpers and the custom projectile painters (chair, barrel) so tests and other content can reuse them.
  */
 (function () {
   'use strict';
   const DD = window.DD;
+  /**
+   * A range number in a desc as targeting resolves it for this user (range items such as the Yardstick of Reach, Dazzle,
+   * modifyRange hooks: what the card's Range pill says; playtest heroes-v1) via DD.Targeting.reach. No user: the number.
+   */
+  function reach(user, id, base) {
+    const d = DD.getSkill(id);
+    if (!user || !d || !DD.Targeting) return base;
+    if (typeof DD.Targeting.reach === 'function') return DD.Targeting.reach(d, null, user, base);
+    return Math.max(0, base + DD.Targeting.range(user, d, 1)[1] - DD.Targeting.range(null, d, 1)[1]);
+  }
 
   const INK = '#1a1014';
   const GOLD = '#ffd76a';
@@ -298,8 +309,8 @@
     levels: [{ dmg: 7 }, { dmg: 9 }, { dmg: 10, push: 1 }],
     target: { type: 'unit', range: [1, 4], filter: 'enemy', los: true },
     area: { shape: 'custom', fn: function (ctx) { return shoveArea(ctx, lv(ctx && ctx.L).push || 0); } },
-    desc: function (L) {
-      return 'Hurl a tavern chair at a foe within 4: ' + L.dmg + ' damage' + (L.push ? ' and it is knocked back ' + plural(L.push, 'tile') : '') + '.';
+    desc: function (L, user) {
+      return 'Hurl a tavern chair at a foe within ' + reach(user, 'gen_throw_chair', 4) + ': ' + L.dmg + ' damage' + (L.push ? ' and it is knocked back ' + plural(L.push, 'tile') : '') + '.';
     },
     flavor: 'Every tavern brawl ends the same way. Somebody gets chaired.',
     execute: function (ctx) {
@@ -352,8 +363,8 @@
       canTarget: function (ctx) { return rollPath(ctx.user, ctx.target) ? true : 'Something solid is in the way.'; },
     },
     canUse: function (ctx) { return ctx.user && A().cantMove(ctx.user) ? 'Rooted: no room to roll.' : true; },
-    desc: function (L) {
-      return 'Roll up to ' + L.range + ' tiles in a straight line, right past anyone in the way, and gain ' + L.block + ' Block.';
+    desc: function (L, user) {
+      return 'Roll up to ' + reach(user, 'gen_dodge_roll', L.range) + ' tiles in a straight line, right past anyone in the way, and gain ' + L.block + ' Block.';
     },
     flavor: 'Invincibility frames sold separately. Nobody gets a swing at a moving target.',
     execute: function (ctx) {
@@ -450,8 +461,8 @@
     levels: [{ dmg: 2, range: 2, r: 0 }, { dmg: 3, range: 3, r: 0 }, { dmg: 3, range: 3, r: 1 }],
     target: { type: 'unit', range: function (L) { return [1, lv(L).range || 2]; }, filter: 'enemy', los: true },
     area: { shape: 'circle', size: function (L) { return lv(L).r || 0; } },
-    desc: function (L) {
-      return 'Fling sand at a foe within ' + L.range + (L.r ? ' and every foe next to it' : '') + ': ' + L.dmg + ' damage and Dazzled ' +
+    desc: function (L, user) {
+      return 'Fling sand at a foe within ' + reach(user, 'gen_pocket_sand', L.range) + (L.r ? ' and every foe next to it' : '') + ': ' + L.dmg + ' damage and Dazzled ' +
         'through ' + (L.r ? 'their' : 'its') + ' next turn (attacks land 1 tile off).';
     },
     flavor: 'Sh-sha! Nobody can swing at what they can\'t see. Beach not included.',
@@ -476,8 +487,8 @@
     levels: [{ block: 3, range: 3, r: 0 }, { block: 5, range: 4, r: 0 }, { block: 6, range: 4, r: 1 }],
     target: { type: 'unit', range: function (L) { return [1, lv(L).range || 3]; }, filter: 'enemy', los: true },
     area: { shape: 'circle', size: function (L) { return lv(L).r || 0; } },
-    desc: function (L) {
-      return 'Taunt a foe within ' + L.range + (L.r ? ' and every foe next to it (on their next turn they' : ' (on its next turn it') +
+    desc: function (L, user) {
+      return 'Taunt a foe within ' + reach(user, 'gen_taunt', L.range) + (L.r ? ' and every foe next to it (on their next turn they' : ' (on its next turn it') +
         ' must attack you) and gain ' + L.block + ' Block.';
     },
     flavor: 'The bravest words in any language. Also the last, sometimes.',
@@ -527,8 +538,8 @@
     levels: [{ dmg: 5, range: 4 }, { dmg: 6, range: 4 }, { dmg: 7, range: 5 }],
     target: { type: 'tile', range: function (L) { return [2, lv(L).range || 4]; }, los: false },
     area: { shape: 'circle', size: 1 },
-    desc: function (L) {
-      return 'Lob a lit barrel 2-' + L.range + ' tiles away, no line of sight needed: ' + L.dmg + ' fire damage to everyone within 1, ' +
+    desc: function (L, user) {
+      return 'Lob a lit barrel 2-' + reach(user, 'gen_barrel_toss', L.range) + ' tiles away, no line of sight needed: ' + L.dmg + ' fire damage to everyone within 1, ' +
         'allies too. Sets off oil, webs and barrels.';
     },
     flavor: 'Where was the barrel? Nobody asks where the barrel was.',
@@ -595,7 +606,7 @@
       },
     },
     canUse: function (ctx) { return ctx.user && A().cantMove(ctx.user) ? 'Rooted: you can\'t walk away.' : true; },
-    desc: function (L) { return 'Walk up to ' + L.range + ' tiles without provoking attacks of opportunity.'; },
+    desc: function (L, user) { return 'Walk up to ' + reach(user, 'gen_tactical_retreat', L.range) + ' tiles without provoking attacks of opportunity.'; },
     flavor: 'We are not running away. We are advancing toward the rear.',
     execute: function (ctx) {
       const u = ctx.user;

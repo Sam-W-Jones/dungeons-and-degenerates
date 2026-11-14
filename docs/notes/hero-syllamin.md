@@ -423,3 +423,29 @@ Suite: `hero_syllamin: v2 requests — …`. Rules: `docs/notes/rules.md` "v2 re
 - **Barrels.** Your Mom Joke (basic) and Mic Drop (3 AP, once per combat, no line of sight) can set one off. Kept:
   dropping the mic on a barrel is the most Syllamin thing possible. A blast is not his words: it adds no Roasted stack.
 - **Heals.** None.
+
+## Playtest fixes (Nov 12)
+
+- **text-tone-2 (content part, fixed)**: the ally_down barks that assumed a particular hero was the one down ("Marwyn,
+  MAGNIFICENT people don't nap mid-fight!", "Basanos, up! Bite something…") are now helper lines naming a STANDING
+  hero ("Marwyn, flex at them until they wake up!", "Basanos, go bite whoever did that, you big puppy!"). Josiah's
+  "Basanos, I am a doctor, not a vet!" got the same treatment. Every named ally_down line in the eleven heroes I own
+  now names a helper, so one engine rule fixes the rest.
+- **Request (fix:engine, text-tone-2)**: pass the downed unit to the ally_down bark and never pick a line that names
+  the downed hero (`partyLines` already matches names: drop the downed hero's too). With that, no line misfires.
+  DONE by fix:engine (rules.md "Playtest fixes (Nov 12)": the engine passes the downed hero, a line naming a hero only
+  fires while that hero stands, `{downed}` fills the downed hero's name). Marwyn's "Basanos, get up! …" is in a deferred
+  file (marwyn.js).
+- **heroes-v1 (fixed)**: the target-range numbers in his descs follow his real reach (range items, Dazzle) through `reach()` → `DD.Targeting.reach`; details and the cross-hero suite in hero-kiri.md.
+
+## Finish (Nov 14) — playtest desc-sweep-7 (FIX: CONTENT)
+
+- With The Electric Lute, Your Mom Joke reads "Deal 5 lightning damage to a foe up to 4 tiles away, and electrify the
+  water it stands in (everyone in that water is shocked, allies too; The Electric Lute)." (a codex card keeps psychic).
+  Suite `hero_syllamin: finish …`. D7: two swap barks.
+
+## Review (finish, Nov 14) — REVIEWER
+
+- D1 / D4 with his real kit: Heckle now breaks a crate for its 🔨 number ("Syllamin turns Heckle on the Crate…"); with The
+  Electric Lute a Your Mom Joke at a crate standing in a puddle shocks nobody (the rider has no target), and the crate
+  takes exactly the listed damage. A flying Syllamin now shoots Bone Piles under AutoPlay (D5, act2.js's hint).

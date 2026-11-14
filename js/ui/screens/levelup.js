@@ -200,10 +200,12 @@
     st.refs.status.textContent = name + ' is choosing a boon…';
     if (!choices.length) {
       if (tracked(r) && num(rh.pendingLevels) > 0) rh.pendingLevels = 0; // nothing left to offer: never loop forever
-      UI.alert(name + ' — Level ' + forLevel, name + ' feels stronger. There was nothing new to learn, so they learned humility instead.', { icon: '✨', onClose: function () { heroDone(heroIdx); } });
+      UI.alert(name + ' — Level ' + forLevel, name + ' feels stronger. There was nothing new to learn, so ' + name + ' learned humility instead.', { icon: '✨', onClose: function () { heroDone(heroIdx); } });
       return;
     }
-    const bark = def && def.barks && def.barks.levelup && def.barks.levelup.length ? DD.util.pick(def.barks.levelup, DD.rng) : '';
+    // [playtest text-tone-6] a line that names a hero who isn't in the party is skipped
+    const luLines = def && def.barks && Array.isArray(def.barks.levelup) ? UI.partyLines(def.barks.levelup) : [];
+    const bark = luLines.length ? DD.util.pick(luLines, DD.rng) : '';
     const stats = UI.heroStats(rh);
     const growth = def && def.growth && def.growth.hp ? def.growth.hp : 0;
     const more = tracked(r) && num(rh.pendingLevels) > 1 ? ' (' + num(rh.pendingLevels) + ' boons to pick)' : '';

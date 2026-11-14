@@ -4,8 +4,8 @@
  *   minion/normal: a1_rat (packs, Bleed) · a1_gob_grunt (2-tile spear, pokes objects) · a1_gob_kid (straight-line
  *     slingshot, taunts) · a1_kobold_rep (Strike Action: Inspired allies) · a1_slime (splits into two a1_slimelet
  *     unless cooked or dropped) · a1_spore_bro (walks up, explodes; pops into spores when killed) · a1_spider (web
- *     Root, bites webbed prey harder) · a1_critic (Bad Review: Weak)
- *   elites: a1_mimic (tongue pull, gold-swallowing CHOMP, and the act's one elite wind-up: the Lid Slam) · a1_bugbear
+ *     Root, bites webbed prey harder) · a1_critic (Bad Review: Weakened)
+ *   elites: a1_mimic (tongue pull, the gold-swallowing Gold Digger bite, and the act's one elite wind-up: the Lid Slam) · a1_bugbear
  *     (throws heroes into walls, friends and pits; bar stools) · a1_cube (immovable, Engulf, Jiggle Slam)
  *   extras: status a1_engulfed · object a1_strike_fund + its rule a1_hazard_pay · 11 encounters (8 normal, 3 elite;
  *     3 handcrafted layouts).
@@ -267,8 +267,9 @@
 
   DD.registerObject({
     id: 'a1_strike_fund', name: 'Strike Fund', blocksMove: true, blocksLos: false, hp: 8, height: 0.75, color: '#f49ac1',
-    smashable: true,
-    desc: 'Destructible (8 HP); adjacent heroes can Smash it. The union\'s piggy bank. Hazard pay: an enemy that starts ' +
+    // rules run: a destroy objective — shooting it is the point
+    smashable: true, targetable: true,
+    desc: 'Destructible (8 HP): any single-target damage skill can break it, or Smash it from next to it. The union\'s piggy bank. Hazard pay: an enemy that starts ' +
       'its turn within 2 tiles of a Strike Fund gains 2 Block. Breaking it spills 3 gold.',
     init: function () {
       const s = S();
@@ -277,7 +278,8 @@
     onDestroyed: function (obj, tile) {
       DD.FX.particles(tile, { kind: 'coins', count: 14 });
       A().gainGold(3);
-      A().log('The Strike Fund shatters. 3 gold rolls out, along with the union\'s dignity.', 'system');
+      // the engine already logs "… is destroyed." first: this line only adds what spills out (playtest text-tone-9)
+      A().log('3 gold rolls out of the wreckage, along with the union\'s dignity.', 'system');
     },
     draw: drawStrikeFund,
   });
@@ -755,7 +757,7 @@
     desc: 'The cellar\'s oldest tenant; it has not paid rent since the Second Age, and it drops on you fast (initiative +2). An ambush hunter: it ignores whoever stands in front and goes for whoever looks tastiest (the wounded and the squishy). Spits webs that Root (and keep Rooting whoever steps in), then bites prey that is Rooted or still standing in a web harder. Walks on its own webs: immune to Root. Weak to fire.' });
 
   // =====================================================================================================
-  // Bandit Bard Critic — Bad Review (Weak); silence-able
+  // Bandit Bard Critic — Bad Review (Weakened); silence-able
   // =====================================================================================================
 
   eskill({ id: 'a1_critic_review', name: 'Bad Review', icon: '👎', kind: 'spell', tags: ['ranged', 'debuff'], anchor: 'unit', cooldown: 1,
@@ -780,7 +782,7 @@
 
   DD.registerEnemy({ id: 'a1_critic', name: 'Bandit Bard Critic', act: 1, tier: 'normal', hp: 17, mov: 3, armor: 0, init: 1,
     tags: ['human', 'bandit', 'bard'], flags: {}, resist: {},
-    passive: { name: 'Everyone\'s a Critic', icon: '👎', desc: 'On his turn he keeps his distance and writes a Bad Review (damage + Weak) of a hero he can see, preferring one who is not Weak yet, or swings his lute at anyone next to him. Silenced, he has nothing to say.' },
+    passive: { name: 'Everyone\'s a Critic', icon: '👎', desc: 'On his turn he keeps his distance and writes a Bad Review (damage + Weakened) of a hero he can see, preferring one who is not Weakened yet, or swings his lute at anyone next to him. Silenced, he has nothing to say.' },
     sprite: { base: 'humanoid', scale: 1, build: 'slim', outfit: 'coat',
       palette: { skin: '#e8c4a0', cloth: '#41285e', cloth2: '#d8c27a', hair: '#2a1a12', hat: '#1c1a22', eye: '#2b2233', accent: '#c0392b',
         scarf: '#c0392b', quill: '#f6f2ea', parchment: '#efe2b8', mask: '#1c1a22', outline: '#1a1014' },
@@ -821,7 +823,7 @@
       if (active(tu)) A().pull(u, tu, u, ctx.L.pull, { bump: 0 });
     } });
   // v2: a plain bite now (the hop existed to catch heroes dodging its telegraph); it walks up on its own turn instead
-  eskill({ id: 'a1_mimic_chomp', name: 'CHOMP', icon: '🦷', kind: 'attack', tags: ['melee', 'gold'], anchor: 'unit',
+  eskill({ id: 'a1_mimic_chomp', name: 'Gold Digger', icon: '🦷', kind: 'attack', tags: ['melee', 'gold'], anchor: 'unit',
     levels: [{ dmg: 9, steal: 4 }], target: { type: 'unit', range: [1, 1], filter: 'enemy', los: true },
     desc: function (L) {
       return 'Deal ' + L.dmg + ' damage and swallow up to ' + L.steal + ' of the party\'s gold (the Mimic coughs it all back up when it dies).';
@@ -845,7 +847,7 @@
     } });
   // The act's one elite wind-up (the lid creaking open IS the mimic): announced on its turn, lands at the start of its
   // next one (anchor 'self': push the Mimic and the slam moves with it). A stun, sleep, freeze or sheep interrupts it.
-  eskill({ id: 'a1_mimic_slam', name: 'Lid Slam', icon: '📦', kind: 'attack', tags: ['melee', 'aoe', 'push'], anchor: 'self', cooldown: 3,
+  eskill({ id: 'a1_mimic_slam', name: 'Lid Slam', icon: '📦', kind: 'attack', tags: ['melee', 'aoe', 'push'], anchor: 'self', cooldown: 3, windupOnly: true,
     levels: [{ dmg: 7, push: 1 }], target: { type: 'self' }, area: { shape: 'square', size: 1 },
     desc: function (L) {
       return 'Wind-up: the lid creaks open. At the start of the Mimic\'s next turn it slams down: ' + L.dmg + ' damage to every unit around the Mimic ' +
@@ -934,13 +936,13 @@
 
   DD.registerEnemy({ id: 'a1_mimic', name: 'Mimic (Disappointed)', act: 1, tier: 'elite', hp: 68, mov: 3, armor: 2, init: 2,
     tags: ['monstrosity', 'mimic'], flags: { large: true }, resist: { fire: 1.25 },
-    passive: { name: 'Creaky Lid', icon: '📦', desc: 'On its turn it CHOMPs a hero it can walk up to (sticking to the one next to it), else licks someone 2-4 tiles away in a straight line and reels them in. Crowded by 2+ foes, it winds up a Lid Slam instead: it lands at the start of its next turn, and while the lid is open it can\'t bite anyone walking away.' },
+    passive: { name: 'Creaky Lid', icon: '📦', desc: 'On its turn it bites a hero it can walk up to (Gold Digger, sticking to the one next to it), else licks someone 2-4 tiles away in a straight line and reels them in. Crowded by 2+ foes, it winds up a Lid Slam instead: it lands at the start of its next turn, and while the lid is open it can\'t bite anyone walking away.' },
     sprite: { base: 'custom', scale: 1.4, height: 40, width: 32, headY: -24, portrait: { x: 0, y: -22, r: 19 },
       palette: { wood: '#8a5a2b', metal: '#d4af37', skin: '#8a5a2b', eye: '#f4f0e0', accent: '#e8607a', outline: '#1a1014' },
       draw: drawMimic },
     skills: ['a1_mimic_tongue', 'a1_mimic_chomp', 'a1_mimic_slam'], ai: mimicPlan, aiStyle: 'melee', xp: 12, gold: [10, 16],
     hooks: {
-      // the lid is open (Lid Slam wound up): no CHOMP for heroes stepping out of the slam (pure: paths and the HUD ask)
+      // the lid is open (Lid Slam wound up): no Gold Digger for heroes stepping out of the slam (pure: paths and the HUD ask)
       modifyOpportunity: function (o) {
         if (o.attacker && o.attacker.defId === 'a1_mimic' && hasIntent(o.attacker, 'a1_mimic_slam')) o.cancel = true;
       },
@@ -959,11 +961,11 @@
       hurt: ['Rude! I\'m an antique!', 'Watch the finish!', 'That\'s going to splinter.'],
       death: ['Should have been... a wardrobe...', 'Take the gold. It was never enough.', '*lid closes sadly*'],
     },
-    desc: 'A chest that wanted to eat a dragon hoard and keeps getting adventurers. It has been waiting nine years for someone to touch it (initiative +2). It walks up and CHOMPs (swallowing party gold, coughed back up when it dies), or licks a hero in a straight line and reels them in. Crowd it and the lid creaks open: the Lid Slam lands at the start of its next turn, so back away or stun it. Iron bands: armor 2.' });
+    desc: 'A chest that wanted to eat a dragon hoard and keeps getting adventurers. It has been waiting nine years for someone to touch it (initiative +2). It walks up and bites (Gold Digger: it swallows party gold and coughs it back up when it dies), or licks a hero in a straight line and reels them in. Crowd it and the lid creaks open: the Lid Slam lands at the start of its next turn, so back away or stun it. Iron bands: armor 2.' });
 
   /**
    * One move and one action a turn: crowded by 2+ foes (diagonals count) → the lid creaks open (the Lid Slam wind-up is
-   * its whole turn); else CHOMP whoever it can walk up to; else lick someone in a straight line; else walk closer.
+   * its whole turn); else bite (Gold Digger) whoever it can walk up to; else lick someone in a straight line; else walk closer.
    */
   function mimicPlan(unit, api) {
     if (!api.foes(unit).length) return;
@@ -1286,7 +1288,7 @@
     objective: { type: 'killAll' }, reward: NORMAL });
 
   DD.registerEncounter({ id: 'a1_union_meeting', act: 1, kind: 'normal', name: 'Mandatory Union Meeting', weight: 0.9, minDepth: 2,
-    intro: 'The Kobold Union Rep is mid-speech about overtime pay. The goblins vote unanimously to stab you. Smash the Strike Funds and the union folds.',
+    intro: 'The Kobold Union Rep is mid-speech about overtime pay. The goblins vote unanimously to stab you. Break the Strike Funds (shoot them, or Smash them up close) and the union folds.',
     // the union hall: funds on the back table, rows of chairs, the Rep on his soapbox
     map: { theme: 'cellar', layout: [
       '###########',

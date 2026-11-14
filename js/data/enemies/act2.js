@@ -15,8 +15,8 @@
  *     instead of walking, chain Swamp Gas Zap, hovers over pits and Lures heroes into them) · a2_owlbear_cub
  *     (straight-line Cub Charge) · a2_banshee (cone Stun from where she floats, One-Star Review) · a2_gargoyle (Gutter
  *     Dive from its perch, then Stone Form until the end of its next turn) · a2_pixie_swarm (single-target hits deal
- *     half, Glitter Bomb Dazzles)
- *   elites: a2_mama_owlbear (immovable; Pounce, Maul, ⏳ Stomp, Vendetta on whoever kills a cub) · a2_necro_ta (Red
+ *     half, Fairy Dust-Up Dazzles)
+ *   elites: a2_mama_owlbear (immovable; Mama's Coming (a pounce), Maul, ⏳ Stomp, Vendetta on whoever kills a cub) · a2_necro_ta (Red
  *     Pen, Raise Dead, Detention bone walls; Bone Piles reassemble at once while he stands) · a2_gary (immovable Flesh
  *     Golem: lightning heals him, throws coworkers, GARY ANGRY below half HP) with a2_tesla_coil minions.
  *   extras: statuses a2_stoneform, a2_vendetta · objects a2_bone_pile, a2_bone_wall, a2_chafing_dish (brunch platter),
@@ -35,6 +35,14 @@
   function has(u, id) { return !!u && DD.Act.hasStatus(u, id); }
   function dist(a, b) { return Math.abs(a.x - b.x) + Math.abs(a.y - b.y); }
   function eskill(def) { def.owner = 'enemy'; def.ap = 0; return DD.registerSkill(def); }
+  /** [playtest desc-sweep-4] a skill's damage as THIS fight deals it for a live unit (DD.AI.fightLevel: × the fight's
+   *  damage row, e.g. casual ×0.8), the raw number without one (a codex card). Passive rule lines read it. */
+  function hitOf(u, id, key) {
+    const s = DD.getSkill(id);
+    if (!s) return 0;
+    const L = u && u.side && DD.AI && DD.AI.fightLevel ? DD.AI.fightLevel(s, 1, u) : DD.skillLevel(s, 1);
+    return L[key || 'dmg'];
+  }
   function lunge(ctx, to) { const p = to || ctx.target; if (p && ctx.user && (p.x !== ctx.user.x || p.y !== ctx.user.y)) DD.FX.lunge(ctx.user, p); }
   /** Attack bark (cosmetic; barks are silenced in previews). */
   function say(ctx, chance) { if (ctx.isIntent) A().maybeBark(ctx.user, 'attack', chance === undefined ? 0.25 : chance); }
@@ -445,11 +453,13 @@
   }
 
   DD.registerObject({
-    id: PILE, name: 'Bone Pile', blocksMove: false, blocksLos: false, hp: 3, height: 0.35, color: '#e8e2cf', smashable: true,
-    desc: 'A Skeleton Intern on its break. It stands back up (half HP) at the end of the next round, or the same round ' +
-      'while a Necromancer TA stands. A hero walking over it (flying over it doesn\'t count), a Smash or 3+ damage scatters it for good.',
-    // a stomp is a floor effect (v2): flyers float over the pile
-    autoplay: function (unit) { return unit && unit.side === 'hero' && G().feelsFloor(unit) ? 9 : 0; },
+    // rules run (D1): a target for any single-target damage skill (3 HP), so a pile across the room can be finished from range
+    id: PILE, name: 'Bone Pile', blocksMove: false, blocksLos: false, hp: 3, height: 0.35, color: '#e8e2cf', smashable: true, targetable: true,
+    desc: 'A Skeleton Intern on its break (3 HP). It stands back up (half HP) at the end of the next round, or the same round ' +
+      'while a Necromancer TA stands. A hero walking over it (flying over it doesn\'t count), a Smash or 3 damage (any single-target ' +
+      'damage skill can break it) scatters it for good.',
+    // a stomp is a floor effect (v2): flyers float over the pile; breaking it (a shot, a Smash) is for anyone (lead D5)
+    autoplay: function (unit, obj, tile, s, how) { return unit && unit.side === 'hero' && (how === 'break' || G().feelsFloor(unit)) ? 9 : 0; },
     onEnter: function (unit, obj, tile) {
       if (!active(unit) || unit.side !== 'hero') return;
       DD.FX.text(tile, 'Crunch!', { color: '#fff4d0', size: 15 });
@@ -469,9 +479,19 @@
   function boxedIn(u) { return DIRS.every(function (d) { return !G().isFree(u.x + d.x, u.y + d.y, u); }); }
 
   DD.registerObject({
-    id: 'a2_bone_wall', name: 'Bone Wall', blocksMove: true, blocksLos: true, hp: 5, height: 1.3, color: '#ddd5bf', smashable: true,
-    desc: 'Detention, in bone form. Blocks movement and line of sight. 5 HP: one Smash breaks it. Crumbles at the end of the next round.',
-    autoplay: function (unit) { return unit && unit.side === 'hero' && boxedIn(unit) ? 8 : 0; },
+    // rules run: an ally can shoot a walled-in friend free
+    id: 'a2_bone_wall', name: 'Bone Wall', blocksMove: true, blocksLos: true, hp: 5, height: 1.3, color: '#ddd5bf', smashable: true, targetable: true,
+    desc: 'Detention, in bone form. Blocks movement and line of sight. 5 HP: one Smash breaks it, and any single-target damage skill can break it. ' +
+      'Crumbles at the end of the next round.',
+    // AutoPlay: worth breaking for a hero it walls in, or (rules run: Smash it or shoot it) for a friend it walls in
+    autoplay: function (unit, obj, tile) {
+      if (!unit || unit.side !== 'hero') return 0;
+      if (boxedIn(unit)) return 8;
+      return tile && G().neighbors(tile.x, tile.y).some(function (n) {
+        const a = G().unitAt(n.x, n.y);
+        return active(a) && a !== unit && a.side === 'hero' && boxedIn(a);
+      }) ? 6 : 0;
+    },
     onRoundEnd: function (obj, tile) {
       obj.data.turns = (obj.data.turns === undefined ? 2 : obj.data.turns) - 1;
       if (obj.data.turns > 0) return;
@@ -483,8 +503,10 @@
   });
 
   DD.registerObject({
+    // rules run: a destroy objective — shooting it is the point
     id: 'a2_chafing_dish', name: 'Unholy Brunch Platter', blocksMove: true, blocksLos: false, hp: 10, height: 0.9, color: '#c9ccd4', smashable: true,
-    desc: 'Destructible (10 HP; adjacent heroes can Smash it). At the end of each round it heals every enemy within 2 tiles for 3 HP. ' +
+    targetable: true,
+    desc: 'Destructible (10 HP): any single-target damage skill can break it, or Smash it from next to it. At the end of each round it heals every enemy within 2 tiles for 3 HP. ' +
       'Breaking it spills flammable hollandaise (oil).',
     onRoundEnd: function (obj, tile) {
       const s = S();
@@ -503,9 +525,11 @@
   });
 
   DD.registerObject({
+    // rules run: the party guards it, so its attacks are never aimed at it (area hits and blasts still reach it)
     id: 'a2_coffee_machine', name: 'Coffee Machine', blocksMove: true, blocksLos: false, hp: 24, height: 1.2, color: '#5a4a44', yawAware: true,
+    targetable: false,
     desc: 'The last working coffee machine in the Academy (24 HP). If it breaks, finals week wins: defeat. Interns and zombies claw at it ' +
-      'from the tiles next to it: stand in their way.',
+      'from the tiles next to it: stand in their way. Your attacks are never aimed at it; your blasts are not so polite.',
     onDestroyed: function () { A().log('The coffee machine dies. Somewhere, a wizard falls asleep mid-lecture, forever.', 'narrator'); },
     draw: drawCoffeeMachine,
   });
@@ -726,8 +750,8 @@
     tags: ['undead', 'skeleton'], flags: {}, resist: { poison: 0 },
     sprite: SPR.intern, skills: ['a2_intern_papercut', 'a2_intern_coffee'], ai: defaultThen(BRUTE, 1), aiStyle: 'melee', xp: 2, gold: [1, 2],
     passive: { icon: '🦴', name: 'Reassembles', desc: 'Dies into a Bone Pile that stands back up at half HP at the end of the next round (same round while a ' +
-      'Necromancer TA stands). Fire or holy damage, a fall, stepping on the pile or a Smash end it. On its turn it Paper Cuts the hero ' +
-      'next to it (it sticks to that one) or lobs a Coffee Run.' },
+      'Necromancer TA stands). Fire or holy damage, a fall, a stomp, a Smash or 3 damage to the pile end it. On its turn it Paper Cuts the ' +
+      'adjacent hero (it sticks to that one) or lobs a Coffee Run.' },
     hooks: {
       onCombatStart: function (unit) { intro(unit, 0.15); },
       onDeath: function (unit, d) {
@@ -754,7 +778,7 @@
       death: ['Taking my fifteen.', 'I\'ll be back after lunch.', 'This isn\'t the end of my internship!'],
       reassemble: ['I\'m back! Did I miss the meeting?', 'Clocking back in!', 'Still unpaid. Still here.'],
     },
-    desc: 'Reassembles: it leaves a Bone Pile that stands back up at half HP at the end of the next round. Walk over or Smash the pile, ' +
+    desc: 'Reassembles: it leaves a Bone Pile that stands back up at half HP at the end of the next round. Walk over or Smash the pile, break it with any single-target damage skill (3 HP), ' +
       'or finish it with fire, holy damage or a fall. Paid in exposure, which, for a skeleton, is mostly sunburn.' });
 
   // =====================================================================================================
@@ -801,15 +825,17 @@
   DD.registerEnemy({ id: 'a2_zombie_unpaid', name: 'Zombie (Unpaid)', act: 2, tier: 'normal', hp: 28, mov: 3, armor: 0, init: -2,
     tags: ['undead', 'zombie'], flags: {}, resist: { fire: 1.5, poison: 0 },
     sprite: SPR.zombie, skills: ['a2_zombie_overtime', 'a2_zombie_grab'], ai: defaultThen(BRUTE, 1), aiStyle: 'melee', xp: 5, gold: [2, 4],
-    passive: { icon: '✋', name: 'Grab, Then Bite', desc: 'On its turn it bites the hero next to it (7) and sticks to that one. A hero 2-4 tiles away in a ' +
-      'straight line gets yanked up to 3 tiles toward it and Rooted instead (never through a coworker): the bite comes next turn. Slow ' +
-      '(move 3), weak to fire.' },
+    passive: { icon: '✋', name: 'Grab, Then Bite', desc: function (u) {
+      return 'On its turn it bites the hero next to it (' + hitOf(u, 'a2_zombie_overtime') + ') and sticks to that one. A hero 2-4 tiles away in a ' +
+        'straight line gets yanked up to 3 tiles toward it and Rooted instead (never through a coworker): the bite comes next turn. Slow ' +
+        '(move 3), weak to fire.';
+    } },
     hooks: { onCombatStart: function (unit) { intro(unit, 0.15); } },
     barks: {
       spawn: ['Brainsss... and dental...', 'Clock... in...', 'Shift... starts... now...'],
       attack: ['Overtime...', 'Grab... the new guy...', 'Mandatory... team building...'],
       hurt: ['Not... the... face...', 'Workers\'... comp...', 'Ow. Probably.'],
-      death: ['Finally... a... day... off...', 'Tell HR... I quit...', 'Weekend... at last...'],
+      death: ['Finally... a... day... off...', 'Is this... a sick day... or a personal day...', 'Weekend... at last...'],
     },
     desc: 'Slow, but Grabby Hands yanks a hero 2-4 tiles away (in a straight line) toward it and Roots it; the bite follows. Weak to fire. ' +
       'Has worked here for 300 years without a raise and no longer remembers what weekends are.' });
@@ -864,7 +890,7 @@
       spawn: ['Welcome to Brunch. You may never leave.', 'Mimosa? It\'s mandatory.', 'Have you accepted Eggs Benedict?'],
       attack: ['Careful, it\'s hot!', 'Brunch waits for no one!', 'You\'re not on the reservation list!'],
       hurt: ['You spilled my mimosa!', 'This is a brunch, not a battle!', 'I\'d like to speak to your server!'],
-      death: ['Tell the Benedict... I tried...', 'My table... is... ready...', 'Bottomless... like... this... pit...'],
+      death: ['Cancel... my mimosa...', 'My table... is... ready...', 'Bottomless... like... this... pit...'],
     },
     desc: 'Heals allies with Bottomless Mimosas (8 HP) and serves Hollandaise Horrors. Kill it first or the brunch never ends. ' +
       'Brunch is a sacrament. Reservations are mandatory. The waitlist is eternal.' });
@@ -1105,9 +1131,11 @@
   DD.registerEnemy({ id: 'a2_banshee', name: 'Banshee (Wants to Speak to the Manager)', act: 2, tier: 'normal', hp: 26, mov: 4, armor: 0, init: 1,
     tags: ['undead', 'spirit'], flags: { flying: true }, resist: { poison: 0, holy: 1.5 },
     sprite: SPR.banshee, skills: ['a2_banshee_scream', 'a2_banshee_review'], ai: bansheePlan, aiStyle: { style: 'ranged', keepDistance: 2 }, xp: 6, gold: [3, 5],
-    passive: { icon: '📢', name: 'Wants the Manager', desc: 'On her turn she screams at every hero in her 2-tile cone from where she floats (6 + Stun, ' +
-      'cooldown 3). Otherwise she keeps her distance: she floats to 2-3 tiles from a hero and leaves a One-Star Review. Don\'t end your turn ' +
-      'within 2 tiles of her.' },
+    passive: { icon: '📢', name: 'Wants the Manager', desc: function (u) {
+      return 'On her turn she screams at every hero in her 2-tile cone from where she floats (' + hitOf(u, 'a2_banshee_scream') + ' + Stun, ' +
+        'cooldown 3). Otherwise she keeps her distance: she floats to 2-3 tiles from a hero and leaves a One-Star Review. Don\'t end your turn ' +
+        'within 2 tiles of her.';
+    } },
     hooks: { onCombatStart: function (unit) { intro(unit, 0.35); } },
     barks: {
       spawn: ['I\'d like to speak to the manager.', 'Excuse me. EXCUSE ME.', 'Is this how you treat customers?'],
@@ -1150,7 +1178,7 @@
   eskill({ id: 'a2_gargoyle_stone', name: 'Stone Form', icon: '🗿', kind: 'buff', tags: ['stone'], anchor: 'self',
     levels: [{ turns: 1 }], target: { type: 'self' },
     desc: function () { return 'Turn to stone until the end of its next turn: takes 75% less damage and does nothing on that turn.'; },
-    flavor: 'Not sleeping. Load-bearing.',
+    flavor: 'Not sleeping. Just very, very still.',
     execute: function (ctx) {
       const u = ctx.user;
       if (!active(u)) return;
@@ -1180,8 +1208,10 @@
   DD.registerEnemy({ id: 'a2_gargoyle', name: 'Gargoyle', act: 2, tier: 'normal', hp: 28, mov: 3, armor: 1, init: -1,
     tags: ['construct', 'stone'], flags: {}, resist: { poison: 0 },
     sprite: SPR.gargoyle, skills: ['a2_gargoyle_dive', 'a2_gargoyle_stone'], ai: gargoylePlan, aiStyle: 'assassin', xp: 6, gold: [3, 5],
-    passive: { icon: '🗿', name: 'Swoop, Then Statue', desc: 'Sneaky: on its turn it dives on the weakest hero within 5 tiles of where it perches (8 to it ' +
-      'and every hero next to it), then turns to stone until the end of its next turn: 75% less damage, and that turn it does nothing.' },
+    passive: { icon: '🗿', name: 'Swoop, Then Statue', desc: function (u) {
+      return 'Sneaky: on its turn it dives on the weakest hero within 5 tiles of where it perches (' + hitOf(u, 'a2_gargoyle_dive') + ' to it ' +
+        'and every hero next to it), then turns to stone until the end of its next turn: 75% less damage, and that turn it does nothing.';
+    } },
     hooks: {
       onCombatStart: function (unit) { intro(unit, 0.15); },
       onRoundStart: function (unit) { stoneLook(unit); },
@@ -1194,7 +1224,7 @@
     barks: {
       spawn: ['...', '*grinding stone*', 'You\'re standing in my rain.'],
       attack: ['SPLASH ZONE!', 'Gutter ball!', 'Incoming downpour!'],
-      hurt: ['Chipped!', 'That\'s ARCHITECTURE!', 'I\'m load-bearing!'],
+      hurt: ['Chipped!', 'That\'s ARCHITECTURE!', 'I\'m a listed building!'],
       death: ['*crumbles into gravel*', 'Finally... a demolition permit...', 'Tell the pigeons... I\'m sorry...'],
       stone: ['*becomes extremely still*', 'I\'m a statue now. Move along.'],
     },
@@ -1204,7 +1234,7 @@
   // =====================================================================================================
   // Pixie Swarm — dazzle, swarm
   // =====================================================================================================
-  eskill({ id: 'a2_pixie_glitter', name: 'Glitter Bomb', icon: '✨', kind: 'spell', tags: ['aoe', 'ranged', 'dazzle'], anchor: 'unit', cooldown: 1,
+  eskill({ id: 'a2_pixie_glitter', name: 'Fairy Dust-Up', icon: '✨', kind: 'spell', tags: ['aoe', 'ranged', 'dazzle'], anchor: 'unit', cooldown: 1,
     aiScore: sparesFriends,
     levels: [{ dmg: 5, turns: 1 }], target: { type: 'unit', range: [1, 5], filter: 'enemy', los: false }, area: { shape: 'circle', size: 1 },
     desc: function (L) { return 'Throw glitter at a foe up to 5 tiles away: ' + L.dmg + ' damage to it and every foe next to it, and Dazzle them (−1 range on their next turn).'; },
@@ -1230,18 +1260,18 @@
     tags: ['fey', 'swarm'], flags: { flying: true }, resist: {},
     sprite: SPR.pixies, skills: ['a2_pixie_glitter', 'a2_pixie_bite'], ai: defaultThen(PIXIE, 2), aiStyle: PIXIE, xp: 5, gold: [2, 5],
     passive: { icon: '🧚', name: 'Swarm', desc: 'Single-target skills deal half damage to it; area attacks hit in full. On its turn it keeps its distance ' +
-      'and throws a Glitter Bomb from 2+ tiles away (every other turn); in between it flies in and bites.' },
+      'and throws a Fairy Dust-Up (glitter) from 2+ tiles away (every other turn); in between it flies in and bites.' },
     hooks: {
       onCombatStart: function (unit) { intro(unit, 0.2); },
       modifyIncomingDamage: function (d) { if (d.cause === 'skill' && singleTarget(d.skill)) d.mult *= 0.5; },
     },
     barks: {
       spawn: ['GLITTER TIME!', 'A rave in the woods! You\'re invited!', 'Sparkle sparkle STAB!'],
-      attack: ['Glitter bomb!', 'Tiny bites! Tiny bites!', 'You look so SHINY now!'],
+      attack: ['Fairy dust-up!', 'Tiny bites! Tiny bites!', 'You look so SHINY now!'],
       hurt: ['Rude!', 'Ow ow ow ow ow!', 'You squished Kevin!'],
       death: ['The rave... is over...', '*sad sparkles*', 'Glitter... is... forever...'],
     },
-    desc: 'Swarm: single-target skills deal half damage to it; area attacks hit every pixie at full. Glitter Bomb Dazzles (−1 range). ' +
+    desc: 'Swarm: single-target skills deal half damage to it; area attacks hit every pixie at full. Fairy Dust-Up Dazzles (−1 range). ' +
       'A rave that got out of hand in 1347 and never stopped.' });
 
   // =====================================================================================================
@@ -1443,7 +1473,7 @@
       });
       if (n) {
         DD.FX.particles(ctx.target, { kind: 'dust', color: '#e6dcc2', count: 12 });
-        A().log(ctx.user.name + ' assigns Detention: ' + n + ' bone wall' + (n === 1 ? '' : 's') + ' rise.', 'enemy');
+        A().log(ctx.user.name + ' assigns Detention: ' + n + ' bone wall' + (n === 1 ? ' rises' : 's rise') + '.', 'enemy');
         say(ctx, 0.5);
       }
     } });
@@ -1665,7 +1695,8 @@
       hurt: ['*sputter*', '*spark*'],
       death: ['*fwoomp*', '*sad electrical whine*'],
     },
-    desc: 'Arcs 5 lightning damage into the nearest unit within 4 tiles on its turn, friend or foe, skipping lightning-immune ones (Gary heals from it); ' +
+    // [playtest desc-sweep-4] no damage number here: a codex card can't know the fight's difficulty (the ability row shows the hit)
+    desc: 'Arcs lightning into the nearest unit within 4 tiles on its turn, friend or foe, skipping lightning-immune ones (Gary heals from it); ' +
       'with nobody in reach it Overcharges. Immovable, immune to lightning. Voids every warranty within a mile.' });
 
   // =====================================================================================================
@@ -1706,7 +1737,7 @@
     objective: { type: 'killAll' } });
 
   enc({ id: 'a2_forbidden_buffet', kind: 'normal', name: 'The Forbidden Buffet', minDepth: 1, weight: 0.8,
-    intro: 'Three unholy brunch platters keep the cult fed forever: eggs Benedict that never runs out. Kick over the buffet before they get seconds.',
+    intro: 'Three unholy brunch platters keep the cult fed forever: eggs Benedict that never runs out. Kick over the buffet (shoot the platters, or Smash them up close) before they get seconds.',
     map: { theme: 'graveyard', w: 11, h: 10, features: ['gravestones', 'mud'], density: 1 },
     enemies: [{ id: 'a2_brunch_cultist', n: 2 }, { id: 'a2_skeleton_intern', n: 2 }, { id: 'a2_zombie_unpaid', n: 1 }],
     reinforcements: [{ round: 3, enemies: [{ id: 'a2_hollandaise', n: 2 }], edge: 'zone', text: 'The buffet is replenished. The sauce has opinions.' }],

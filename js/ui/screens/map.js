@@ -91,7 +91,7 @@
       if (enc) {
         const bossId = (enc.enemies || []).map(function (e) { return e.id; }).filter(function (id) { const d = DD.getEnemy(id); return d && d.tier === 'boss'; })[0];
         const bd = bossId ? DD.getEnemy(bossId) : null;
-        extra = '<div class="tt-target">👑 ' + UI.esc(bd ? bd.name + (bd.boss && bd.boss.title ? ', ' + bd.boss.title : '') : enc.name || 'Unknown horror') + '</div>';
+        extra = '<div class="tt-target">👑 ' + UI.esc(bd ? UI.bossWithTitle(bd.name, bd.boss && bd.boss.title) : enc.name || 'Unknown horror') + '</div>';
       }
     }
     const status = state === 'reachable' ? '<div class="tt-foot good">Click to travel here.</div>' :
@@ -321,12 +321,33 @@
     const atStart = !run.nodeId && !(run.visited && run.visited.length);
     const line = params.text || UI.narrate(atStart ? 'act_intro_' + (run.act || 1) : 'map_enter', {}, MAP_ENTER_FALLBACK);
     const quirks = atStart ? quirkBox(run) : null;
-    if (line || quirks) board.appendChild(el('div.map-narration', null, UI.narration(line), quirks));
+    if (line || quirks) {
+      const narr = el('div.map-narration', null, UI.narration(line), quirks);
+      board.appendChild(narr);
+      if (quirks) clearIntro(board, narr);
+    }
     const bannerKey = (run.seed || '') + ':' + (run.act || 1);
     if ((atStart || params.intro) && bannerShownFor !== bannerKey && !DD.headless) {
       bannerShownFor = bannerKey;
       showActBanner(root, run);
     }
+  }
+
+  /**
+   * [release gate] The act-1 intro box (the DM's line + the Session Zero quirks, ~4 lines) covered a first-column node
+   * on nearly every start map. While it is up, the nodes, links, camp and party token are laid out in the part of the
+   * board below it (`.map-board.intro`, `--intro-pad`); the box is gone after the first step and so is the squeeze.
+   */
+  function clearIntro(board, narr) {
+    const fit = function () {
+      if (!narr.isConnected || !board.clientHeight) return;
+      const pad = Math.ceil(narr.offsetTop + narr.offsetHeight + 10);
+      if (pad * 2 > board.clientHeight) return;   // a tiny board: keep the plain layout rather than squash it
+      board.classList.add('intro');
+      board.style.setProperty('--intro-pad', pad + 'px');
+    };
+    fit();
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(fit, function () { /* no fonts API */ });
   }
 
   /** Level-ups / skill learns waiting for a decision (non-blocking in the run layer). */
@@ -350,6 +371,12 @@
         const narr = board.querySelector('.map-narration');
         renderBoard(board, run);
         if (narr) board.appendChild(narr);
+        // [release gate] the party moved on without leaving the map: the quirks line and the intro squeeze go
+        if (run.nodeId || (run.visited && run.visited.length)) {
+          board.classList.remove('intro');
+          const q = narr && narr.querySelector('.sz-quirks');
+          if (q) q.parentNode.removeChild(q);
+        }
       },
       unmount: function () {
         timers.forEach(function (t) { clearTimeout(t); });

@@ -2,7 +2,8 @@
  * Suites 'hero_slate: …' for js/data/heroes/slate.js (v2: initiative turns, no telegraphs, no Guard, simple kit):
  * definition + level tables + simplicity rules, Short Fuse (Rage from hits / heals / buffs, the flare), every skill at
  * every level in DD.Combat.sandbox fights (damage vs armor-free fixture foes, statuses lasting exactly the right own
- * turns, throws, crashes, pits, lava, water, walls, map edges, objects, grapple holds and drags, cooldowns, ranges),
+ * turns, throws, crashes, pits, lava, water, walls, map edges, objects, grapple holds and drags, cooldowns, ranges;
+ * D9 sustain: Hold Still holds until the end of Slate's next turn(s), Stress Ball squeezes the held foe for a self-heal),
  * the signature, the items, combos with other heroes (fixtures; Betty, Corelos, Hjalmar and Valdris when loaded),
  * attacks of opportunity (he provokes and makes them; a held foe never strikes its holder; a foe Taunted by Get Off My
  * Lawn lets allies walk off it; throws, slams, pulls, drags and Air Mail never provoke), previews vs reality, v2 edge cases
@@ -16,7 +17,7 @@
   if (!T || !DD) return;
 
   const POOL = ['sla_hold_still', 'sla_personal_space', 'sla_rocks_fall', 'sla_air_mail', 'sla_foot_down', 'sla_lawn',
-    'sla_rock_bottom', 'sla_gasket', 'sla_get_over_here'];
+    'sla_rock_bottom', 'sla_gasket', 'sla_get_over_here', 'sla_stress_ball'];
   const ALL_SKILLS = ['sla_love_tap', 'sla_tantrum'].concat(POOL);
   const L5_HP = 32 + 4 * 4;   // Slate at level 5 (the default in these sandboxes)
   // words for mechanics v2 removed (DESIGN §4.1): nothing of Slate's may still promise them
@@ -129,8 +130,8 @@
     t.ok(combos.length >= 2 && combos.length <= 3, '2-3 skills tagged as combo setups with other heroes: ' + combos.join(', '));
     // the passive: one rule (two sentences), his comedic core
     const pd = h.passive.desc;
-    t.ok(/Rage/.test(pd) && /hits, heals or buffs/.test(pd) && /\+2 damage/.test(pd), 'passive desc: ' + pd);
-    t.ok(pd.split('. ').length <= 2 && pd.length <= 150, 'passive is one clear rule (' + pd.length + ' chars)');
+    t.ok(/Rage/.test(pd) && /hits him, heals him or gives him a buff status/.test(pd) && /Block doesn't count/.test(pd) && /\+2 damage/.test(pd), 'passive desc: ' + pd);
+    t.ok(pd.split('. ').length <= 2 && pd.length <= 175, 'passive is one clear rule (' + pd.length + ' chars)');
     // texts that mention removed mechanics or the wrong pronouns
     const narr = (DD.defs.narration.tips || []).filter(function (l) { return /Slate/.test(l); });
     t.ok(narr.length >= 3, 'loading tips about Slate (' + narr.length + ')');
@@ -142,7 +143,7 @@
       t.ok(!/\b(she|her|hers)\b/i.test(tx), 'Slate is he/him: ' + tx.slice(0, 70));
     });
     // barks
-    const keys = ['select', 'start', 'move', 'kill', 'hurt', 'lowhp', 'downed', 'revive', 'ally_down', 'levelup', 'victory', 'idle', 'signature'];
+    const keys = ['select', 'start', 'move', 'kill', 'hurt', 'lowhp', 'downed', 'revive', 'ally_down', 'levelup', 'victory', 'idle', 'signature', 'squeeze'];
     let mentions = 0;
     const named = {};
     keys.forEach(function (k) {
@@ -241,11 +242,21 @@
     t.ok(f.u.downed, 'downed');
     DD.Act.damage(at(3, 4), f.u, 3);
     t.eq(rage(f.u), 0, 'downed: no Rage');
+    // D9: Stress Ball's heal comes from Slate himself (src = Slate): no Rage; the cleric's heal still annoys him
+    f = fight({ slate: { x: 4, y: 4, skills: [{ id: 'sla_hold_still', level: 1 }, { id: 'sla_stress_ball', level: 1 }] },
+      allies: [{ id: 'test_cleric', x: 3, y: 4 }], enemies: [{ id: 'test_grunt', x: 5, y: 4, hpMult: 3 }] });
+    f.u.hp -= 12;
+    t.eq(use(f.u, 'sla_hold_still', 5, 4), true, 'Stress Ball: grab');
+    const hpSq = f.u.hp;
+    t.eq(use(f.u, 'sla_stress_ball', 5, 4), true, 'Stress Ball: squeeze');
+    t.ok(f.u.hp > hpSq && rage(f.u) === 0, 'Stress Ball\'s heal (src = Slate) healed him and gave no Rage (' + (f.u.hp - hpSq) + ' HP, Rage ' + rage(f.u) + ')');
+    DD.Act.heal(at(3, 4), f.u, 2);
+    t.eq(rage(f.u), 1, 'the cleric\'s heal still does (+1)');
     noErrors(t, 'Short Fuse', p0);
   });
 
   // ---- Hold Still -----------------------------------------------------------------------------------------
-  T.suite('hero_slate: Hold Still — Grappled through exactly its next turn(s), drag, release', function (t) {
+  T.suite('hero_slate: Hold Still — Grappled until the end of his next turn(s) (its own turns held as before), drag, release', function (t) {
     const p0 = DD.problems.length;
     // the bait: a nearly dead mage two steps from the grunt; a free grunt goes for her, a held one can only hit Slate
     function bait(lv, extra) {
@@ -285,17 +296,24 @@
       t.eq(mage.hp, 4, 'L' + lv + ': the mage is safe');
       t.eq(u.hp, L5_HP - 3, 'L' + lv + ': it stabbed the only thing in reach (Slate, 4 − 1 armor)');
       t.eq(rage(u), 1, 'L' + lv + ': which annoyed him (+1 Rage)');
-      if (Lv.turns === 1) {
-        t.ok(!has(g, 'sla_grappled') && !DD.Combat.cantMove(g), 'L' + lv + ': free at the end of its one held turn');
-      } else {
-        t.ok(has(g, 'sla_grappled') && st(g, 'sla_grappled').turns === 1, 'L' + lv + ': still held for its second turn');
+      // D9 retime: the hold counts Slate's turns, so it is still on during his next turn (squeeze, drag or throw it now)
+      t.ok(has(g, 'sla_grappled') && st(g, 'sla_grappled').turns === Lv.turns && DD.Slate.heldBy(u) === g,
+        'L' + lv + ': still Grappled on Slate\'s round-2 turn (' + (st(g, 'sla_grappled') || {}).turns + ' of his turns left)');
+      t.ok(DD.Combat.cantMove(g) && g.x === 4 && g.y === 4, 'L' + lv + ': still next to him, still unable to move');
+      if (Lv.turns === 2) {
         spent(u);
-        untilTurnOf(u);
-        t.ok(g.x === 4 && g.y === 4 && mage.hp === 4, 'L' + lv + ': second turn held too');
-        t.ok(!has(g, 'sla_grappled'), 'L' + lv + ': then free');
+        untilTurnOf(u);   // round 3: the grunt's second held turn is over
+        t.ok(DD.Combat.state.round === 3 && g.x === 4 && g.y === 4 && mage.hp === 4, 'L' + lv + ': its second turn held too');
+        t.ok(has(g, 'sla_grappled') && st(g, 'sla_grappled').turns === 1, 'L' + lv + ': still held on Slate\'s 2nd turn after the grab');
       }
+      spent(u);   // this round's reaction too: only the hold kept it here
+      pass();     // the end of Slate's turn: he lets go
+      t.ok(!has(g, 'sla_grappled') && !DD.Combat.cantMove(g) && !DD.Slate.heldBy(u),
+        'L' + lv + ': free at the end of Slate\'s ' + (Lv.turns === 1 ? '' : '2nd ') + 'turn after the grab');
+      t.ok(untilTurnOf(u), 'L' + lv + ': another round');
+      t.ok(!(g.x === 4 && g.y === 4) && (mage.hp < 4 || mage.downed), 'L' + lv + ': on its next turn it walks off to the wounded mage');
     }
-    // the foe acts before Slate: the hold still covers exactly its next turn
+    // the foe acts before Slate: it is held through its next turn, Slate's following turn still holds it, then he lets go
     c = bait(1, { initiative: 'enemiesFirst', noPlan: true });
     t.ok(DD.Combat.current() === c.u && DD.Combat.state.round === 1, 'enemies first: the grunt passed round 1, Slate acts');
     c.u.oppRound = DD.Combat.state.round + 1;   // his round-2 reaction is spent: only the hold keeps the grunt there
@@ -303,7 +321,36 @@
     untilTurnOf(c.u);   // the mage, then round 2: the grunt (held), then Slate
     t.ok(DD.Combat.current() === c.u && DD.Combat.state.round === 2, 'round 2, Slate\'s turn');
     t.ok(c.g.x === 4 && c.g.y === 4 && c.mage.hp === 4, 'enemies first: held through its round-2 turn');
-    t.ok(!has(c.g, 'sla_grappled'), 'and free at its end (before Slate\'s turn)');
+    t.ok(has(c.g, 'sla_grappled') && DD.Slate.heldBy(c.u) === c.g, 'enemies first: Slate still holds it on his round-2 turn');
+    c.u.oppRound = DD.Combat.state.round + 1;   // and his round-3 reaction
+    pass();
+    t.ok(!has(c.g, 'sla_grappled') && !DD.Combat.cantMove(c.g), 'enemies first: free at the end of Slate\'s round-2 turn');
+    untilTurnOf(c.u);   // the mage, then round 3: the grunt (free), then Slate
+    t.ok(!(c.g.x === 4 && c.g.y === 4), 'enemies first: on its round-3 turn it walks off (held for exactly 1 of its turns)');
+
+    // the Grappled desc says when he lets go, counted in his turns
+    [1, 3].forEach(function (lv) {
+      const Lv = L('sla_hold_still', lv);
+      const f2 = fight({ slate: { x: 4, y: 4, skills: [{ id: 'sla_hold_still', level: lv }] }, enemies: [{ id: 'test_grunt', x: 5, y: 4 }] });
+      const g2 = at(5, 4);
+      const hd = function () { const s0 = st(g2, 'sla_grappled'); return s0 ? DD.getStatus('sla_grappled').desc(s0) : '(not held)'; };
+      const onFoe = [];
+      const off = DD.Events.on('turn:end', function (ev) { if (ev && ev.unit === g2) onFoe.push(hd()); });
+      use(f2.u, 'sla_hold_still', 5, 4);
+      const want = function (n) { return 'lets go at the end of his next ' + (n === 1 ? 'turn' : n + ' turns') + '.'; };
+      t.ok(hd().indexOf('Held by Slate') === 0 && hd().indexOf(want(Lv.turns)) >= 0, 'L' + lv + ' desc on the grab turn: ' + hd());
+      t.ok(!DD.Slate.releasesThisTurn(g2), 'L' + lv + ': the grab turn is not the release turn');
+      for (let k = Lv.turns; k >= 1; k--) {
+        untilTurnOf(f2.u);
+        t.ok(onFoe.length > 0 && onFoe[onFoe.length - 1].indexOf(want(k)) >= 0, 'L' + lv + ' desc on the foe\'s turn: ' + onFoe[onFoe.length - 1]);
+        const d2 = hd();
+        t.ok(d2.indexOf(k === 1 ? 'lets go at the end of this turn.' : want(k - 1)) >= 0, 'L' + lv + ' desc on his turn (' + k + ' left): ' + d2);
+        t.eq(DD.Slate.releasesThisTurn(g2), k === 1, 'L' + lv + ': releasesThisTurn on his turn with ' + k + ' left');
+      }
+      off();
+      pass();
+      t.ok(!has(g2, 'sla_grappled'), 'L' + lv + ': and it was this turn');
+    });
 
     // dragging along
     let f = fight({ slate: { x: 4, y: 4, skills: [{ id: 'sla_hold_still', level: 2 }] }, enemies: [{ id: 'test_grunt', x: 5, y: 4 }] });
@@ -374,6 +421,115 @@
     t.eq(use(f.u, 'sla_hold_still', 4, 6), true, 'the (pushable) Test Overlord can be grabbed');
     t.ok(has(boss, 'sla_grappled') && DD.Combat.cantMove(boss), 'and can\'t walk off');
     noErrors(t, 'Hold Still', p0);
+  });
+
+  // ---- Stress Ball (D9 sustain: healing while grappling) ------------------------------------------------------
+  T.suite('hero_slate: Stress Ball — squeeze the foe you\'re holding: damage, and you heal', function (t) {
+    const p0 = DD.problems.length;
+    const def = DD.getSkill('sla_stress_ball');
+    t.ok(def.tags.indexOf('heal') < 0, 'no \'heal\' tag: it must not make him a healer (REQ.healer)');
+    t.ok(def.ap === 1 && def.cooldown === 1 && def.kind === 'attack', '1 AP, cooldown 1, an attack');
+    t.ok(def.target.objects === false, 'he squeezes foes, not crates');
+    t.eq(DD.getHero('slate').skillPool[DD.getHero('slate').skillPool.length - 1], 'sla_stress_ball', 'appended to the end of his pool');
+    t.ok(DD.getHero('slate').startingSkills.indexOf('sla_stress_ball') < 0, 'not a starter (Hold Still and Personal Space are)');
+    const sqLog = function (s, from) { return s.log.slice(from).filter(function (e) { return /like a stress ball/.test(e.text); }); };
+    function setup(lv, extra) {
+      const f = fight(Object.assign({ slate: { x: 4, y: 4, skills: [{ id: 'sla_hold_still', level: 1 }, { id: 'sla_stress_ball', level: lv }] },
+        enemies: [{ id: 'test_grunt', x: 5, y: 4, hpMult: 3 }, { id: 'test_grunt', x: 3, y: 4, hpMult: 3 }] }, extra || {}));
+      return { f: f, u: f.u, g: at(5, 4), other: at(3, 4) };
+    }
+    for (let lv = 1; lv <= 3; lv++) {
+      const Lv = L('sla_stress_ball', lv);
+      t.eq(desc('sla_stress_ball', lv), 'Squeeze the foe you\'re holding: ' + Lv.dmg + ' damage, and you heal ' + Lv.heal + ' HP.', 'L' + lv + ' desc');
+      const c = setup(lv);
+      const u = c.u, g = c.g;
+      u.hp -= 10;
+      t.ok(!valid(u, 'sla_stress_ball', 5, 4) && !valid(u, 'sla_stress_ball', 3, 4), 'L' + lv + ': nobody held, nothing to squeeze');
+      const why = DD.Targeting.pure(function () { return def.target.canTarget(DD.Targeting.buildCtx(u, slotOf(u, 'sla_stress_ball'), { x: 3, y: 4 })); });
+      t.eq(why, 'Grab it first (Hold Still).', 'L' + lv + ': it says why');
+      t.eq(use(u, 'sla_hold_still', 5, 4), true, 'L' + lv + ': grabbed');
+      t.ok(valid(u, 'sla_stress_ball', 5, 4) && !valid(u, 'sla_stress_ball', 3, 4), 'L' + lv + ': only the held foe is a target, not the other adjacent one');
+      const ghp = g.hp, hp = u.hp, ap = u.ap, l0 = c.f.s.log.length;
+      t.eq(use(u, 'sla_stress_ball', 5, 4), true, 'L' + lv + ': squeezed');
+      t.eq(ghp - g.hp, Lv.dmg, 'L' + lv + ': the held foe takes ' + Lv.dmg);
+      t.eq(u.hp - hp, Lv.heal, 'L' + lv + ': Slate heals ' + Lv.heal);
+      t.eq(ap - u.ap, 1, 'L' + lv + ': 1 AP');
+      t.eq(slotOf(u, 'sla_stress_ball').cd, 1, 'L' + lv + ': cooldown 1');
+      t.eq(rage(u), 0, 'L' + lv + ': no Rage from his own heal, nor from the squeeze');
+      t.ok(has(g, 'sla_grappled') && DD.Slate.heldBy(u) === g, 'L' + lv + ': still holding it');
+      t.eq(sqLog(c.f.s, l0).length, 1, 'L' + lv + ': the log says he squeezed it like a stress ball');
+      t.eq(c.other.hp, 42, 'L' + lv + ': the other grunt is untouched');
+    }
+    // the flare: at 3+ Rage the squeeze deals +2 (an ordinary skill hit)
+    let c = setup(1);
+    c.u.hp -= 10;
+    use(c.u, 'sla_hold_still', 5, 4);
+    setRage(c.u, 3);
+    let ghp = c.g.hp, hp = c.u.hp;
+    t.eq(use(c.u, 'sla_stress_ball', 5, 4), true, 'flared: squeezed');
+    t.eq(ghp - c.g.hp, 3 + 2, 'flared: 3 + 2 damage');
+    t.ok(c.u.hp - hp === 4 && rage(c.u) === 3, 'flared: heals 4, Rage unchanged (' + rage(c.u) + ')');
+    // a squeeze that kills still heals him, and the hold is gone with the foe
+    c = setup(2);
+    c.u.hp -= 10;
+    use(c.u, 'sla_hold_still', 5, 4);
+    c.g.hp = 2;
+    hp = c.u.hp;
+    t.eq(use(c.u, 'sla_stress_ball', 5, 4), true, 'kill: squeezed');
+    t.ok(c.g.dead || c.g.downed, 'kill: the foe popped');
+    t.eq(c.u.hp - hp, L('sla_stress_ball', 2).heal, 'kill: he still heals ' + L('sla_stress_ball', 2).heal);
+    t.ok(!DD.Slate.heldBy(c.u), 'kill: nobody held any more');
+    // full HP: the squeeze still hurts, the heal is 0 and there is no log line
+    c = setup(1);
+    use(c.u, 'sla_hold_still', 5, 4);
+    ghp = c.g.hp;
+    let l0 = c.f.s.log.length;
+    t.eq(use(c.u, 'sla_stress_ball', 5, 4), true, 'full HP: squeezed');
+    t.ok(ghp - c.g.hp === 3 && c.u.hp === c.u.maxHp, 'full HP: 3 damage, nothing to heal');
+    t.eq(sqLog(c.f.s, l0).length, 0, 'full HP: no stress-ball log line');
+    // the retime: grab on one turn, squeeze on the next (the hold lasts until the end of his next turn)
+    c = setup(1);
+    c.u.hp -= 10;
+    t.eq(use(c.u, 'sla_hold_still', 5, 4), true, 'next turn: grabbed');
+    t.ok(untilTurnOf(c.u) && DD.Combat.state.round === 2, 'next turn: round 2, Slate\'s turn');
+    t.ok(has(c.g, 'sla_grappled') && valid(c.u, 'sla_stress_ball', 5, 4), 'next turn: still held, so it can be squeezed');
+    ghp = c.g.hp; hp = c.u.hp;
+    t.eq(use(c.u, 'sla_stress_ball', 5, 4), true, 'next turn: squeezed');
+    t.ok(ghp - c.g.hp === 3 && c.u.hp - hp === 4, 'next turn: 3 damage, heals 4');
+    pass();
+    t.ok(!has(c.g, 'sla_grappled'), 'next turn: and he lets go at its end');
+    // III: two squeezes per grab (the grab turn, then his 2nd turn after it; cooldown 1 skips the one between)
+    c = setup(3, { slate: { x: 4, y: 4, skills: [{ id: 'sla_hold_still', level: 3 }, { id: 'sla_stress_ball', level: 3 }] } });
+    c.u.hp -= 20;
+    use(c.u, 'sla_hold_still', 5, 4);
+    t.eq(use(c.u, 'sla_stress_ball', 5, 4), true, 'III: squeeze on the grab turn');
+    untilTurnOf(c.u);
+    t.ok(has(c.g, 'sla_grappled') && DD.Combat.canUse(c.u, slotOf(c.u, 'sla_stress_ball')) !== true, 'III: still held next turn, Stress Ball cooling down');
+    untilTurnOf(c.u);
+    t.ok(has(c.g, 'sla_grappled') && DD.Combat.state.round === 3, 'III: still held on his 2nd turn after the grab');
+    t.eq(use(c.u, 'sla_stress_ball', 5, 4), true, 'III: the second squeeze');
+    pass();
+    t.ok(!has(c.g, 'sla_grappled'), 'III: then he lets go');
+    // [review sustain] the retime tip, word for word: "at least until the end of his next turn" (III holds 2), and next
+    // turn he can drag it, throw it or squeeze it
+    const tip = (DD.defs.narration.tips || []).filter(function (l) { return /Slate holds on/.test(l); })[0] || '';
+    t.ok(/at least until the end of his next turn/.test(tip) && /drag it, throw it or squeeze it next turn/.test(tip) && tip.length <= 140, 'the retime tip is exact at every level: ' + tip);
+    [1, 3].forEach(function (lv) {
+      const sk = [{ id: 'sla_hold_still', level: lv }, { id: 'sla_personal_space', level: 1 }];
+      let f = fight({ w: 11, slate: { x: 4, y: 4, skills: sk }, enemies: [{ id: 'test_grunt', x: 5, y: 4, hpMult: 3 }] });
+      let g = at(5, 4);
+      use(f.u, 'sla_hold_still', 5, 4);
+      untilTurnOf(f.u);
+      t.ok(has(g, 'sla_grappled'), 'tip L' + lv + ': still held on his next turn');
+      t.eq(use(f.u, 'sla_personal_space', 5 + L('sla_personal_space', 1).range, 4), true, 'tip L' + lv + ': he throws the held foe next turn');
+      t.ok(g.x === 5 + L('sla_personal_space', 1).range && !has(g, 'sla_grappled') && !DD.Slate.heldBy(f.u), 'tip L' + lv + ': thrown, and the hold is over');
+      f = fight({ w: 11, slate: { x: 4, y: 4, skills: sk }, enemies: [{ id: 'test_grunt', x: 5, y: 4, hpMult: 3 }] });
+      g = at(5, 4);
+      use(f.u, 'sla_hold_still', 5, 4);
+      untilTurnOf(f.u);
+      t.ok(DD.Combat.move(f.u, 2, 4) && g.x === 3 && g.y === 4 && has(g, 'sla_grappled'), 'tip L' + lv + ': he drags it along next turn (at ' + g.x + ',' + g.y + ')');
+    });
+    noErrors(t, 'Stress Ball', p0);
   });
 
   // ---- Personal Space ---------------------------------------------------------------------------------------
@@ -547,6 +703,30 @@
     use(f.u, 'sla_rocks_fall', 4, 4);
     t.ok(!DD.Grid.tile(4, 4).obj || DD.Grid.tile(4, 4).obj.id !== 'barrel_explosive', 'it smashes objects (the barrel went off)');
     t.ok(at(4, 5).hp === 14 - 8 && at(5, 5).hp === 14, 'the barrel blast hits its neighbour (8), not a diagonal 2 away');
+    // rules run: what the party may not aim at (targetable: false, the object it protects) is no boulder target either
+    f = fight({ slate: { x: 1, y: 4, skills: sk }, enemies: [{ id: 'test_grunt', x: 8, y: 8 }], objective: { type: 'protect', objId: 'keg' },
+      objects: [{ x: 4, y: 4, id: 'keg' }, { x: 4, y: 2, id: 'crate', targetable: false }, { x: 4, y: 6, id: 'crate' }] });
+    t.ok(!valid(f.u, 'sla_rocks_fall', 4, 4), 'Hard Pass: not at the keg the party protects');
+    t.ok(!valid(f.u, 'sla_rocks_fall', 4, 2), 'Hard Pass: not at an object that says targetable: false');
+    t.ok(valid(f.u, 'sla_rocks_fall', 4, 6), 'Hard Pass: a plain crate, sure');
+  });
+
+  // ---- rules run: the Boulder is anyone's to break ------------------------------------------------------------
+  T.suite('hero_slate: rules run — the Boulder is a breakable target for any single-target damage skill', function (t) {
+    const p0 = DD.problems.length;
+    const f = fight({ slate: { x: 1, y: 4 }, allies: [{ id: 'test_mage', x: 1, y: 6 }], enemies: [{ id: 'test_grunt', x: 8, y: 8 }],
+      objects: [{ x: 4, y: 6, id: 'sla_boulder' }], order: ['test_mage'] });
+    const bd = DD.getObject('sla_boulder');
+    t.ok(bd.targetable === true && /any single-target damage skill/.test(bd.desc), 'the Boulder says any single-target damage skill can break it (D1)');
+    const m = DD.Combat.heroes().filter(function (u) { return u.defId === 'test_mage'; })[0];
+    if (!DD.Combat.isTurnOf(m)) DD.Combat.giveTurnTo(m);
+    const q = DD.Targeting.validTargets(m, m.basic).filter(function (e) { return e.x === 4 && e.y === 6; })[0];
+    t.ok(!!q && q.obj === 'sla_boulder' && q.hp === 5 && q.dmg === 4, 'the mage can shoot it (' + JSON.stringify(q) + ')');
+    DD.Combat.useSkill(m, m.basic, 4, 6);
+    DD.Combat.useSkill(m, m.basic, 4, 6);
+    t.ok(!DD.Grid.tile(4, 6).obj, 'two bolts clear it');
+    t.ok(f.u && !f.u.dead, 'Slate does not mind');
+    noErrors(t, 'boulder', p0);
   });
 
   // ---- Air Mail -----------------------------------------------------------------------------------------------
@@ -1169,11 +1349,14 @@
         [0, 3].forEach(function (rg) {
           const sk = POOL.indexOf(id) >= 0 ? [{ id: id, level: lv }] : [];
           const f0 = busy(sk, rg);
+          if (id === 'sla_stress_ball') DD.Slate.grab(f0.u, at(5, 4), 1);   // its only target is the held foe
           const targets = DD.Targeting.validTargets(f0.u, slotOf(f0.u, id)).slice(0, 6);
+          if (id === 'sla_stress_ball') t.eq(targets.length, 1, 'Stress Ball L' + lv + ': one target, the held foe');
           targets.forEach(function (tg) {
             const f = busy(sk, rg);
             const u = f.u, sl = slotOf(u, id);
-            if (id === 'sla_rock_bottom' || id === 'sla_personal_space') DD.Slate.grab(u, at(5, 4), 1);   // a held foe in the mix
+            if (id === 'sla_rock_bottom' || id === 'sla_personal_space' || id === 'sla_stress_ball') DD.Slate.grab(u, at(5, 4), 1);   // a held foe in the mix
+            if (id === 'sla_stress_ball') u.hp -= 10;   // room for the heal: the preview shows it on him
             const snap = function () {
               return JSON.stringify([f.s.units.map(function (x) { return [x.id, x.x, x.y, x.hp, x.block, (x.statuses || []).map(function (q) { return [q.id, q.stacks, q.turns, q.source]; })]; }),
                 f.s.hype, f.s.grid.tiles.map(function (tl) { return [tl.t, tl.obj && tl.obj.id, tl.surface && tl.surface.id]; })]);
@@ -1289,10 +1472,11 @@
     // a whole AI round with a hold, a taunt and a stun on the board: no errors, statuses tick per own turn
     f = fight({ ai: true, slate: { x: 4, y: 4, skills: [{ id: 'sla_hold_still', level: 3 }, { id: 'sla_lawn', level: 1 }] },
       allies: [{ id: 'test_knight', x: 3, y: 3 }], enemies: [{ id: 'test_grunt', x: 5, y: 4 }, { id: 'test_archer', x: 4, y: 6 }, { id: 'test_minion', x: 8, y: 8 }] });
-    t.eq(use(f.u, 'sla_hold_still', 5, 4), true, 'AI round: grabbed (III: its next 2 turns)');
+    t.eq(use(f.u, 'sla_hold_still', 5, 4), true, 'AI round: grabbed (III: until the end of his next 2 turns)');
     t.eq(use(f.u, 'sla_lawn', 4, 4), true, 'AI round: yelled');
     for (let i = 0; i < 4 && !f.s.result; i++) DD.Combat.endRound();
-    // [review v2] exact: the III hold covered rounds 1-2 and the taunt round 1, so nothing of either is left by round 5
+    // [review v2] exact: the III hold lasts through Slate's next 2 turns (he lets go at the end of his round-3 turn) and
+    // the taunt covered round 1, so nothing of either is left by round 5
     t.ok(!DD.Slate.heldBy(f.u) && DD.Combat.state.units.every(function (x) { return !has(x, 'sla_grappled') && !has(x, 'taunt'); }), 'after 4 rounds no hold and no taunt is left');
     noErrors(t, 'edge cases', p0);
   });
@@ -1400,6 +1584,68 @@
     } else t.log('DD.UI not loaded: tooltips skipped');
   });
 
+  // ---- AutoPlay: grab and squeeze (D9 sustain) -------------------------------------------------------------------
+  T.suite('hero_slate: AutoPlay grabs and squeezes (Stress Ball); Hold Still\'s autoplayValue', function (t) {
+    const p0 = DD.problems.length;
+    const AI = DD.Slate.HOLD_AI;
+    t.ok(AI >= 1.5 && AI <= 2.5, 'HOLD_AI in the spec\'s 1.5-2.5 band (' + AI + ')');
+    function probe() {
+      const used = [];
+      DD.Act.addRule({ id: 'sla_squeeze_probe', name: 'Probe', hooks: { onSkillUsed: function (ctx) { if (ctx.user && ctx.user.defId === 'slate' && !DD.Act.simulating) used.push(ctx.skill.id); } } });
+      return used;
+    }
+    function hv(f, x, y) { return DD.Targeting.pure(function () { return DD.Slate.holdValue(DD.Targeting.buildCtx(f.u, slotOf(f.u, 'sla_hold_still'), { x: x, y: y })); }); }
+    // Slate at 40% HP, a grunt next to him: AutoPlay grabs it and squeezes it (the same turn, or the next)
+    [1, 2].forEach(function (lv) {
+      const f = fight({ slate: { x: 4, y: 4, level: lv === 1 ? 1 : 5, skills: [{ id: 'sla_hold_still', level: lv }, { id: 'sla_stress_ball', level: lv }] },
+        enemies: [{ id: 'test_grunt', x: 5, y: 4, hpMult: 4 }] });
+      f.u.hp = Math.round(f.u.maxHp * 0.4);
+      const hp0 = f.u.hp;
+      const used = probe();
+      DD.AutoPlay.takeTurn();
+      const first = used.slice();
+      if (used.indexOf('sla_stress_ball') < 0 && !f.s.result) { untilTurnOf(f.u); DD.AutoPlay.takeTurn(); }
+      const gi = used.indexOf('sla_hold_still'), si = used.indexOf('sla_stress_ball');
+      t.ok(gi >= 0 && first.indexOf('sla_hold_still') >= 0, 'L' + lv + ': AutoPlay grabs on its first turn (' + first.join(', ') + ')');
+      t.ok(si > gi, 'L' + lv + ': and squeezes it the same turn or the next (' + used.join(', ') + ')');
+      t.ok(f.u.hp > hp0, 'L' + lv + ': Slate healed (' + hp0 + ' → ' + f.u.hp + ')');
+      t.log('L' + lv + ': turn 1 ' + first.join(', ') + (used.length > first.length ? '; turn 2 ' + used.slice(first.length).join(', ') : ''));
+    });
+    // holdValue: HOLD_AI alone without Stress Ball; more with it ready (now, or next turn)
+    let f = fight({ slate: { x: 4, y: 4, skills: [{ id: 'sla_hold_still', level: 1 }] }, enemies: [{ id: 'test_grunt', x: 5, y: 4 }, { id: 'test_brute', x: 3, y: 4 }] });
+    f.u.hp = Math.round(f.u.maxHp * 0.4);
+    t.eq(hv(f, 5, 4), AI, 'no Stress Ball socketed: holdValue = HOLD_AI');
+    t.eq(hv(f, 3, 4), 0, 'an immovable brute: nothing to hold, 0');
+    f = fight({ slate: { x: 4, y: 4, skills: [{ id: 'sla_hold_still', level: 1 }, { id: 'sla_stress_ball', level: 1 }] }, enemies: [{ id: 'test_grunt', x: 5, y: 4 }] });
+    const sb = L('sla_stress_ball', 1);
+    const near = function (a, b) { return Math.abs(a - b) < 1e-9; };
+    f.u.hp = Math.round(f.u.maxHp * 0.4);   // below half: a heal is worth 1.5 a point
+    let v = hv(f, 5, 4);
+    t.ok(v > AI && near(v, AI + sb.heal * 1.5 + 0.5 * sb.dmg), 'Stress Ball ready, Slate below half HP: HOLD_AI + heal × 1.5 + ½ dmg (' + v + ')');
+    f.u.hp = f.u.maxHp - 2;
+    v = hv(f, 5, 4);
+    t.ok(near(v, AI + 2 * 0.8 + 0.5 * sb.dmg), 'Slate missing 2 HP: HOLD_AI + 2 × 0.8 + ½ dmg (' + v + ')');
+    f.u.hp = f.u.maxHp;
+    v = hv(f, 5, 4);
+    t.ok(near(v, AI + 0.5 * sb.dmg), 'at full HP: the squeeze\'s damage only (' + v + ')');
+    const sl = slotOf(f.u, 'sla_stress_ball');
+    sl.cd = 1; sl.fresh = false;
+    t.ok(hv(f, 5, 4) > AI, 'Stress Ball off cooldown by his next turn (cd 1, not fresh): still counted (the hold lasts through it)');
+    sl.cd = 1; sl.fresh = true;
+    t.eq(hv(f, 5, 4), AI, 'Stress Ball just used (cd 1, fresh): not ready next turn, HOLD_AI only');
+    sl.cd = 0; sl.fresh = false;
+    // the quick pass prices the self-heal; the exact pass leaves it to the dry run
+    f.u.hp = Math.round(f.u.maxHp * 0.4);
+    DD.Slate.grab(f.u, at(5, 4), 1);
+    const ctx = DD.Targeting.buildCtx(f.u, sl, { x: 5, y: 4 });
+    ctx.L = sb;
+    const q = DD.getSkill('sla_stress_ball').aiScore(ctx);
+    t.ok(near(q, sb.heal * 1.5), 'Stress Ball aiScore (quick pass, below half HP): heal × 1.5 (' + q + ')');
+    ctx.autoplay = { preview: null };
+    t.eq(DD.getSkill('sla_stress_ball').aiScore(ctx), 0, 'Stress Ball aiScore with ctx.autoplay (exact pass): 0');
+    noErrors(t, 'AutoPlay squeeze', p0);
+  });
+
   // ---- sprite ----------------------------------------------------------------------------------------------------
   T.suite('hero_slate: sprite, rune flare, holding pose, portrait and Boulder painter', function (t) {
     const p0 = DD.problems.length;
@@ -1485,5 +1731,79 @@
     t.ok(walk.v.dead || walk.lost > fly.lost || has(walk.v, 'burn'), 'a walker thrown there pays for the lava (' + walk.lost + ' lost)');
     noErrors(t, 'v2 requests', p0);
   });
-})();
 
+  // ---- finish (Nov 14): the playtest findings held for the sustain build -----------------------------------------------
+  T.suite('hero_slate: finish — Short Fuse says what counts: a buff status does, Block from an ally doesn\'t (heroes-6 / desc-sweep-6)', function (t) {
+    const p0 = DD.problems.length;
+    const f = fight({ slate: { x: 2, y: 4 }, allies: [{ id: 'valdris', x: 3, y: 4, level: 1, skills: ['val_forge_armour', 'val_forge_weapon'] }],
+      enemies: [{ id: 'test_grunt', x: 8, y: 8 }], order: ['valdris'] });
+    const v = DD.Combat.heroes().filter(function (u) { return u.defId === 'valdris'; })[0];
+    if (!DD.Combat.isTurnOf(v)) DD.Combat.giveTurnTo(v);
+    const sk = function (id) { return v.skills.filter(function (s) { return s.id === id; })[0]; };
+    t.ok(DD.Combat.useSkill(v, sk('val_forge_armour'), f.u.x, f.u.y) && f.u.block > 0, 'Forge Armor gives Slate Block (' + f.u.block + ')');
+    t.eq(rage(f.u), 0, 'Block from an ally: no Rage, as the text says');
+    t.ok(DD.Combat.useSkill(v, sk('val_forge_weapon'), f.u.x, f.u.y), 'Forge Weapon (a buff status) on Slate');
+    t.eq(rage(f.u), 1, 'a buff status: +1 Rage');
+    // every text that states the rule names the exception
+    const texts = [DD.getHero('slate').passive.desc, DD.getStatus('sla_rage').desc({ stacks: 1 })].concat((DD.defs.narration.tips || []).filter(function (l) { return /Slate gains Rage/.test(l); }));
+    t.ok(texts.length === 3 && texts.every(function (x) { return /gives him a buff status \(Block doesn't count\)/.test(x); }), 'passive, Rage status and tip say "a buff status (Block doesn\'t count)": ' + texts.join(' | '));
+    noErrors(t, 'short fuse text', p0);
+  });
+
+  T.suite('hero_slate: finish — range texts follow his range items: Hard Pass, Get Over Here and the throws (heroes-v1 / desc-sweep-5)', function (t) {
+    const p0 = DD.problems.length;
+    const f = fight({ slate: { x: 1, y: 4, skills: ['sla_rocks_fall', 'sla_get_over_here', 'sla_personal_space', 'sla_air_mail'] }, enemies: [{ id: 'test_grunt', x: 8, y: 8 }] });
+    const u = f.u;
+    // "up to N tiles": the target range for Hard Pass / Get Over Here; the throw distance (range − the lift tile) for the throws
+    const CASES = [['sla_rocks_fall', 0], ['sla_get_over_here', 0], ['sla_personal_space', 1], ['sla_air_mail', 1]];
+    [0, 1].forEach(function (bonus) {
+      u.rangeBonus = bonus;
+      CASES.forEach(function (c) {
+        [1, 2, 3].forEach(function (lv) {
+          const n = DD.Targeting.range(u, DD.getSkill(c[0]), lv)[1] - c[1];
+          const d = desc(c[0], lv, u);
+          t.ok(new RegExp('up to ' + n + ' tile').test(d), c[0] + ' L' + lv + ' with +' + bonus + ' range: "up to ' + n + '" (' + d + ')');
+        });
+      });
+    });
+    u.rangeBonus = 0;
+    // the Mitts still count, in a fight and on a codex card (a RunHero has no range bonus to ask)
+    u.items = ['sla_mitts'];
+    t.ok(/up to 4 tiles/.test(desc('sla_personal_space', 1, u)), 'Mitts in a fight: Personal Space I throws 4 (' + desc('sla_personal_space', 1, u) + ')');
+    u.items = [];
+    // Get Over Here with +2 range (two range items): a foe two tiles further still lands next to him ("pull it next to you")
+    const g = fight({ slate: { x: 1, y: 4, skills: ['sla_get_over_here'] }, enemies: [{ id: 'test_grunt', x: 7, y: 4 }, { id: 'test_grunt', x: 8, y: 8 }] });
+    g.u.rangeBonus = 2;
+    const foe = at(7, 4);
+    t.eq(use(g.u, 'sla_get_over_here', 7, 4), true, 'Get Over Here I reaches 6 tiles with +2 range');
+    t.ok(foe.x === 2 && foe.y === 4, 'and pulls the foe all the way next to him (' + foe.x + ',' + foe.y + ')');
+    noErrors(t, 'range texts', p0);
+  });
+
+  T.suite('hero_slate: finish — move 4 (audit-8: the weakest hero was too slow to reach the fight in acts 2-3)', function (t) {
+    const h = DD.getHero('slate');
+    t.eq(h.stats.mov, 4, 'Slate moves 4 (was 3)');
+    t.ok(h.stats.init === -2 && h.stats.hp === 32 && h.stats.armor === 1 && h.flags.immovable === true, 'the rest of the golem is unchanged (init −2, 32 HP, armor 1, immovable)');
+    const f = fight({ slate: { x: 1, y: 4, level: 1 }, enemies: [{ id: 'test_grunt', x: 8, y: 8 }] });
+    t.ok(DD.Combat.move(f.u, 5, 4) && f.u.x === 5, 'he walks 4 tiles in one move (1,4 → 5,4)');
+  });
+
+  // ---- finish review (Nov 14): audit-7, the engine's cantMoveNext asks Grappled when the hold ends ---------------------
+  T.suite('hero_slate: finish review — Grappled tells predictions when the hold ends (shading / AutoPlay danger, audit-7)', function (t) {
+    const p0 = DD.problems.length;
+    [[1, false], [3, true]].forEach(function (c) {
+      const lv = c[0];
+      const f = fight({ slate: { x: 2, y: 4, skills: [{ id: 'sla_hold_still', level: lv }] }, enemies: [{ id: 'test_grunt', x: 3, y: 4 }, { id: 'test_grunt', x: 8, y: 8 }] });
+      const g = at(3, 4);
+      g.hp = g.maxHp = 200;
+      t.eq(use(f.u, 'sla_hold_still', 3, 4), true, 'Hold Still ' + lv + ' grabs the grunt on his turn');
+      t.ok(has(g, 'sla_grappled') && DD.Act.cantMoveNext(g), 'L' + lv + ' grab turn: the grunt\'s next turn is a held one (predicted)');
+      pass();
+      t.ok(DD.Combat.isTurnOf(f.u) && has(g, 'sla_grappled'), 'L' + lv + ': Slate\'s next turn, the grunt still held');
+      t.eq(DD.Act.cantMoveNext(g), c[1], 'L' + lv + ' next turn: ' + (c[1] ? 'the hold outlasts this turn, so its next turn is still held' : 'the hold ends with this turn, so the grunt is predicted free'));
+      pass();
+      t.eq(has(g, 'sla_grappled'), c[1], 'L' + lv + ': the prediction came true (held at its turn: ' + has(g, 'sla_grappled') + ')');
+    });
+    noErrors(t, 'grappled heldThrough', p0);
+  });
+})();

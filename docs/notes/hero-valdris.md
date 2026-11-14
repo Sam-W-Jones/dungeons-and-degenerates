@@ -280,3 +280,14 @@ errors. (Baseline before the review: 790 suites, 7 failing sections, the same ow
   true`, preview "UP! 5 HP", 5 HP, 1 AP), then on the standing knight it sheds Weak and heals 5; Percussive Maintenance
   and Hammer of Faith at a barrel (preview = reality, no push, AP paid).
 - **Requests**: none.
+
+## Playtest fixes (Nov 12)
+
+- **text-tone-25 (polish, fixed)**: the skill is named "Forge Armor" (US spelling, like the Armor stat and slot it sits
+  next to; it grants Block). The id stays `val_forge_armour`; the barks and blurb keep his British voice. DESIGN's
+  mentions are the docs owner's (deferred).
+- **heroes-v1 (fixed)**: the target-range numbers in his descs follow his real reach (range items, Dazzle) through `reach()` → `DD.Targeting.reach`; details and the cross-hero suite in hero-kiri.md.
+
+## Review (finish, Nov 14) — REVIEWER
+
+- D1: Anvil Drop now breaks a crate for exactly its 🔨 number and stuns nothing (a spell: "Valdris turns Anvil Drop on the Crate…"); his Forge Armour on Slate gives Block and, as Short Fuse now says, no Rage.

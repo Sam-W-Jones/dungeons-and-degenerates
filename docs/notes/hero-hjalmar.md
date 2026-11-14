@@ -1,6 +1,6 @@
 # HERO — Hjalmar, the Menace (notes)
 
-Files: `js/data/heroes/hjalmar.js`, `tests/content/hero_hjalmar.js` (22 suites `hero_hjalmar: …`), this file.
+Files: `js/data/heroes/hjalmar.js`, `tests/content/hero_hjalmar.js` (25 suites `hero_hjalmar: …`), this file.
 Run: `bash tools/test.sh "suite=hero_hjalmar&isolate=heroes/hjalmar,hero_hjalmar"` and `bash tools/test.sh "suite=content:&isolate=heroes/hjalmar,hero_hjalmar"`.
 Looks: `bash tools/shot.sh "debug=1&fixtures=1&isolate=heroes/hjalmar,hero_hjalmar&screen=gallery&gallery=hjalmar" .tmp/hjalmar/g.png 1280x720 4000`,
 in combat: `bash tools/shot.sh "debug=1&fixtures=1&isolate=heroes/hjalmar,hero_hjalmar&screen=combat&party=hjalmar,test_knight,test_cleric,test_mage&encounter=test_a1_elite&seed=4&autoplay=1&fast=1" .tmp/hjalmar/c1.png 1280x720 9000`.
@@ -79,7 +79,9 @@ value, like Buga's fines). Bait and Switch (quick pass): the trap under him × t
 Coconut Toss knocks its target 1 tile away from him, e.g. into one of his traps), `hja_pomade` Greased Fur Pomade (rare
 trinket: +1 move, he can't be opportunity-attacked — `modifyOpportunity` cancel, pure), `hja_prop_sack` Bottomless Sack of
 Props (legendary armor: +6 max HP, the first trap he sets each turn costs 0 AP — `modifyCost` keyed on
-`unit.data.hjaTrapTurn !== state.turn`, set when a trap is placed). No `stats.block` anywhere (v2).
+`unit.data.hjaTrapTurn !== state.turn`, set when a trap is placed), `hja_canned_laughter` Canned Laughter (rare trinket,
+D9 Nov 12: he heals 4 HP whenever a foe springs one of his traps; the rule lives in `spring()`, see "Sustain (Nov 12)").
+No `stats.block` anywhere (v2).
 
 **Sprite**: humanoid, `tiny` build, scale 0.92 (a small monkey next to the party), brown fur skin, `rat` ears in fur with
 pale insides (they read as round monkey ears), a red organ-grinder tunic, a long `cat` tail in fur, no base eyes / mouth.
@@ -128,7 +130,7 @@ of sight is now checked on a foe in range behind a wall (it was out of range bef
 
 ## Public API (for tests / other content)
 
-`DD.Hjalmar = { KINDS, TRAP_HYPE, SLIPPED, isTrap(obj), traps(owner?) → [tiles], canTrapAt(p) → true | reason,
+`DD.Hjalmar = { KINDS, TRAP_HYPE, SLIPPED, CANNED ('hja_canned_laughter'), CANNED_HEAL (4), isTrap(obj), traps(owner?) → [tiles], canTrapAt(p) → true | reason,
 setTrap(owner, x, y, kind, opts) → obj | null, spring(x, y, foe) → bool, springOn(tile, unit) → bool, gloveTiles(ctx),
 trapValue(ctx, kind), crossChance(foe, p, party) }`. Kinds: `peel`, `bear` (`{ snap }`), `cushion` / `paint` (`{ turns }`),
 `boom` (`{ boom }`), `glove` (`{ push, dir }`).
@@ -273,3 +275,94 @@ up; a rotatable map. Engine rules: `docs/notes/rules.md` "v2 requests".
   knock-back, 1 AP); the glove arrow at 0 / 90 / 180 / 270 / 37° equals `DD.Iso.local`, yaw 0 is the classic step and
   180° points the other way.
 - **Requests**: none.
+
+## Sustain (Nov 12) — Canned Laughter (D9; spec `.tmp/wf13/sustain-spec.md` §1.5 + §2.1, owner HERO-TRIO)
+
+The user (D9): no generic heal for every party (the First-Aid Fanny Pack left the starting kit); sustain comes from each
+hero's own verbs, spread over skills, items and passives, "without overloading each character with a self-heal".
+Hjalmar's is the **item** delivery in that spread: the prankster monkey laughs at his own pratfalls, and laughter is the
+best medicine. It is optional loot on purpose: his downs are average (0.25 a fight) and his weakness (0.44x the median in
+the no-pack sim) is output, not sustain, so his kit doesn't change.
+
+- **New hero item** `hja_canned_laughter` Canned Laughter 🥫: rare trinket, `hero: 'hjalmar'`, `stats: {}`, `hooks: {}`.
+  Desc `Whenever a foe springs one of Hjalmar's traps, he heals 4 HP.` (`'… he heals ' + CANNED_HEAL + ' HP.'`, 61
+  chars). Flavor `A tin can of recorded laughter. Laughter is the best medicine, says Hjalmar. Josiah declined to
+  comment.` (104 chars). Ordinary hero-item loot and shop stock (default weight; only while he is in the party). It
+  competes with the Greased Fur Pomade for the trinket slot and pairs with the Bottomless Sack of Props.
+- **Mechanics** in `spring()` (the one place every trap goes off), inside the `owner.defId === HERO` block after the
+  Monkey Business Hype: `if (active(owner))` the trap bark, then, if he wears it, a `🥫 HA-HA-HA!` pop-up (banana yellow)
+  and `A().heal(owner, owner, CANNED_HEAL)`; when that heals more than 0, the log line `Hjalmar laughs so hard at the
+  pratfall that it heals him.` (after Act.heal's own `Hjalmar heals 4 HP.`).
+  - One heal per trap sprung: a Firecracker that hits 2 foes is one spring; two traps sprung are two heals.
+  - It fires on any turn (traps mostly spring on the foes' turns) and for any way in: walking, pushed, pulled, swapped.
+  - A downed Hjalmar is not `active`: his trap still bites and the crowd still cheers (+5 Hype), but he heals nothing and
+    stays down (never a revive). An ownerless trap heals nobody.
+- Constants `CANNED = 'hja_canned_laughter'`, `CANNED_HEAL = 4`, both exported on `DD.Hjalmar`. Header comment: "4 hero
+  items, a loading tip".
+- **Loading tip** (his file, `DD.registerNarration('tips', …)`): `Wearing Canned Laughter, Hjalmar heals every time a foe
+  springs one of his traps. Laughter is the best medicine.`
+- AutoPlay: nothing. It is a passive rider on springs; AutoPlay already values setting traps (`trapValue`).
+- Expected (spec §1.5): about 0.7 springs a normal fight and 1.4 an elite fight under AutoPlay, so about 3-6 HP a fight
+  when worn. Balance pass 3 measures its worn rate; no fallback (it is optional loot).
+
+**Tests**: `ITEMS` gets `hja_canned_laughter` (registry: he/him in its texts, flavor ≤ 120, no stats.block); "four hero
+items" (was three; the rare + legendary check stays); new suite `hero_hjalmar: Canned Laughter — he heals 4 HP whenever a
+foe springs one of his traps (D9)` (24 assertions): the exports; a rare trinket only he wears, no stats, the exact desc,
+desc and flavor ≤ 120; worn, hurt by 10, a grunt pushed onto his bear trap heals him exactly 4 (the trap still snaps and
+roots), both log lines, the pop-up over him, Monkey Business still +5; not worn: 0; a grunt walking in on its own turn
+heals him 4; one Firecracker hitting 2 foes heals once, a second trap heals again (+8 in all); downed: the trap springs
+and pays Hype, he heals nothing and stays down; full HP: no overheal, no log line; hurt by 2: capped at max; an ownerless
+trap heals nobody; the tip (≤ 140, no she/her). Monkey Business (Hype) is unchanged and its suite passes as written.
+
+**Deviations**: none from the spec's mechanics or texts. The log line uses `owner.name` (it reads `Hjalmar …`). The
+Canned Laughter cases are a suite of their own instead of extra lines in the items suite (whose title names the three
+older items).
+
+**Requests**: none.
+
+## Review (sustain, Nov 12) — adversarial review: the user's intent and the rules text (ADVERSARIAL REVIEWER role)
+
+- **Verified** (suites; scratch harness `.tmp/rev13/rt.js`: real encounters, real allies, Canned Laughter worn; 9 / 7 / 7
+  fights at hero level 2 / 4 / 6): one heal of 4 per trap a foe springs (a two-foe Firecracker is one), on any turn,
+  never for a downed Hjalmar, nothing from an ownerless trap; the item desc ("Whenever a foe springs one of Hjalmar's
+  traps, he heals 4 HP."), the `🥫 HA-HA-HA!` pop-up, the log and the tip agree. 0.9 / 1.3 / 4.6 HP a fight while worn
+  (the spec's estimate: about 3-6). It is the item delivery of D9's spread: optional, hero-locked rare loot.
+- **Fixed**: nothing. Pronouns: he / him; Josiah (he) in the flavor.
+
+## Review (sustain, Nov 12) — engine, AutoPlay and tests (ADVERSARIAL REVIEWER role)
+
+Probes in a scratch page (`.tmp/rev-engine/probe.html` + `probe.js`, run by `.tmp/rev-engine/run.sh`, which takes a
+Chrome slot like `tools/test.sh`): real act 1 encounters through `DD.Encounter.build` + `DD.AutoPlay.runBattle`, parties
+with Hjalmar wearing Canned Laughter, Basanos, Sparrow and Slate (Stress Ball), levels 1 and 3.
+
+**Verified (by running code)**
+- Dry runs and previews never heal or log: every real "laughs so hard" line had a real (non-simulated) `DD.Act.heal` on
+  Hjalmar behind it, over 20 AutoPlay fights; a party push onto his trap (Basanos' Shoulder Check) previews his +4
+  (`perUnit[hjalmar].heal === 4`) and the preview leaves HP, the trap, the log and Hype untouched; the real push heals 4.
+- Loot and shops: with Hjalmar in the party a rare roll gives Canned Laughter about 1 time in 27 (22/600), shops stock
+  it (10/200); never without him. Save / load keeps it worn, and a fight from the reloaded run has it on his unit.
+
+**Fixed**
+1. **AutoPlay never valued the item's play pattern.** The spec (§5) says the dry run of the triggering action sees the
+   heal, which holds for a party push onto a trap, but most traps spring on a foe's own turn, where no dry run runs:
+   `trapValue` (the trap skills' `autoplayValue`) had no term for it, so wearing the item changed nothing about where or
+   whether he set traps. `trapValue` now adds, while he wears it and is hurt, the chance that any foe springs the trap ×
+   the heal priced the way AutoPlay prices heals (`(1 − miss) × min(4, missing) × (1.5 below half HP, else 0.8)`), before
+   the "another trap is right there" discount and the cap of 14. At full HP or without the item: unchanged. Regression
+   (each case fails without the fix): `hero_hjalmar: review (sustain) — AutoPlay prices Canned Laughter's heal when he
+   sets a trap; previews show it and leak nothing; loot, shops and saves` (exact deltas: missing 3 → + chance × 3 × 0.8;
+   below half → + chance × 4 × 1.5; full HP → no change; plus the preview, loot / shop and save / load cases above).
+   Deviation from spec §5 ("Canned Laughter: no AutoPlay"), recorded here.
+
+**Test runs**: isolated `suite=hero_hjalmar&isolate=hjalmar,basanos,items,consumables`: 26 suites, 996 ok, 0 failures
+(before the loot / save cases were added; the review suite alone: 19 ok). Full run: see `docs/notes/hero-slate.md`
+"Review (sustain) — engine, AutoPlay and tests".
+
+## Finish (Nov 14) — the playtest findings held for the sustain build (FIX: CONTENT)
+
+- **heroes-2 / desc-sweep-7 / review-open-6 (fixed)**: with the Coconut of Unusual Size, Coconut Toss reads "Deal 4
+  damage to a foe within 4 and knock it 1 tile back (Coconut of Unusual Size)."
+- **heroes-v1 / desc-sweep-5 / review-open-7 (fixed)**: every "within N" (Coconut Toss, the six traps, Swing Away,
+  Bait and Switch, Prank War's aim) prints `DD.Targeting.reach`.
+- **text-tone-24 / review-open-11 (fixed)**: Pickpocket says "it is Weakened through its next turn" (the status's name).
+- Suite `hero_hjalmar: finish — texts follow his items …` covers all three. D7: two swap barks. Numbers: none changed.

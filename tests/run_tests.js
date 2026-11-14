@@ -788,6 +788,7 @@
       t.eq(levels(), lv0, 'levels unchanged');
       t.ok(!/XP/.test(fd.text) && /levels up/.test(fd.text), 'its text says so without XP: ' + fd.text);
       t.eq(S().stats.levelUps, 0, 'stats.levelUps unchanged');
+      t.eq(S().stats.combats, 0, 'playtest first-hour-3: a lost objective is not a fight won (stats.combats 0)');
       // treasure: not a fight
       newRun(PARTY, 'kind-treasure');
       travelTo('treasure');
@@ -797,6 +798,7 @@
       travelTo('combat');
       eng.end('defeat', function (units) { units.forEach(function (u) { u.hp = 0; u.downed = true; }); });
       t.ok(S().over === 'defeat' && levels() === '1,1,1,1', 'a TPK: game over, no level-up');
+      t.eq(S().stats.combats, 0, 'playtest first-hour-3: the TPK fight is not counted as won ("Fights won 0")');
     });
   });
 
@@ -1085,8 +1087,9 @@
         const kind = ['normal', 'elite', 'boss'][i % 3], act = (Math.floor(i / 3) % 3) + 1;
         const r = DD.Rewards.combat(kind, act, DD.RNG('loot' + i), s);
         const types = r.choices.map(function (c) { return c.type; });
-        const lo = kind === 'boss' ? 80 : kind === 'elite' ? 35 : 12 + 6 * (act - 1);
-        const hi = kind === 'boss' ? 100 : kind === 'elite' ? 50 : 20 + 6 * (act - 1);
+        // the gold rows are DD.Balance knobs (sustain refit 3: bosses 50-70, no per-act growth; DESIGN §5)
+        const G = DD.Balance.gold, per = (G.fightPerAct[kind] || 0) * (act - 1);
+        const lo = G.fight[kind][0] + per, hi = G.fight[kind][1] + per;
         if (r.choices.length !== 3 || types.some(function (x, k) { return types.indexOf(x) !== k; })) { ok = false; t.log('bad choices ' + json(types)); }
         if (r.gold < lo || r.gold > hi) { ok = false; t.log(kind + ' act ' + act + ' gold ' + r.gold); }
         if (r.levelUpCount !== 1 || 'xp' in r) ok = false;
@@ -1149,6 +1152,50 @@
     });
   });
 
+  // [finish desc-sweep-9] a gold card says what the pick adds: Run.addGold pays gold Blessings (Trust Fund) on top
+  T.suite('run: finish — desc-sweep-9: a gold card states the gold the party gets (Trust Fund included), exactly', function (t) {
+    return sandbox(t, function () {
+      DD.registerPassive({ id: 'test_tmp_rp_allowance', name: 'Test Allowance', icon: '💰', rarity: 'common', levels: [{ pct: 10 }, { pct: 15 }, { pct: 20 }],
+        runMods: function (L) { return { gold: L.pct / 100 }; }, desc: function (L) { return '+' + L.pct + '% gold.'; } });
+      newRun(PARTY, 'gold-card');
+      const s = S();
+      s.party.forEach(function (rh) { rh.passives = []; });   // the sandbox party may start with Blessings: none here
+      function card(n) { return DD.Rewards.combat('normal', 1, DD.RNG('gc'), s, {}).choices.filter(function (c) { return c.type === 'gold'; })[0] || null; }
+      const pile = function (n) { return DD.Rewards.goldReward ? DD.Rewards.goldReward(n) : null; };
+      t.ok(typeof DD.Run.goldPreview === 'function' && DD.Run.goldPreview(35) === 35, 'no Blessing: Run.goldPreview(35) = 35');
+      t.eq(pile(35).desc, 'Gain 35 gold.', 'no Blessing: "Gain 35 gold."');
+      [[1, 38], [3, 42]].forEach(function (c) {
+        s.party.forEach(function (rh) { rh.passives = []; });
+        t.ok(DD.Run.addPassive(0, 'test_tmp_rp_allowance', c[0]), 'Allowance ' + c[0] + ' on hero 1');
+        s.goldCarry = 0;
+        const r = pile(35), g0 = s.gold;
+        const n = DD.Rewards.apply(r);
+        t.eq(r.desc, 'Gain ' + c[1] + ' gold (35 + ' + (c[0] === 1 ? 10 : 20) + '% from Blessings).', 'level ' + c[0] + ': the card reads "' + r.desc + '"');
+        t.ok(n.ok && s.gold - g0 === c[1], 'level ' + c[0] + ': the pick adds exactly ' + c[1] + ' (' + (s.gold - g0) + ', "' + n.text + '")');
+      });
+      t.ok(card() === null || /^Gain \d+ gold/.test(card().desc), 'combat reward screens build the same card');
+      // [finish review] an event hint states the income too ("Gain 50 gold" pays 55 with Allowance I); costs stay as written
+      DD.registerEvent({ id: 'test_tmp_ev_gold', title: 'Gold Hint Test', icon: '💰', act: 1, text: 'Gold.', choices: [
+        { label: 'Take it.', hint: 'Gain 50 gold.', resolve: function (api) { return 'Got ' + api.gold(50) + ' gold.'; } },
+        { label: 'Bet.', hint: 'Pay 25 gold and roll: 11-19 pays 50 gold, a natural 20 pays 100 (15 gold each if full).', resolve: function () { return 'No.'; } },
+      ] });
+      try {
+        s.party.forEach(function (rh) { rh.passives = []; });
+        DD.Run.openEvent('test_tmp_ev_gold', null, { noShow: true });
+        let ev = DD.Run.currentEvent();
+        t.eq(ev.choices[0].hint, 'Gain 50 gold.', 'no Blessing: the hint as written');
+        DD.Run.addPassive(0, 'test_tmp_rp_allowance', 1);
+        s.goldCarry = 0;
+        ev = DD.Run.currentEvent();
+        t.eq(ev.choices[0].hint, 'Gain 55 gold.', 'Allowance I: "' + ev.choices[0].hint + '"');
+        t.eq(ev.choices[1].hint, 'Pay 25 gold and roll: 11-19 pays 55 gold, a natural 20 pays 110 (16 gold each if full).', 'payouts follow, the stake does not: "' + ev.choices[1].hint + '"');
+        const g0 = s.gold;
+        DD.Run.chooseEventOption(0);
+        t.eq(s.gold - g0, 55, 'the choice adds what its hint said');
+      } finally { delete DD.defs.events.test_tmp_ev_gold; }
+    });
+  });
+
   T.suite('run: rewards — applying every reward type, one pick per screen', function (t) {
     return sandbox(t, function (eng) {
       newRun(PARTY, 'apply');
@@ -1156,8 +1203,11 @@
       const A = DD.Rewards.apply;
       t.ok(A({ type: 'gold', amount: 30 }).ok && s.gold === 90, 'gold');
       s.party[0].hp = 5;
-      const healed = A(DD.Rewards.healReward());
-      t.ok(healed.ok && s.party[0].hp === 5 + Math.round(24 * 0.3), 'heal 30%');
+      // Mystery Stew heals DD.Balance.heal.reward of max HP (0.35 since sustain refit 3) and its desc says so
+      const stew = DD.Rewards.healReward(), frac = DD.Balance.heal.reward;
+      t.ok(stew.desc.indexOf(Math.round(frac * 100) + '%') >= 0, 'Mystery Stew desc names its ' + Math.round(frac * 100) + '%: ' + stew.desc);
+      const healed = A(stew);
+      t.ok(healed.ok && s.party[0].hp === 5 + Math.round(24 * frac), 'heal ' + Math.round(frac * 100) + '%');
       const it = A(DD.Rewards.itemReward('rt_w_rare', s));
       t.ok(it.ok && it.equippedTo === 0 && s.party[0].items.weapon === 'rt_w_rare', 'item auto-equipped into an empty slot');
       const cur = A(DD.Rewards.itemReward('rt_t_cursed', s));

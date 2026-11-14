@@ -2,11 +2,13 @@
  * Basanos the Mostly Housebroken, human werewolf (he/him, available from the start): melee in two forms.
  *   Human  — a disciplined swordsman: Silvered Sword basic; hits, shoves, taunts and bodyguarding.
  *   Wolf   — a savage skirmisher: +2 move, Claw basic (Bleed); rends, pounces, howls and bites.
- * Transform (a skill) swaps the forms. Skills are tagged 'human' or 'wolf'; the other form's are locked (canUse).
- * Passive Hair Trigger: damage that leaves him below half HP turns him into the werewolf for free.
+ * Transform (a skill) swaps the forms; his first Transform each turn, either way, heals him (MEND 2 / 3 / 4: the change
+ * knits him back together). Skills are tagged 'human' or 'wolf'; the other form's are locked (canUse).
+ * Passive Hair Trigger: damage that leaves him below half HP turns him into the werewolf for free (it never heals).
  * The form is the status bas_wolf (the source of truth) plus bookkeeping in unit.data.bas: the move bonus, the basic
- * attack slot and the sprite override (unit.sprite logically, unit.vis.sprite in step with FX playback).
- * Registers: hero basanos, 13 skills (bas_*), status bas_wolf, 3 hero items. Test / debug API: DD.Basanos.
+ * attack slot, the sprite override (unit.sprite logically, unit.vis.sprite in step with FX playback) and the turn his
+ * mend was spent.
+ * Registers: hero basanos, 13 skills (bas_*), status bas_wolf, 3 hero items, loading tips. Test / debug API: DD.Basanos.
  */
 (function () {
   'use strict';
@@ -17,8 +19,11 @@
   const SWORD = 'bas_sword', CLAW = 'bas_claw', TRANSFORM = 'bas_transform';
   const WOLF_MOV = 2;                  // werewolf form: +2 move
   const COLLAR = 'bas_flea_collar', COAT = 'bas_wolfsbane_coat', MOONFANG = 'bas_moonfang';
-  const COAT_HEAL = 6;
+  const COAT_BLOCK = 5;                // Wolfsbane-Lined Coat: Block when Transform turns him back into a human
   const CLAW_LV = [{ dmg: 4, bleed: 1 }, { dmg: 5, bleed: 1 }, { dmg: 5, bleed: 2 }];   // Claw by Transform level
+  // Transform's heal by level: his first Transform each turn (D9: heal on transform). Sustain refit: 3/4/5 -> 2/3/4, the
+  // spec's first fallback: with the Flea Collar (a free Transform each turn) he healed ~13 HP a regular fight (cap ~10)
+  const MEND = [2, 3, 4];
   const MOON = '#ff5a4f';
 
   // ---- helpers ------------------------------------------------------------------------------------------
@@ -41,7 +46,7 @@
   }
   function dataOf(u) {
     const d = u.data || (u.data = {});
-    return d.bas || (d.bas = { wolf: false, mov: 0, collar: -1 });
+    return d.bas || (d.bas = { wolf: false, mov: 0, collar: -1, mend: -1 });
   }
   /** Read-only view of his form bookkeeping (queries must not create it). */
   function peek(u) { return (u && u.data && u.data.bas) || null; }
@@ -51,6 +56,12 @@
   function formOf(def) {
     const tags = (def && def.tags) || [];
     return tags.indexOf('wolf') >= 0 ? 'wolf' : tags.indexOf('human') >= 0 ? 'human' : null;
+  }
+  /** A skill's target reach for this user: the base number plus his range items (DD.Targeting.reach; playtest heroes-v1). */
+  function reach(user, id, L, base) {
+    const d = DD.getSkill(id);
+    if (!user || !d || !DD.Targeting || typeof DD.Targeting.reach !== 'function') return base;
+    return DD.Targeting.reach(d, L, user, base);
   }
 
   // ---- forms ------------------------------------------------------------------------------------------
@@ -133,10 +144,8 @@
     DD.FX.sound('roar');
     DD.FX.text(u, why === 'trigger' ? 'HAIR TRIGGER!' : 'AWOOO!', { color: '#e8e2ff', size: why === 'trigger' ? 18 : 16 });
     A().log(why === 'trigger' ? u.name + ' is hurt and the wolf gets out (Hair Trigger).' : u.name + ' turns into the werewolf.', 'hero');
-    if (why === 'trigger') {
-      A().bark(u, 'trigger');
-      if (hasItem(u, COAT)) A().heal(u, u, COAT_HEAL);
-    } else if (why === 'skill') A().bark(u, 'wolf');
+    if (why === 'trigger') A().bark(u, 'trigger');
+    else if (why === 'skill') A().bark(u, 'wolf');
     return true;
   }
   function becomeHuman(u) {
@@ -169,12 +178,20 @@
     hairTrigger(u);
   }
 
-  /** canUse gate of a form-tagged skill. */
+  /** Transform is socketed (it can be forgotten at a level-up: then only Hair Trigger / Blood Moon change his form). */
+  function hasTransform(u) {
+    return !!u && Array.isArray(u.skills) && u.skills.some(function (sl) { return sl && sl.id === TRANSFORM; });
+  }
+  /**
+   * canUse gate of a form-tagged skill. The lock names the way out he really has (playtest heroes-1: "Transform first"
+   * once he had forgotten Transform): without it the wolf only gets out by Hair Trigger or Blood Moon, and the man
+   * only comes back next fight (every fight starts him human).
+   */
   function gate(form) {
     return function (ctx) {
-      const wolf = isWolf(ctx.user);
-      if (form === 'wolf' && !wolf) return 'Werewolf form only (Transform first).';
-      if (form === 'human' && wolf) return 'Human form only (Transform first).';
+      const wolf = isWolf(ctx.user), tf = hasTransform(ctx.user);
+      if (form === 'wolf' && !wolf) return tf ? 'Werewolf form only (Transform first).' : 'Werewolf form only (no Transform socketed: Hair Trigger or Blood Moon lets the wolf out).';
+      if (form === 'human' && wolf) return tf ? 'Human form only (Transform first).' : 'Human form only (no Transform socketed: he is human again next fight).';
       return true;
     };
   }
@@ -231,7 +248,16 @@
     });
     return best;
   }
-  /** Transform's aiScore: what the other form could do with the AP left, minus what this one can do now. */
+  /** True when his mend is already spent this turn (pure: never creates his bookkeeping). */
+  function mendSpent(u) {
+    const s = S(), d = peek(u);
+    return !!s && !!d && d.mend === s.turn;
+  }
+  /**
+   * Transform's aiScore: what the other form could do with the AP left, minus what this one can do now; plus, in
+   * AutoPlay's quick pass only, the unspent mend (the exact pass's dry run already sees the real heal). The level key
+   * is `mend`, not `heal`, so the quick pass's generic heal term never credits a mend he already spent this turn.
+   */
   function transformScore(ctx) {
     const u = ctx.user;
     if (!active(u) || !DD.Combat.state) return 0;
@@ -241,7 +267,11 @@
     let then = formValue(u, !wolf, (u.ap || 0) - cost);
     // below half HP the next hit turns him right back (Hair Trigger)
     if (wolf && u.hp * 2 < u.maxHp) then *= 0.5;
-    return Math.max(0, then - now - 2);
+    const base = Math.max(0, then - now - 2);
+    if (ctx.autoplay || mendSpent(u)) return base;
+    // outside the max(0, …): form friction must not swallow the heal
+    const mend = (ctx.L && ctx.L.mend) || MEND[transformLevel(u) - 1] || 0, miss = u.maxHp - u.hp;
+    return base + (miss > 0 ? Math.min(mend, miss) * (miss > u.maxHp / 2 ? 1.5 : 0.8) : 0);
   }
 
   // ---- sprites -------------------------------------------------------------------------------------------
@@ -366,17 +396,43 @@
   DD.registerSkill({
     id: TRANSFORM, name: 'Transform', owner: HERO, icon: '🌕', kind: 'utility', tags: ['shapeshift'],
     ap: 1, cooldown: 0,
-    levels: CLAW_LV.map(function (c) { return { claw: c.dmg, bleed: c.bleed }; }),
+    // `mend`, not `heal`: AutoPlay's quick pass would credit a `heal` even once it is spent (transformScore prices it)
+    levels: CLAW_LV.map(function (c, i) { return { claw: c.dmg, bleed: c.bleed, mend: MEND[i] }; }),
     target: { type: 'self' },
+    // "first Transform", not "first switch": a Hair Trigger switch on his own turn is a switch, but it neither heals nor
+    // spends the mend (review, sustain); the Flea Collar words its free Transform the same way
     desc: function (L, user) {
-      return 'Switch between human and werewolf. Werewolf: +' + WOLF_MOV + ' move; basic attack Claw (' + L.claw + ' damage, ' +
-        bleedN(L.bleed, user) + ' Bleed).';
+      return 'Switch between human and werewolf. Your first Transform each turn heals you ' + L.mend + ' HP' +
+        (mendSpent(user) ? ' (used this turn)' : '') + '. Werewolf: +' + WOLF_MOV + ' move; basic attack Claw (' + L.claw +
+        ' damage, ' + bleedN(L.bleed, user) + ' Bleed).' +
+        // [playtest desc-sweep-7] the Wolfsbane-Lined Coat changes what this skill does, so its text says so
+        (hasItem(user, COAT) ? ' Turning back into a human gives you ' + COAT_BLOCK + ' Block (Wolfsbane-Lined Coat).' : '');
     },
+    // [playtest heroes-1] the level-up forget picker shows this on Transform's card (DD.UI.chooseSkillSlot)
+    forgetWarning: 'Both his forms hang on this. Without Transform the wolf only gets out by Hair Trigger or Blood Moon, ' +
+      'and then stays out (human skills locked) until the fight ends. Vet bills not included.',
     flavor: 'It is a medical condition. Please stop clapping.',
     execute: function (ctx) {
       const u = ctx.user;
       if (!active(u)) return;
-      if (isWolf(u)) becomeHuman(u); else becomeWolf(u, 'skill');
+      const s = S(), d = dataOf(u);
+      const mend = !!s && d.mend !== s.turn;
+      const human = isWolf(u);
+      const switched = human ? becomeHuman(u) : becomeWolf(u, 'skill');
+      if (!switched || !active(u)) return;
+      if (mend) {
+        d.mend = s.turn;                     // the first Transform spends it, even at full HP (the desc says "first")
+        if (u.hp < u.maxHp) {
+          DD.FX.text(u, 'Good as new-ish!', { color: '#bff5c8', size: 15 });
+          if (A().heal(u, u, ctx.L.mend) > 0) A().log('The change knits ' + u.name + ' back together. His trousers are not so lucky.', 'hero');
+        }
+      }
+      // Wolfsbane-Lined Coat: only a chosen switch back to the man (Block resets at his turn start, each switch costs AP)
+      if (human && hasItem(u, COAT)) {
+        A().addBlock(u, COAT_BLOCK);
+        DD.FX.text(u, 'Coat on.', { color: '#c9d4ff', size: 14 });
+        A().log(u.name + ' buttons the wolfsbane coat back up. It itches. It works.', 'hero');
+      }
     },
     aiScore: transformScore,
   });
@@ -443,15 +499,29 @@
     id: 'bas_step_in', name: 'Step In', owner: HERO, icon: '🔁', kind: 'move', tags: ['human', 'swap', 'block'],
     ap: 1, cooldown: 2,
     levels: [{ range: 3, block: 4 }, { range: 4, block: 5 }, { range: 5, block: 6 }],
-    target: { type: 'unit', range: function (L) { return [1, L.range]; }, los: false, filter: 'ally' },
+    // [playtest heroes-4] the other swaps' rules (Human Shield, the swap move; lead decision D2): an immovable ally can't
+    // be swapped, and he never lands on a pit or lava a flying ally hovers over
+    target: { type: 'unit', range: function (L) { return [1, L.range]; }, los: false, filter: 'ally',
+      canTarget: function (ctx) {
+        const a = ctx.targetUnit, u = ctx.user;
+        if (!a || !u) return 'Pick an ally.';
+        if (A().isImmovable(a) || A().isImmovable(u)) return 'Won\'t budge.';
+        if (!G().isFlying(u) && (G().isDrop(a.x, a.y) || !G().isWalkable(a.x, a.y, u))) return 'Basanos can\'t stand there.';
+        if (G().hazardAt(a.x, a.y, u)) return 'Basanos would rather not stand in THAT.';
+        return true;
+      } },
     canUse: gate('human'),
-    desc: function (L) { return 'Human form: swap places with an ally within ' + plural(L.range, 'tile') + ' and gain ' + L.block + ' Block.'; },
+    desc: function (L, user) {
+      const n = reach(user, 'bas_step_in', L, L.range);
+      return 'Human form: swap places with an ally within ' + plural(n, 'tile') + ' and gain ' + L.block + ' Block.';
+    },
     flavor: 'I\'ll take this one. You go stand somewhere less stabby.',
     execute: function (ctx) {
       const u = ctx.user, a = ctx.targetUnit;
       if (!active(u) || !active(a) || a === u) return;
+      if (!A().swap(u, a, { src: u })) { DD.FX.text(u, 'Won\'t budge!', { color: '#dddddd', size: 13 }); return; }
       DD.FX.text(u, 'Behind me!', { color: '#ffe9c4', size: 15 });
-      if (A().swap(u, a, { force: true, src: u }) && active(u)) A().addBlock(u, ctx.L.block);
+      if (active(u)) A().addBlock(u, ctx.L.block);
     },
   });
 
@@ -493,11 +563,13 @@
     levels: [{ dmg: 4, range: 3 }, { dmg: 6, range: 4 }, { dmg: 8, range: 5 }],
     target: {
       type: 'unit', range: function (L) { return [1, L.range]; }, los: true, filter: 'enemy',
-      objects: false,   // a pounce lands next to a foe; he does not leap onto barrels (Claw pops an adjacent one)
+      objects: false,   // a pounce lands next to a foe; he does not leap onto barrels or crates (Claw hits an adjacent one)
       canTarget: function (ctx) { return landingTile(ctx.user, ctx.targetUnit) ? true : 'No room to land.'; },
     },
     canUse: gate('wolf'),
-    desc: function (L) { return 'Werewolf form: leap next to a foe within ' + plural(L.range, 'tile') + ', deal ' + L.dmg + ' damage and Stun it.'; },
+    desc: function (L, user) {
+      return 'Werewolf form: leap next to a foe within ' + plural(reach(user, 'bas_pounce', L, L.range), 'tile') + ', deal ' + L.dmg + ' damage and Stun it.';
+    },
     flavor: 'Good boy! No. NO. Bad— well. Effective.',
     execute: function (ctx) {
       const u = ctx.user, f = ctx.targetUnit;
@@ -676,6 +748,7 @@
       start: ['Everyone stay calm. Especially me.', 'Let\'s do this cleanly. No biting. Hopefully.',
         'I\'ll hold the front. If I start growling, hold it for me.', 'Swords out. Leashes... no. No leashes.',
         'Monsters ahead. Professional courtesy ends here.'],
+      swap: ['Switch with me, {ally}. I\'ll take the bitey end.', 'After you, {ally}. Sorry. Before you. Sorry.'],
       move: ['Coming through. Sorry. Sorry.', 'On it.', 'I smell goblin. Don\'t ask how I know.', 'Pardon me. Mind your toes.',
         'Heel. I mean... I\'m going.'],
       kill: ['Sorry. It had to be done.', 'Clean cut. My mother would be proud.', 'One less monster. Present company excluded.',
@@ -726,7 +799,7 @@
   DD.registerItem({
     id: COAT, name: 'Wolfsbane-Lined Coat', slot: 'armor', rarity: 'rare', icon: '🧥', hero: HERO,
     stats: { hp: 4 },
-    desc: '+4 max HP. When Hair Trigger turns you into the werewolf, heal ' + COAT_HEAL + '.',
+    desc: '+4 max HP. When Transform turns you back into a human, gain ' + COAT_BLOCK + ' Block.',
     flavor: 'Lined with wolfsbane. It itches. That is how he knows it is working.',
     hooks: {},
   });
@@ -739,11 +812,17 @@
     hooks: {},
   });
 
+  // ---- loading-screen tips ----------------------------------------------------------------------------------
+  DD.registerNarration('tips', [
+    'Basanos\'s first Transform each turn knits him back together. Hair Trigger doesn\'t count: he has to mean it.',
+  ]);
+
   // ---- test / debug API ---------------------------------------------------------------------------------------
   DD.Basanos = {
-    WOLF: WOLF, WOLF_MOV: WOLF_MOV, CLAW_LV: CLAW_LV, COAT_HEAL: COAT_HEAL,
+    WOLF: WOLF, WOLF_MOV: WOLF_MOV, CLAW_LV: CLAW_LV, MEND: MEND, COAT_BLOCK: COAT_BLOCK,
     HUMAN_SPRITE: HUMAN_SPRITE, WOLF_SPRITE: WOLF_SPRITE, DIRE_SPRITE: DIRE_SPRITE,
     isWolf: isWolf, becomeWolf: becomeWolf, becomeHuman: becomeHuman, syncForm: syncForm, transformLevel: transformLevel,
-    formOf: formOf, formValue: formValue, transformScore: transformScore, landingTile: landingTile, baseMov: baseMov,
+    formOf: formOf, formValue: formValue, transformScore: transformScore, mendSpent: mendSpent, landingTile: landingTile,
+    baseMov: baseMov,
   };
 })();

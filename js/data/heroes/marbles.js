@@ -10,6 +10,16 @@
 (function () {
   'use strict';
   const DD = window.DD;
+  /**
+   * A range number in a desc as targeting resolves it for this user (range items such as the Yardstick of Reach, Dazzle,
+   * modifyRange hooks: what the card's Range pill says; playtest heroes-v1) via DD.Targeting.reach. No user: the number.
+   */
+  function reach(user, id, base) {
+    const d = DD.getSkill(id);
+    if (!user || !d || !DD.Targeting) return base;
+    if (typeof DD.Targeting.reach === 'function') return DD.Targeting.reach(d, null, user, base);
+    return Math.max(0, base + DD.Targeting.range(user, d, 1)[1] - DD.Targeting.range(null, d, 1)[1]);
+  }
 
   // ---- helpers ---------------------------------------------------------------------------------------
   function A() { return DD.Act; }
@@ -19,6 +29,13 @@
   function has(u, id) { return DD.Act.hasStatus(u, id); }
   function hostile(a, b) { return DD.Grid.hostile(a, b); }
   function hasItem(u, id) { return !!u && Array.isArray(u.items) && u.items.indexOf(id) >= 0; }
+  /** Item check for descs: combat units (items array) and RunHeroes (slot object) alike. */
+  function wears(u, id) {
+    if (!u) return false;
+    if (Array.isArray(u.items)) return u.items.indexOf(id) >= 0;
+    if (u.items && typeof u.items === 'object') { for (const k in u.items) if (u.items[k] === id) return true; }
+    return !!(u.runHero && u.runHero !== u && wears(u.runHero, id));
+  }
   function lv(a, b, c) { return [a, b, c]; }
   function tiles(n) { return n + ' tile' + (n === 1 ? '' : 's'); }
   function skillName(id) { const d = DD.getSkill(id); return d ? d.name : id; }
@@ -279,7 +296,8 @@
   skill({ id: 'mar_whack', name: 'Walking Stick Whack', icon: '🏑', kind: 'attack', tags: ['melee', 'push'], ap: 1, cooldown: 1,
     levels: lv({ dmg: 5, push: 2 }, { dmg: 6, push: 2 }, { dmg: 7, push: 3 }),
     target: { type: 'unit', range: [1, 1], filter: 'enemy' },
-    desc: function (L) { return 'Deal ' + L.dmg + ' damage to an adjacent foe and push it ' + tiles(L.push) + '.'; },
+    // the Cane of Unsolicited Advice pushes 1 tile further: the text says so (playtest heroes-2)
+    desc: function (L, user) { return 'Deal ' + L.dmg + ' damage to an adjacent foe and push it ' + tiles(L.push + (wears(user, 'mar_cane') ? 1 : 0)) + '.'; },
     flavor: 'Forty years of walking-stick kata. One tasteful thwack. Into the pit, ideally.',
     execute: function (ctx) {
       const user = ctx.user, u = ctx.targetUnit;
@@ -385,7 +403,7 @@
   skill({ id: 'mar_carrot', name: 'Carrot Toss', icon: '🥕', kind: 'heal', tags: ['heal', 'ranged'], ap: 1, cooldown: 0, charges: 3,
     levels: lv({ heal: 6 }, { heal: 8 }, { heal: 10 }),
     target: { type: 'unit', range: [0, 4], filter: 'allyOrSelf', los: true },
-    desc: function (L) { return 'Heal an ally within 4 tiles (or himself) for ' + L.heal + ' HP. He packs 3 carrots per fight.'; },
+    desc: function (L, user) { return 'Heal an ally within ' + reach(user, 'mar_carrot', 4) + ' tiles (or himself) for ' + L.heal + ' HP. He packs 3 carrots per fight.'; },
     flavor: 'Good for the eyes. Also the ribs, the morale and, once, a dragon.',
     execute: function (ctx) {
       const user = ctx.user, u = ctx.targetUnit;
@@ -403,8 +421,8 @@
       if (!ctx || !ctx.target) return [];
       return ctx.L && ctx.L.dmg ? G().shape('circle', ctx.target, null, 1) : [{ x: ctx.target.x, y: ctx.target.y }];
     } },
-    desc: function (L) {
-      return 'Leap to an empty tile up to ' + L.r + ' tiles away, over anything.' +
+    desc: function (L, user) {
+      return 'Leap to an empty tile up to ' + reach(user, 'mar_leap', L.r) + ' tiles away, over anything.' +
         (L.dmg ? ' He lands with a THUMP: ' + L.dmg + ' damage to adjacent foes.' : '');
     },
     flavor: 'His hips filed for retirement decades ago. His legs never got the memo.',
@@ -423,7 +441,7 @@
   skill({ id: 'mar_hook', name: 'Vaudeville Hook', icon: '🪝', kind: 'attack', tags: ['ranged', 'pull'], ap: 1, cooldown: 2,
     levels: lv({ dmg: 3, range: 3 }, { dmg: 4, range: 4 }, { dmg: 5, range: 5 }),
     target: { type: 'unit', range: function (L) { return [2, L.range]; }, filter: 'enemy', straight: true, los: true },
-    desc: function (L) { return 'Hook a foe in a straight line 2-' + L.range + ' tiles away: ' + L.dmg + ' damage and yank it next to him.'; },
+    desc: function (L, user) { return 'Hook a foe in a straight line 2-' + reach(user, 'mar_hook', L.range) + ' tiles away: ' + L.dmg + ' damage and yank it next to him.'; },
     flavor: 'Get off the stage. Get INTO the fireball.',
     execute: function (ctx) {
       const user = ctx.user, u = ctx.targetUnit;
@@ -436,8 +454,8 @@
   skill({ id: 'mar_waxon', name: 'Wax On, Wax Off', icon: '🧽', kind: 'buff', tags: ['buff', 'combo'], ap: 1, cooldown: 2,
     levels: lv({ range: 3 }, { range: 5 }, { range: 5, ap: 1 }),
     target: { type: 'unit', range: function (L) { return [1, L.range]; }, filter: 'ally', los: false },
-    desc: function (L) {
-      return 'An ally within ' + L.range + ' tiles is Empowered: its next damaging skill deals +50%.' +
+    desc: function (L, user) {
+      return 'An ally within ' + reach(user, 'mar_waxon', L.range) + ' tiles is Empowered: its next damaging skill deals +50%.' +
         (L.ap ? ' It also gets +' + L.ap + ' AP on its next turn.' : '');
     },
     flavor: 'Paint the fence. Sand the floor. Now punch that ogre in the kneecap.',
@@ -535,6 +553,7 @@
       start: ['Back in my day, dungeons had the decency to be dark.', 'Ah, a fight! I remember those. Vaguely.',
         'Stand behind me, children. And mind the marbles.', 'Let\'s be quick. It\'s nearly nap o\'clock.',
         'Nobody touch my cane. Or my carrots.', 'Betty, dear, please don\'t eat the dungeon. We need it.'],
+      swap: ['Excuse me, {ally}, dear. Professor coming through.', 'Swap with an old rabbit, {ally}? Splendid. Mind the hip.'],
       move: ['Hop, hop. Mind the hip.', 'My knees say no. My paws say yes.', 'I used to do this faster. In the Bronze Age.',
         'Where was I going? Ah. Forward.', 'Coming, coming! Don\'t rush an old rabbit.', 'Pebbles, heel! Not on the rug! ...Too late.'],
       kill: ['Respect your elders.', 'Rest now. I certainly intend to.', 'I\'ve forgotten more kung fu than you\'ll ever learn.',
@@ -544,7 +563,7 @@
       lowhp: ['I may need a little lie-down. A long one.', 'Josiah, dear, is that potion carrot-flavoured?',
         'Someone fetch my pills. The blue ones. No, the OTHER blue ones.', 'I see a bright light. Oh. It\'s Zarathor\'s jewellery.',
         'Kiri, dear, if I go ethereal, leave out a carrot.', 'Valdris, dear, forge me a new hip. Quickly.'],
-      downed: ['Just... resting my eyes...', 'Wake me when it\'s lunch.', 'Tell my marbles... I loved them...',
+      downed: ['Just... resting my eyes...', 'Wake me when it\'s lunch.', 'I appear to have... finally lost... my marbles...',
         'Zzz... five more minutes, Master...', 'Pebbles... fetch Valdris... good boy...'],
       revive: ['I\'m up! I was never down. I was meditating.', 'Who moved the floor?', 'Ah, a second wind. Or my ninth.',
         'Right! Where was I? Oh yes. Violence.'],

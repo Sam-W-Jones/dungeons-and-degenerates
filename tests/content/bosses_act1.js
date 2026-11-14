@@ -279,7 +279,7 @@
     const ib = DD.getEnemy('grim_intern').barks;
     ['spawn', 'attack', 'hurt', 'death'].forEach(function (k) { t.ok(ib[k].length >= 2 && ib[k].every(function (b) { return b.length <= 70; }), 'intern barks.' + k); });
     const pd = passiveText(null, 'grimble');
-    t.ok(/Two turns a round/.test(pd) && /Levy, Red Tape, Levy, Hire Intern/.test(pd) && /one round later/.test(pd) && /DROP ZONE/.test(pd) && !/next:/.test(pd),
+    t.ok(/Two turns a round/.test(pd) && /Levy, Please Hold, Levy, Hire Intern/.test(pd) && /one round later/.test(pd) && /DROP ZONE/.test(pd) && !/next:/.test(pd),
       'his passive states the rule (codex: no live "next")');
     const enc = DD.getEncounter('boss_grimble');
     t.ok(enc && enc.kind === 'boss' && enc.act === 1 && enc.objective.type === 'boss', 'encounter boss_grimble (act 1 boss)');
@@ -327,7 +327,7 @@
     const rec = recorder();
     const seq = [];
     for (let i = 0; i < 4; i++) { DD.AI.act(boss); seq.push(boss.data.lastAct); }
-    t.eq(seq.join(','), 'levy,tape,levy,hire', 'phase 1 docket, one step a turn: Levy, Red Tape, Levy, Hire Intern');
+    t.eq(seq.join(','), 'levy,tape,levy,hire', 'phase 1 docket, one step a turn: Levy, Please Hold, Levy, Hire Intern');
     t.eq(rec.windups.filter(function (w) { return w.unit === boss && w.skill === 'grim_audit'; }).length, 1, 'one Audit wound up (he keeps one pending)');
     const au = pendingOf(boss, 'grim_audit')[0];
     t.ok(au && au.windup && au.anchor === 'ground' && au.turnsLeft === 2, 'the Audit is a ground wind-up (2 of his turns = one round)');
@@ -352,7 +352,8 @@
     t.ok(boss.data.lastAct !== 'stamp', 'with the Stamp on cooldown he does his docket instead (' + boss.data.lastAct + ')');
     t.eq(boss.data.step, stepBefore + 1, 'and that step is used up');
 
-    // Red Tape goes for a hero standing in the pending Audit's lane; a Rooted hero attracts the next Audit
+    // playtest bosses-objectives-1 (Nov 12): wind-ups stay dodgeable. Please Hold never roots a hero standing in the
+    // pending Audit's lane (his one turn to step out would be gone), and an Audit never aims down a Rooted hero's lane
     g = grimbleAlone(4, { heroes: ['test_cleric', 'test_mage'] });
     boss = g.boss;
     const c2 = hero('test_cleric'), m2 = hero('test_mage');
@@ -362,16 +363,37 @@
     const inLane = [c2, m2].filter(function (h) { return inList(h, lane1.tiles); })[0];
     const outLane = inLane === c2 ? m2 : c2;
     t.ok(!!inLane && !inList(outLane, lane1.tiles), 'one hero in the audited lane, one outside');
-    DD.AI.act(boss);                                        // step 2: Red Tape
-    t.eq(boss.data.lastAct, 'tape', 'step 2: Red Tape');
-    t.ok(has(inLane, 'root') && !has(outLane, 'root'), 'Red Tape roots the hero standing in the Audit lane (they can\'t walk out of it)');
+    DD.AI.act(boss);                                        // step 2: Please Hold (his back-to-back second turn)
+    t.eq(boss.data.lastAct, 'tape', 'step 2: Please Hold');
+    t.ok(!has(inLane, 'root') && has(outLane, 'root'), 'Please Hold roots the hero OUTSIDE the Audit lane (the one inside still gets his turn to step out)');
     boss.intents = [];
     DD.AI.act(boss);
     const lane2 = pendingOf(boss, 'grim_audit')[0];
-    t.ok(lane2 && inList(inLane, lane2.tiles), 'with no Audit pending, the rooted hero gets audited first');
+    t.ok(lane2 && !inList(outLane, lane2.tiles) && inList(inLane, lane2.tiles), 'with no Audit pending, the next one skips the Rooted hero\'s row and column');
+    // everyone in a pending lane: Please Hold has nobody fair to root, so that docket step levies instead
+    g = grimbleAlone(4, { heroes: ['test_cleric', 'test_mage'] });
+    boss = g.boss;
+    const c3 = hero('test_cleric'), m3 = hero('test_mage');
+    put(c3, 2, 7); put(m3, 8, 7);                           // same row
+    g.s.sandboxGold = 50;
+    DD.AI.act(boss);
+    const lane3 = pendingOf(boss, 'grim_audit')[0];
+    if (lane3 && inList(c3, lane3.tiles) && inList(m3, lane3.tiles)) {
+      DD.AI.act(boss);
+      t.ok(!has(c3, 'root') && !has(m3, 'root'), 'both heroes in the Audit lane: nobody is put on hold (' + boss.data.lastAct + ')');
+    } else t.ok(true, 'the Audit took a column (the both-in-lane case did not come up)');
+    // a stunned hero's lane is off limits too
+    g = grimbleAlone(4, { heroes: ['test_cleric', 'test_mage'] });
+    boss = g.boss;
+    const c4 = hero('test_cleric'), m4 = hero('test_mage');
+    put(c4, 9, 9); put(m4, 2, 6);
+    DD.Act.addStatus(c4, 'stun', { turns: 1 }, null);
+    DD.AI.act(boss);
+    const lane4 = pendingOf(boss, 'grim_audit')[0];
+    t.ok(!lane4 || !inList(c4, lane4.tiles), 'an Audit never aims through a stunned hero');
 
     // without his office (sandbox) he still works
-    DD.Combat.sandbox({ w: 11, h: 11, seed: 3, heroes: [{ id: 'test_mage', x: 1, y: 1, level: 2 }], enemies: [{ id: 'grimble', x: 9, y: 9 }], enemyAi: false, gold: 30 });
+    DD.Combat.sandbox({ w: 11, h: 11, seed: 3, heroes: [{ id: 'test_mage', x: 1, y: 1, level: 2 }, { id: 'test_cleric', x: 4, y: 6, level: 2 }], enemies: [{ id: 'grimble', x: 9, y: 9 }], enemyAi: false, gold: 30 });   // two heroes: Please Hold skips the one in the Audit lane
     const b2 = units('grimble')[0];
     const acts = [];
     t.tryRun('grimble without his office', function () { DD.AI.act(b2); acts.push(b2.data.lastAct); DD.AI.act(b2); acts.push(b2.data.lastAct); });
@@ -431,7 +453,7 @@
     t.eq(h0 - c.hp, GW.dmg + gn, 'Garnish Wages deals ' + GW.dmg + ' (+' + gn + ' gains) behind the cabinet');
     t.eq(DD.Act.gold(), 50 - GW.gold, 'and steals ' + GW.gold + ' gold');
 
-    // Red Tape: damage + Root for the hero's next turn
+    // Please Hold: damage + Root for the hero's next turn
     g = grimbleAlone(6);
     boss = g.boss;
     const m = hero('test_mage');
@@ -439,7 +461,7 @@
     const RT = L1('grim_redtape');
     h0 = m.hp;
     now(boss, 'grim_redtape', m);
-    t.eq(h0 - m.hp, RT.dmg, 'Red Tape deals ' + RT.dmg);
+    t.eq(h0 - m.hp, RT.dmg, 'Please Hold deals ' + RT.dmg);
     t.ok(has(m, 'root'), 'and Roots');
     DD.Combat.giveTurnTo(m);
     t.eq(DD.Combat.reachable(m).size, 0, 'on the hero\'s next turn it cannot walk away');
@@ -657,7 +679,7 @@
     t.eq(boss.mov, mov0 + GB().PHASE2_MOV, '+' + GB().PHASE2_MOV + ' move: he leaves his desk');
     const au = pendingOf(boss, 'grim_audit');
     t.eq(au.map(function (it) { return laneOf(it.tiles); }).sort().join(','), 'col,row', 'a crossing Audit: a row and a column');
-    t.ok(/Garnish Wages, Hire Interns, Garnish Wages, Red Tape/.test(passiveText(boss)) && /a row and a column/.test(passiveText(boss)), 'the passive shows the phase 2 docket');
+    t.ok(/Garnish Wages, Hire Interns, Garnish Wages, Please Hold/.test(passiveText(boss)) && /a row and a column/.test(passiveText(boss)), 'the passive shows the phase 2 docket');
     t.ok(!inZone(boss) && (k.x !== 4 || k.y !== 5), 'the Stamp is ready: he walks out from behind his desk (' + key(boss) + ') and stamps the knight away (' + key(k) + ')');
     t.eq(boss.data.lastAct, 'stamp', 'and stamps');
     // Stamp cooling down: back toward his desk (and he does his docket)
@@ -707,7 +729,7 @@
     c.hp = c.maxHp;
     let h0 = c.hp;
     now(boss, 'grim_redtape', c);
-    t.eq(h0 - c.hp, L1('grim_redtape').dmg + b, 'Red Tape gets it: ' + (L1('grim_redtape').dmg + b));
+    t.eq(h0 - c.hp, L1('grim_redtape').dmg + b, 'Please Hold gets it: ' + (L1('grim_redtape').dmg + b));
     put(c, 4, 3);
     h0 = c.hp;
     now(boss, 'grim_stamp', boss);
@@ -744,6 +766,8 @@
     g.s.sandboxGold = 5;
     DD.Combat._action(function () { DD.Act.kill(boss, hero('test_knight')); });
     t.eq(DD.Act.gold(), 22, 'his ledger refunds the 17 stolen gold when he falls');
+    t.ok(g.s.log.some(function (l) { return l.text === 'His ledger bursts open: 17 gold flutters back to the party, refunded in full!'; }),
+      'the death refund is one whole sentence (playtest text-tone-14)');
     t.eq(g.s.result, 'victory', 'killing Grimble wins the fight');
     // in a live run the refund goes back raw (no passive gold bonus on your own coins)
     g = grimbleAlone(52);
@@ -779,6 +803,8 @@
     t.ok(ia && ia.label === 'Exploit Loophole' && ia.ap === 1, 'adjacent hero can Exploit Loophole (1 AP)');
     t.ok(DD.Combat.interact(k, 10, 3), 'pull 1');
     t.ok(at(10, 3).obj.data.on && /EXPLOITED/.test(at(10, 3).obj.label), 'loophole 1 exploited (label says so)');
+    t.ok(/^Loopholes 1\/3\. Exploit all 3 \(1 AP each/.test(s.objective.flavor) && /DROP ZONE/.test(s.objective.flavor),
+      'the objective bar counts it live (playtest bosses-objectives-6): ' + s.objective.flavor);
     t.eq(hint(at(10, 3), k), 0, 'an exploited loophole hints 0');
     t.ok(!DD.Combat.interactions(k).some(function (o) { return o.x === 10 && o.y === 3; }), 'and offers no interaction');
     // an intern able to undo the work on its next turn: deal with it first
@@ -810,6 +836,7 @@
     t.eq(g.jam, R1, 'under review for ' + R1 + ' rounds');
     t.ok(GB().vaultTile(s).obj.data.down, 'vault door is down');
     t.ok(ls.every(function (l) { return /under review/.test(l.obj.label); }), 'labels say under review');
+    t.ok(new RegExp('under review for ' + R1 + ' rounds').test(s.objective.flavor), 'and so does the objective bar: ' + s.objective.flavor);
     t.ok(!DD.Combat.interactions(m).some(function (o) { return o.kind === 'object' && o.x === 6 && o.y === 7; }), 'no exploiting during the review');
     t.eq(hint(at(10, 3), k), 0, 'review hints 0');
     rec.off();
@@ -1131,7 +1158,7 @@
     t.ok(!inList(c, RK().chanTiles('B')), 'and climbs out onto the walkway, not back into the water');
     t.ok(lw.dead, 'his own lawyer in the channel drowned');
     t.ok(!king.dead && king.x === 10 && king.y === 8, 'the King rides his own surge');
-    // lawyers: OBJECTION! push, Cease and Desist Root, Billable Bite (also their attack of opportunity)
+    // lawyers: Strike That! push, Temporary Injunction Root, Billable Bite (also their attack of opportunity)
     g = fight('boss_rat_king', 14);
     king = units('rat_king')[0];
     const law = units('rat_lawyer')[0];
@@ -1143,12 +1170,12 @@
     const OL = L1('rat_objection'), CL = L1('rat_cease'), BL = L1('rat_billable');
     let h0 = m.hp;
     now(law, 'rat_objection', m);
-    t.eq(h0 - m.hp, OL.dmg, 'OBJECTION! deals ' + OL.dmg);
+    t.eq(h0 - m.hp, OL.dmg, 'Strike That! deals ' + OL.dmg);
     t.ok(m.x === 5 && m.y === 9 + OL.push, 'and pushes the hero ' + OL.push + ' tile away (' + key(m) + ')');
     put(m, 5, 8);
     h0 = m.hp;
     now(law, 'rat_cease', m);
-    t.eq(h0 - m.hp, CL.dmg, 'Cease and Desist deals ' + CL.dmg);
+    t.eq(h0 - m.hp, CL.dmg, 'Temporary Injunction deals ' + CL.dmg);
     t.ok(has(m, 'root'), 'and Roots');
     DD.Act.removeStatus(m, 'root', { silent: true });
     put(law, 5, 9); put(m, 5, 10);
@@ -1166,10 +1193,11 @@
     // the lawyer AI likes rooting heroes the King can reach
     const cease = DD.getSkill('rat_cease');
     put(king, 6, 7); put(law, 6, 4); put(m, 6, 6);
+    DD.Combat.state.data.rat.held = {};   // forget the Injunction served above (no re-root for a round: playtest suite)
     const sc1 = cease.aiScore(DD.Targeting.buildCtx(law, slotOf(law, 'rat_cease'), { x: m.x, y: m.y }));
     DD.Act.addStatus(m, 'root', { turns: 1 }, null);
     const sc2 = cease.aiScore(DD.Targeting.buildCtx(law, slotOf(law, 'rat_cease'), { x: m.x, y: m.y }));
-    t.ok(sc1 > 0 && sc2 < 0, 'Cease and Desist is worth it on a free hero near the King, not on a rooted one (' + sc1 + ' / ' + sc2 + ')');
+    t.ok(sc1 > 0 && sc2 < 0, 'Temporary Injunction is worth it on a free hero near the King, not on a rooted one (' + sc1 + ' / ' + sc2 + ')');
     // Plaintiff Rats nibble
     const pr = DD.Act.spawn('rat_plaintiff', 7, 10, { silent: true });
     DD.Act.removeStatus(m, 'root', { silent: true });
@@ -1878,4 +1906,183 @@
     t.ok(d0.n > 0 && d180.n > 0 && d0.x < 80 && d180.x > 80, 'the hoisted door swings round with the board (x ' + d0.x.toFixed(1) + ' -> ' + d180.x.toFixed(1) + ')');
     t.eq(DD.problems.slice(n0).filter(function (p) { return /^Error in /.test(p); }).length, 0, 'no swallowed errors');
   }, { tags: ['render'] });
+
+  // Explicit initiative (docs cleanup, Nov 5): every act 1 boss-fight enemy states its modifier instead of leaning on the
+  // tier default; the values are the effective ones from before (minions +1, the Rat Lawyer 0, the bosses +2).
+  T.suite('bosses_act1: every boss-fight enemy states its initiative (same values as before)', function (t) {
+    const WANT = { grimble: 2, grim_intern: 1, rat_king: 2, rat_plaintiff: 1, rat_lawyer: 0 };
+    Object.keys(WANT).forEach(function (id) {
+      const d = DD.getEnemy(id);
+      if (!d) { t.log(id + ' not loaded'); return; }
+      t.ok(typeof d.init === 'number' && d.init === WANT[id], id + ': init ' + d.init + ' (want ' + WANT[id] + ')');
+    });
+  });
+
+  // ---- rules run (user: "objects should be targetable to break them") ------------------------------------------------
+  T.suite('bosses_act1: rules run — a Filing Cabinet can be shot open (smoke); the loopholes, vault, desk and valves are interactions, not targets', function (t) {
+    if (!have()) { t.skip('boss content not loaded'); return; }
+    const cdef = DD.getObject('grim_cabinet');
+    t.ok(cdef.targetable === true && /any single-target damage skill can break it/.test(cdef.desc), 'the cabinet says any single-target damage skill can break it (targetable: true; D1)');
+    ['grim_loophole', 'grim_vault', 'grim_desk', 'rat_valve'].forEach(function (id) {
+      const d = DD.getObject(id);
+      if (d) t.ok(!(d.hp > 0), id + ': no HP, so nothing to shoot (its puzzle is an interaction)');
+    });
+    fight('boss_grimble', 3);
+    const mage = hero('test_mage');
+    const cab = DD.Combat.state.grid.tiles.filter(function (q) { return q.obj && q.obj.id === 'grim_cabinet'; })[0];
+    const spot = DD.Grid.neighbors(cab.x, cab.y).filter(function (q) { return DD.Grid.isFree(q.x, q.y) && !DD.Grid.isDrop(q.x, q.y); })[0];
+    put(mage, spot.x, spot.y);
+    DD.Combat.giveTurnTo(mage);
+    mage.ap = 3;
+    const q = DD.Targeting.validTargets(mage, mage.basic).filter(function (e) { return e.x === cab.x && e.y === cab.y; })[0];
+    t.ok(!!q && q.obj === 'grim_cabinet' && q.hp === 6 && q.dmg === 4, 'a cabinet is a target (' + JSON.stringify(q) + ')');
+    DD.Combat.useSkill(mage, mage.basic, cab.x, cab.y);
+    DD.Combat.useSkill(mage, mage.basic, cab.x, cab.y);
+    t.ok(!tile(cab.x, cab.y).obj && tile(cab.x, cab.y).surface && tile(cab.x, cab.y).surface.id === 'smoke', 'two bolts: a blizzard of receipts (smoke)');
+  });
+
+  // ---- playtest fixes (Nov 12) ------------------------------------------------------------------------------------------
+  T.suite('bosses_act1: playtest fixes (Nov 12) — the Rat King\'s wind-ups stay dodgeable, no Injunction lock, live puzzle hints', function (t) {
+    if (!have()) { t.skip('boss content not loaded'); return; }
+    const n0 = DD.problems.length;
+    // bosses-objectives-v1: Sewer Surge never floods a channel with a Rooted (or stunned) hero in it
+    let g = kingAlone(31, { still: true });
+    let king = g.king;
+    const k = hero('test_knight'), c = hero('test_cleric'), m = hero('test_mage'), r = hero('test_rogue');
+    put(king, 6, 1);
+    put(m, 6, 8);                                          // channel B
+    king.data.step = 3;                                    // Sewer Surge
+    DD.AI.act(king);
+    t.ok(pendingOf(king, 'rat_surge').some(function (i) { return i.data.chan === 'B'; }), 'a free hero in channel B: B is flooded (control)');
+    king.intents = [];
+    refresh([k, c, m, r]);
+    DD.Act.addStatus(m, 'root', { turns: 1 }, null);
+    king.data.step = 3;
+    DD.AI.act(king);
+    t.ok(!pendingOf(king, 'rat_surge').some(function (i) { return i.data.chan === 'B'; }), 'the same hero Rooted: channel B is left alone (' + king.data.lastAct + ')');
+    // Gnaw never takes the tile of a pinned hero
+    king.intents = [];
+    refresh([k, c, m, r]);
+    park([k, c, m, r], R_FAR);
+    put(c, 3, 9);                                          // a rotten tile
+    DD.Act.addStatus(c, 'stun', { turns: 1 }, null);
+    king.data.step = 1;                                    // Gnaw
+    DD.AI.act(king);
+    t.ok(!pendingOf(king, 'rat_gnaw').some(function (i) { return i.tiles.some(function (q) { return q.x === 3 && q.y === 9; }); }), 'a stunned hero\'s rotten tile is never gnawed');
+    // Tangled Tails never roots a hero standing in (or reeled into) a pending Surge channel
+    king.intents = [];
+    refresh([k, c, m, r]);
+    park([k, c, m, r], R_FAR);
+    put(king, 6, 5);
+    put(m, 6, 8);                                          // in channel B, 3 tiles away
+    king.data.step = 3;
+    DD.AI.act(king);
+    t.ok(pendingOf(king, 'rat_surge').some(function (i) { return i.data.chan === 'B'; }), 'Surge on channel B pending');
+    king.data.step = 0;                                    // Tangled Tails
+    DD.AI.act(king);
+    t.ok(!has(m, 'root'), 'Tangled Tails leaves the hero in the flooding channel free to wade out (' + king.data.lastAct + ')');
+    put(m, 1, 11);
+    put(c, 6, 10);                                         // reeled 2 toward him lands in channel B
+    king.data.step = 0;
+    DD.AI.act(king);
+    t.ok(!has(c, 'root') || !(tile(c.x, c.y).tag || '').match(/rat_chanB/), 'nor reels a hero into it (' + key(c) + ', ' + king.data.lastAct + ')');
+    // bosses-objectives-5: Temporary Injunction has a cooldown and never re-roots a hero the court held this round or last
+    const cease = DD.getSkill('rat_cease');
+    t.ok(cease.cooldown >= 2, 'Temporary Injunction: cooldown ' + cease.cooldown + ' (like every rooting enemy skill)');
+    g = fight('boss_rat_king', 32);
+    const law = units('rat_lawyer')[0], vic = hero('test_knight');
+    put(vic, law.x, law.y + 2 <= 11 ? law.y + 2 : law.y - 2);
+    const sc = function () { return cease.aiScore(DD.Targeting.buildCtx(law, slotOf(law, 'rat_cease'), { x: vic.x, y: vic.y })); };
+    t.ok(sc() > 0, 'a fresh hero is worth an Injunction (' + sc() + ')');
+    now(law, 'rat_cease', vic);
+    t.ok(has(vic, 'root'), 'served');
+    vic.statuses = vic.statuses.filter(function (s) { return s.id !== 'root'; });   // his Root wore off on his turn
+    t.ok(sc() < 0, 'the root wore off, but he was held this round: not again yet (' + sc() + ')');
+    g.round = (g.round || 1) + 1;
+    t.ok(sc() < 0, 'nor next round (' + sc() + ')');
+    g.round += 1;
+    t.ok(sc() > 0, 'two rounds later he is fair game again (' + sc() + ')');
+    // bosses-objectives-6: the objective bar says what the valves are doing
+    g = fight('boss_rat_king', 33);
+    t.ok(/^Valve A ready · Valve B ready\. Crank a ready valve \(1 AP\) while the King wades in its channel/.test(g.objective.flavor), 'live valve hint: ' + g.objective.flavor);
+    const va = RK().valves(g).filter(function (v) { return v.obj.data.chan === 'A'; })[0];
+    const cr = hero('test_cleric');
+    t.ok(interactAt(cr, va.x, va.y), 'crank valve A');
+    t.ok(new RegExp('^Valve A in ' + RK().cfg.valveCd + ' rounds · Valve B ready').test(g.objective.flavor), 'the hint counts the recharge: ' + g.objective.flavor);
+    g = fight('boss_grimble', 34);
+    t.ok(/^Loopholes 0\/3\./.test(g.objective.flavor), 'Grimble\'s bar starts at 0/3: ' + g.objective.flavor);
+    // bosses-objectives-3 (the Rat King's part): between his turns, a preview of a turn of his that falls in the next round
+    // carries the stack that round start adds; his wind-up numbers never carry the swarm
+    const kg = kingAlone(35);
+    const kk = kg.king;
+    DD.Act.addStatus(kk, 'rat_swarm', { stacks: 2, silent: true }, kk);
+    const per = RK().cfg.swarmDmg;
+    const saved = { i: kg.s.turnIndex, c: kg.s.current };
+    t.eq(DD.AI.telegraphFlat(kk), 2 * per, 'his turns still to come this round: +' + 2 * per);
+    kg.s.turnIndex = kg.s.order.length;                    // past both of his entries: his next turn is next round
+    kg.s.current = null;
+    t.eq(DD.AI.telegraphFlat(kk), 3 * per, 'his next turn is next round: +' + 3 * per + ' (the round start adds a stack)');
+    const gnawDef = DD.getSkill('rat_gnaw');
+    t.eq(gnawDef.telegraphFlat(kk) + DD.AI.telegraphFlat(kk), 0, 'and a wind-up still carries none of it');
+    kg.s.turnIndex = saved.i; kg.s.current = saved.c;
+    // text-tone-19: Class Action's verb follows the count ("2 … Rats crawl", "1 … Rat crawls")
+    const gc = kingAlone(36);
+    const CA = DD.skillLevel(DD.getSkill('rat_class'), 1);
+    now(gc.king, 'rat_class', gc.king);
+    now(gc.king, 'rat_class', gc.king);
+    const cls = gc.s.log.filter(function (l) { return /^Class action!/.test(l.text); }).map(function (l) { return l.text; });
+    t.eq(cls[0], 'Class action! ' + CA.n + ' Plaintiff Rats crawl out of the drains to join the lawsuit.', 'plural: ' + cls[0]);
+    t.eq(cls[1], 'Class action! ' + (CA.cap - CA.n) + ' Plaintiff Rat crawls out of the drains to join the lawsuit.', 'singular: ' + cls[1]);
+    t.eq(DD.problems.slice(n0).filter(function (p) { return /^Error in /.test(p); }).length, 0, 'no swallowed errors');
+  });
+
+  // ---- review of the playtest fixes (Nov 12, adversarial reviewer) -----------------------------------------------------
+  T.suite('bosses_act1: playtest review — Grimble\'s Rubber Stamp never knocks a hero into a pending Audit lane (bosses-objectives-1)', function (t) {
+    if (!have()) { t.skip('boss content not loaded'); return; }
+    const n0 = DD.problems.length;
+    let g = grimbleAlone(41, { heroes: ['test_cleric', 'test_mage'] });
+    let boss = g.boss;
+    const m = hero('test_mage'), c = hero('test_cleric');
+    put(c, 9, 9);
+    put(boss, 5, 3);
+    put(m, 4, 3);
+    const sl = slotOf(boss, 'grim_stamp');
+    sl.cd = 0;
+    const pv = DD.Targeting.preview(boss, sl, { x: boss.x, y: boss.y });
+    const land = pv && pv.perUnit && pv.perUnit[m.id] && pv.perUnit[m.id].moved;
+    t.ok(!!land && land.x !== m.x, 'the Stamp would knock the mage along his row to ' + (land ? land.x + ',' + land.y : '?'));
+    if (!land) return;
+    const tiles = GB().lane('col', land.x);
+    DD.AI.windUp(boss, 'grim_audit', { x: land.x, y: land.y }, { tiles: tiles, data: { lane: 'col:' + land.x, oneRound: true }, turns: 2, noCooldown: true, label: 'Audit (column)' });
+    t.ok(!inList(m, tiles) && GB().stampTraps(boss), 'an Audit pending down the column he would land in: the Stamp is a trap');
+    DD.AI.act(boss);
+    t.ok(boss.data.lastAct !== 'stamp', 'so he works his docket instead (' + boss.data.lastAct + ')');
+    t.ok(!inList(m, tiles), 'and the mage is not in the lane (' + m.x + ',' + m.y + ')');
+    // the same spot with no Audit pending: he stamps as before
+    g = grimbleAlone(41, { heroes: ['test_cleric', 'test_mage'] });
+    boss = g.boss;
+    put(hero('test_cleric'), 9, 9);
+    put(boss, 5, 3);
+    put(hero('test_mage'), 4, 3);
+    slotOf(boss, 'grim_stamp').cd = 0;
+    t.ok(!GB().stampTraps(boss), 'no Audit pending: no trap');
+    DD.AI.act(boss);
+    t.eq(boss.data.lastAct, 'stamp', 'and the hero next to him gets the Stamp');
+    t.eq(DD.problems.slice(n0).filter(function (p) { return /^Error in /.test(p); }).length, 0, 'no swallowed errors');
+  });
+
+  // ---- finish (Nov 14): playtest desc-sweep-2 --------------------------------------------------------------------------
+  T.suite('bosses_act1: finish — Grimble\'s rule line gives the Audit this fight lands (the act 1 boss row), as the wind-up row does', function (t) {
+    const n0 = DD.problems.length;
+    realFight('boss_grimble', 1401);
+    const g = units('grimble')[0] || DD.Combat.state.units.filter(function (u) { return u.isBoss || u.tier === 'boss'; })[0];
+    const f = DD.Combat.state.difficulty.dmg;
+    const want = Math.round(L1('grim_audit').dmg * f);
+    t.ok(f > 1, 'a real act 1 boss fight scales his damage (×' + f + ')');
+    const txt = DD.getEnemy(g.defId).passive.desc(g);
+    t.ok(new RegExp('Audit wound up: ' + want + ' damage').test(txt), 'rule line: ' + want + ' (raw ' + L1('grim_audit').dmg + ') — ' + txt);
+    t.eq(DD.AI.fightLevel(DD.getSkill('grim_audit'), 1, g).dmg, want, 'the wind-up row\'s number is the same');
+    t.ok(new RegExp('Audit wound up: ' + L1('grim_audit').dmg + ' damage').test(DD.getEnemy(g.defId).passive.desc(null)), 'a codex card (no unit) keeps the raw number');
+    t.eq(DD.problems.slice(n0).filter(function (p) { return /^Error in /.test(p); }).length, 0, 'no swallowed errors');
+  });
 })();

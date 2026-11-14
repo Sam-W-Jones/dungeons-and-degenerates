@@ -12,12 +12,14 @@
   const EPITAPHS = [
     'Checked for traps. Once.',
     'Rolled a natural 1 at the worst possible moment.',
-    'Died as they lived: loudly.',
+    'Lived loudly. Died louder.',
     'Gone, but not forgotten. Mostly forgotten.',
     'Should have taken the Shield spell.',
     'Split the party. Paid the price.',
     'Said "how bad could it be?"',
-    'Their character sheet is now a coaster.',
+    'Character sheet: now a coaster.',
+    'Asked the DM "are you sure?" The DM was sure.',
+    'Went first. Should have gone last.',
   ];
   const GAMEOVER_FALLBACK = ['The Party That Tripped Over Its Own Ambition', 'Rocks Fell. Everyone Died.', 'A Cautionary Tale, Probably'];
   const DEFEAT_FALLBACK = ['The DM closes his notebook gently. "Well. That happened."', 'Rocks did not even need to fall.'];
@@ -41,7 +43,7 @@
     const p = params || {};
     const run = DD.UI.run();
     let s = p.summary || null;
-    if (!s && run) s = { act: run.act, party: run.party, stats: run.stats, difficulty: run.difficulty, startedAt: run.stats && run.stats.startedAt };
+    if (!s && run) s = { act: run.act, party: run.party, stats: run.stats, difficulty: run.difficulty, startedAt: run.stats && run.stats.startedAt, seed: run.seed };
     if (!s) s = newestHistory() || {};
     const party = (s.party || s.heroes || []).map(function (h) { return typeof h === 'string' ? { id: h, level: 1 } : h; }).filter(Boolean);
     const stats = Object.assign({}, s, s.stats || {});
@@ -50,11 +52,11 @@
     const duration = num(stats.durationMs) || (started ? Math.max(0, ended - started) : 0);
     return {
       act: num(s.act) || num(p.act) || 1, party: party, stats: stats, difficulty: s.difficulty || 'normal', duration: duration,
-      killedBy: s.killedBy || null, unlocked: Array.isArray(s.unlocked) ? s.unlocked : null, result: s.result || null,
+      seed: s.seed !== undefined ? s.seed : run ? run.seed : '', killedBy: s.killedBy || null, unlocked: Array.isArray(s.unlocked) ? s.unlocked : null, result: s.result || null,
     };
   }
 
-  function statGrid(sm) {
+  function statGrid(sm, tpk) {
     const UI = DD.UI, el = UI.el;
     const st = sm.stats;
     const items = [
@@ -63,8 +65,10 @@
       ['💀', 'Kills', num(st.kills)],
       ['💥', 'Damage dealt', num(st.damage)],
       ['🪙', 'Gold earned', num(st.goldEarned)],
-      ['🤕', 'Times downed', num(st.downs)],
-      ['⚰️', 'Heroes lost', num(st.deaths)],
+      // [playtest first-hour-3] downs and write-offs count when a fight ends with someone standing, so a TPK's last fight
+      // adds none: under TOTAL PARTY KILL the labels say so ("Times downed 0" read oddly there)
+      ['🤕', tpk ? 'Downs before the wipe' : 'Times downed', num(st.downs)],
+      ['⚰️', tpk ? 'Heroes lost before the wipe' : 'Heroes lost', num(st.deaths)],
       ['👑', 'Elites / Bosses', num(st.elites) + ' / ' + num(st.bosses)],
     ];
     if (sm.duration) items.push(['⏱️', 'Time played', UI.duration(sm.duration)]);
@@ -92,10 +96,16 @@
     return box;
   }
 
-  function tombstones(party, dead) {
+  // [playtest first-hour-5 / text-tone-4] epitaphs carry no pronoun (every hero is he or she), vary with the run's seed
+  // and never repeat inside one party
+  function tombstones(party, dead, seed) {
     const UI = DD.UI, el = UI.el;
+    const used = {};
     return el('div.tombs', null, party.map(function (rh) {
-      const ep = EPITAPHS[DD.util.hash(String(rh.id) + ':ep') % EPITAPHS.length];
+      let i = DD.util.hash(String(rh.id) + ':ep:' + String(seed === undefined ? '' : seed)) % EPITAPHS.length;
+      for (let n = 0; n < EPITAPHS.length && used[i]; n++) i = (i + 1) % EPITAPHS.length;
+      used[i] = 1;
+      const ep = EPITAPHS[i];
       return el('div.tomb' + (dead ? '.dead' : '.alive'), { style: { '--hc': (UI.heroDef(rh) || {}).color || '#c9a24f' } },
         UI.portrait(rh.id, 64, { dead: dead || rh.dead }),
         el('div.tomb-name', null, UI.heroName(rh)),
@@ -130,8 +140,8 @@
         const line = UI.narrate('defeat', {}, DEFEAT_FALLBACK);
         if (line) wrap.appendChild(UI.narration(line, { cls: 'center' }));
         if (sm.killedBy) wrap.appendChild(el('div.end-killer', null, 'Felled by ', el('b', null, sm.killedBy), ' in Act ' + DD.util.roman(sm.act) + '.'));
-        if (sm.party.length) wrap.appendChild(tombstones(sm.party, true));
-        wrap.appendChild(statGrid(sm));
+        if (sm.party.length) wrap.appendChild(tombstones(sm.party, true, sm.seed));
+        wrap.appendChild(statGrid(sm, true));
         wrap.appendChild(unlockProgress());
         wrap.appendChild(endButtons());
         root.appendChild(el('div.end-scroll.scroll', null, wrap));
@@ -169,7 +179,7 @@
           if (params.healed) wrap.appendChild(el('div.end-heal', null, '💚 The party patches itself up between acts: everyone heals ' + Math.round(num(params.healed) * 100) + '% of their max HP.'));
           if (unlockedNow.length) wrap.appendChild(el('div.unlock-banner', null, unlockedNow.map(function (id) {
             const d = DD.getHero(id);
-            return el('div.ub-hero', { style: { '--hc': d.color || '#c9a24f' } }, UI.portrait(id, 72), el('div.ub-text', null, el('div.ub-kicker', null, 'New hero unlocked!'), el('div.ub-name', null, d.name + (d.epithet ? ' ' + d.epithet : '')), el('div.ub-role', null, 'Recruit them at a tavern or pick them in your next campaign.')));
+            return el('div.ub-hero', { style: { '--hc': d.color || '#c9a24f' } }, UI.portrait(id, 72), el('div.ub-text', null, el('div.ub-kicker', null, 'New hero unlocked!'), el('div.ub-name', null, d.name + (d.epithet ? ' ' + d.epithet : '')), el('div.ub-role', null, 'Now on the menu at every tavern, and in the lineup for your next campaign.')));
           })));
           if (run && run.party) wrap.appendChild(tombstones(run.party.filter(function (h) { return !h.dead; }), false));
           const cont = UI.button(nextInfo ? 'Onward to Act ' + nextInfo.roman : 'Continue', function () {

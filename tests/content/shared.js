@@ -17,9 +17,10 @@
   const DD = window.DD;
   if (!T || !DD) return;
 
-  const TOTAL = 50;
-  const RARITY_COUNT = { common: 19, rare: 16, legendary: 7, cursed: 8 };
-  const SLOT_COUNT = { weapon: 17, armor: 16, trinket: 17 };
+  // balance pass 1: + the First-Aid Fanny Pack (a common trinket; out of the starting kit again since D9, ordinary loot)
+  const TOTAL = 51;
+  const RARITY_COUNT = { common: 20, rare: 16, legendary: 7, cursed: 8 };
+  const SLOT_COUNT = { weapon: 17, armor: 16, trinket: 18 };
   // v2: no 'block' (nobody starts a fight with Block); 'init' = the initiative modifier
   const STAT_KEYS = ['hp', 'ap', 'mov', 'armor', 'dmg', 'heal', 'range', 'hype', 'init'];
   const HOOK_NAMES = ['onCombatStart', 'onCombatEnd', 'onRoundStart', 'onTurnStart', 'onTurnEnd', 'onMove', 'onEnterTile', 'onSkillUsed',
@@ -134,7 +135,7 @@
   // ==========================================================================================================
   // Registration
   // ==========================================================================================================
-  T.suite('items: registry — 50 shared items, rarities, slots, ids, text, stats and prices (v2)', function (t) {
+  T.suite('items: registry — 51 shared items, rarities, slots, ids, text, stats and prices (v2)', function (t) {
     if (!loaded(t)) return;
     const list = shared();
     t.eq(list.length, TOTAL, TOTAL + ' shared items');
@@ -1063,7 +1064,62 @@
     sane(t, 'balloons');
   });
 
-  // v2 requests (Nov 3): flyers ignore everything on the floor; any single-target attack can set off an explosive barrel
+  // Nov 5 fix: Basanos' Transform pins the old look on screen (unit.vis.sprite) until FX playback reaches the change.
+  // The balloons used to wrap that pin, so once playback dropped it the werewolf showed up bare. Headless FX are instant,
+  // so this suite queues them for real and plays them back with DD.FX.flush().
+  T.suite('items: Party Balloons survive a Basanos Transform while FX play back (the on-screen pin)', function (t) {
+    if (!loaded(t)) return;
+    if (!DD.getHero('basanos') || !DD.Basanos || !DD.Sprites || typeof DD.Sprites.metrics !== 'function') {
+      t.skip('basanos or the sprite module is not loaded');
+      return;
+    }
+    fight({ heroes: [{ id: 'basanos', x: 4, y: 4, items: ['party_balloons'], skills: ['bas_transform'] }], enemies: [{ id: 'test_grunt', x: 8, y: 8 }] });
+    const b = unitOf('basanos'), W = DD.Basanos.WOLF_SPRITE, M = DD.Basanos.HUMAN_SPRITE;
+    const shown = function () { return DD.Sprites.specFor(b); };
+    t.ok(shown().itemBalloons && shown().scale === M.scale, 'balloons on the man');
+    const was = DD.FX.instant;
+    DD.FX.instant = false;
+    try {
+      t.ok(use(b, 'bas_transform', b.x, b.y), 'Transform, FX queued');
+      t.ok(b.sprite && b.sprite.itemBalloons && b.sprite.scale === W.scale, 'the logical look is the werewolf with balloons at once');
+      t.ok(shown().itemBalloons && shown().scale === M.scale, 'on screen the man is pinned until playback, balloons and all');
+      DD.FX.flush();
+      t.ok(!(b.vis && b.vis.sprite), 'playback done: the pin is dropped');
+      t.ok(shown().itemBalloons && shown().scale === W.scale, 'the werewolf on screen keeps the balloons');
+      t.ok(use(b, 'bas_transform', b.x, b.y), 'Transform back, FX queued');
+      DD.FX.flush();
+      t.ok(shown().itemBalloons && shown().scale === M.scale, 'the man on screen has his balloons again');
+    } finally {
+      DD.FX.flush();
+      DD.FX.instant = was;
+    }
+    sane(t, 'balloons + transform');
+  });
+
+  // Review (balance run): the HUD's portraits now draw the look a unit shows (forms), and the balloons' strings cut
+  // across the holder's face in every party card, tracker chip and inspect panel (the balloons themselves cropped off).
+  T.suite('items: Party Balloons stay off portraits (on the board only)', function (t) {
+    if (!loaded(t)) return;
+    if (!DD.Sprites || typeof DD.Sprites.portrait !== 'function' || typeof DD.Sprites.drawUnit !== 'function') { t.skip('no sprite module'); return; }
+    fight({ heroes: [kn(['party_balloons'])], enemies: [{ id: 'test_grunt', x: 8, y: 8 }] });
+    const k = unitOf('test_knight');
+    t.ok(k.sprite && k.sprite.itemBalloons, 'the holder wears the balloon look');
+    const px = function (cv) { return cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data; };
+    const a = px(DD.Sprites.portrait(k.defId, 96, { bg: false })), b = px(DD.Sprites.portrait(k, 96, { bg: false }));
+    let diff = 0;
+    for (let i = 0; i < a.length; i += 4) if (Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]) + Math.abs(a[i + 3] - b[i + 3]) > 8) diff++;
+    t.eq(diff, 0, 'the holder\'s portrait is the plain one (' + diff + ' px differ)');
+    // on the board the balloons are still drawn
+    const cv = document.createElement('canvas'); cv.width = 160; cv.height = 200;
+    const draw = function (u) { const c = cv.getContext('2d'); c.clearRect(0, 0, 160, 200); DD.Sprites.drawUnit(c, u, 80, 170, 1.4, 0.6); return px(cv); };
+    const withB = draw(k), plain = draw(Object.assign({}, k, { sprite: null, vis: Object.assign({}, k.vis || {}, { sprite: null }) }));
+    let boardDiff = 0;
+    for (let i = 0; i < withB.length; i += 4) if (withB[i + 3] !== plain[i + 3] || withB[i] !== plain[i]) boardDiff++;
+    t.ok(boardDiff > 30, 'on the board the balloons still show (' + boardDiff + ' px)');
+    sane(t, 'balloons off portraits');
+  });
+
+  // v2 requests (Nov 3): flyers ignore everything on the floor; any single-target damage skill can set off an explosive barrel (D1)
   T.suite('items: v2 requests — Party Balloons float over the whole floor, a flying Candle bearer, Steve pokes barrels', function (t) {
     if (!loaded(t)) return;
     fight({ heroes: [kn(['party_balloons'], 2, 4)], enemies: [{ id: 'test_grunt', x: 8, y: 8 }],
@@ -1500,8 +1556,10 @@
         seen[id] = true;
       }
       t.eq(wrong, 0, r + ': randomItem keeps the rarity');
-      const missing = shared().filter(function (it) { return it.rarity === r && !seen[it.id]; }).map(function (it) { return it.id; });
+      const missing = shared().filter(function (it) { return it.rarity === r && !it.noDrop && !seen[it.id]; }).map(function (it) { return it.id; });
       t.eq(missing.length, 0, r + ': every shared ' + r + ' item drops (missing: ' + missing.join(', ') + ')');
+      const kitOnly = shared().filter(function (it) { return it.rarity === r && it.noDrop && seen[it.id]; }).map(function (it) { return it.id; });
+      t.eq(kitOnly.length, 0, r + ': starting-kit items (noDrop) never drop (' + kitOnly.join(', ') + ')');
     });
     shared().forEach(function (it) {
       const r = DD.Rewards.itemReward(it.id, run);
@@ -2089,5 +2147,54 @@
     rows.sort(function (a, b) { return b.score - a.score; });
     rows.forEach(function (r) { t.log(r.text); });
     t.ok(rows.length > 0, rows.length + ' items × ' + fights.length + ' fights');
+  });
+  // ---- the First-Aid Fanny Pack (ordinary common loot since D9) ----------------------------------------------------
+  // Balance pass 1 put it in every starting kit (DD.Balance.start.items); the user took it out again (D9, Nov 12: no
+  // generic heal for every party). It drops and is sold like any common.
+  T.suite('items: the First-Aid Fanny Pack heals the most hurt of you and your adjacent allies 3 HP at your turn start (ordinary common loot since D9)', function (t) {
+    if (!loaded(t)) return;
+    const it = DD.getItem('first_aid_fanny_pack');
+    t.ok(!!it && it.slot === 'trinket' && it.rarity === 'common' && !it.hero && !it.noDrop, 'a common trinket anyone can wear, in loot and shops');
+    if (!it) return;
+    t.ok((DD.Balance.start.items || []).indexOf(it.id) < 0, 'no party starts with one (D9: no generic heal for every party)');
+    t.ok(/start of your turn/.test(it.desc) && /most hurt of you and the allies next to you/.test(it.desc) && /not a downed one/.test(it.desc) && /heals 3 HP/.test(it.desc), 'the desc says when, who and how much: ' + it.desc);
+    // loot and shops prefer what the party doesn't own: a party that already wears one is offered other commons
+    const run = { act: 1, gold: 100, inventory: [], consumables: [], maxConsumables: 3, flags: {},
+      party: ['test_knight', 'test_mage'].map(function (id) { return DD.Combat.makeRunHero({ id: id }); }) };
+    const rngLoot = DD.RNG('fanny-loot:' + t.seed);
+    let found = 0;
+    for (let i = 0; i < 300; i++) if (DD.Rewards.randomItem({ rarity: 'common', slot: 'trinket', run: run }, rngLoot) === it.id) found++;
+    t.ok(found > 0, 'a party without one finds it in common trinket loot (' + found + ' of 300 rolls)');
+    run.party[0].items.trinket = it.id;
+    const rng = DD.RNG('fanny-dupes:' + t.seed);
+    let dupes = 0;
+    for (let i = 0; i < 300; i++) if (DD.Rewards.randomItem({ rarity: 'common', slot: 'trinket', run: run }, rng) === it.id) dupes++;
+    t.eq(dupes, 0, 'a party wearing one is not offered a second (300 common trinket rolls)');
+    // the knight wears it at (2,4); the mage next to him (3,4); the cleric two tiles away (2,6); a grunt next to him (2,3)
+    fight({ heroes: [kn(['first_aid_fanny_pack']), { id: 'test_mage', x: 3, y: 4 }, { id: 'test_cleric', x: 2, y: 6 }],
+      enemies: [{ id: 'test_grunt', x: 2, y: 3 }, { id: 'test_grunt', x: 8, y: 8 }] });
+    const k = unitOf('test_knight'), m = unitOf('test_mage'), c = unitOf('test_cleric'), g = at(2, 3);
+    k.hp = k.maxHp - 2; m.hp = m.maxHp - 6; c.hp = c.maxHp - 9; g.hp = g.maxHp - 5;
+    // the knight's next turn comes up: the mage (6 missing, next to him) heals, not the cleric (9 missing, 2 away)
+    t.eq(DD.Combat.current(), k, 'premise: the knight acts first (his first turn start came before anyone was hurt)');
+    DD.Combat.endTurn();
+    for (let i = 0; i < 12 && DD.Combat.current() !== k; i++) DD.Combat.endTurn();
+    t.eq(DD.Combat.current(), k, 'premise: the knight\'s next turn');
+    t.eq(m.hp, m.maxHp - 3, 'the most hurt ally next to you heals 3 (6 missing → 3)');
+    t.ok(k.hp === k.maxHp - 2 && c.hp === c.maxHp - 9 && g.hp === g.maxHp - 5, 'only one heal: not you (2 missing), not an ally 2 tiles away, never a foe');
+    // alone and hurt: the wearer patches himself up; nobody hurt: nothing happens
+    fight({ heroes: [kn(['first_aid_fanny_pack'])], enemies: [{ id: 'test_grunt', x: 8, y: 8 }] });
+    const k2 = unitOf('test_knight');
+    k2.hp = k2.maxHp - 10;
+    DD.Combat.endTurn();
+    for (let i = 0; i < 6 && DD.Combat.current() !== k2; i++) DD.Combat.endTurn();
+    t.eq(k2.hp, k2.maxHp - 7, 'alone and hurt: you heal 3 yourself');
+    // downed allies are not healed (an aura is not an aimed heal, so it never revives)
+    fight({ heroes: [kn(['first_aid_fanny_pack']), { id: 'test_mage', x: 3, y: 4 }], enemies: [{ id: 'test_grunt', x: 8, y: 8 }] });
+    const k3 = unitOf('test_knight'), m3 = unitOf('test_mage');
+    A().kill(m3, null);
+    DD.Combat.endTurn();
+    for (let i = 0; i < 6 && DD.Combat.current() !== k3; i++) DD.Combat.endTurn();
+    t.ok(m3.downed && !m3.dead, 'a downed ally next to you stays down (Help Up or an aimed heal gets them up)');
   });
 })();

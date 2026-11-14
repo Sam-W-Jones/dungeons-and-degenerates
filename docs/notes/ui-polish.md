@@ -135,3 +135,20 @@ and the CSS for the pills); everything else below is from the resumed pass. Scre
   thresholds and one engine status-flag suite that the AutoPlay, balance and rules passes are rewriting in parallel
   (`js/engine/*`, boss files); no swallowed `Error in`. Every `ui:`, `hud:`, `run:` and `passives:` suite passes
   (81 suites, 1,831 assertions).
+
+## Review (finish) — REVIEWER (Nov 14)
+
+Nothing in this area changed in the finish run or its review (sprites, FX, audio and these screens were re-shot at
+1280x720 and 1920x1080 and are fine). The review's findings, fixes and requests: docs/notes/hud-v2.md "Review (finish)".
+
+## Release gate (Nov 14)
+
+- **The act-1 intro box covered a map node.** The DM's line plus the Session Zero quirks wrap to ~4 lines, so the box
+  covered a first-column node on 40 of 40 start maps at 1280×720 (26 of 40 at 1920×1080; the "~2 lines" note above no
+  longer held). `js/ui/screens/map.js` `clearIntro`: while the quirks box is up, the board gets `.intro` and
+  `--intro-pad` (the box's bottom + 10 px, re-measured when the web fonts are ready) and the nodes, links, camp and party
+  token are laid out in the area below it (`css/style.css`, three rules after `.map-narration`). A `run:changed` update
+  after the first step drops the quirks line and the squeeze; a remount never adds them. Suite `ui: release gate — the
+  act-1 intro box never covers a map node …` (the real page at 1024×640, 1280×720 and 1920×1080, 12 start maps each; 5
+  checks fail with `clearIntro` switched off).
+- Known, not fixed (polish): the rewards line's d4 face "1" reads like "I" in Cinzel (`.rwl-face`, `.rwl-result b`).

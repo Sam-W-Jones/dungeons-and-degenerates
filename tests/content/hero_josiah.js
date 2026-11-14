@@ -1404,4 +1404,17 @@
     cast(t, j, 'jos_leeches', 1, 3, 4);
     t.ok(knight().downed, 'Prescribe Leeches heals Josiah only: the downed knight stays down');
   });
+
+  // ---- finish (Nov 14): playtest desc-sweep-10 --------------------------------------------------------------------------
+  T.suite('hero_josiah: finish — Onyx\'s text gives the HP the raven gets (10, +10% per Josiah level after the first)', function (t) {
+    const txt = DD.getSummon('jos_raven').desc;
+    t.ok(/10 HP, \+10% per Josiah level after the first/.test(txt), 'summon text: ' + txt);
+    [1, 3, 5].forEach(function (lv) {
+      DD.Combat.sandbox({ w: 9, h: 9, seed: 3, enemyAi: false, heroes: [{ id: 'josiah', x: 1, y: 4, level: lv }], enemies: [{ id: 'test_grunt', x: 8, y: 8 }],
+        objective: { type: 'custom', text: 'jos' }, encounter: { id: 'jos_finish', checkObjective: function () { return null; } } });
+      const raven = DD.Combat.state.units.filter(function (u) { return u.defId === 'jos_raven' && !u.dead; })[0];
+      const want = Math.round(10 * (100 + 10 * (lv - 1)) / 100);
+      t.ok(!!raven && raven.maxHp === want, 'Josiah level ' + lv + ': Onyx has ' + want + ' HP, as the text reads (' + (raven && raven.maxHp) + ')');
+    });
+  });
 })();

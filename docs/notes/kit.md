@@ -1,7 +1,7 @@
 # kit — notes (generic skills + consumables)
 
 Files: `js/data/skills_generic.js` (12 generic skills, owner `'generic'`, ids `gen_*`), `js/data/consumables.js`
-(14 consumables `con_*` + the surface `con_d4s`), `tests/content/kit.js` (16 suites `kit: …`; the real-hero preview
+(15 consumables `con_*` + the surface `con_d4s`), `tests/content/kit.js` (17 suites `kit: …`; the real-hero preview
 suite skips itself in isolated runs).
 
 Isolated runs: `bash tools/test.sh "suite=kit&isolate=skills_generic,consumables,content/kit"` (16 suites, 1 skipped) and
@@ -265,9 +265,162 @@ targetting o fheals on downed characters to heal and bring them up". Engine rule
   First Aid level, the three drinks, +50% healing, preview = reality; barrels for Chair / Punch / Jar; Holy Water and the
   Flask with flyers). "Second Wind, First Aid and Power Nap": First Aid now accepts a downed adjacent ally.
 
+## Rules run (Nov 6) — breaking objects (CONTENT SWEEP, shared)
+
+User: "objects should be targetable to break them" (engine rule: `docs/notes/rules.md` "Rules run"). Every attack that
+could aim at a barrel can now hit any breakable object for its listed damage (no riders: no knockback, no chain). The
+**Thunder Jar** keeps its damage in `execute`, so it states **`objectDmg: 8`** (its first strike; the content advisory
+listed it). Nobody opts out: Throw Chair, Sucker Punch and the Jar all make sense on a crate. Tests in "kit: v2
+requests…": a plain barrel is a breakable target for Throw Chair (7, "breaks!", no blast) instead of "no target"; the
+Thunder Jar hits a totem for 8 and the grunt beside it takes nothing.
+
+## Balance pass 1 (Nov 10) — the Bucket of Ice Water and the starting kit
+
+The healer gap (`docs/notes/balance.md` "Pass 1"): every party now starts with a new 15th consumable, the **Bucket of
+Ice Water** (and a First-Aid Fanny Pack on one hero, `js/data/items.js`; the Red Drink was in the kit for a while and was
+dropped: AutoPlay drank it in the first fights) (`con_ice_bucket`, 🪣, common, 25 gold, 1 AP, tags heal / revive): "Splash a
+downed ally within 2: they get back up with 50% of their max HP." Target `{ type: 'unit', range: [1, 2], filter:
+'downedAlly', los: false }` (the engine's revive filter, as Josiah's Smelling Salts), so only a downed hero is ever a
+target and AutoPlay keeps it until someone goes down. `DD.Act.revive(t, 0.5, { by })`: the ally keeps its initiative
+slot, nothing rides along. `DD.Kit.BUCKET_PCT` = 50; `DD.Kit.CONSUMABLE_IDS` lists it last. It drops and is sold like
+any common consumable. The kit itself is `DD.Balance.start.consumables` (balance.js), read by `DD.Run.newRun`.
+Tests: the registry suite counts 15; new suite "kit: balance pass — the Bucket of Ice Water gets a downed ally within 2
+back up at half HP, and nothing else" (targets at 1 and 2 tiles, not 3, not standing allies / you / foes; 50% HP; 1 AP;
+used up; AutoPlay keeps it while nobody is down and splashes a downed ally it can't walk to — with a Help Up in reach
+it walks over and keeps the bucket).
+Numbers unchanged elsewhere (Red Drink 10, Big Red Drink 20, First Aid 6/8/10).
+(Superseded in part by "Sustain (Nov 12)" below: the Fanny Pack left the kit; the Bucket stays.)
+
+## Sustain (Nov 12) — the starting kit is the Bucket only (D9, KIT-BALANCE build)
+
+The user (D9, `.tmp/wf12/lead-decisions.md`): no generic heal handed to every party; sustain is linked to the heroes
+themselves (skills, passives, hero items). Spec: `.tmp/wf13/sustain-spec.md` §2.3, §2.4, §3, §7 (KIT-BALANCE).
+- `js/data/balance.js`: `start = { consumables: ['con_ice_bucket'], items: [] }`. The **Bucket of Ice Water** stays: a
+  one-shot revive that only targets a downed ally, so it is not the "heal for every party" D9 rules out (93 of 100 runs
+  use it; it matters most to parties without a healer). `start.items` stays supported by `DD.Run.newRun` (empty). The
+  kit comment and the act 1 row comment were rewritten; **no number moved** (the act 1 rows were sized by pass 1 for the
+  Fanny Pack; balance pass 3 re-fits them, `docs/notes/balance.md`).
+- The **First-Aid Fanny Pack** is unchanged and stays in the game as one of the 20 ordinary common items (loot and shops,
+  weight 1, not `noDrop`); only its comment in `js/data/items.js` changed (`docs/notes/items.md`).
+- Nothing else in the kit changed: no consumable, no generic skill, `tests/content/kit.js` untouched (its Bucket suite
+  still holds).
+- Tests: `tests/balance_tests.js` suite 6 is now `balance: every party starts the run with a revive and no generic heal
+  (the starting kit, D9)`: no starting item; the guard (a starting item may not carry an `onTurnStart` / `onTurnEnd`
+  hook); every kit consumable targets `downedAlly`; the 3-pocket check; `newRun` plumbing (the pockets, nobody wears the
+  Fanny Pack, every difficulty and party size gets the same kit); with `start.items = ['first_aid_fanny_pack']` exactly
+  one hero wears it (the path still works); unknown ids are skipped. Suite 5: only its comment (and the boss row's
+  assertion message) now say the row was sized for a heal D9 removed; the 1.1-1.3 bound is unchanged.
+
+Status (Nov 12, ~20:00, after the restart): every edit above is in the files (checked with `git diff`). Isolated run
+`suite=balance,Fanny&isolate=data/items.js,consumables,enemies/act1,content/shared,content/kit`: suites 1-6, the Fanny
+suite and the Bucket suite pass; suite 7 (pass 2's acts 2-3 boss rows, written ahead) fails as expected until the
+balance pass writes `DD.Balance.encounters` (spec §9 B4). Full run (`bash tools/test.sh`, Nov 12 ~20:05): 991 suites,
+122,815 assertions ok, 4 failures in 2 suites: that suite 7 (3 asserts: Lich-tenstein, Dr. Iris and the DM rows are
+still ×1; not this build's, it waits for phase 2) and `hero_marwyn: AutoPlay battles, acts 2-3` ("many different
+skills used (6)"; HERO-TRIO's file, being rebuilt in parallel). No swallowed "Error in" lines. Nothing failing comes from
+this build's edits.
+
+### Requests (Nov 12)
+
+- **Kit / consumables owner** (`js/data/consumables.js` header, lines 12-13, comment only): "is in every party's starting
+  kit (DD.Balance.start.consumables, next to the First-Aid Fanny Pack in js/data/items.js)" is stale since D9. Suggested:
+  "is every party's starting kit (DD.Balance.start.consumables; D9: the kit is a revive, not a heal)". Not in my files.
+
+### Deviations (Nov 12)
+
+- None from the spec in the kit. (Suite 5's assertion message changed with its comment: see `docs/notes/items.md`
+  "Sustain (Nov 12)" for the full list of this build's departures.)
+
+## Review (sustain, Nov 12) — adversarial review of the starting kit (ADVERSARIAL REVIEWER role)
+
+- **Verified**: `DD.Balance.start = { consumables: ['con_ice_bucket'], items: [] }`; a fresh `DD.Run.newRun` puts the
+  Bucket in the pockets and nobody wears the Fanny Pack (balance suite 6, every difficulty and party size); the
+  `start.items` path still equips an item when a sim hands one out. In the act 1 sim
+  (`seeds=8&from=7000&stop=1&party=slate,basanos,sparrow,marwyn&dump=1`) the Bucket was used 8 times in 8 runs.
+  The Bucket only targets a downed ally, so the kit is a revive, not a recurring heal (D9).
+- **Fixed**: nothing. Open: the request above to the consumables owner (js/data/consumables.js header, lines 12-13,
+  still says the Bucket sits "next to the First-Aid Fanny Pack").
+
 ## History
 
 v1 (2026-10-31, kit + review): telegraph-era versions of these skills (Tactical Retreat's landing tile out of
 telegraphs, Sand's intent-counting aiScore, "No Guard Block" jokes), fixed in review: the Mystery Potion's preview
 giving the roll away (kept: its own preview), push highlights ignoring `modifyPush` (kept: `pushDist`), icon clashes on
 the action bar (kept: 🤛 👐 🚑 and the registry check), desc exactness (kept as a rule).
+
+## Review (playtest fixes, Nov 12 ~20:45) — the consumables part of heroes-v1 (playtest REVIEWER role)
+
+fix:ui added `UI.consumableDesc(d, user)` and passes the selected unit in combat (fix:content's request in hero-kiri.md);
+the seven ranged consumables (Bucket of Ice Water, Flask of Bad Decisions, Scroll of Yeet, Bag of d4s, Holy Water, Frost
+Flask, Thunder Jar) now have `desc(L, user)` with `DD.Targeting.reach` (helper `within()` in consumables.js): the pocket
+tooltip of a hero with a +range item says "within 5", shops / rewards (no holder) the base number. `DD.Rewards.consumableReward`
+renders the desc through `DD.skillDesc` (a string as before). Suites: `kit: playtest review — consumable texts give the
+range the holder really has`; `kit: registry` / `kit: balance pass` read the desc via `DD.skillDesc`.
+
+## Balance refit (Nov 12) — the Bucket of Ice Water stays (BALANCE REFIT 1; docs/notes/balance.md "Sustain refit - act 1")
+
+- Measured without it (act 1 only, 300 runs, seeds 7000+, `bal=start.consumables:[]`): act 1 cleared 65 → 59% (X 55 →
+  50, H 77 → 69), the act 1 boss 69 → 66%. Splashed 219 times in 300 act 1 runs and ~196 times in 200 campaigns. A
+  one-shot revive that waits for a down, not the recurring heal D9 rejected: kept as the whole starting kit.
+- `js/data/consumables.js` header: the "next to the First-Aid Fanny Pack" line is fixed (the kit owner's request): "is
+  every party's starting kit (DD.Balance.start.consumables; D9: the kit is a revive, not a heal)". Comment only.
+
+## Finish (Nov 14) — lead decisions D1 / D7 on the content side, heroes-v1 for all sixteen (FIX: CONTENT)
+
+**D1 (which skills break objects; desc == execute).** The engine plays "every single-target damage skill (attack or
+spell, hero or hero-side summon) can aim at a breakable object: its damage and nothing else". The content texts now say
+it in the same words:
+- Object descs: Grimble's filing cabinet, Lich-tenstein's shelves, the Strike Fund, the Bone Pile (and the Skeleton
+  Intern's codex line), the Detention Pile, the Bottomless Mimosa Bar, Slate's Boulder and Buga's Pork Barrel say "any
+  single-target damage skill can break it" (the Pork Barrel: "aim any single-target damage skill at it"). Tips: "Shoot
+  the barrel: aim any single-target damage skill at an explosive barrel and it goes off …" and "… Any single-target
+  damage skill can break one too." Comments in consumables.js / skills_generic.js / buga.js follow.
+- The opt-outs (`target.objects: false`), each because a crate makes no sense even as a joke or would be an exploit:
+  Basanos's Pounce (the leap lands next to a foe), Ellaria's Fetch! (the corgi's dash and drag: a free sight-free hit at
+  6), Kiri's Arrow from Beyond (it lands next turn, "wherever it is"), Slate's Hold Still / Rock Bottom / Stress Ball
+  (grapple, slam, squeeze: foes only), Sparrow's Vein Glory (the dart is the point), Zarathor's Throw Money At It (its
+  gold is paid in execute, so a shot at a crate would be free). Eight in all; `kit: finish D1` pins the list.
+- The comedic line for a non-weapon skill breaking something is the engine's (`SPELL_BREAK_QUIPS` in actions.js: "turns
+  Heckle on the Crate … Not what that skill was for. It worked anyway.").
+- `kit.js` "Sand in Your Eye: not an attack, so no barrel target" asserted the old rule; it now checks Sand in Your Eye I
+  (single-target, 2 damage) is a barrel target, III (an area) and Come At Me, Bro (no damage) are not, and that Sand I
+  breaks a totem for its listed 2.
+
+**D7 (swap narration).** The engine narrates `swap` ({hero} the mover, {ally} the ally) now and then and the mover may
+bark `swap` ({ally}). Content: 8 narration lines (narrator.js, TOKENS.swap = hero, ally; no line names a hero, so the
+party filter has nothing to drop) and 2 swap barks for every hero (Betty 4: his bark suite wants 4-6 per key), each
+with `{ally}` and no other hero named. `kit: finish D7` checks the tokens, the names and a real bark.
+
+**heroes-v1 (all sixteen).** The cross-hero suite `kit: playtest fixes (Nov 12) — descs give the range …` now walks every
+hero (Slate, Basanos, Sparrow, Marwyn and Hjalmar joined; each has its own `finish` suite too). items.js had nothing to
+fix: its "within N tiles" are self areas (no range bonus); the Party Balloons desc now ends "You still swoop down for
+gold." (text-tone-v1, ≤ 150 chars).
+
+Tests changed for the new rules (they asserted the old ones): `kit.js` (Sand in Your Eye), `hero_buga.js` (the Pork
+Barrel cue records `ctx.objectHit`: D4 gives an object hit no `ctx.target`), the D1 wording checks in `bosses_act1`,
+`bosses_act2`, `enemies_act1`, `enemies_act2`, `integration`, `narrative` and `hero_slate`.
+
+Requests:
+- TERRAIN (js/data/terrain.js owner): the generic props barrel, keg, dead_tree, bush, mushroom (Spore Pod), coffin,
+  bookshelf, candles, soda_can, fence and brazier give their HP but not the rule; the HUD's 🔨 line states it, but D1
+  wants the descs to say it too, e.g. "Destructible cover (5 HP): any single-target damage skill can break it. …".
+  `kit: finish D1` logs the list (it asserts only the content files' objects).
+
+## Review (finish) — adversarial review of the finish fixes (REVIEWER role, Nov 14)
+
+- **D1 end to end on real content** (probe `.tmp/wf14/rev/d1.js`, `d1b.js`): every player-side single-target skill with an
+  enemy target (562 hero / generic / summon / consumable skill-levels) was used on a dummy foe and, when it aims, on a
+  40-HP crate, an explosive barrel, a Bone Pile and three opted-out objects (the DM's panel, the coffee machine, a
+  protect-objective keg). Each crate / pile took exactly its `objectDamage` (the 🔨 number); nothing else changed (other
+  units, positions, statuses, gold, Hype; Marbles' "Remembered!" free use is spent, which is a cost, not a rider); every
+  barrel went off; no opted-out object was ever a target. With every item and every table Blessing (2,682 hits, procs
+  forced) no rider fired on a crate (the Chaos Crystal's wild surge fires on any use: a use hook, allowed by D4).
+- **Found: a silent opt-out.** Head Over Heels (Betty, a utility with a 'custom' area: the landing tile) deals 5 at III
+  but never aimed at objects and was not on the list. It now says `objects: false` (a throw: the damage is the landing):
+  nine opt-outs. `kit: finish D1` pins it.
+- **Found: the D7 "no hero named" checks could never fire** (`new RegExp('\b' + w + '\b')`: in a string `'\b'` is a
+  backspace). Both checks now use `'\\b'` (a word boundary); the lines pass (no swap line names another hero).
+- TERRAIN request done (the reviewer owns terrain.js now): barrel, dead tree, bush, Spore Pod, coffin, bookshelf, candles,
+  Soda Can Tower, Iron Fence and brazier say "any single-target damage skill can break it". The Ale Keg does NOT: as The
+  Last Keg (a1_open_mic) it is a protect objective and nobody may aim at it, and the HUD shows the def's desc. `kit: finish
+  D1` now asserts the props too (the keg excepted).

@@ -74,6 +74,33 @@
     return false;
   }
   Act.cantMove = cantMove;
+  /**
+   * [finish audit-7] Can't move at the start of its NEXT turn (predictions: AI.reachOf, AutoPlay's danger model): a
+   * Rooted / noMove status that still holds then. A status def may answer itself with `heldThrough(st, unit) => bool`
+   * (pure; e.g. a hold that counts its holder's turns, such as Slate's Grappled); otherwise its own decay decides — one
+   * that ticks at the unit's turn end (not fresh, 1 turn left) or turn start (1 left) is gone by then. Pure.
+   */
+  function cantMoveNext(u) {
+    if (!u || !u.statuses) return false;
+    const s = S(), cur = s && s.current ? byId(s.current) : null;
+    const own = !!cur && (cur === u || (!!DD.Combat && typeof DD.Combat.groupOf === 'function' && DD.Combat.groupOf(cur).indexOf(u) >= 0));
+    for (let i = 0; i < u.statuses.length; i++) {
+      const st = u.statuses[i];
+      const sd = DD.getStatus(st.id);
+      if (st.id !== 'root' && !(sd && sd.noMove && flagOf(sd, 'noMove', st, u))) continue;
+      if (sd && typeof sd.heldThrough === 'function') {
+        if (DD.safe('status ' + sd.id + ' heldThrough', sd.heldThrough, sd, [st, u]) !== false) return true;
+        continue;
+      }
+      const decay = (sd && sd.decay) || 'turnEnd';
+      if (!(st.turns >= 0) || decay === 'never') return true;
+      if (decay === 'turnStart' && st.turns <= 1) continue;
+      if (decay === 'turnEnd' && own && !st.fresh && st.turns <= 1) continue;
+      return true;
+    }
+    return false;
+  }
+  Act.cantMoveNext = cantMoveNext;
   function isBoss(u) { return !!u && (u.tier === 'boss' || !!u.isBoss); }
   function nameOf(u) { return u ? u.name : 'Something'; }
   function byId(id) {
@@ -84,6 +111,20 @@
   }
   function defOf(u) { return DD.Hooks.defOf(u); }
   Act.isBoss = isBoss;
+
+  // [finish D2] pronouns for rule texts that need one ("Slate is immovable: he can start a swap…"). A unit or its def may
+  // say `pronoun: 'he' | 'she' | 'it' | 'they'`; without one a hero is the campaign's (Ellaria, Sparrow and Kiri are she,
+  // every other hero he) and anything else is 'it'.
+  const PRONOUNS = { he: ['he', 'him', 'his'], she: ['she', 'her', 'her'], it: ['it', 'it', 'its'], they: ['they', 'them', 'their'] };
+  const SHE_HEROES = { ellaria: 1, sparrow: 1, kiri: 1 };
+  /** { sub, obj, pos } of a unit: 'he' / 'him' / 'his' and so on. */
+  Act.pronouns = function (u) {
+    const def = u ? defOf(u) : null;
+    let p = (u && u.pronoun) || (def && def.pronoun);
+    if (!PRONOUNS[p]) p = u && u.kind === 'hero' ? (SHE_HEROES[u.defId] ? 'she' : 'he') : 'it';
+    const w = PRONOUNS[p];
+    return { sub: w[0], obj: w[1], pos: w[2] };
+  };
 
   function statOf(u) {
     const s = S();
@@ -136,10 +177,26 @@
   function emit(name, data) { if (!Act.simulating) DD.Events.emit(name, data); }
   Act.emit = emit;
 
+  /** [playtest text-tone-10] End a log sentence: no '.' after a name that already ends in ! ? . or … ("Thief!", "Sparrow?"). */
+  function stop(text) { return /[.!?…]$/.test(text) ? text : text + '.'; }
+  /**
+   * [playtest text-tone-10] How a status reads as it lands: a def's logVerb ('is', 'gains', 'turns into a'...), else
+   * 'is' for adjectives (Stunned, Burning, Thorny, Wet, Asleep: the core statuses; names whose last word ends -ed / -ing /
+   * -y / -ble / -ous / -ive / -al / -ent / -ful / -less; "In Debt") and 'gains' for nouns ("Betty gains Thief!",
+   * "Valdris gains Flame-Forged Edge (3)").
+   */
+  function statusVerb(def) {
+    if (def.logVerb) return def.logVerb;
+    const words = String(def.name || '').replace(/[^A-Za-z]+$/, '').split(/[\s-]+/);
+    const last = words[words.length - 1] || '';
+    return def.core || /(ed|ing|y|ble|ous|ive|al|ent|ful|less)$/i.test(last) || /^(in|on|at|under|out|off|up)$/i.test(words[0] || '') ? 'is' : 'gains';
+  }
+  let logCount = 0;   // lines logged so far (any fight): "did that callback log anything?"
   Act.log = function (text, cls) {
     const s = S();
     if (!s || Act.simulating || Act.muted || !text) return;
     const entry = { round: s.round, text: String(text), cls: cls || 'system' };
+    logCount++;
     s.log.push(entry);
     if (s.log.length > 400) s.log.splice(0, s.log.length - 400);
     emit('combat:log', entry);
@@ -152,24 +209,87 @@
     return line;
   };
 
-  /** Speech bubble from a bark key of the unit's def (select/kill/hurt/...) or literal text. */
+  // [engine requests, hero barks] a bark line that names a hero who is not in this fight is never picked. A hero is
+  // named by any capitalised word of 3+ letters of its name ("Mayor Buga": Mayor, Buga), whole words, case-sensitive.
+  let heroNames = null;
+  function heroNameTests() {
+    const ids = Object.keys((DD.defs && DD.defs.heroes) || {});
+    if (heroNames && heroNames.n === ids.length) return heroNames.list;
+    const list = [];
+    ids.forEach(function (id) {
+      const words = String(DD.getHero(id).name || '').split(/[^A-Za-z]+/).filter(function (w) { return w.length >= 3 && /^[A-Z]/.test(w) && w !== 'The'; });
+      if (words.length) list.push({ id: id, re: new RegExp('\\b(' + words.join('|') + ')\\b') });
+    });
+    heroNames = { n: ids.length, list: list };
+    return list;
+  }
+  /** The lines that name nobody missing from the fight (every line when there is no fight). */
+  function partyLines(lines) {
+    const s = S();
+    if (!s || !s.units || !lines.length) return lines;
+    const here = {};
+    s.units.forEach(function (u) { if (u.kind === 'hero') here[u.defId] = 1; });
+    const absent = heroNameTests().filter(function (h) { return !here[h.id]; });
+    if (!absent.length) return lines;
+    return lines.filter(function (l) { return !absent.some(function (h) { return h.re.test(String(l)); }); });
+  }
+  Act.partyLines = partyLines;
+  /**
+   * [playtest text-tone-2] Lines that fit who they are about (opts.about: the hero who just went down, for 'ally_down'):
+   * a line naming a hero is a call to a HELPER, so that hero must be up ("Pebbles, fetch help!" never fires while
+   * Pebbles is the one down, nor while Pebbles is out); to address the downed hero, a line writes {downed} (filled in
+   * with the name). The speaker naming himself in the third person is fine. [finish text-tone-2] A line that OPENS by
+   * telling a named hero to get up ("Basanos, get up! …", "Marwyn, up!") speaks to the downed hero: it fires only when
+   * that hero is the one down.
+   */
+  const GET_UP = /^\W*([A-Z][A-Za-z' .-]*?),\s*(?:[Gg]et up|[Uu]p\b|[Oo]n your feet|[Ww]ake up|[Ss]tand up)/;
+  function aboutLines(lines, speaker, about) {
+    const s = S();
+    if (!s || !about || !lines.length) return lines;
+    const tests = heroNameTests();
+    return lines.filter(function (l) {
+      const txt = String(l);
+      const call = GET_UP.exec(txt);
+      for (let i = 0; i < tests.length; i++) {
+        const h = tests[i];
+        if (speaker && speaker.defId === h.id) continue;
+        if (!h.re.test(txt)) continue;
+        const u = s.units.filter(function (x) { return x.kind === 'hero' && x.defId === h.id && !x.dead; })[0];
+        if (call && h.re.test(call[1])) { if (!u || u.id !== about.id) return false; continue; }
+        if (!u || u.downed) return false;
+      }
+      return true;
+    });
+  }
+  Act.aboutLines = aboutLines;
+
+  /**
+   * Speech bubble from a bark key of the unit's def (select/kill/hurt/...) or literal text. opts go to FX.bark, except
+   * opts.about (the unit the bark is about: see aboutLines; `{downed}` / `{ally}` in the line become its name — the
+   * engine's 'ally_down' passes the downed hero, 'swap' the ally swapped with).
+   */
   Act.bark = function (unit, keyOrText, opts) {
     if (Act.simulating || !unit || unit.dead || !keyOrText) return '';
     const def = defOf(unit);
     let text = String(keyOrText);
+    const about = opts && opts.about;
+    if (about) { opts = Object.assign({}, opts); delete opts.about; }
     // identifier-like strings ('kill', 'ally_down', 'phase') are bark keys; anything else is literal text
     if (/^[a-z][a-z0-9_]*$/.test(text)) {
       const lines = def && def.barks ? def.barks[text] : null;
-      text = Array.isArray(lines) ? U.line(lines, cosmeticRng()) : typeof lines === 'string' ? lines : '';
+      let ok = Array.isArray(lines) ? partyLines(lines) : typeof lines === 'string' ? partyLines([lines]) : [];
+      if (about) ok = aboutLines(ok, unit, about);
+      text = !ok.length ? '' : Array.isArray(lines) ? U.line(ok, cosmeticRng()) : ok[0];
+      if (about && text) text = text.replace(/\{downed\}|\{ally\}/g, about.name);
     }
     if (!text) return '';
     FX().bark(unit, text, opts);
     return text;
   };
-  /** Bark with a probability (cosmetic). */
-  Act.maybeBark = function (unit, key, chance) {
+  /** Bark with a probability (cosmetic). opts as Act.bark. */
+  Act.maybeBark = function (unit, key, chance, opts) {
     if (Act.simulating) return '';
-    if (cosmeticRng().next() < (chance === undefined ? 0.35 : chance)) return Act.bark(unit, key);
+    if (cosmeticRng().next() < (chance === undefined ? 0.35 : chance)) return Act.bark(unit, key, opts);
     return '';
   };
 
@@ -366,12 +486,24 @@
     if ((stunLikeId(id) || id === 'sheep') && f.stunImmune) return true;
     if (id === 'sheep' && isBoss(unit)) return true;
     if (Array.isArray(f.immune) && f.immune.indexOf(id) >= 0) return true;
+    // [finish FF-6] an elemental damage-over-time (Burning: fire, Poisoned: poison) never sticks to a unit immune to
+    // that element (resist 0): no stacks, no log spam, no "vs Burning" riders on a fire-proof Hell Hound
+    const sd = DD.getStatus(id);
+    if (sd && sd.element && unit.resist && unit.resist[sd.element] === 0) return true;
     return false;
   }
-  /** The unit can't get this status (flags.immune, stunImmune for stun-likes and sheep, bosses vs sheep). Pure. */
+  /**
+   * The unit can't get this status (flags.immune, stunImmune for stun-likes and sheep, bosses vs sheep, an elemental
+   * status vs resist 0 to its element). Pure.
+   */
   Act.immuneTo = function (unit, id) { return !!unit && immuneTo(unit, id); };
 
-  /** Apply a status. opts: number (stacks) or { stacks = 1, turns, silent }. Returns the instance or null. */
+  /**
+   * Apply a status. opts: number (stacks) or { stacks = 1, turns, silent, fresh, thisTurn }. Returns the instance or null.
+   * [engine requests, kit] fresh: false = applied during its owner's own turn, the end of THIS turn counts (skipFresh: false
+   * for one application); thisTurn: true = { turns: 1, fresh: false }: "this turn only" (gone at the end of the turn).
+   * A re-application that changes nothing (same stacks, no longer duration) is not logged again (wading through water).
+   */
   Act.addStatus = function (target, id, opts, src) {
     if (typeof opts === 'number') opts = { stacks: opts };
     opts = opts || {};
@@ -380,7 +512,7 @@
     if (!active(target)) return null;
     let stacks = opts.stacks === undefined ? 1 : Math.max(1, Math.round(opts.stacks) || 1);
     const defTurns = turnsOf(def.defaultTurns, -1);
-    let turns = turnsOf(opts.turns, defTurns);
+    let turns = turnsOf(opts.thisTurn ? 1 : opts.turns, defTurns);
     if (immuneTo(target, id)) {
       if (!opts.silent) FX().text(target, 'Immune!', { color: '#dddddd', size: 14 });
       return null;
@@ -397,11 +529,14 @@
     if (id === 'wet' && has(target, 'burn')) Act.removeStatus(target, 'burn', { text: 'Extinguished!' });
     const max = def.maxStacks || 99;
     let inst = getStatus(target, id);
-    const fresh = ownPhase(target);
+    const fresh = ownPhase(target) && opts.fresh !== false && !opts.thisTurn;
+    let changed = true;
     if (inst) {
       if (def.stacking === 'none') return inst;
+      const s0 = inst.stacks, t0 = inst.turns;
       inst.stacks = def.stacking === 'stack' ? Math.min(max, inst.stacks + stacks) : Math.min(max, Math.max(inst.stacks, stacks));
       inst.turns = inst.turns < 0 || turns < 0 ? -1 : Math.max(inst.turns, turns);
+      changed = inst.stacks !== s0 || inst.turns !== t0 || (fresh && !inst.fresh);
       if (fresh) inst.fresh = true;
       if (src) inst.source = src.id;
     } else {
@@ -410,34 +545,52 @@
       target.statuses.push(inst);
     }
     bump();
-    if (!opts.silent) {
+    if (!opts.silent && changed) {
       FX().status(target, id, '+' + def.name + (stacks > 1 ? ' ' + stacks : ''));
       FX().sound(def.type === 'buff' ? 'buff' : 'debuff');
-      Act.log(target.name + ' is ' + def.name + (inst.stacks > 1 ? ' (' + inst.stacks + ')' : '') + '.', 'status');
+      Act.log(stop(target.name + ' ' + statusVerb(def) + ' ' + def.name + (inst.stacks > 1 ? ' (' + inst.stacks + ')' : '')), 'status');
     }
     // v2: a stun-like or a polymorph interrupts a pending wind-up at once (clear feedback; DESIGN §4.1 counterplay).
-    // Taunt, charm, silence, dazzle and confuse act on the unit's next turn instead (DD.AI), not on its wind-ups.
+    // Taunt, charm and silence act on the unit's next turn instead (DD.AI), not on its wind-ups.
     if (target.intents && target.intents.length && DD.AI && DD.AI.cancelIntents && (stunLikeId(id) || id === 'sheep')) {
       DD.AI.cancelIntents(target, id === 'sheep' ? 'Baa?' : def.name + '!', { keepUnstoppable: true });
+    }
+    // playtest fix (bosses-objectives-2): Dazzle / Confuse move a pending wind-up (1 tile off / a quarter turn): the
+    // offset is rolled NOW and stored on the intent, so the board shows where it will really land
+    if ((id === 'dazzled' || id === 'confused') && target.intents && target.intents.length && DD.AI && DD.AI.rollSkew) {
+      target.intents.slice().forEach(function (it) { DD.AI.rollSkew(target, it); });
     }
     DD.Hooks.fire('onStatusApplied', target, target, inst, src || null);
     return inst;
   };
 
+  /** opts: { silent, text, reason } (reason for onStatusRemoved: 'removed' default, 'expired' from DD.Combat's decay). */
   Act.removeStatus = function (target, id, opts) {
     opts = opts || {};
     if (!target || !target.statuses) return false;
     for (let i = 0; i < target.statuses.length; i++) {
       if (target.statuses[i].id !== id) continue;
-      target.statuses.splice(i, 1);
+      const inst = target.statuses.splice(i, 1)[0];
       bump();
       const def = DD.getStatus(id);
       if (!opts.silent) FX().status(target, id, opts.text || ('−' + (def ? def.name : id)), { removed: true });
       landed(target, def);
+      statusGone(target, inst, def, opts.reason || 'removed');
       return true;
     }
     return false;
   };
+
+  /**
+   * [engine requests, hero-basanos] A status left the unit (removed, expired, cleansed): its def's own onRemove(unit,
+   * inst, reason) and onStatusRemoved(unit, inst, reason) on the unit's sources (the status itself is gone from them),
+   * so content whose state follows a status (a form, an aura) re-syncs at once. Not for downs / deaths (all statuses go).
+   */
+  function statusGone(unit, inst, def, reason) {
+    if (!unit || unit.dead) return;
+    if (def && typeof def.onRemove === 'function') DD.safe('status ' + def.id + ' onRemove', def.onRemove, def, [unit, inst, reason]);
+    DD.Hooks.fire('onStatusRemoved', unit, unit, inst, reason);
+  }
 
   /**
    * [v2 review] A status that granted flight (def `flying`) is gone: a unit that no longer flies over a pit or deep
@@ -453,16 +606,18 @@
     if (!target || !target.statuses) return 0;
     type = type || 'debuff';
     let n = 0, wings = null;
+    const gone = [];
     const max = count === undefined || count === null ? Infinity : count;
     for (let i = target.statuses.length - 1; i >= 0 && n < max; i--) {
       const def = DD.getStatus(target.statuses[i].id);
-      if (def && def.type === type) { target.statuses.splice(i, 1); n++; if (def.flying) wings = def; }
+      if (def && def.type === type) { gone.push({ inst: target.statuses.splice(i, 1)[0], def: def }); n++; if (def.flying) wings = def; }
     }
     if (n) {
       bump();
       FX().text(target, type === 'debuff' ? 'Cleansed!' : 'Dispelled!', { color: type === 'debuff' ? '#9fffb0' : '#d0b0ff', size: 15 });
       Act.log(target.name + (type === 'debuff' ? ' shrugs off ' : ' loses ') + U.plural(n, type) + '.', 'status');
       landed(target, wings);
+      for (let i = 0; i < gone.length; i++) statusGone(target, gone[i].inst, gone[i].def, 'cleansed');
     }
     return n;
   };
@@ -495,6 +650,24 @@
     return m;
   }
   Act.takenMult = takenMult;
+  /**
+   * [engine requests, hero-marwyn] Flat damage-taken change from content statuses declaring takenFlat (number or pure
+   * (st, unit, d) => number; −2 = 2 less per hit), added to d.flat after the multipliers, every cause (a function can
+   * look at d.cause). Declared rather than hooked, so DD.AI.estimate reads it too (its d: { source, target, skill, base,
+   * element, cause: 'skill', opportunity }).
+   */
+  function takenFlat(u, d) {
+    let f = 0;
+    const list = (u && u.statuses) || [];
+    for (let i = 0; i < list.length; i++) {
+      const sd = DD.getStatus(list[i].id);
+      if (!sd || sd.takenFlat === undefined || sd.takenFlat === null) continue;
+      const v = Number(typeof sd.takenFlat === 'function' ? DD.safe('takenFlat of ' + sd.id, sd.takenFlat, sd, [list[i], u, d || {}]) : sd.takenFlat);
+      if (isFinite(v)) f += v;
+    }
+    return f;
+  }
+  Act.takenFlat = takenFlat;
 
   /**
    * Deal damage. opts: element, skill, tags, cause ('skill'|'status'|'surface'|'terrain'|'bump'|'fall'|
@@ -553,6 +726,7 @@
     DD.Hooks.fire('modifyIncomingDamage', target, d);
     if (has(target, 'vulnerable')) d.mult *= 1.25;
     d.mult *= takenMult(target);
+    d.flat += takenFlat(target, d);
     if (d.element && target.resist && typeof target.resist[d.element] === 'number') {
       d.mult *= target.resist[d.element];
       if (target.resist[d.element] === 0) d.nullified = true; // [integration fix] immune: flat bonuses don't leak through
@@ -597,8 +771,8 @@
     if (!opts.silent && final > 0) {
       const how = cause === 'status' ? ' (' + (d.tags[0] || 'status') + ')' : cause === 'skill' || cause === 'other' ? '' : ' (' + cause + ')';
       const from = src && src !== target && (cause === 'skill' || cause === 'other') ? ' from ' + src.name : '';
-      Act.log(target.name + ' takes ' + d.dealt + (d.element ? ' ' + d.element : '') + ' damage' + from + how +
-        (blocked ? ' (' + blocked + ' blocked)' : '') + (d.highGround ? ' (high ground!)' : '') + '.', target.side === 'hero' ? 'enemy' : 'dmg');
+      Act.log(stop(target.name + ' takes ' + d.dealt + (d.element ? ' ' + d.element : '') + ' damage' + from + how +
+        (blocked ? ' (' + blocked + ' blocked)' : '') + (d.highGround ? ' (high ground!)' : '')), target.side === 'hero' ? 'enemy' : 'dmg');
     }
     const cu = d.credit;
     if (cu) { const st = statOf(cu); if (st) st.dmg += d.dealt; }
@@ -620,7 +794,7 @@
     DD.Hooks.fire('onTakeDamage', target, d);
     if (target.hp <= 0 && !target.dead && !target.downed) {
       d.killed = true;
-      if (!zeroHp(target, d) && active(target) && !(target.hp > 0)) target.hp = 1;
+      zeroHp(target, d, 1);
     } else if (final > 0 && target.side === 'hero' && target.kind === 'hero') {
       if (target.hp <= target.maxHp * 0.3) Act.maybeBark(target, 'lowhp', 0.3); else Act.maybeBark(target, 'hurt', 0.15);
     } else if (final > 0 && target.side === 'enemy') Act.maybeBark(target, 'hurt', 0.12);
@@ -653,7 +827,7 @@
     if (opts.hitObjects) {
       for (let i = 0; i < tiles.length; i++) {
         const t = G().tile(tiles[i].x, tiles[i].y);
-        if (t && t.obj) Act.damageObject(src, t.x, t.y, typeof amount === 'function' ? amount(null) : amount);
+        if (t && t.obj) Act.damageObject(src, t.x, t.y, typeof amount === 'function' ? amount(null) : amount, opts);
       }
     }
     return out;
@@ -732,11 +906,15 @@
    * the HP the hook gave it (else 1 after damage, its HP before an instant kill). [phase 4, bosses-act2 request]
    * Returns false when the death was refused.
    */
-  function zeroHp(target, d) {
+  function zeroHp(target, d, keepHp) {
     if (DD.Hooks.some('preventDeath', target, target, d)) {
       d.killed = false;
       d.prevented = true;
       bump();
+      // [engine requests, hero-basanos] the unit's sources hear it at once (its HP is already what the veto left it):
+      // Hair Trigger after Plot Armor need not wait for the next hook on him
+      if (active(target) && !(target.hp > 0)) target.hp = keepHp > 0 ? keepHp : 1;
+      DD.Hooks.fire('onDeathPrevented', target, target, d);
       return false;
     }
     if (target.kind === 'hero') down(target, d); else die(target, d);
@@ -759,7 +937,12 @@
   function die(target, d) {
     const s = S();
     if (target.dead) return;
-    if (target.side === 'enemy') Act.bark(target, 'death');
+    // [playtest text-tone-20] minions and rank-and-file die with a bark now and then (3-line pools wore thin fast);
+    // elites and bosses always get their last words
+    if (target.side === 'enemy') {
+      if (target.tier === 'elite' || isBoss(target)) Act.bark(target, 'death');
+      else Act.maybeBark(target, 'death', 0.4);
+    }
     target.dead = true;
     target.hp = 0;
     target.block = 0;
@@ -816,11 +999,16 @@
     FX().downed(target);
     FX().sound('downed');
     Act.log(target.name + ' is down!', 'kill');
-    Act.narrate('hero_downed', { hero: target.name, enemy: d.credit ? d.credit.name : 'gravity' });
+    // [playtest text-tone-5 / bosses-objectives-10] a self-own or friendly fire is not a villain's triumph
+    const cr = d.credit || null;
+    if (cr && cr === target) Act.narrate('hero_downed_self', { hero: target.name });
+    else if (cr && cr.side === target.side) Act.narrate('hero_downed_friendly', { hero: target.name, enemy: cr.name });
+    else Act.narrate('hero_downed', { hero: target.name, enemy: cr ? cr.name : 'gravity' });
     s.stats.downs = (s.stats.downs || 0) + 1;
     Act.bark(target, 'downed');
     const allies = s.units.filter(function (u) { return u.kind === 'hero' && active(u) && u !== target; });
-    if (allies.length) Act.maybeBark(allies[Math.floor(cosmeticRng().next() * allies.length)], 'ally_down', 0.6);
+    // [playtest text-tone-2] the bark knows who went down (no "Basanos, up!" while Basanos stands)
+    if (allies.length) Act.maybeBark(allies[Math.floor(cosmeticRng().next() * allies.length)], 'ally_down', 0.6, { about: target });
     DD.Hooks.fire('onDowned', target, target, d);
     // [phase 4, passives-table request] onAllyDowned(unit, downed, d): heroes are downed, not killed (no onAllyDeath)
     const side = s.units.slice();
@@ -842,7 +1030,7 @@
       credit: src || currentCredit(), text: opts.text || null };
     const hp0 = target.hp;
     target.hp = 0;
-    if (!zeroHp(target, d)) { if (!target.dead && !target.downed && !(target.hp > 0)) target.hp = Math.max(1, hp0); return false; }
+    if (!zeroHp(target, d, Math.max(1, hp0))) return false;
     const st = statOf(d.credit);
     if (st) st.dmg += hp0;
     return true;
@@ -862,6 +1050,11 @@
     target.hp = U.clamp(Math.round(opts.hp !== undefined && isFinite(exact) ? exact : target.maxHp * frac), 1, target.maxHp);
     target.ap = 0;
     bump();
+    // playtest fix (robustness-1), the safety net: never stand up over a drop or inside a wall
+    if (!G().isWalkable(target.x, target.y, target) || (!G().isFlying(target) && G().isDrop(target.x, target.y))) {
+      const spot = safeSpot(target.x, target.y, target);
+      if (spot) { const from = { x: target.x, y: target.y }; target.x = spot.x; target.y = spot.y; FX().jump(target, from, spot); }
+    }
     FX().revive(target);
     FX().sound('heal');
     // [requests verify] no pronoun after a hero's name (every hero has their own; narrator.js convention)
@@ -884,29 +1077,35 @@
     if (s && s.rng && r0 !== null && s.rng.getState() !== r0) bump();
   }
   /**
-   * Fire everything that happens when a unit enters a tile. cause 'move'|'push'|'teleport'|'spawn'. Flyers (v2) feel
-   * nothing of the floor: no terrain onEnter, no ground objects / traps / plates, only airborne surfaces (clouds).
-   * onEnterTile hooks still fire (content that implements a floor effect there checks DD.Grid.feelsFloor).
+   * Fire everything that happens when a unit enters a tile. cause 'move'|'push'|'teleport'|'spawn'; from: the tile it
+   * came from ({x,y}; null for teleports / spawns that don't say). [engine requests, hero-hjalmar] Terrain, surface and
+   * object onEnter all get (…, cause, from): terrain onEnter(unit, tile, cause, from), surface onEnter(unit, tile, cause,
+   * from), object onEnter(unit, obj, tile, cause, from) — a banana peel can send a slider on the way it was going.
+   * Flyers (v2) feel nothing of the floor: no terrain onEnter, no ground objects / traps / plates, only airborne surfaces
+   * (clouds) — except LOOT: an object flagged `loot` (gold piles: picking up is not a floor effect, lead's call) is
+   * picked up by flyers too. onEnterTile hooks still fire (content that implements a floor effect there checks
+   * DD.Grid.feelsFloor).
    */
-  function enterTile(unit, tile, cause) {
+  function enterTile(unit, tile, cause, from) {
     if (!tile || !active(unit)) return;
     const floor = G().feelsFloor(unit);
+    const came = from ? { x: from.x, y: from.y } : null;
     if (cause !== 'spawn') {
       if (floor) {
         const td = G().terrain(tile);
-        if (typeof td.onEnter === 'function') tileCall('terrain ' + td.id + ' onEnter', td.onEnter, td, [unit, tile, cause]);
+        if (typeof td.onEnter === 'function') tileCall('terrain ' + td.id + ' onEnter', td.onEnter, td, [unit, tile, cause, came]);
         if (!active(unit)) return;
       }
       if (tile.surface) {
         const sd = DD.getSurface(tile.surface.id);
-        if (sd && typeof sd.onEnter === 'function' && G().feelsSurface(unit, sd)) tileCall('surface ' + sd.id + ' onEnter', sd.onEnter, sd, [unit, tile]);
+        if (sd && typeof sd.onEnter === 'function' && G().feelsSurface(unit, sd)) tileCall('surface ' + sd.id + ' onEnter', sd.onEnter, sd, [unit, tile, cause, came]);
         if (!active(unit)) return;
       }
       const o = tile.obj;
-      if (o && floor && !G().objBlocksMove(o)) {
+      if (o && (floor || G().isLoot(o)) && !G().objBlocksMove(o)) {
         const od = DD.getObject(o.id);
         const fn = typeof o.onEnter === 'function' ? o.onEnter : od && od.onEnter;
-        if (typeof fn === 'function') tileCall('object ' + o.id + ' onEnter', fn, o, [unit, o, tile]);
+        if (typeof fn === 'function') tileCall('object ' + o.id + ' onEnter', fn, o, [unit, o, tile, cause, came]);
         if (!active(unit)) return;
       }
     }
@@ -1042,7 +1241,7 @@
         bump();
         FX().slide(target, from, { x: nx, y: ny }, { ms: 120 });
         if (!G().isFlying(target) && G().isDrop(nx, ny)) { res.fell = true; fall(target, src); break; }
-        enterTile(target, G().tile(nx, ny), 'push');
+        enterTile(target, G().tile(nx, ny), 'push', from);
         remaining--;
         if (remaining === 0 && !slid && opts.slide !== false && active(target) && slippery(target)) {
           remaining = 1; slid = true;
@@ -1063,7 +1262,7 @@
     FX().text(target, 'BONK!', { color: '#ffe08a', size: 16 });
     Act.damage(src, target, dmg, { cause: 'bump', tags: ['bump'] });
     if (b.kind === 'unit' && active(b.unit)) Act.damage(src, b.unit, dmg, { cause: 'bump', tags: ['bump'] });
-    if (b.kind === 'object') Act.damageObject(src, nx, ny, dmg);
+    if (b.kind === 'object') Act.damageObject(src, nx, ny, dmg, { cause: 'bump' });
   }
 
   /** Pull toward a point (stops before reaching it). */
@@ -1095,7 +1294,7 @@
     target.x = x; target.y = y;
     bump();
     if (opts.fx !== false) FX().teleport(target, from, { x: x, y: y });
-    if (!opts.noEnter) enterTile(target, G().tile(x, y), 'teleport');
+    if (!opts.noEnter) enterTile(target, G().tile(x, y), 'teleport', from);
     return true;
   };
 
@@ -1117,7 +1316,7 @@
       [a, b].forEach(function (u) {
         if (!active(u)) return;
         if (!G().isFlying(u) && G().isDrop(u.x, u.y)) fall(u, opts.src || currentCredit());
-        else enterTile(u, G().tile(u.x, u.y), 'teleport');
+        else enterTile(u, G().tile(u.x, u.y), 'teleport', u === a ? pa : pb);
       });
     });
     return true;
@@ -1142,6 +1341,7 @@
     if (!L || !(L.dmg > 0)) return null;
     const tags = def.tags || [];
     if (tags.indexOf('ranged') >= 0) return null;
+    if (DD.AI && DD.AI.windupOnly && DD.AI.windupOnly(def)) return null;   // a skill only ever wound up is no reaction
     if (def.area && def.area.shape && def.area.shape !== 'single' && tags.indexOf('melee') < 0) return null;
     const tg = def.target || {};
     const type = tg.type || 'unit';
@@ -1311,7 +1511,8 @@
    * Walk along a path (excluding start) one tile at a time, firing tile effects. Stops if the unit dies, is
    * rooted, or the way is blocked; never ends sharing a tile. opts: action (default true: counts as a move
    * action for Bleed), cause ('move'), provoke (a MOVE action: leaving a tile next to opposing units triggers their
-   * attacks of opportunity; an attack that downs, stuns, roots, moves or stops the walker ends the walk there).
+   * attacks of opportunity; an attack that downs, stuns, roots, moves or stops the walker ends the walk there),
+   * passDowned (it may step over the bodies of downed foes: the AI's boxed-in fallback; never ends on one).
    * Returns the tiles actually walked (array; .provoked = attacks of opportunity made, .interrupted = one ended it).
    */
   Act.moveAlong = function (unit, path, opts) {
@@ -1320,12 +1521,13 @@
     walked.provoked = 0;
     walked.interrupted = false;
     if (!active(unit) || !path || !path.length) return walked;
+    const path0 = { x: unit.x, y: unit.y };
     stopping.delete(unit);
     for (let i = 0; i < path.length; i++) {
       const p = path[i];
       if (!G().isWalkable(p.x, p.y, unit)) break;
       let occ = G().unitAt(p.x, p.y);
-      if (occ && occ !== unit && (G().hostile(unit, occ) || i === path.length - 1)) break;
+      if (occ && occ !== unit && ((G().hostile(unit, occ) && !(opts.passDowned && occ.downed)) || i === path.length - 1)) break;
       if (opts.provoke) {
         const x0 = unit.x, y0 = unit.y;
         const n = provokeLeaving(unit, p);
@@ -1340,7 +1542,7 @@
           // the attack may have changed the way ahead
           if (!G().isWalkable(p.x, p.y, unit)) break;
           occ = G().unitAt(p.x, p.y);
-          if (occ && occ !== unit && (G().hostile(unit, occ) || i === path.length - 1)) break;
+          if (occ && occ !== unit && ((G().hostile(unit, occ) && !(opts.passDowned && occ.downed)) || i === path.length - 1)) break;
         }
       }
       face(unit, p);
@@ -1348,7 +1550,7 @@
       unit.x = p.x; unit.y = p.y;
       walked.push({ x: p.x, y: p.y });
       FX().move(unit, [{ x: p.x, y: p.y }], { from: from });
-      enterTile(unit, G().tile(p.x, p.y), opts.cause || 'move');
+      enterTile(unit, G().tile(p.x, p.y), opts.cause || 'move', from);
       if (!active(unit)) break;
       if (stopping.has(unit)) { stopping.delete(unit); break; }
       if (i < path.length - 1) {
@@ -1359,10 +1561,10 @@
     }
     stopping.delete(unit);
     // never end inside another unit (e.g. rooted while passing through a friend, or downed there by an attack of
-    // opportunity: the body is moved off the friend's tile too)
+    // opportunity: the body is moved off the friend's tile too) — back to the last tile of the walk it can stand on
     if (!unit.dead && unitsOn(unit.x, unit.y) > 1) {
-      const spot = G().nearestFree(unit.x, unit.y, unit);
-      if (spot) { const from = { x: unit.x, y: unit.y }; unit.x = spot.x; unit.y = spot.y; FX().slide(unit, from, spot); }
+      const back = [path0].concat(walked.slice(0, -1)).reverse();
+      settleOff(unit, back);
     }
     if (walked.length) {
       DD.Hooks.fire('onMove', unit, unit, walked);
@@ -1376,6 +1578,94 @@
     for (let i = 0; i < s.units.length; i++) { const u = s.units[i]; if (!u.dead && u.x === x && u.y === y) n++; }
     return n;
   }
+  /**
+   * Playtest fix (combat-controls-v1): a unit left sharing a tile (rooted while passing through a friend, downed there by
+   * an attack of opportunity, shoved onto one by a tile effect) steps back to the newest tile of `back` it can stand on
+   * — tiles it already stood on this move, so no new tile effects; hazard-free ones first — else to the nearest free
+   * safe tile (Act.safeSpot: never a drop, hazards last), whose floor it feels as it lands there (cause 'push').
+   */
+  function settleOff(unit, back) {
+    const from = { x: unit.x, y: unit.y };
+    const fly = G().isFlying(unit);
+    function ok(p, safe) {
+      if (!p || (p.x === from.x && p.y === from.y) || !G().isFree(p.x, p.y, unit) || (!fly && G().isDrop(p.x, p.y))) return false;
+      return !safe || !G().hazardAt(p.x, p.y, unit);
+    }
+    let spot = null;
+    for (let pass = 0; pass < 2 && !spot; pass++) {
+      for (let i = 0; i < (back || []).length; i++) if (ok(back[i], pass === 0)) { spot = { x: back[i].x, y: back[i].y }; break; }
+    }
+    const fresh = !spot;
+    if (fresh) spot = safeSpot(from.x, from.y, unit) || G().nearestFree(from.x, from.y, unit);
+    if (!spot) return false;
+    unit.x = spot.x; unit.y = spot.y;
+    FX().slide(unit, from, spot);
+    if (fresh && active(unit)) enterTile(unit, G().tile(spot.x, spot.y), 'push', from);
+    return true;
+  }
+
+  const SWAP_QUIPS = ['Pardon me. Excuse me. Coming through.', 'Personal space is a social construct.', 'Formation change! Allegedly tactical.',
+    'A do-si-do, but make it violent.', 'Tag, you\'re it.'];
+  const SWAP_NARRATE = 0.25;   // chance of the 'swap' narration line after a swap (cosmetic)
+  /**
+   * v2 (user request, rules run): a SWAP move (DD.Combat.swap): the mover steps onto the tile of an adjacent ally while
+   * the ally takes the mover's old tile. The mover's step is a move action: with opts.provoke, leaving its tile provokes
+   * attacks of opportunity exactly like a walk's first step (one that downs, stuns, roots, moves or stops it ends the
+   * move there and the swap does not happen; nor when the ally is no longer there, up and free to go). The ally is
+   * displaced: it provokes nothing and spends nothing. Both feel their new tiles as usual (the mover with cause 'move',
+   * the ally 'teleport', as in Act.swap; flyers skip the floor); onMove and Bleed for the mover only. Positions change
+   * without bump() (like moveAlong), so a swap whose tile effects change nothing can be undone.
+   * Returns { swapped, provoked, interrupted }.
+   */
+  Act.swapMove = function (mover, ally, opts) {
+    opts = opts || {};
+    const out = { swapped: false, provoked: 0, interrupted: false };
+    if (!active(mover) || !active(ally) || mover === ally || G().dist(mover, ally) !== 1) return out;
+    const s = S();
+    const from = { x: mover.x, y: mover.y }, to = { x: ally.x, y: ally.y };
+    stopping.delete(mover);
+    if (opts.provoke) {
+      out.provoked = provokeLeaving(mover, to);
+      if (out.provoked) {
+        if (s.result || !active(mover) || mover.x !== from.x || mover.y !== from.y || stunnedNow(mover) || cantMove(mover) || stopping.has(mover)) {
+          out.interrupted = true;
+          stopping.delete(mover);
+          if (active(mover) && !s.result) FX().text(mover, 'Stopped!', { color: '#ffb36b', size: 14 });
+          return out;
+        }
+        // a sweeping strike may have changed the ally: it must still be there, up and free to go
+        if (!active(ally) || ally.x !== to.x || ally.y !== to.y || stunnedNow(ally) || cantMove(ally) || isImmovable(ally)) {
+          out.interrupted = true;
+          return out;
+        }
+      }
+    }
+    face(mover, to);
+    face(ally, from);
+    mover.x = to.x; mover.y = to.y;
+    ally.x = from.x; ally.y = from.y;
+    out.swapped = true;
+    FX().move(mover, [to], { from: from });
+    FX().move(ally, [from], { from: to, parallel: true });
+    FX().text(mover, '⇄ Swap!', { color: '#bfe3ff', size: 13, parallel: true });
+    if (!Act.simulating) {
+      Act.log(mover.name + ' swaps places with ' + ally.name + '. ' + U.line(SWAP_QUIPS, cosmeticRng()), mover.side === 'hero' ? 'hero' : 'enemy');
+      // [finish D7] the narrator's aside now and then (narration key 'swap': {hero} the mover, {ally} the ally)
+      if (cosmeticRng().next() < SWAP_NARRATE) Act.narrate('swap', { hero: mover.name, ally: ally.name });
+    }
+    enterTile(mover, G().tile(to.x, to.y), 'move', from);
+    if (active(ally)) enterTile(ally, G().tile(from.x, from.y), 'teleport', to);
+    stopping.delete(mover);
+    stopping.delete(ally);
+    // never share a tile (a tile effect moved one of them onto the other): off to a free safe tile
+    [mover, ally].forEach(function (u) {
+      if (u.dead || unitsOn(u.x, u.y) <= 1) return;
+      settleOff(u, u === mover ? [from] : [to]);
+    });
+    DD.Hooks.fire('onMove', mover, mover, [{ x: to.x, y: to.y }]);
+    if (active(mover)) Act.bleedTick(mover);
+    return out;
+  };
 
   // ---- surfaces & elements (§6.6; reaction table lives in js/data/terrain.js) ----------------------
   const CREATES = { water: 'water', poison: 'poison', blood: 'blood', oil: 'oil', holy: 'holy', web: 'web', smoke: 'smoke', cheeto: 'cheeto', steam: 'steam' };
@@ -1391,7 +1681,7 @@
     const sd = DD.getSurface(id);
     if (!sd) { DD.warn('setSurface: unknown surface "' + id + '"'); return false; }
     const td = G().terrain(t);
-    const cloud = !!sd.airborne;   // [v2 review] clouds drift over pits / lava
+    const cloud = G().isCloud(sd);   // [v2 review] clouds drift over pits / lava (airborne or cloud: true)
     if (td.pit && !cloud) return false;
     if (td.walkable === false && !td.pit && !td.liquid) return false;
     if (td.liquid === 'lava' && !cloud) return false;
@@ -1469,7 +1759,8 @@
       FX().tile(tiles[i].x, tiles[i].y, 'glow', { color: '#ff8a1a', parallel: i > 0 });
     }
     FX().sound('fire');
-    Act.log(tiles.length > 1 ? 'The ' + fromId + ' goes up in a line of flames!' : 'It ignites!', 'dmg');
+    const fd = DD.getSurface(fromId);   // [engine requests, act 3] the surface's name, never its id
+    Act.log(tiles.length > 1 ? 'The ' + (fd && fd.name ? fd.name : 'slick') + ' goes up in a line of flames!' : 'It ignites!', 'dmg');
     // the floor burns: walkers on the slick catch fire, flyers above it don't (v2)
     for (let i = 0; i < tiles.length; i++) Act.applyElement(tiles[i].x, tiles[i].y, 'fire', src, { floor: true });
   }
@@ -1570,7 +1861,7 @@
       for (let i = 0; i < victims.length; i++) Act.damage(src || null, victims[i], dmg, { element: element, cause: 'explosion', tags: ['explosion'] });
       for (let i = 0; i < tiles.length; i++) {
         const tt = G().tile(tiles[i].x, tiles[i].y);
-        if (tt.obj) Act.damageObject(src, tt.x, tt.y, dmg);
+        if (tt.obj) Act.damageObject(src, tt.x, tt.y, dmg, { cause: 'explosion' });
         if (element) Act.applyElement(tt.x, tt.y, element, src, { noUnits: true });
         if (o.surface && !tt.surface) Act.setSurface(tt.x, tt.y, o.surface, o.turns || 2);
       }
@@ -1608,7 +1899,7 @@
     bump();
     FX().tile(x, y, def.pit ? 'crack' : def.liquid ? 'splash' : 'pulse');
     const wall = def.walkable === false && !def.pit && !def.liquid;
-    const cloudy = !!(t.surface && (DD.getSurface(t.surface.id) || {}).airborne);   // [v2 review] clouds stay
+    const cloudy = !!(t.surface && G().isCloud(DD.getSurface(t.surface.id)));   // [v2 review] clouds stay
     if (wall || (def.pit && !cloudy)) t.surface = null;
     if (def.pit && t.obj) t.obj = null;
     if (def.liquid === 'lava' && !cloudy) t.surface = null;
@@ -1620,6 +1911,11 @@
         const spot = G().nearestFree(x, y, u);
         if (spot) { const from = { x: u.x, y: u.y }; u.x = spot.x; u.y = spot.y; FX().slide(u, from, spot); }
       } else if (!fly && typeof def.onEnter === 'function') DD.safe('terrain ' + def.id + ' onEnter', def.onEnter, def, [u, t, 'terrain']);
+    } else if (u && !u.dead && u.downed && ((!G().isFlying(u) && G().isDrop(x, y)) || wall)) {
+      // playtest fix (robustness-1): a downed body is moved off a tile that turns into a pit / deep water / wall (no fall
+      // damage at 0 HP), so a revive never stands the hero up over the hole
+      const spot = safeSpot(x, y, u);
+      if (spot) { const from = { x: u.x, y: u.y }; u.x = spot.x; u.y = spot.y; FX().jump(u, from, spot); }
     }
     return true;
   };
@@ -1654,6 +1950,13 @@
     return o;
   };
 
+  /** [finish D3] src attacked an object (not an environmental hit, not a reflection): a Stealthed src is revealed. */
+  function revealAttacker(src, opts) {
+    const cause = (opts && opts.cause) || 'skill';
+    if (!active(src) || ENV_CAUSE[cause] || (opts && opts.reflect) || !has(src, 'stealth')) return;
+    Act.removeStatus(src, 'stealth', { text: 'Revealed!' });
+  }
+
   Act.removeObject = function (x, y) {
     const t = G().tile(x, y);
     if (!t || !t.obj) return null;
@@ -1663,14 +1966,19 @@
     return o;
   };
 
-  /** Damage a destructible object (hp > 0). Returns true if it was destroyed. */
-  Act.damageObject = function (src, x, y, amount) {
+  /**
+   * Damage a destructible object (hp > 0). Returns true if it was destroyed. opts.cause ('skill' by default; 'explosion',
+   * 'bump', 'status', 'surface', 'terrain', 'fall' are environmental) and opts.reflect: like Act.damage's, they decide
+   * whether src attacked it — [finish D3] attacking an object ends src's Stealth exactly as attacking a unit does.
+   */
+  Act.damageObject = function (src, x, y, amount, opts) {
     const t = G().tile(x, y);
     const o = t && t.obj;
     if (!o) return false;
     if (!(o.maxHp > 0) || !(o.hp > 0)) return false;
     amount = Math.round(amount || 0);
     if (amount <= 0) return false;
+    revealAttacker(src, opts);
     const by = src || currentCredit();
     const hint = by && by.side === 'hero' && S() && S().kind === 'boss' ? Act.puzzleHint(o, by, t) : 0;   // before the hit
     o.hp -= amount;
@@ -1694,18 +2002,39 @@
     const def = DD.getObject(o.id);
     FX().particles({ x: x, y: y }, { kind: 'dust', count: 14 });
     FX().sound('bump');
-    Act.log('The ' + String(o.label || (def ? def.name : o.id)).toLowerCase() + ' is destroyed.', 'system');
     s.stats.objects = s.stats.objects || {};
     s.stats.objects[o.id] = (s.stats.objects[o.id] || 0) + 1;
     const ob = s.objective;
     if (ob && ob.type === 'destroy' && (!ob.objId || ob.objId === o.id)) ob.destroyed = (ob.destroyed || 0) + 1;
     const fn = typeof o.onDestroyed === 'function' ? o.onDestroyed : def && def.onDestroyed;
+    const n0 = logCount;
     if (typeof fn === 'function') Act.withCredit(src, function () { DD.safe('object ' + o.id + ' onDestroyed', fn, o, [o, t, src || null]); });
+    // [playtest text-tone-9] the plain line only when the object's own onDestroyed told nothing (the Strike Fund, the keg
+    // and the DM's panels announce themselves): its name in its own case, 'are' for plural names
+    if (logCount === n0) { const nm = Act.objName(o); Act.log(nm.charAt(0).toUpperCase() + nm.slice(1) + ' ' + objVerb(o) + ' destroyed.', 'system'); }
     if (hint > 0) puzzleStep(by, hint);
     if (DD.Combat && DD.Combat.refreshObjective) DD.Combat.refreshObjective();
     if (DD.Combat && DD.Combat.checkEnd) DD.Combat.checkEnd();
     return true;
   };
+
+  /**
+   * [playtest text-tone-9] An object's name for a log line, mid-sentence and in its own case (labels and def names are
+   * proper names: "the Crate", "the DM Screen Panel", "The Last Keg" — a name that starts with "The" takes no article).
+   */
+  Act.objName = function (o) {
+    if (!o) return 'something';
+    const def = DD.getObject(o.id);
+    const name = String(o.label || (def ? def.name : o.id));
+    return /^the\s/i.test(name) ? name : 'the ' + name;
+  };
+  /** 'are' for a plural name (def.plural, else the head noun ends in a plain -s: Candles, Bones; a Stack of Sourcebooks is one). */
+  function objVerb(o) {
+    const def = DD.getObject(o.id);
+    if (o.plural !== undefined || (def && def.plural !== undefined)) return (o.plural !== undefined ? o.plural : def.plural) ? 'are' : 'is';
+    const head = String(o.label || (def ? def.name : o.id)).split(/\s+of\s+/i)[0].replace(/[^A-Za-z\s]+$/, '').split(/\s+/).pop() || '';
+    return /[a-z]s$/i.test(head) && !/(ss|us|is)$/i.test(head) ? 'are' : 'is';
+  }
 
   /** A volatile object: it explodes when destroyed (def or instance flag `volatile`), so attacks can set it off. */
   Act.isVolatile = function (o) {
@@ -1727,20 +2056,60 @@
     const o = t && t.obj;
     if (!o) return false;
     const def = DD.getObject(o.id);
-    const name = String(o.label || (def ? def.name : o.id)).toLowerCase();
+    const name = Act.objName(o);
     const tags = (skill && skill.tags) || [];
     const ranged = !!src && (G().dist(src, t) > 1 || tags.indexOf('ranged') >= 0);
     if (src) {
+      revealAttacker(src);   // [finish D3] setting off a barrel on purpose is not subtle either
       face(src, t);
       if (ranged) FX().projectile(src, { x: x, y: y }, { kind: 'bolt', color: '#ffd27a' });
       else FX().lunge(src, { x: x, y: y });
       if (!Act.simulating) {
-        Act.log(src.name + (ranged ? ' takes a shot at the ' : ' gives the ') + name + (ranged ? '' : ' a good whack') + '. ' +
+        Act.log(src.name + (ranged ? ' takes a shot at ' : ' gives ') + name + (ranged ? '' : ' a good whack') + '. ' +
           U.line(DETONATE_QUIPS, cosmeticRng()), src.side === 'hero' ? 'hero' : 'enemy');
       }
     }
     bump();
     return Act.destroyObject(x, y, src || null);
+  };
+
+  const BREAK_QUIPS = ['Property damage is still damage.', 'The DM adds it to the bill.', 'It had it coming.', 'Vandalism, but heroic.',
+    'Somewhere, a carpenter weeps.'];
+  // [finish D1] a spell or other non-weapon skill breaking things (Heckle a crate until it falls apart)
+  const SPELL_BREAK_QUIPS = ['Not what that skill was for. It worked anyway.', 'It was not emotionally prepared for that.',
+    'Structural integrity: roasted.', 'Turns out furniture has feelings.', 'The DM checks the rules. Allowed. Sadly.'];
+  /** A skill that is no weapon: not kind 'attack', not the user's basic, not a consumable (they "take a shot"). */
+  function nonWeapon(src, skill) {
+    return !!skill && skill.kind !== 'attack' && !(src && src.basic && src.basic.id === skill.id) && DD.getConsumable(skill.id) !== skill;
+  }
+  /**
+   * v2 (user request, rules run; lead decision D1): a single-target damage skill aimed at a BREAKABLE object
+   * (DD.Targeting.breakableAt) hits it for `amount` (DD.Targeting.objectDamage: the skill's listed damage; riders don't
+   * happen) — DD.Act.damageObject, so at 0 HP it breaks: onDestroyed, loot, puzzle hooks and the destroy objective,
+   * credited to the attacker. FX: a projectile for a ranged attack, a lunge for a melee one; a log line (a spell "turns
+   * Heckle on the Crate"). Called by DD.Combat.resolveSkill inside the skill's resolution. Returns true when it broke.
+   */
+  Act.breakObject = function (src, x, y, amount, skill) {
+    const t = G().tile(x, y);
+    const o = t && t.obj;
+    if (!o) return false;
+    const def = DD.getObject(o.id);
+    const name = Act.objName(o);
+    const tags = (skill && skill.tags) || [];
+    const ranged = !!src && (G().dist(src, t) > 1 || tags.indexOf('ranged') >= 0);
+    amount = Math.max(0, Math.round(amount || 0));
+    if (src) {
+      face(src, t);
+      if (ranged) FX().projectile(src, { x: x, y: y }, { kind: 'bolt', color: '#e0c090' });
+      else FX().lunge(src, { x: x, y: y });
+      if (!Act.simulating) {
+        const hp = o.hp || 0, odd = nonWeapon(src, skill);
+        const how = odd ? ' turns ' + skill.name + ' on ' : ranged ? ' takes a shot at ' : ' whacks ';
+        Act.log(src.name + how + name + ': ' + Math.min(amount, hp) + ' damage' +
+          (amount >= hp ? '. ' + U.line(odd ? SPELL_BREAK_QUIPS : BREAK_QUIPS, cosmeticRng()) : ' (' + (hp - amount) + ' HP left).'), src.side === 'hero' ? 'hero' : 'enemy');
+      }
+    }
+    return Act.damageObject(src || null, x, y, amount);
   };
 
   /** Interaction offered by an object for this unit: { ap, label } or null. */

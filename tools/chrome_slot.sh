@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # Dungeons and Degenerates — machine-wide cap on concurrent headless Chrome runs (sourced by tools/*.sh).
 # Many agents launching Chrome at once exhausted the machine's memory and got the app killed, so every
-# headless run takes one of DD_CHROME_SLOTS (default 3) slots under .tmp/locks/ and waits for a free one.
+# headless run takes one of DD_CHROME_SLOTS (else .tmp/locks/max, else 3) slots under .tmp/locks/ and waits for a free one.
 #   ROOT=...; . "$ROOT/tools/chrome_slot.sh"; chrome_slot_acquire    # released automatically on exit
 chrome_slot_release() {
   if [ -n "${CHROME_SLOT:-}" ]; then rm -rf "$CHROME_SLOT"; CHROME_SLOT=''; fi
 }
 
 chrome_slot_acquire() {
-  local dir="${ROOT:?ROOT must be set}/.tmp/locks" max="${DD_CHROME_SLOTS:-3}" i d p waited=0
+  local dir="${ROOT:?ROOT must be set}/.tmp/locks" max i d p waited=0
+  # the cap: $DD_CHROME_SLOTS, else a number in .tmp/locks/max (the lead lowers it when the machine is busy), else 3
+  max="${DD_CHROME_SLOTS:-$(tr -dc 0-9 < "$dir/max" 2>/dev/null)}"; max="${max:-3}"
   mkdir -p "$dir"
   while :; do
     for ((i = 1; i <= max; i++)); do

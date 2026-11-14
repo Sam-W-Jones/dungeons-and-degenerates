@@ -48,7 +48,7 @@
   };
   UI.NODE_TYPES = {
     combat: { icon: '⚔️', name: 'Combat', desc: 'A fight. Probably goblins. It is always goblins. Win it and one hero levels up.' },
-    elite: { icon: '💀', name: 'Elite', desc: 'A nasty fight with a guaranteed rare item (and the usual one level-up). Possible regret.' },
+    elite: { icon: '💀', name: 'Elite', desc: 'A nasty fight. The loot on offer always includes a rare item (plus the usual one level-up). Possible regret.' },
     event: { icon: '❓', name: 'Event', desc: 'Something weird happens. The DM is improvising.' },
     shop: { icon: '🛒', name: 'Shop', desc: 'Ye Olde Overpriced Shoppe: items, skill tomes, potions and services.' },
     tavern: { icon: '🍺', name: 'Tavern', desc: 'Rest, train or recruit. Mostly drink.' },
@@ -58,7 +58,67 @@
   UI.DIFFICULTIES = [
     { id: 'casual', name: 'Casual', icon: '🍕', desc: 'Enemies have 20% less HP and deal 20% less damage.', quip: 'The DM pulls his punches.' },
     { id: 'normal', name: 'Normal', icon: '🎲', desc: 'Standard enemy HP and damage.', quip: 'As the dice intended.' },
-    { id: 'brutal', name: 'Brutal', icon: '☠️', desc: 'Enemies have 25% more HP, deal 20% more damage, and normal fights bring one extra enemy.', quip: 'The DM had a bad week.' },
+    { id: 'brutal', name: 'Brutal', icon: '☠️', desc: 'Enemies have 15% more HP, deal 5% more damage, and normal fights bring one extra enemy.', quip: 'The DM had a bad week.' },
+  ];
+  // [playtest text-tone-18] each desc is read from DD.Balance when shown (the numbers the engine uses); the strings above
+  // are the fallback for a build without it
+  UI.DIFFICULTIES.forEach(function (d) {
+    const fallback = d.desc;
+    Object.defineProperty(d, 'desc', { enumerable: true, get: function () { return difficultyDesc(d.id) || fallback; } });
+  });
+  function pctWord(f, more, less) {
+    const p = Math.round(Math.abs(f - 1) * 100);
+    return p === 0 ? '' : p + '% ' + (f > 1 ? more : less);
+  }
+  function difficultyDesc(id) {
+    const B = DD.Balance;
+    const row = B && B.difficulty && B.difficulty[id];
+    if (!row) return '';
+    const hp = pctWord(num(row.hp, 1), 'more HP', 'less HP');
+    const dmg = pctWord(num(row.dmg, 1), 'more damage', 'less damage');
+    const ex = (B.extraEnemies && B.extraEnemies[id]) || {};
+    const extras = ['normal', 'elite', 'boss'].map(function (k) {
+      const n = num(ex[k]);
+      if (n <= 0) return '';
+      const kind = k === 'normal' ? 'normal fights' : k + ' fights';
+      if (n < 1) return kind + ' have a ' + Math.round(n * 100) + '% chance of an extra enemy';
+      return kind + ' bring ' + (n === 1 ? 'one extra enemy' : n + ' extra enemies');
+    }).filter(Boolean);
+    const parts = [];
+    if (hp && dmg) parts.push('Enemies have ' + hp + ' and deal ' + dmg);
+    else if (hp) parts.push('Enemies have ' + hp);
+    else if (dmg) parts.push('Enemies deal ' + dmg);
+    if (!parts.length && !extras.length) return 'Standard enemy HP and damage.';
+    const all = parts.concat(extras);
+    if (!parts.length) all[0] = all[0].charAt(0).toUpperCase() + all[0].slice(1);
+    return (all.length > 2 ? all.slice(0, -1).join(', ') + ', and ' + all[all.length - 1] : all.join(', and ')) + '.';
+  }
+  /**
+   * [playtest first-hour-8 / text-tone-15] The one controls list: Settings shows `desc`, the in-combat menu `short`
+   * (or desc) and skips rows with menu: false. README's Controls table says the same.
+   */
+  UI.CONTROLS = [
+    { key: 'Left click', desc: 'Select · move · use the armed skill', short: 'Select · move · use · confirm' },
+    { key: 'Click an adjacent ally', desc: 'While moving: swap places (costs the move; the ally pays nothing)', short: 'While moving: swap places' },
+    { key: 'Shift + click an ally', desc: 'Swap with a summon of this turn (a plain click selects it)', short: 'Swap with a summon of this turn' },
+    { key: 'Right click / Esc', desc: 'Cancel targeting · close windows', short: 'Cancel targeting · unpin' },
+    { key: '1 – 6', desc: 'Basic attack, skills, signature', short: 'Basic, skills, signature' },
+    { key: '7 – 0', desc: 'Consumables' },
+    { key: 'E', desc: 'Interact · Help Up' },
+    { key: 'Tab', desc: 'Next unit of this turn (hero + summons)' },
+    { key: 'Space', desc: 'Roll for initiative · end turn · skip animations', short: 'Roll initiative · end turn · skip animations' },
+    { key: 'Z', desc: 'Undo last move' },
+    { key: 'Hold Alt / T', desc: 'Threat shading: where enemies can reach' },
+    { key: 'Enter', desc: 'Use the armed skill on the hovered tile' },
+    { key: 'WASD / Arrows', desc: 'Pan the camera' },
+    { key: 'Right / left drag', desc: 'Pan the camera' },
+    { key: 'Mouse wheel / + −', desc: 'Zoom' },
+    { key: 'Middle drag', desc: 'Rotate the map to any angle' },
+    { key: 'Q / R', desc: 'Turn the map 90°' },
+    { key: 'Shift + wheel', desc: 'Rotate the map (or a sideways swipe)', short: 'Rotate the map (or swipe · twist)' },
+    { key: 'Two-finger twist', desc: 'Rotate the map (touch)', menu: false },
+    { key: 'Home', desc: 'Reset the view' },
+    { key: 'F', desc: 'Recenter the camera', short: 'Recenter the board' },
   ];
   UI.RARITY = {
     common: { name: 'Common', color: '#cfc6b4' },
@@ -810,6 +870,43 @@
     return id ? (DD.getHero(id) || DD.getEnemy(id) || DD.getSummon(id)) : null;
   };
 
+  /**
+   * [playtest text-tone-21] A boss and its title in one line: "Grimble, the Goblin Tax Collector", "The Rat King and the
+   * Rat Bar Association" (a title that starts with "and" joins with a space; a leading "The" goes lower case after a comma).
+   */
+  UI.bossWithTitle = function (name, title) {
+    const t = String(title || '').trim();
+    if (!t) return String(name || '');
+    if (/^and\b/i.test(t)) return name + ' ' + t.charAt(0).toLowerCase() + t.slice(1);
+    return name + ', ' + t.replace(/^The\b/, 'the');
+  };
+
+  // [playtest text-tone-6] barks outside a fight (level-up, recruit) name only heroes in the party, as combat barks do
+  // (DD.Act.partyLines: a hero is named by a capitalised word of 3+ letters of its name, whole word, case-sensitive)
+  let heroNames = null;
+  function heroNameTests() {
+    const ids = Object.keys((DD.defs && DD.defs.heroes) || {});
+    if (heroNames && heroNames.n === ids.length) return heroNames.list;
+    const list = [];
+    ids.forEach(function (id) {
+      const words = String((DD.getHero(id) || {}).name || '').split(/[^A-Za-z]+/).filter(function (w) { return w.length >= 3 && /^[A-Z]/.test(w) && w !== 'The'; });
+      if (words.length) list.push({ id: id, re: new RegExp('\\b(' + words.join('|') + ')\\b') });
+    });
+    heroNames = { n: ids.length, list: list };
+    return list;
+  }
+  /** The lines that name no hero missing from `ids` (hero def ids; default: the run's party still standing). */
+  UI.partyLines = function (lines, ids) {
+    if (!Array.isArray(lines) || !lines.length) return Array.isArray(lines) ? lines : [];
+    if (!ids) {
+      const run = UI.run();
+      ids = run && run.party ? run.party.filter(function (rh) { return rh && !rh.dead; }).map(function (rh) { return rh.id; }) : null;
+    }
+    if (!ids) return lines;
+    const absent = heroNameTests().filter(function (h) { return ids.indexOf(h.id) < 0; });
+    return lines.filter(function (l) { return !absent.some(function (h) { return h.re.test(String(l)); }); });
+  };
+
   /** Hero ids in display order: canonical heroes first, test fixtures hidden once real heroes exist. */
   /** Sort rank of a hero's unlock: starters 0, act N → N, a boss of act N → N + 0.5. */
   function unlockRank(d) {
@@ -997,6 +1094,7 @@
     return [num(r[0]), num(r[1])];
   }
 
+  const ANYWHERE_RANGE = 30;   // no board is that wide: a skill with this reach hits anywhere
   function rangeLabel(def, L, user, level) {
     const tg = def.target || {};
     if (tg.type === 'self') return 'Self';
@@ -1004,6 +1102,8 @@
     const r = resolveRange(def, L, user, level);
     if (r[1] <= 0) return 'Self';
     if (r[1] === 1 && r[0] <= 1) return 'Melee';
+    // [playtest heroes-8] a range past any board (The Ol' Switcheroo's 40) is just 'Anywhere'
+    if (r[1] >= ANYWHERE_RANGE) return r[0] > 1 ? 'Anywhere ' + r[0] + '+ tiles away' : 'Anywhere';
     return r[0] === r[1] ? 'Range ' + r[1] : 'Range ' + r[0] + '–' + r[1];
   }
 
@@ -1012,10 +1112,11 @@
     const size = num(DD.resolve(a.size, L, isCombatUnit(user) ? user : null, 1), 1);
     switch (a.shape) {
       case undefined: case null: case 'single': return '';
-      case 'circle': return 'Radius ' + size;
-      case 'square': return (2 * size + 1) + '×' + (2 * size + 1) + ' square';
+      // [playtest text-tone-22] a circle / square / cross of size 0 is one tile: no area chip (a ring at 0 is still its own thing)
+      case 'circle': return size > 0 ? 'Radius ' + size : '';
+      case 'square': return size > 0 ? (2 * size + 1) + '×' + (2 * size + 1) + ' square' : '';
       case 'ring': return 'Ring at ' + size;
-      case 'cross': return 'Cross (arms ' + size + ')';
+      case 'cross': return size > 0 ? 'Cross (arms ' + size + ')' : '';
       case 'line': return 'Line ' + size + (a.pierce === false ? ', stops at first unit' : ', pierces');
       case 'cone': return 'Cone ' + size;
       case 'row': return 'Row, width ' + (2 * size + 1);
@@ -1026,6 +1127,15 @@
       default: return U.capitalize(String(a.shape)) + ' ' + size;
     }
   }
+
+  /** The live fight's damage factor for an enemy-side unit in it (state.difficulty.dmg), else 1. */
+  function fightDmgMult(user) {
+    const s = DD.Combat && DD.Combat.state;
+    if (!s || !user || user.side !== 'enemy' || !s.difficulty || !Array.isArray(s.units) || s.units.indexOf(user) < 0) return 1;
+    const m = Number(s.difficulty.dmg);
+    return isFinite(m) && m > 0 ? m : 1;
+  }
+  UI.fightDmgMult = fightDmgMult;
 
   /**
    * Structured info about a skill at a level (shared by cards and tooltips). `unit` may be a combat unit or a RunHero
@@ -1039,6 +1149,19 @@
     const lv = U.clamp(num(level, 1) || 1, 1, maxLevel);
     const L = DD.skillLevel(def, lv);
     const user = describer(unit);
+    // [playtest first-hour-1] a monster in the live fight: its damage at this fight's multiplier (act row × difficulty,
+    // the factor Act.damage and AI.intentDmg apply), so the text matches the hit and the reach line beside it
+    const mult = fightDmgMult(user);
+    const desc = function (lvl) {
+      if (mult === 1 || typeof def.desc !== 'function') return DD.skillDesc(def, lvl, user);
+      // the engine's numbers when it has them (DD.AI.fightLevel: every damage key, as wind-up texts use), else L.dmg
+      const AI = DD.AI;
+      const Lx = AI && typeof AI.fightLevel === 'function' ? DD.safe('AI.fightLevel', AI.fightLevel, AI, [def, lvl, user]) : null;
+      const L0 = DD.skillLevel(def, lvl);
+      const Lf = Lx || (typeof L0.dmg === 'number' ? Object.assign({}, L0, { dmg: Math.round(L0.dmg * mult) }) : L0);
+      const s = DD.safe('desc of ' + def.id, def.desc, def, [Lf, user]);
+      return s == null ? '' : String(s);
+    };
     const info = {
       def: def, id: def.id, name: def.name || def.id, icon: def.icon || '✦', kind: def.kind || 'attack',
       level: lv, maxLevel: maxLevel, L: L, user: user,
@@ -1052,8 +1175,9 @@
       target: (def.target && FILTER_LABEL[def.target.filter]) || '',
       los: !!(def.target && def.target.los),
       straight: !!(def.target && def.target.straight),
-      desc: DD.skillDesc(def, lv, user),
-      next: lv < maxLevel ? DD.skillDesc(def, lv + 1, user) : '',
+      desc: desc(lv),
+      next: lv < maxLevel ? desc(lv + 1) : '',
+      fightMult: mult !== 1 && Object.keys(L).some(function (k) { return typeof L[k] === 'number' && /^(dmg|damage|crit)$|dmg|Dmg|Damage/.test(k); }) ? mult : 1,
       flavor: def.flavor || '',
       tags: (def.tags || []).filter(function (t) { return typeof t === 'string'; }),
       random: (def.tags || []).indexOf('random') >= 0,
@@ -1123,7 +1247,7 @@
     if (notes.length) h += '<div class="tt-costnote">' + esc(notes.join(' · ')) + (live ? '' : ' (its cost at the start of a turn)') + '</div>';
     if (opts.paidBy) h += '<div class="tt-costnote">🩸 ' + esc(opts.paidBy) + ' pays the ' + info.baseHp + ' HP instead' + (opts.paidWhy ? ' (' + esc(opts.paidWhy) + ')' : '') + '.</div>';
     h += '<div class="tt-target">🎯 ' + esc(tgt.join(' · ')) + '</div>';
-    UI.aimNotes(info.def, info.user).forEach(function (n) { h += '<div class="tt-target tt-aimnote">' + esc(n) + '</div>'; });
+    UI.aimNotes(info.def, info.user, info.level).forEach(function (n) { h += '<div class="tt-target tt-aimnote">' + esc(n) + '</div>'; });
     if (slot && info.charges) h += '<div class="tt-target">Uses left this fight: ' + Math.max(0, info.charges - num(slot.uses)) + '</div>';
     h += '<div class="tt-desc">' + esc(info.desc || 'No description.') + '</div>';
     if (opts.showNext && info.next) h += '<div class="tt-next"><span>Level ' + U.roman(info.level + 1) + ':</span> ' + esc(info.next) + '</div>';
@@ -1189,13 +1313,15 @@
     ap: function (v) { return UI.signed(v) + ' AP'; },
     mov: function (v) { return UI.signed(v) + ' Move'; },
     armor: function (v) { return UI.signed(v) + ' Armor'; },
+    init: function (v) { return UI.signed(v) + ' initiative'; },
     dmg: function (v) { return UI.pct(v) + ' damage'; },
     heal: function (v) { return UI.pct(v) + ' healing'; },
     range: function (v) { return UI.signed(v) + ' range (skills with range 2+)'; },
     block: function (v) { return UI.signed(v) + ' Block at combat start'; },
     hype: function (v) { return UI.signed(v) + ' Hype at combat start'; },
   };
-  const STAT_ORDER = ['hp', 'ap', 'mov', 'armor', 'dmg', 'heal', 'range', 'block', 'hype'];
+  // v2: `init` (the d20 modifier: the Adrenaline Jar, Kiri's Name Tag, Valdris' Conditioner); `block` stays for old saves
+  const STAT_ORDER = ['hp', 'ap', 'mov', 'armor', 'init', 'dmg', 'heal', 'range', 'block', 'hype'];
 
   UI.statLines = function (stats) {
     const out = [];
@@ -1277,13 +1403,19 @@
    * revivesWith) — an explosive object (it goes off; the skill's own effects don't happen) or a downed ally (it gets back
    * up with the healed HP). `unit`: the hero using it (its basic attack counts), or nothing (a stand-in hero). → [lines]
    */
-  UI.aimNotes = function (def, unit) {
+  UI.aimNotes = function (def, unit, level) {
     const T = DD.Targeting;
     if (!def || !T) return [];
     const user = unit && unit.kind ? unit : { kind: 'hero', side: 'hero', id: '_aimNotes' };
     const out = [];
-    if (typeof T.aimsAtObjects === 'function' && DD.safe('Targeting.aimsAtObjects', T.aimsAtObjects, T, [user, def])) {
+    // the engine decides who aims at objects (finish D1: any single-target damage skill; target.objects false opts out)
+    const ref = level > 1 && DD.getSkill(def.id) === def ? { id: def.id, level: level } : def;
+    if (typeof T.aimsAtObjects === 'function' && DD.safe('Targeting.aimsAtObjects', T.aimsAtObjects, T, [user, ref])) {
       out.push('💥 Can also be aimed at an explosive barrel (anything volatile) in range to set it off: the blast happens instead of its usual effect.');
+      // rules run: breakable objects (crates, totems…) take the listed damage (Weak / Inspired / item bonus count) and,
+      // finish D1 / D4, nothing else: no riders, statuses, pulls, heals or gold
+      const dmg = typeof T.objectDamage === 'function' ? Math.round(num(DD.safe('Targeting.objectDamage', T.objectDamage, T, [user, ref]))) : 0;
+      if (dmg > 0) out.push('🔨 Can also hit a breakable object in range (crates, totems…) for ' + dmg + ' damage and nothing else; it breaks at 0 HP.');
     }
     if (typeof T.revivesWith === 'function' && DD.safe('Targeting.revivesWith', T.revivesWith, T, [user, def])) {
       out.push('🆘 Aimed at a downed ally, it gets that ally back up with the healed HP.');
@@ -1291,27 +1423,40 @@
     return out;
   };
 
-  function consumableTargetLabel(d) {
+  /** user: the combat unit about to use it (the HUD's pocket), so the range is that unit's real reach. */
+  function consumableTargetLabel(d, user) {
     const tg = d.target || {};
     if (tg.type === 'self') return 'Self';
-    const fake = { target: tg, area: d.area };
-    const r = rangeLabel(fake, {}, null, 1);
+    const fake = isCombatUnit(user) ? d : { target: tg, area: d.area };
+    const r = rangeLabel(fake, {}, isCombatUnit(user) ? user : null, 1);
     const a = areaLabel(fake, {}, null);
     const f = FILTER_LABEL[tg.filter];
     return [r, a, f && r !== 'Self' ? 'Targets ' + f : ''].filter(Boolean).join(' · ');
   }
 
+  /**
+   * [playtest heroes-v1] A consumable's text: a plain string, or desc(L, user) like a skill's, so a ranged one can print
+   * the holder's real reach (DD.Targeting.reach: a +range item adds to it). Without a combat unit: the listed numbers.
+   */
+  UI.consumableDesc = function (d, user) {
+    if (!d) return '';
+    if (typeof d.desc === 'function') return DD.skillDesc(d, 1, isCombatUnit(user) ? user : null);
+    return d.desc ? String(d.desc) : '';
+  };
+
   UI.consumableTooltipHtml = function (id, opts) {
     opts = opts || {};
     const d = DD.getConsumable(id);
     if (!d) return '<div class="tt"><div class="tt-desc">Unknown consumable.</div></div>';
+    const user = isCombatUnit(opts.user) ? opts.user : null;
+    const desc = UI.consumableDesc(d, user);
     let h = '<div class="tt tt-consumable rarity-' + esc(d.rarity || 'common') + '">';
     h += '<div class="tt-head"><span class="tt-icon">' + esc(d.icon || '🧪') + '</span><div class="tt-titles"><div class="tt-title">' + esc(d.name) + '</div>';
     h += '<div class="tt-sub"><span class="rarity-text">' + esc(UI.rarityName(d.rarity)) + '</span> Consumable</div></div></div>';
     h += '<div class="tt-costs"><span class="pill ap">' + num(d.ap, 1) + ' AP</span><span class="pill">Single use</span></div>';
-    h += '<div class="tt-target">🎯 ' + esc(consumableTargetLabel(d)) + '</div>';
-    UI.aimNotes(d, null).forEach(function (n) { h += '<div class="tt-target tt-aimnote">' + esc(n) + '</div>'; });
-    if (d.desc) h += '<div class="tt-desc">' + esc(d.desc) + '</div>';
+    h += '<div class="tt-target">🎯 ' + esc(consumableTargetLabel(d, user)) + '</div>';
+    UI.aimNotes(d, user).forEach(function (n) { h += '<div class="tt-target tt-aimnote">' + esc(n) + '</div>'; });
+    if (desc) h += '<div class="tt-desc">' + esc(desc) + '</div>';
     if (d.flavor) h += '<div class="tt-flavor">“' + esc(d.flavor) + '”</div>';
     if (opts.price !== undefined && opts.price !== null) h += '<div class="tt-foot">Price: ' + UI.goldHtml(opts.price) + '</div>';
     h += '</div>';
@@ -1330,13 +1475,14 @@
     }
     card.appendChild(el('div.ic-icon', null, d.icon || '🧪'));
     const main = el('div.ic-main', null, el('div.ic-name', null, d.name), el('div.ic-sub', null, el('span.rarity-text', null, UI.rarityName(d.rarity)), ' Consumable · ' + num(d.ap, 1) + ' AP'));
-    if (!opts.compact && d.desc) main.appendChild(el('div.ic-desc', null, d.desc));
+    const cdesc = UI.consumableDesc(d, opts.user);
+    if (!opts.compact && cdesc) main.appendChild(el('div.ic-desc', null, cdesc));
     card.appendChild(main);
     if (opts.price !== undefined && opts.price !== null) card.appendChild(el('div.ic-price', null, UI.goldText(opts.price)));
     if (opts.badge) card.appendChild(el('div.ic-badge', null, opts.badge));
     if (opts.action) card.appendChild(el('div.ic-action', null, opts.action));
     if (opts.disabled) card.classList.add('is-disabled');
-    if (opts.tooltip !== false) UI.tooltip(card, function () { return UI.consumableTooltipHtml(id); }, { pos: opts.tipPos || 'top' });
+    if (opts.tooltip !== false) UI.tooltip(card, function () { return UI.consumableTooltipHtml(id, { user: opts.user }); }, { pos: opts.tipPos || 'top' });
     if (typeof opts.onClick === 'function') {
       card.setAttribute('role', 'button');
       card.addEventListener('click', function (e) {
@@ -1542,7 +1688,7 @@
     h += '<div class="tt-sub">' + esc([d.race, d.cls].filter(Boolean).join(' ')) + (d.role ? ' · ' + esc(d.role) : '') + '</div></div></div>';
     h += '<div class="tt-costs"><span class="pill">❤ ' + num(st.hp) + ' HP</span><span class="pill ap">' + num(st.ap, 3) + ' AP</span><span class="pill">👣 ' + num(st.mov) + ' Move</span>' + (num(st.armor) ? '<span class="pill">🛡 ' + num(st.armor) + ' Armor</span>' : '') +
       '<span class="pill" title="Initiative modifier: added to the d20 when a fight starts">🎲 Init ' + initText(st.init) + '</span></div>';
-    if (d.flags && d.flags.flying) h += '<div class="tt-target">' + esc(UI.flyLine(d.name)) + '</div>';
+    if (d.flags && d.flags.flying) h += '<div class="tt-target">' + esc(UI.flyLine(d.name, true)) + '</div>';
     if (d.passive) h += '<div class="tt-desc"><b>' + esc(d.passive.name || 'Passive') + ':</b> ' + esc(d.passive.desc || '') + '</div>';
     if (opts.locked) h += '<div class="tt-foot">🔒 ' + esc(UI.unlockHint(d)) + '</div>';
     h += '</div>';
@@ -1554,7 +1700,11 @@
   UI.initText = initText;
 
   /** v2 (user request): what flying means, wherever a flyer is described outside a fight. */
-  UI.flyLine = function (who) { return '🪽 Flying: ignores floor effects — lava, fire, puddles, traps and pressure plates. Clouds and gases still reach ' + (who || 'it') + '.'; };
+  // [playtest text-tone-v1] loot is not a floor effect: a hero-side flyer still pockets gold (DD.Grid.isLoot)
+  UI.flyLine = function (who, loot) {
+    return '🪽 Flying: ignores floor effects — lava, fire, puddles, traps and pressure plates. Clouds and gases still reach ' + (who || 'it') + '.' +
+      (loot ? ' Loot is not floor: ' + (who || 'it') + ' still swoops down for gold.' : '');
+  };
   const TIER_LABEL = { minion: 'Minion', normal: 'Enemy', elite: 'Elite', boss: 'Boss' };
   UI.enemyTooltipHtml = function (enemyId) {
     const d = DD.getEnemy(enemyId) || DD.getSummon(enemyId);
@@ -1592,21 +1742,26 @@
       if (x.base && !x.id) spec = x;
       else { id = x.defId || x.id; def = UI.anyDef(id) || (x.sprite ? x : null); if (!UI.anyDef(id) && x.sprite) spec = x.sprite; }
     }
+    // opts.unit: a combat unit whose look can change (Basanos' werewolf, Ellaria's Wild Shape, a cameo): draw the look it
+    // shows now (DD.Sprites resolves vis.sprite / unit.sprite / the def), cached per look
+    const live = opts.unit && typeof opts.unit === 'object' && DD.Sprites && typeof DD.Sprites.specFor === 'function' ? opts.unit : null;
+    if (live) { spec = null; id = live.defId || id; if (!def) def = UI.anyDef(id); }
     const color = (def && def.color) || '#8a6a2a';
     const wrap = el('div.portrait', { class: [opts.dead ? 'dead' : '', opts.locked ? 'locked' : '', opts.frame === false ? 'noframe' : '', opts.cls || ''], style: { width: size + 'px', height: size + 'px', '--pc': color } });
     let media = null;
-    if (DD.Sprites && (spec || id)) {
+    if (DD.Sprites && (spec || id || live)) {
       const dpr = Math.min(2, window.devicePixelRatio || 1);
       const px = Math.max(16, Math.min(320, Math.round(size * dpr)));
       // Transparent background: the frame (CSS) supplies it, and locked silhouettes stay character-shaped.
       const sOpts = Object.assign({ bg: false }, opts.spriteOpts || {});
+      const src0 = live || spec || id;
       // Prefer the cached data URL (an <img> is cheap to re-create on every re-render); else copy the canvas.
       if (typeof DD.Sprites.portraitURL === 'function') {
-        const url = DD.safe('Sprites.portraitURL', DD.Sprites.portraitURL, DD.Sprites, [spec || id, px, sOpts]);
+        const url = DD.safe('Sprites.portraitURL', DD.Sprites.portraitURL, DD.Sprites, [src0, px, sOpts]);
         if (url) media = el('img.portrait-canvas', { src: url, alt: '', draggable: 'false' });
       }
       if (!media && typeof DD.Sprites.portrait === 'function') {
-        const src = DD.safe('Sprites.portrait', DD.Sprites.portrait, DD.Sprites, [spec || id, px, sOpts]);
+        const src = DD.safe('Sprites.portrait', DD.Sprites.portrait, DD.Sprites, [src0, px, sOpts]);
         if (src && typeof src.getContext === 'function' && src.width) {
           media = document.createElement('canvas');
           media.width = src.width;
@@ -1750,7 +1905,9 @@
     body.appendChild(el('div.rp-label', null, 'Forget one:'));
     const grid = el('div.rp-grid');
     body.appendChild(grid);
-    const forgetLine = (name === 'Professor Marbles' ? 'He forgets things. This one is on purpose.' : 'The forgotten skill is gone for good. (Professor Marbles does this daily.)');
+    // [playtest heroes-v2] a forgotten skill goes back in the hero's pile (DD.Run.learnableFor skips socketed ones only)
+    const forgetLine = (name === 'Professor Marbles' ? 'He forgets things. This one is on purpose. It goes back in the pile: a later level-up or tome may offer it again.'
+      : 'A forgotten skill goes back in the pile: a later level-up or tome may offer it again. (Professor Marbles does this daily.)');
     body.appendChild(el('div.rp-note', null, forgetLine));
     const m = UI.modal({
       title: opts.title || 'Make Room in That Skull', icon: '🧠', size: 'lg', closable: false, cls: 'modal-replace',
@@ -1762,6 +1919,10 @@
         badge: 'Forget', hotkey: String(i + 1), cls: 'forgettable', unit: rh,
         onClick: function () { m.close('pick'); done(i); },
       });
+      // [playtest heroes-1] a keystone skill (def.forgetWarning: Basanos's Transform) says what forgetting it costs
+      const sd = DD.getSkill(s.id);
+      const warn = sd ? DD.resolve(sd.forgetWarning, null, rh, '') : '';
+      if (warn) { card.classList.add('rp-keystone'); card.appendChild(el('div.rp-warn', null, '⚠ ' + String(warn))); }
       grid.appendChild(card);
     });
     return m;
@@ -1886,7 +2047,7 @@
       }) : null;
       const discard = UI.button('Discard', function () { finish('discard'); }, {
         cls: 'ghost', icon: '🗑️', hotkey: 'd',
-        tooltip: '<div class="tt"><div class="tt-desc">Pass on this roll. ' + esc(name) + ' keeps the Blessings they have.</div></div>',
+        tooltip: '<div class="tt"><div class="tt-desc">Pass on this roll. ' + esc(name) + ' keeps every Blessing as it is.</div></div>',
       });
       [primary, replace, discard].forEach(function (b) { if (b) actions.appendChild(b); });
       m.defaultButton = primary || replace;

@@ -198,11 +198,15 @@
       DD.Combat.endTurn();
       t.ok(round() === 3 && sl.cd === 0, 'whack L' + lv + ': off cooldown in round 3');
     });
-    // foes only: allies, empty tiles and objects are not targets
+    // foes only: allies and empty tiles are not targets; (rules run) the adjacent crate is, as a thing to break
     fight({ w: 10, h: 5, me: { x: 1, y: 2 }, allies: [{ id: 'test_knight', x: 2, y: 2 }], enemies: [{ id: 'test_grunt', x: 1, y: 3 }], objects: [{ x: 1, y: 1, id: 'crate' }] });
     u = me();
     const wsl = sock(u, 'mar_whack', 1);
-    t.eq(JSON.stringify(DD.Targeting.validTargets(u, wsl)), JSON.stringify([{ x: 1, y: 3 }]), 'whack: only the adjacent foe is a target');
+    const wq = DD.Targeting.validTargets(u, wsl);
+    t.eq(JSON.stringify(wq.filter(function (q) { return !q.obj; })), JSON.stringify([{ x: 1, y: 3 }]), 'whack: the adjacent foe is the only unit target');
+    const wc = wq.filter(function (q) { return q.obj; });
+    t.ok(wc.length === 1 && wc[0].obj === 'crate' && wc[0].x === 1 && wc[0].y === 1 && !wc[0].detonates && wc[0].dmg === DD.skillLevel(DD.getSkill('mar_whack'), 1).dmg,
+      'whack: the adjacent crate is a breakable target, hit for the listed damage (' + JSON.stringify(wc) + ')');
     // map edge: a blocked push bumps for 3
     fight({ w: 6, h: 3, me: { x: 3, y: 1 }, enemies: [{ id: 'test_grunt', x: 4, y: 1 }] });
     u = me(); g = at(4, 1);
@@ -1450,5 +1454,23 @@
     t.log('attacks of opportunity: by him ' + opp.by + ' (' + (opp.by / Math.max(1, fights)).toFixed(2) + '/fight) · on him ' + opp.on + ' (' + (opp.on / Math.max(1, fights)).toFixed(2) + '/fight)');
     t.log('fights ' + fights + ', wins ' + wins);
     t.ok(fights > 0, 'simulated');
+  });
+})();
+
+// ---- playtest fixes (Nov 12) ----------------------------------------------------------------------------------------
+(function () {
+  'use strict';
+  const T = window.DD_TEST, DD = window.DD;
+  if (!T || !DD || !DD.getHero('marbles')) return;
+  T.suite('hero_marbles: playtest fixes (Nov 12) — the Cane\'s extra push is in Walking Stick Whack\'s text', function (t) {
+    DD.Combat.sandbox({ w: 7, h: 7, seed: 3, enemyAi: false, heroes: [{ id: 'marbles', x: 1, y: 3, level: 1 }], enemies: [{ id: 'test_grunt', x: 5, y: 5 }],
+      objective: { type: 'custom', text: 'Testing' }, encounter: { id: 'mar_pt', checkObjective: function () { return null; } } });
+    const m = DD.Combat.state.units.filter(function (u) { return u.defId === 'marbles'; })[0];
+    const whack = DD.getSkill('mar_whack');
+    t.ok(/push it 2 tiles\.$/.test(DD.skillDesc(whack, 1, m)), 'no Cane: push it 2 tiles');
+    m.items = (m.items || []).concat(['mar_cane']);
+    t.ok(/push it 3 tiles\.$/.test(DD.skillDesc(whack, 1, m)), 'with the Cane: push it 3 tiles (' + DD.skillDesc(whack, 1, m) + ')');
+    t.ok(/push it 4 tiles\.$/.test(DD.skillDesc(whack, 3, m)), 'III with the Cane: 4 tiles');
+    t.ok(/push it 3 tiles\.$/.test(DD.skillDesc(whack, 1, { items: { weapon: 'mar_cane' } })), 'a party sheet (slot object) too');
   });
 })();

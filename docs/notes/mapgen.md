@@ -143,3 +143,25 @@ within(list, r), freeTiles(x, y, r), tile(x, y), pick(list), isBoss(u), immovabl
   floor); the text ("Water it stands in") already said so.
 - `wm_barrel_roll` places `barrel_explosive` (volatile in terrain.js): heroes can shoot those barrels. `wm_duck_honk`
   (the Confused Duck, hero side) can set one off too. Checked by "integration: v2 requests — … no screen-direction words".
+
+## Playtest fixes (Nov 12) — fix:engine
+
+- **bosses-objectives-9** (fixed): a protect objective names the placed object by its label when the map gives one
+  (`objective.objLabel`: "Protect The Last Keg and defeat all enemies."). Suite `mapgen: playtest fixes — …`.
+- **robustness-5** (fixed): `mapgen: encounter build (synthetic encounters)` compares the build's difficulty info with
+  `DD.Balance.scale(…)` (difficulty × act × kind) instead of a literal row, and checks brutal > normal.
+
+## Finish (Nov 14) — fix:engine
+
+- **bosses-objectives-9** (the part still there): the build text already said "Protect The Last Keg…", but the LIVE
+  objective bar (`DD.Combat.objectiveText`, refreshed after every action) still used the def name ("Protect the Ale
+  Keg"). It now takes `objective.objLabel` or the label of the placed object. Suite `mapgen: finish — bosses-objectives-9`.
+- audit-1: `encounter.js` DIFFICULTY (the fallback used only without DD.Balance) now matches DD.Balance (brutal 1.15 / 1.05).
+- Full record: `docs/notes/rules.md` "Finish (Nov 14)".
+
+## Review (finish, Nov 14) — REVIEWER
+
+- bosses-objectives-9 re-played: the live bar says "Protect The Last Keg and defeat all enemies". The Ale Keg's own desc
+  stays "Destructible." without the D1 sentence on purpose: as The Last Keg it is the protect objective and nobody may aim
+  at it (the HUD shows the def's desc for every keg). Every other breakable generic prop in terrain.js now says "any
+  single-target damage skill can break it" (`kit: finish D1` asserts it).

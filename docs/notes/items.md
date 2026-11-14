@@ -9,8 +9,8 @@ Run: `bash tools/test.sh "suite=items&isolate=items,shared"` · rarity sim: `bas
 
 ## Summary (v2)
 
-50 hero-agnostic items (`hero: null`, plain snake_case ids): 17 weapons, 16 armor, 17 trinkets — 19 common, 16 rare,
-7 legendary, 8 cursed. Prices are the rarity defaults (40 / 80 / 150 / 25) except the Pay-to-Win Medallion (1 gold).
+51 hero-agnostic items (`hero: null`, plain snake_case ids): 17 weapons, 16 armor, 18 trinkets — 20 common, 16 rare,
+7 legendary, 8 cursed (the 51st, the First-Aid Fanny Pack, came with balance pass 1). Prices are the rarity defaults (40 / 80 / 150 / 25) except the Pay-to-Win Medallion (1 gold).
 Stats the engine applies (`hp ap mov armor dmg heal range hype init`) live in `stats` and are spelled out in `desc`
 (reward / shop cards print only `desc`); everything else is a §5.3 hook.
 
@@ -163,8 +163,9 @@ None.
   Adrenaline's "+2 initiative" (and hero items with `stats.init`: Kiri's Name Tag, Valdris' Conditioner) shows only in
   the desc. Please add `init: v => signed(v) + ' initiative'`. The `block` label ("Block at combat start") is obsolete:
   no item grants it any more (Run.heroStats still sums it for old saves; it can stay hidden).
-- **Lead (docs)**: ARCHITECTURE §3.4 Item still lists `block: Block at combat start` — v2: `stats.block` is ignored, add
-  `init` (initiative modifier). DESIGN §7 "armor (HP/armor/Block)" → "armor (HP/armor/retaliation/resistances)".
+- ~~**Lead (docs)**: ARCHITECTURE §3.4 Item still lists `block: Block at combat start` — v2: `stats.block` is ignored, add
+  `init` (initiative modifier). DESIGN §7 "armor (HP/armor/Block)" → "armor (HP/armor/retaliation/resistances)".~~
+  Done (Nov 5 docs cleanup).
 - **AUTOPLAY (optional)**: AutoPlay never values an attack of opportunity's riders (the Polearm's stop, Darryl / Big
   Stick shoves on reactions), so in sims the Polearm measures ~0; nothing to change unless you model riders.
 - **ENGINE / AI (optional, review v2)**: `DD.AI.opportunityDmg` → `estimate` ignores hooks, so a hero's reaction with an
@@ -280,6 +281,108 @@ the campaign sims (`tools/sim.sh`, which loot as they go) are where "hard but fa
   barrel is the whole joke). No other item hook needed a change (`onSkillUsed` hooks guard `ctx.targetUnit`).
 - Tests: "items: v2 requests — Party Balloons float over the whole floor, a flying Candle bearer, Steve pokes barrels".
 
+## Docs and content cleanup (Nov 5) — Party Balloons after a Basanos Transform
+
+- **Fixed**: `balloonSprite` wrapped `DD.Sprites.specFor(unit)`, which prefers the on-screen pin (`unit.vis.sprite`)
+  over the logical look. Basanos' Transform pins his old look until FX playback reaches the change; the balloons'
+  `onSkillUsed` saw the already-wrapped pin, returned, and once playback dropped the pin the werewolf showed up bare
+  until his next skill or turn end (cosmetic; headless FX are instant, so no suite saw it). The balloons now wrap the
+  LOGICAL look: `specFor` of a stand-in `{ id, defId, kind, sprite: unit.sprite }` (no `vis`), i.e. `unit.sprite`, else
+  the def's. The pinned old look keeps the balloons it already had; the new look gets them at once, so it has them the
+  moment the pin drops. Nothing on the sprite side changed (RENDER-SPRITES: no request).
+- **Test**: `items: Party Balloons survive a Basanos Transform while FX play back (the on-screen pin)` queues FX for
+  real (`DD.FX.instant = false`, played with `DD.FX.flush()`, restored in a `finally`): the logical werewolf has
+  balloons at once, the pinned man keeps his, the werewolf on screen has them after playback, and so does the man after
+  Transform back. Mutation-checked: with the old `specFor(unit)` three assertions fail. Skips when `basanos` or the
+  sprite module is not loaded (isolated runs).
+- The `hero-basanos.md` ITEMS request is closed by this.
+
+## Review (balance run)
+
+- **Fixed — balloon strings across the holder's portrait.** The HUD's portraits now draw the look a unit shows (forms),
+  and the wrapped balloon look put three white strings across the hero's face in every party card, tracker chip and
+  inspect panel (the balloons themselves are cropped off a portrait). The overlay now draws the balloons only on the
+  board: `o.unit` is set by `DD.Sprites.drawUnit` and absent from portraits / galleries. Suite `items: Party Balloons
+  stay off portraits (on the board only)`: the holder's portrait equals the plain one pixel for pixel (573 px differed
+  before; mutation-checked) and the board still draws them.
+- **Not done — the render request** (Party Balloons as a `unit.overlays` add-on instead of wrapping `unit.sprite`):
+  `tests/content/hero_basanos.js` (hero-basanos owner) asserts `shown().itemBalloons` on the wrapped spec, so the switch
+  needs that suite updated with it. The wrapper works (it survives Transform, Hair Trigger, Wild Shape via its re-tie
+  hooks); the add-on would be tidier. Request kept open for the item + Basanos owners together.
+- Verified: the Nov 5 cleanup changed only text and the logical-look wrap; `desc` texts edited there match `execute`
+  (content suites pass); no balance number moved.
+
+## Balance pass 1 (Nov 11) — the First-Aid Fanny Pack (every party's starting heal)
+
+New common trinket `first_aid_fanny_pack` (👝): "At the start of your turn, the most hurt of you and the allies next to you
+(not a downed one) heals 3 HP." (`FANNY_HEAL` = 3; ties go to the first unit in the fight's list; foes never; an aura is
+not an aimed heal, so it never revives.) Every party starts with one: `DD.Balance.start.items`, equipped by
+`DD.Run.newRun` on the first living hero with a free trinket slot. Otherwise an ordinary common: it can drop and be sold,
+but loot and shops prefer items the party doesn't own, so a party wearing one is not offered a second. Why: the healer
+gap (`docs/notes/balance.md` "Pass 1"): potions are drunk in the first fights, a heal that lasts the run is what closes
+it (whole campaigns: parties without Ellaria / Josiah 20% → 38% runs won with it on top of the old kit). Suite `items:
+balance pass — the First-Aid Fanny Pack heals the most hurt of you and your adjacent allies 3 HP at your turn start`
+(who, how much, alone, downed allies stay down, the desc, in the starting kit, not offered twice).
+**D9 (Nov 12)**: the user took it out of the starting kit again ("I don't want this"): it is now an ordinary common
+trinket in loot and shops, nothing else changed. See "Sustain (Nov 12)" below.
+
+## Sustain (Nov 12) — the Fanny Pack leaves the starting kit (D9, KIT-BALANCE build)
+
+The user (D9, `.tmp/wf12/lead-decisions.md`): on pass 1's Fanny Pack in every kit, "I don't want this. I'd rather spread
+out better self-healing skill and options", "linked to the characters themselves", "without overloading each character
+with a self-heal". Spec: `.tmp/wf13/sustain-spec.md` §2.3 (the Fanny Pack), §3 (the kit), §7 (KIT-BALANCE tests).
+- `first_aid_fanny_pack` is **unchanged**: common trinket, 👝, desc, `FANNY_HEAL` 3, its `onTurnStart` hook. Not
+  `noDrop`: one of the 20 shared commons at weight 1; loot and shops still prefer items the party doesn't own. Only
+  `DD.Balance.start.items` lost it (`[]`, `js/data/balance.js`; `docs/notes/kit.md`). The comment above it in
+  `js/data/items.js` now says so. Shared counts unchanged: 51 (20 common / 16 rare / 7 legendary / 8 cursed; 17 weapons,
+  16 armor, 18 trinkets).
+- The character-linked heals that replace it live in the hero files (Slate's Stress Ball, Basanos' Transform and Coat,
+  Sparrow's Juice Box, Marwyn's surge, Hjalmar's Canned Laughter: other owners). No new shared item: the spec rejected
+  shared heal commons as a drift back toward a generic party heal.
+- Tests (`tests/content/shared.js`): the Fanny suite is now `items: the First-Aid Fanny Pack heals the most hurt of you
+  and your adjacent allies 3 HP at your turn start (ordinary common loot since D9)`; "every party starts with one" flipped
+  to "no party starts with one (D9: no generic heal for every party)"; new: not `noDrop`, and a party without one finds
+  it in common trinket loot (300 rolls); the desc, no-duplicates and adjacency checks are unchanged. `RARITY_COUNT` and
+  "51 shared items" unchanged. The counts comment above `TOTAL` was updated (comment only).
+
+### Deviations (Nov 12, this build)
+
+- `tests/balance_tests.js` suite 5: the spec changes only the comment; the boss row's assertion message also said
+  "what pays for the starting kit", so it now reads "pass 1's row, re-fitted by pass 3". Text only; the 1.1-1.3 bound is
+  unchanged.
+- `tests/content/shared.js`: besides the Fanny suite, the one-line counts comment at the top (`TOTAL` / `RARITY_COUNT`)
+  said the Fanny Pack is "a common trinket every party starts with; never dropped or sold" (wrong since D9, and the
+  "never dropped or sold" part was already wrong). Comment only; the counts are unchanged.
+- The Fanny suite gained two checks the spec doesn't list (not `noDrop`; found in common trinket loot), so "ordinary
+  common loot" is tested, not just stated.
+
+Status (Nov 12, ~20:05): landed and tested; the Fanny suite passes isolated and in the full run (results in
+`docs/notes/kit.md` "Sustain (Nov 12)").
+
+### Requests (Nov 12)
+
+- **Balance (pass 3)**: `docs/notes/balance.md` (Pass 1 "Tests", line ~271) names the old suite 6 title ("a heal and a
+  revive"); the Pass 3 section can name the new one. The act 1 rows wait for pass 3 (spec §9 B2).
+
+## Review (sustain, Nov 12) — adversarial review (ADVERSARIAL REVIEWER role)
+
+- **Verified**: the First-Aid Fanny Pack is unchanged (desc, FANNY_HEAL 3, onTurnStart), not `noDrop`, and in no starting
+  kit (`items: the First-Aid Fanny Pack … (ordinary common loot since D9)` and balance suite 6 pass); the only items.js
+  change of this run is its comment. The two hero items of D9 live in their heroes' files: Hjalmar's Canned Laughter
+  (new, rare trinket) and Basanos' Wolfsbane-Lined Coat (its Hair-Trigger heal, the HP-threshold heal the user ruled out,
+  is now 5 Block when Transform turns him back into a human). Shared counts unchanged (51: 20 / 16 / 7 / 8).
+- **Fixed**: nothing.
+
+## Review (sustain, Nov 12) — engine, AutoPlay and tests (ADVERSARIAL REVIEWER role)
+
+- **Verified (by running code, `.tmp/rev-engine/probe.js`)**: a new run of Hjalmar / Slate / Basanos / Sparrow starts
+  with the Bucket of Ice Water in the pockets and nothing worn; common rolls give the Fanny Pack about 1 time in 19
+  (31/600) and rare rolls give Canned Laughter about 1 in 27 (22/600) with Hjalmar in the party, never without him;
+  shops stock Canned Laughter (10/200). A save / load keeps Canned Laughter, the Wolfsbane-Lined Coat (+4 max HP on the
+  fighting unit), Stress Ball in Slate's slots and the Bucket, and AutoPlay plays a whole fight from the reloaded run.
+  Permanent regression for the hero item: `hero_hjalmar: review (sustain) — …; loot, shops and saves`.
+- **Fixed**: nothing in items.js (the Canned Laughter AutoPlay fix is in `hjalmar.js`, see hero-hjalmar.md).
+
 ## History (v1, condensed)
 
 - Review (Oct 31): Crash Helmet also sinks `d.flat` (Weak Ankles scar leaked bump damage); Pocket Hourglass quotes keyed
@@ -292,3 +395,17 @@ the campaign sims (`tools/sim.sh`, which loot as they go) are where "hard but fa
   Gilded Breastplate, Lance, Dog Treats, Barrel Armor, Adrenaline Jar init), added one item (the Polearm), made the
   turn-based ones count own turns and the "use" triggers skip reactions; the test file was rewritten for initiative
   (heroes first, AI off by default, `endRound`, real AI turns where it matters) with 4 new v2 suites.
+
+## Finish (Nov 14) — FIX: CONTENT
+
+- **text-tone-v1 / review-open-12 (fixed)**: the Bundle of Party Balloons ends "You still swoop down for gold." (loot is
+  not a floor effect: gold piles and Hoard Piles; ≤ 150 chars).
+- **heroes-v1 (items.js part)**: nothing to fix — every "within N tiles" in items.js is a self area (no range bonus).
+
+## Review (finish, Nov 14) — REVIEWER
+
+- D4 swept with every item (hero items on their hero, generic items on every hero): a hit on a crate standing in a puddle,
+  procs forced, never fired a rider (no Lute shock, no echo, no lifesteal, no status, no gold); only the Chaos Crystal's
+  wild surge fires, as it does on any skill use (a use hook: D4 keeps those). Probe `.tmp/wf14/rev/d4.js` (2,682 hits).
+- The Party Balloons text ("You still swoop down for gold.") and the hero-item rider texts (Lute, Coconut, Wolfsbane Coat)
+  read right; their suites pass.

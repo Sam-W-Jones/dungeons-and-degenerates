@@ -8,26 +8,8 @@
   const DD = window.DD;
 
   const SPEEDS = [0.5, 1, 1.5, 2, 3];
-  const CONTROLS = [
-    ['Left click', 'Select hero · move · use skill'],
-    ['Right click / Esc', 'Cancel targeting · close windows'],
-    ['1 – 6', 'Basic attack, skills, signature'],
-    ['7 – 0', 'Consumables'],
-    ['E', 'Interact · Help Up'],
-    ['Tab', 'Cycle heroes'],
-    ['Space', 'Roll for initiative · end turn · skip animations'],
-    ['Z', 'Undo last move'],
-    ['Enter', 'Use the armed skill on the hovered tile'],
-    ['WASD / Arrows', 'Pan the camera'],
-    ['Mouse wheel / + −', 'Zoom'],
-    ['Right / left drag', 'Pan the camera'],
-    ['Middle drag', 'Rotate the map to any angle'],
-    ['Q / R', 'Turn the map 90°'],
-    ['Shift + wheel', 'Rotate the map (or a sideways swipe)'],
-    ['Two-finger twist', 'Rotate the map (touch)'],
-    ['Home', 'Reset the view'],
-    ['F', 'Recenter the camera'],
-  ];
+  // [playtest first-hour-8] the controls list is DD.UI.CONTROLS (shared with the in-combat menu)
+  function controls() { return (DD.UI.CONTROLS || []).map(function (c) { return [c.key, c.desc]; }); }
 
   function save() {
     if (DD.Meta && typeof DD.Meta.save === 'function') DD.safe('Meta.save', DD.Meta.save, DD.Meta);
@@ -133,7 +115,7 @@
         }
 
         panel.appendChild(el('div.set-h', null, 'Controls'));
-        panel.appendChild(el('div.controls', null, CONTROLS.map(function (c) { return el('div.ctrl', null, el('span.ctrl-key', null, c[0]), el('span.ctrl-desc', null, c[1])); })));
+        panel.appendChild(el('div.controls', null, controls().map(function (c) { return el('div.ctrl', null, el('span.ctrl-key', null, c[0]), el('span.ctrl-desc', null, c[1])); })));
 
         panel.appendChild(el('div.set-h.danger', null, 'Danger Zone'));
         panel.appendChild(row('Reset progress', anyLocks ? 'Delete unlocks, stats, codex and history.' : 'Delete stats, codex and history.', UI.button('Reset Progress', resetProgress, { cls: 'danger small', icon: '🔥' })));

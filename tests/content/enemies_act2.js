@@ -155,9 +155,11 @@
       t.eq(e.init, INIT[id], id + ' initiative modifier ' + e.init);
       t.ok(!e.turnsPerRound || e.turnsPerRound === 1, id + ' takes one turn a round');
       const pv = e.passive;
-      t.ok(pv && typeof pv.name === 'string' && pv.name.length >= 3 && pv.name.length <= 26 && typeof pv.desc === 'string', id + ' has a passive (name + desc) for the inspect panel');
-      if (pv && typeof pv.desc === 'string') {
-        t.ok(/\bturn\b/i.test(pv.desc) && pv.desc.length >= 40 && pv.desc.length <= 300, id + ' passive says what it does on its turn, briefly (' + pv.desc.length + ' chars)');
+      // [finish desc-sweep-4] a desc may be (unit) => string: the rule line reads the fight's numbers (codex: the raw ones)
+      const pdesc = pv && typeof pv.desc === 'function' ? pv.desc(null) : pv && pv.desc;
+      t.ok(pv && typeof pv.name === 'string' && pv.name.length >= 3 && pv.name.length <= 26 && typeof pdesc === 'string', id + ' has a passive (name + desc) for the inspect panel');
+      if (pv && typeof pdesc === 'string') {
+        t.ok(/\bturn\b/i.test(pdesc) && pdesc.length >= 40 && pdesc.length <= 300, id + ' passive says what it does on its turn, briefly (' + pdesc.length + ' chars)');
         t.ok(!pv.hooks, id + ' passive is text only (hooks live in def.hooks)');
       }
     });
@@ -266,9 +268,9 @@
         t.eq(d[1], 0, 'not next to the target: untouched');
         t.eq(pos(e), '4,4', 'the gargoyle lands on the closest tile next to it');
       });
-    check('Glitter Bomb', { heroes: [H(4, 4), H(5, 4, 'test_rogue')], enemies: [E(1, 4, 'a2_pixie_swarm')] }, 'a2_pixie_swarm', 'a2_pixie_glitter', function (e, hs) { return hs[0]; },
+    check('Fairy Dust-Up', { heroes: [H(4, 4), H(5, 4, 'test_rogue')], enemies: [E(1, 4, 'a2_pixie_swarm')] }, 'a2_pixie_swarm', 'a2_pixie_glitter', function (e, hs) { return hs[0]; },
       function (e, hs, d) {
-        t.ok(d[0] === 5 && d[1] === 5, 'Glitter Bomb deals 5 to the target and the foe next to it');
+        t.ok(d[0] === 5 && d[1] === 5, 'Fairy Dust-Up deals 5 to the target and the foe next to it');
         t.ok(has(hs[0], 'dazzled') && has(hs[1], 'dazzled'), 'and Dazzles them');
       });
     check('Tiny Bites', { heroes: [H(5, 4)], enemies: [E(4, 4, 'a2_pixie_swarm')] }, 'a2_pixie_swarm', 'a2_pixie_bite', { x: 5, y: 4 },
@@ -646,7 +648,7 @@
     const rec = recorder();
     const px = byDef('a2_pixie_swarm')[0], m2 = heroOf('test_mage'), r0 = DD.Targeting.range(m2, DD.getSkill(m2.basic.id), 1)[1];
     turn(px);
-    t.eq(rec.usedBy('a2_pixie_swarm').join(), 'a2_pixie_glitter', 'on its turn: a Glitter Bomb');
+    t.eq(rec.usedBy('a2_pixie_swarm').join(), 'a2_pixie_glitter', 'on its turn: a Fairy Dust-Up');
     t.ok(has(m2, 'dazzled') && has(heroOf('test_rogue'), 'dazzled') && dist(px, m2) >= 2, 'both heroes glittered, from 2+ tiles away');
     t.eq(DD.Targeting.range(m2, DD.getSkill(m2.basic.id), 1)[1], r0 - 1, 'a Dazzled hero has 1 less range');
     t.ok(DD.Act2.singleTarget(DD.getSkill('test_bolt')) && !DD.Act2.singleTarget(DD.getSkill('test_fireball')), 'singleTarget helper');
@@ -746,6 +748,8 @@
     const walls = [[5, 4], [4, 5]].filter(function (p) { return tile(p[0], p[1]).obj && tile(p[0], p[1]).obj.id === 'a2_bone_wall'; });
     t.eq(walls.length, 2, 'bone walls rise on the free tiles around the hero');
     t.ok(tile(6, 5).obj.id === 'crate' && !tile(5, 6).obj, 'occupied tiles keep what they had');
+    // playtest text-tone-19: the verb follows the count
+    t.ok(DD.Combat.state.log.some(function (l) { return / assigns Detention: 2 bone walls rise\.$/.test(l.text); }), 'the log says "2 bone walls rise"');
     const reach = DD.Combat.reachable(m);
     t.ok(!reach.has('5,4') && !reach.has('4,5'), 'walls block movement');
     t.ok(!DD.Grid.los(m, { x: 5, y: 1 }), 'and line of sight');
@@ -755,6 +759,10 @@
     t.ok(tile(4, 5).obj && tile(4, 5).obj.id === 'a2_bone_wall', 'the other wall lasts through the next round');
     DD.Combat.endRound();
     t.ok(!tile(4, 5).obj || tile(4, 5).obj.id !== 'a2_bone_wall', 'then crumbles (rounds, not turns)');
+    // text-tone-19, singular: a hero in a corner next to a crate leaves room for one wall ("1 bone wall rises", not "rise")
+    quiet({ heroes: [H(0, 0)], enemies: [E(4, 4, 'a2_necro_ta')], objects: [{ x: 1, y: 0, id: 'crate' }] });
+    now(byDef('a2_necro_ta')[0], 'a2_ta_detention', heroOf('test_mage'));
+    t.ok(DD.Combat.state.log.some(function (l) { return / assigns Detention: 1 bone wall rises\.$/.test(l.text); }), 'the log says "1 bone wall rises"');
     // his turn, one thing (v2): Raise Dead when there are piles (or fewer than 2 interns) ...
     quiet({ w: 11, h: 11, heroes: [H(5, 8), H(2, 9, 'test_cleric')], enemies: [E(5, 2, 'a2_necro_ta'), E(9, 1, 'a2_skeleton_intern'), E(9, 2, 'a2_skeleton_intern')] });
     let rec = recorder();
@@ -891,7 +899,7 @@
       { id: 'a2_gargoyle', cfg: { heroes: [H(5, 4)], enemies: [E(1, 4, 'a2_gargoyle')] }, skill: 'a2_gargoyle_dive', also: 'a2_gargoyle_stone',
         check: function (e, h, d) { return d === 8 && has(e, 'a2_stoneform'); }, what: 'dives (8), then turns to stone' },
       { id: 'a2_pixie_swarm', cfg: { heroes: [H(2, 4)], enemies: [E(6, 4, 'a2_pixie_swarm')] }, skill: 'a2_pixie_glitter',
-        check: function (e, h, d) { return d === 5 && has(h, 'dazzled'); }, what: 'throws a Glitter Bomb (5 + Dazzle)' },
+        check: function (e, h, d) { return d === 5 && has(h, 'dazzled'); }, what: 'throws a Fairy Dust-Up (5 + Dazzle)' },
       { id: 'a2_mama_owlbear', cfg: { heroes: [H(4, 5, 'test_mage', { hp: 60 }), H(5, 4, 'test_cleric')], enemies: [E(4, 4, 'a2_mama_owlbear')] }, skill: null,
         check: function (e) { return e.intents.length === 1 && e.intents[0].windup && e.intents[0].skillId === 'a2_mama_stomp'; }, what: 'mauls or pounces, then winds up the Stomp' },
       { id: 'a2_necro_ta', cfg: { w: 11, h: 11, heroes: [H(5, 8)], enemies: [E(5, 2, 'a2_necro_ta')] }, skill: 'a2_ta_raise',
@@ -936,7 +944,8 @@
       const e = byDef(id)[0], st = DD.AI.styleOf(e);
       t.eq(st.style, STYLE[id], id + ' targets as a ' + STYLE[id]);
       t.eq(DD.AI.isDiver(e), STYLE[id] === 'skirmisher' || STYLE[id] === 'assassin', id + (DD.AI.isDiver(e) ? ' dives the weakest hero' : ' does not dive the weakest hero'));
-      t.ok(SAYS[STYLE[id]].test(DD.getEnemy(id).passive.desc), id + ' says how it picks its target: ' + DD.getEnemy(id).passive.desc);
+      const pd = DD.resolve(DD.getEnemy(id).passive.desc, null, null, '');   // a desc may be (unit) => string
+      t.ok(SAYS[STYLE[id]].test(pd), id + ' says how it picks its target: ' + pd);
     });
     // a brute next to the knight bites the knight, though a 5-HP mage is one step away (that step provokes the knight).
     // (the mage is listed first: her turn, so the knight has no round-1 fixture Block)
@@ -1677,4 +1686,89 @@
       'screen / health light in view at 0°, 90°, 180°, 270°: east front, south side (px ' + JSON.stringify(n) + ')');
     t.eq(DD.problems.slice(n0).filter(function (p) { return /^Error in /.test(p); }).length, 0, 'no swallowed errors');
   }, { tags: ['render'] });
+
+  // ---- rules run (user: "objects should be targetable to break them") ------------------------------------------------
+  T.suite('enemies_act2: rules run — bone piles, bone walls and brunch platters are attack targets; the coffee machine never is', function (t) {
+    const Tg = DD.Targeting;
+    t.ok(OBJECTS.every(function (id) { const d = DD.getObject(id); return d && typeof d.targetable === 'boolean'; }), 'every act 2 object states its targetable decision');
+    // a pile across the room: one bolt (4) scatters it for good — no reassembly, no stomp needed
+    quiet({ heroes: [H(1, 4)], enemies: [E(8, 8, 'a2_zombie_unpaid')] });
+    act(function () { DD.Act.placeObject(5, 4, 'a2_bone_pile', { data: { timer: 1 } }); });
+    const m = heroOf('test_mage');
+    const pq = Tg.validTargets(m, m.basic).filter(function (q) { return q.x === 5 && q.y === 4; })[0];
+    t.ok(!!pq && pq.obj === 'a2_bone_pile' && pq.hp === 3 && pq.breaks, 'the pile (3 HP) is a target 4 tiles away (' + JSON.stringify(pq) + ')');
+    t.ok(DD.Combat.useSkill(m, m.basic, 5, 4) && !tile(5, 4).obj, 'one bolt scatters it');
+    DD.Combat.endRound();
+    DD.Combat.endRound();
+    t.eq(byDef('a2_skeleton_intern').length, 0, 'and nobody stands back up');
+    t.ok(/any single-target damage skill can break it/.test(DD.getObject('a2_bone_pile').desc) && /3 HP/.test(DD.getObject('a2_bone_pile').desc), 'the pile desc says so (D1 wording)');
+    t.ok(/3 damage to the pile/.test(DD.getEnemy('a2_skeleton_intern').passive.desc), 'and so does the intern\'s passive');
+    // a Bone Wall boxing in a friend: shoot it from range
+    quiet({ heroes: [H(1, 4), H(6, 4, 'test_knight')], enemies: [E(8, 8, 'a2_zombie_unpaid')] });
+    act(function () { DD.Act.placeObject(5, 4, 'a2_bone_wall', { data: { turns: 2 } }); });
+    const m2 = heroOf('test_mage');
+    t.ok(Tg.validTargets(m2, m2.basic).some(function (q) { return q.obj === 'a2_bone_wall'; }), 'a Bone Wall is a target');
+    t.ok(DD.Combat.useSkill(m2, m2.basic, 5, 4) && tile(5, 4).obj && tile(5, 4).obj.hp === 1, 'a bolt chips it (5 → 1 HP)');
+    // AutoPlay's hint: a wall that boxes in a friend is worth breaking for the others too (from range or with a Smash)
+    quiet({ heroes: [H(1, 4), H(5, 4, 'test_knight')], enemies: [E(8, 8, 'a2_zombie_unpaid')] });
+    act(function () { [[4, 4], [6, 4], [5, 3], [5, 5]].forEach(function (p) { DD.Act.placeObject(p[0], p[1], 'a2_bone_wall', { data: { turns: 2 } }); }); });
+    const wdef = DD.getObject('a2_bone_wall'), kn = heroOf('test_knight'), m5 = heroOf('test_mage');
+    t.ok(wdef.autoplay(kn, tile(4, 4).obj, tile(4, 4)) === 8 && wdef.autoplay(m5, tile(4, 4).obj, tile(4, 4)) > 0, 'hint: worth breaking for the walled-in knight and for the mage outside');
+    t.eq(wdef.autoplay(m5, tile(4, 4).obj, tile(1, 1)), 0, 'hint: a wall nobody is boxed in by is worth nothing');
+    // the platter: 10 HP, oil when it breaks
+    quiet({ heroes: [H(1, 4)], enemies: [E(8, 8, 'a2_zombie_unpaid')] });
+    act(function () { DD.Act.placeObject(4, 4, 'a2_chafing_dish', { hp: 3, maxHp: 10 }); });
+    const m3 = heroOf('test_mage');
+    t.ok(DD.Combat.useSkill(m3, m3.basic, 4, 4) && !tile(4, 4).obj && tile(5, 4).surface && tile(5, 4).surface.id === 'oil', 'a shot platter spills its hollandaise (oil)');
+    // the coffee machine: never an attack target (it is what the party protects), even outside its own fight
+    quiet({ heroes: [H(1, 4)], enemies: [E(8, 8, 'a2_zombie_unpaid')] });
+    act(function () { DD.Act.placeObject(4, 4, 'a2_coffee_machine'); });
+    const m4 = heroOf('test_mage');
+    t.ok(!Tg.objectTargetable(tile(4, 4).obj) && !Tg.isValidTarget(m4, m4.basic, 4, 4), 'nobody aims at the coffee machine');
+    sanity(t, 'act 2 objects (rules run)');
+  });
+
+  // ---- finish (Nov 14): playtest desc-sweep-4 --------------------------------------------------------------------------
+  T.suite('enemies_act2: finish — rule lines give the hits of THIS fight (casual ×0.8, brutal ×1.05), a codex card the raw numbers', function (t) {
+    const n0 = DD.problems.length;
+    const CASES = [['a2_zombie_unpaid', 'a2_zombie_overtime', '(N)'], ['a2_banshee', 'a2_banshee_scream', '(N + Stun'], ['a2_gargoyle', 'a2_gargoyle_dive', '(N to it']];
+    ['casual', 'normal', 'brutal'].forEach(function (diff) {
+      DD.Combat.sandbox({ w: 9, h: 9, seed: 3, enemyAi: false, difficulty: diff, heroes: [{ id: 'test_knight', x: 1, y: 1 }],
+        enemies: CASES.map(function (c, i) { return { id: c[0], x: 6, y: 2 + 2 * i }; }),
+        objective: { type: 'custom', text: 'ea2' }, encounter: { id: 'ea2_finish', checkObjective: function () { return null; } } });
+      const f = DD.Combat.state.difficulty.dmg;
+      CASES.forEach(function (c) {
+        const u = DD.Combat.state.units.filter(function (x) { return x.defId === c[0]; })[0];
+        const want = Math.round(DD.skillLevel(DD.getSkill(c[1]), 1).dmg * f);
+        const txt = DD.getEnemy(c[0]).passive.desc(u);
+        t.ok(txt.indexOf(c[2].replace('N', want)) >= 0, diff + ' ' + c[0] + ': ' + c[2].replace('N', want) + ' (×' + f + ') — ' + txt);
+      });
+    });
+    CASES.forEach(function (c) {
+      const raw = DD.skillLevel(DD.getSkill(c[1]), 1).dmg;
+      t.ok(DD.getEnemy(c[0]).passive.desc(null).indexOf(c[2].replace('N', raw)) >= 0, c[0] + ': a codex card reads the raw ' + raw);
+    });
+    t.ok(!/\d+ lightning damage/.test(DD.getEnemy('a2_tesla_coil').desc), 'the Tesla Coil card quotes no number it can\'t keep (its ability row shows the arc)');
+    t.eq(DD.problems.slice(n0).filter(function (p) { return /^Error in /.test(p); }).length, 0, 'no swallowed errors');
+  });
+
+  // ---- finish review (Nov 14): lead decision D5 on the real Bone Pile ------------------------------------------------
+  T.suite('enemies_act2: finish review — D5: AutoPlay breaks a real Bone Pile for every hero, flyers included (the stomp stays a walker\'s)', function (t) {
+    const n0 = DD.problems.length;
+    const def = DD.getObject('a2_bone_pile');
+    [false, true].forEach(function (flying) {
+      DD.Combat.sandbox({ w: 10, h: 10, seed: 'ea2-d5', noPlan: true, enemyAi: false, heroes: [{ id: 'test_mage', x: 1, y: 4 }],
+        enemies: [{ id: 'test_grunt', x: 9, y: 9 }], objects: [{ x: 4, y: 4, id: 'a2_bone_pile' }],
+        objective: { type: 'custom', text: 'ea2' }, encounter: { id: 'ea2_d5', checkObjective: function () { return null; } } });
+      const m = DD.Combat.heroes()[0], tl = DD.Grid.tile(4, 4);
+      m.flags = Object.assign({}, m.flags, { flying: flying });
+      DD.Act.addStatus(m, 'root', { turns: 2 });
+      const who = flying ? 'a flyer' : 'a walker';
+      t.ok(def.autoplay(m, tl.obj, tl, DD.Combat.state, 'break') > 0, who + ': breaking it (a shot, a Smash) is worth it');
+      t.eq(def.autoplay(m, tl.obj, tl, DD.Combat.state, 'step') > 0, !flying, who + ': stepping on it ' + (flying ? 'does nothing (no stomp from the air)' : 'stomps it'));
+      DD.AutoPlay.takeTurn();
+      t.ok(!tl.obj, who + ' (rooted, 3 tiles off) shoots the pile to bits on its own turn');
+    });
+    t.eq(DD.problems.slice(n0).filter(function (p) { return /^Error in /.test(p); }).length, 0, 'no swallowed errors');
+  });
 })();

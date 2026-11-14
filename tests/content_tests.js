@@ -34,7 +34,9 @@
     // v2: initiative rolls (modifyGuard is gone with Guard: a content hook named so is reported as unknown)
     'modifyInitiative',
     // v2: attacks of opportunity (modifyOpportunity must be pure: previews and the AI query it)
-    'modifyOpportunity', 'onOpportunityAttack'];
+    'modifyOpportunity', 'onOpportunityAttack',
+    // engine requests: pure estimate queries (DD.AI.estimate) and the after-the-fact hooks for a refused death / a status gone
+    'estimateDealt', 'estimateTaken', 'onDeathPrevented', 'onStatusRemoved'];
   const BARK_KEYS = ['select', 'start', 'move', 'kill', 'hurt', 'lowhp', 'downed', 'revive', 'ally_down', 'levelup', 'victory', 'idle', 'signature'];
   const ENEMY_BARK_KEYS = ['spawn', 'attack', 'hurt', 'death'];
   // noProvoke: its moves never provoke attacks of opportunity · noOpportunity: it never makes them (v2)
@@ -258,6 +260,8 @@
       t.ok(typeof s.charges === 'number' && typeof s.hype === 'number', L + ': charges/hype');
       t.ok(typeof s.icon === 'string' && s.icon.length > 0, L + ': icon');
       ['canUse', 'aiScore', 'preview'].forEach(function (k) { t.ok(s[k] === null || s[k] === undefined || typeof s[k] === 'function', L + ': ' + k); });
+      // engine requests: declarative reach flags (DD.AI.windupOnly / fromStand)
+      ['windupOnly', 'fromStand'].forEach(function (k) { if (s[k] !== undefined) t.ok(typeof s[k] === 'boolean', L + ': ' + k + ' is true / false'); });
       if (Array.isArray(s.levels)) levelProblems(s).forEach(function (p) { t.fail(L + ': ' + p); });
       if (s.anchor === 'unit' && s.owner === 'enemy' && s.target && s.target.type !== 'unit') notes.push(L + ": anchor 'unit' on a " + s.target.type + '-target skill (it tracks whoever stands on the tile, else falls back to ground)');
     });
@@ -793,6 +797,69 @@
   });
 
   /**
+   * Engine requests: every cloud carries both flags (cloud / airborne, normalised at load); every object flagged loot is
+   * picked up by a flyer entering its tile (lead's call: picking up is not a floor effect); advisories for the owners —
+   * objects that hand out gold on entry but are not flagged loot (flyers float over them), and enemy skills whose desc
+   * says "Wind-up" but are not flagged windupOnly (reach estimates and the default planner read them as instant).
+   */
+  T.suite('content: engine requests — clouds, loot for flyers, wind-up-only skills (advisories for content owners)', function (t) {
+    all('surfaces').forEach(function (sd) {
+      if (sd.cloud || sd.airborne) t.ok(sd.cloud === true && sd.airborne === true && DD.Grid.isCloud(sd), 'surface ' + sd.id + ': a cloud, both flags set');
+    });
+    const loot = all('objects').filter(function (o) { return o.loot && o.blocksMove === false; });
+    t.ok(!!DD.getObject('gold_pile').loot, 'gold_pile is loot');
+    loot.forEach(function (od) {
+      DD.Combat.sandbox({ w: 7, h: 5, seed: 3, noPlan: true, enemyAi: false, gold: 0, heroes: [{ id: anyHeroId(null), x: 1, y: 2 }], enemies: [{ id: 'test_grunt', x: 6, y: 4 }],
+        objective: { type: 'custom', text: 'Testing' }, encounter: { id: 'test_quiet', checkObjective: function () { return null; } } });
+      const h = DD.Combat.heroes()[0];
+      h.flags = Object.assign({}, h.flags, { flying: true });
+      const obj = DD.Act.placeObject(2, 2, od.id);
+      if (!obj) return;
+      let fired = 0;
+      const own = obj.onEnter;
+      obj.onEnter = function () { fired++; };
+      DD.Act.moveAlong(h, [{ x: 2, y: 2 }], { action: false });
+      obj.onEnter = own;
+      t.ok(fired === 1, 'object ' + od.id + ' (loot): a flyer entering its tile picks it up (onEnter fired)');
+    });
+    const goldy = all('objects').filter(function (o) {
+      return !isTest(o.id) && !o.loot && o.blocksMove === false && typeof o.onEnter === 'function' && (/gainGold\s*\(/.test(String(o.onEnter)) || /\bgold\b/i.test(o.desc || ''));
+    }).map(function (o) { return o.id; });
+    advise('objects that hand out gold when entered but are not flagged loot (lead\'s call: flyers pick up loot too; add loot: true and fix the desc)', goldy);
+    const wind = all('skills').filter(function (s) {
+      if (s.owner !== 'enemy' || isTest(s.id) || DD.AI.windupOnly(s)) return false;
+      let d = '';
+      try { d = DD.skillDesc(s, 1, null); } catch (e) { d = ''; }
+      return /^\s*Wind-up\b/i.test(d);
+    }).map(function (s) { return s.id; });
+    advise('enemy skills whose desc starts "Wind-up" but are not flagged windupOnly (threat shading, AutoPlay and the default planner read them as instant)', wind);
+  });
+
+  /**
+   * [review, balance run] The engine's boxed-in fallback (DD.AI squeeze) runs after a custom planner only when the planner
+   * looked for something to do: a gargoyle in Stone Form "does nothing" on that turn (its passive), even boxed into a
+   * pocket whose only opening holds a downed hero. Out of Stone Form it squeezes past the body like anyone else.
+   */
+  T.suite('content: review (balance run) — a gargoyle in Stone Form does nothing, even boxed in by a downed hero', function (t) {
+    if (!DD.getEnemy('a2_gargoyle') || !DD.getStatus('a2_stoneform')) { t.skip('needs a2_gargoyle and a2_stoneform'); return; }
+    const pocket = function (tl) { if ((tl.x === 2 && tl.y !== 1 && tl.y <= 2) || (tl.y === 2 && tl.x <= 2)) tl.t = 'wall'; };
+    const scene = function () {
+      DD.Combat.sandbox({ w: 9, h: 9, seed: 7, noPlan: true, enemyAi: false, terrain: pocket,
+        heroes: [{ id: 'test_mage', x: 7, y: 1 }, { id: 'test_knight', x: 2, y: 1 }], enemies: [{ id: 'a2_gargoyle', x: 1, y: 1 }],
+        objective: { type: 'custom', text: 'Testing' }, encounter: { id: 'test_quiet', checkObjective: function () { return null; } } });
+      DD.Act.kill(DD.Combat.heroes()[1], null, { force: true });
+      return DD.Combat.enemies()[0];
+    };
+    let g = scene();
+    DD.Act.addStatus(g, 'a2_stoneform', { turns: 1 });
+    DD.AI.act(g);
+    t.ok(g.x === 1 && g.y === 1, 'in Stone Form it stays a statue (' + g.x + ',' + g.y + ')');
+    g = scene();
+    DD.AI.act(g);
+    t.ok(g.x >= 3, 'control: out of Stone Form it squeezes out past the downed knight (' + g.x + ',' + g.y + ')');
+  });
+
+  /**
    * [v2 review] The real thing, for every real skill and consumable the v2 rules reach: aimed at an explosive barrel it
    * sets it off (costs paid, preview = reality, nothing thrown by the content's onSkillUsed / onCostPaid hooks, which
    * now see a use with ctx.targetObj and no targetUnit); aimed at a downed ally a heal does what its preview says (UP!
@@ -886,6 +953,138 @@
     });
     t.log('barrel shots ' + shots + ' · heals that got the ally up ' + ups + ' · that did not (content advisory) ' + still);
     t.ok(shots >= 40 && ups >= 1, 'the rules reach real content (' + shots + ' barrel shots, ' + ups + ' revives)');
+  });
+
+  /**
+   * Rules run (user request: "objects should be targetable to break them"): every real attack that can be aimed at
+   * objects hits a crate for its listed damage, exactly as its preview says ("Break: Crate − N damage, M HP left"), pays
+   * its AP and runs no riders; advisories for the owners — object-aimable attacks with no damage number (they can only set
+   * off barrels: add objectDmg), breakable object defs that are also puzzle objects or interactions (decide
+   * targetable), and objects with HP placed by content as instances.
+   */
+  T.suite('content: rules run — every object-aimable attack hits a crate as previewed; breakable objects (advisories)', function (t) {
+    const Tg = DD.Targeting;
+    const real = all('skills').filter(function (s) { return s.owner !== 'enemy' && !isTest(s.id); });
+    function crateFor(user, ref) {
+      const s = DD.Combat.state, G = DD.Grid;
+      const tiles = s.grid.tiles.slice().sort(function (a, b) {
+        const da = G.dist(user, a), db = G.dist(user, b);
+        return (da < 2) - (db < 2) || da - db;
+      });
+      for (let i = 0; i < tiles.length; i++) {
+        const tl = tiles[i];
+        if (tl.obj || G.unitAt(tl.x, tl.y) || G.isDrop(tl.x, tl.y) || !G.isWalkable(tl.x, tl.y)) continue;
+        DD.Act.placeObject(tl.x, tl.y, 'crate', { hp: 40, maxHp: 40 });
+        if (Tg.validTargets(user, ref).some(function (q) { return q.obj === 'crate' && q.x === tl.x && q.y === tl.y; })) return { x: tl.x, y: tl.y };
+        tl.obj = null;
+      }
+      return null;
+    }
+    const noDmg = [];
+    let hits = 0;
+    real.concat(all('consumables').filter(function (c) { return !isTest(c.id); })).forEach(function (d) {
+      const cons = DD.getConsumable(d.id) === d;
+      let user, ref, s;
+      if (cons) {
+        s = arena(anyHeroId(null), 5);
+        user = s.units.filter(function (u) { return u.kind === 'hero' && !u.downed; })[0];
+        s.consumables = [d.id];
+        ref = d;
+      } else {
+        const probe = userFor(d, 1);
+        if (!probe) return;
+        user = probe.user; ref = probe.slot; s = probe.state;
+      }
+      if (!Tg.aimsAtObjects(user, ref)) return;
+      const dmg = Tg.objectDamage(user, ref);
+      if (!(dmg > 0)) { noDmg.push(d.id); return; }
+      user.ap = 10;
+      const p = crateFor(user, ref);
+      if (!p) { t.log(d.id + ': no crate spot in range in the arena'); return; }
+      const label = d.id + ' aimed at a crate @' + p.x + ',' + p.y;
+      const fp = fingerprint(s);
+      const pv = Tg.preview(user, ref, p);
+      if (fingerprint(s) !== fp) t.fail(label + ': its preview changed the real fight');
+      t.ok(pv.breaks && !pv.detonates && pv.breaks.dmg === Math.min(dmg, 40) && pv.breaks.left === 40 - dmg, label + ': the preview hits it for ' + dmg + ' (' + (pv.breaks && pv.breaks.text) + ')');
+      const before = outcomeBefore(s);
+      const ap0 = user.ap, cost = cons ? (d.ap === undefined ? 1 : d.ap) : DD.Combat.costOf(user, d, 1).ap;
+      t.ok(DD.Combat._action(function () { return !!DD.Combat.resolveSkill(user, ref, p, { pay: true, consumable: cons }); }), label + ': resolved');
+      const o = DD.Grid.tile(p.x, p.y).obj;
+      t.ok(o && o.hp === 40 - dmg, label + ': the crate lost exactly ' + dmg + ' (' + (o ? o.hp : 'gone') + ' left)');
+      t.eq(ap0 - user.ap, cost, label + ': its AP is paid');
+      previewMismatches(pv, s, before).forEach(function (m) { t.fail(label + ': preview ≠ reality: ' + m); });
+      sanity(t, label);
+      hits++;
+    });
+    advise('object-aimable attacks with no damage number (they set off barrels but break nothing): give them objectDmg (number | (L, user) => n)', noDmg);
+    // object defs: what the party can aim at
+    const breakables = all('objects').filter(function (o) { return !isTest(o.id) && o.hp > 0; });
+    const targetable = breakables.filter(function (o) { return o.targetable !== false; }).map(function (o) { return o.id + (o.volatile ? ' (volatile)' : ''); });
+    const optedOut = breakables.filter(function (o) { return o.targetable === false; }).map(function (o) { return o.id; });
+    t.log('breakable objects the party can aim at (' + targetable.length + '): ' + targetable.join(', '));
+    t.log('breakable objects opted out (targetable: false): ' + (optedOut.join(', ') || 'none'));
+    advise('breakable objects that are also puzzle objects or interactions without a targetable decision (shooting them from range may skip the intended interaction: set targetable true or false)',
+      breakables.filter(function (o) { return o.targetable === undefined && !o.volatile && (o.interact || o.autoplay !== undefined || o.smashable); }).map(function (o) { return o.id; }));
+    t.ok(hits >= 40, 'the rule reaches real content (' + hits + ' crate hits)');
+  });
+
+  /**
+   * Finish (Nov 14), lead decision D1: EVERY single-target skill that deals damage — spells and utilities too — can be
+   * aimed at a breakable object and hits it for its listed damage, nothing else (no Charm from Heckle, no heal from Juice
+   * Box, no pull from Get Over Here). The lead's named examples, at level I, where the content is loaded.
+   */
+  T.suite('content: finish — D1: the damaging single-target spells (Heckle, Collect, Hemoglobin, Juice Box, Get Over Here, Anvil, Sand) break crates', function (t) {
+    const Tg = DD.Targeting;
+    const named = ['syl_heckle', 'cor_collect', 'spa_hemoglob', 'spa_juicebox', 'sla_get_over_here', 'val_anvil', 'gen_pocket_sand'].filter(function (id) { return !!DD.getSkill(id); });
+    if (!named.length) { t.skip('the named skills are not loaded'); return; }
+    named.forEach(function (id) {
+      const d = DD.getSkill(id);
+      const probe = userFor(d, 1);
+      if (!probe) { t.log(id + ': no user in the arena'); return; }
+      const user = probe.user, ref = probe.slot, s = probe.state;
+      t.ok(Tg.aimsAtObjects(user, ref), id + ' (' + d.kind + '): aims at objects');
+      const dmg = Tg.objectDamage(user, ref);
+      t.ok(dmg > 0, id + ': object damage ' + dmg);
+      user.ap = 10;
+      const G = DD.Grid;
+      let spot = null;
+      s.grid.tiles.slice().sort(function (a, b) { return G.dist(user, a) - G.dist(user, b); }).some(function (tl) {
+        if (tl.obj || G.unitAt(tl.x, tl.y) || G.isDrop(tl.x, tl.y) || !G.isWalkable(tl.x, tl.y)) return false;
+        DD.Act.placeObject(tl.x, tl.y, 'crate', { hp: 40, maxHp: 40 });
+        if (Tg.validTargets(user, ref).some(function (q) { return q.obj === 'crate' && q.x === tl.x && q.y === tl.y; })) { spot = { x: tl.x, y: tl.y }; return true; }
+        tl.obj = null;
+        return false;
+      });
+      if (!t.ok(!!spot, id + ': a crate spot in range')) return;
+      const others = function () {
+        return s.units.filter(function (u) { return u !== user; }).map(function (u) {
+          return u.id + ':' + u.hp + ':' + u.x + ',' + u.y + ':' + (u.statuses || []).map(function (st) { return st.id + st.stacks; }).join('.');
+        }).join('|');
+      };
+      const before = others(), hp0 = user.hp, at0 = user.x + ',' + user.y;
+      const pv = Tg.preview(user, ref, spot);
+      t.ok(!!pv.breaks && pv.breaks.dmg === dmg, id + ': the preview hits the crate for ' + dmg + ' (' + (pv.breaks && pv.breaks.text) + ')');
+      let ctx = null;
+      t.ok(DD.Combat._action(function () { ctx = DD.Combat.resolveSkill(user, ref, spot, { pay: true }); return !!ctx; }), id + ': resolved on the crate');
+      t.eq(G.tile(spot.x, spot.y).obj.hp, 40 - dmg, id + ': the crate lost exactly ' + dmg);
+      t.eq(others(), before, id + ': nothing happened to anyone else (no riders: statuses, pulls, damage)');
+      t.ok(user.hp === hp0 - ((ctx && ctx.paid && ctx.paid.hp) || 0) && user.x + ',' + user.y === at0, id + ': the user only paid its costs (no heal, no move)');
+    });
+  });
+
+  /** Finish (Nov 14), lead decision D2 on the real Slate: he can start a swap, nobody can swap him (the HUD reason). */
+  T.suite('content: finish — D2: Slate (immovable) starts a swap; an ally can\'t swap him and is told why', function (t) {
+    if (!DD.getHero('slate')) { t.skip('slate not loaded'); return; }
+    const ally = anyHeroId('slate');
+    DD.Combat.sandbox({ w: 7, h: 7, seed: 'd2', noPlan: true, enemyAi: false, objective: { type: 'custom', text: 'Arena' },
+      encounter: { id: 'content_d2', checkObjective: function () { return null; } },
+      heroes: [{ id: 'slate', x: 2, y: 3, level: 1 }, { id: ally, x: 3, y: 3, level: 1 }], enemies: [{ id: 'test_grunt', x: 6, y: 6 }] });
+    const sl = DD.Combat.state.units.filter(function (u) { return u.defId === 'slate'; })[0];
+    const al = DD.Combat.state.units.filter(function (u) { return u.defId === ally; })[0];
+    t.ok(DD.Act.isImmovable(sl), 'premise: Slate is immovable');
+    t.ok(DD.Combat.swap(sl, 3, 3) && sl.x === 3 && al.x === 2, 'Slate swaps with ' + al.name + ' (his own move)');
+    DD.Combat.endTurn();
+    t.eq(DD.Combat.canSwap(al, sl.x, sl.y), 'Slate is immovable: he can start a swap, you can\'t move him.', 'the ally is told why');
   });
 
   // ---- honest areas (v2: AI actions happen at once; boss wind-ups are the only telegraphs) ---------------------------

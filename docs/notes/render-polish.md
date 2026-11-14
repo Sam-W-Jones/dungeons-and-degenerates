@@ -112,3 +112,8 @@ and fights (acts 1-3 and the boss arenas at 1280×720 and 1920×1080, headless s
   during this pass, and the failing set changed between runs with their edits (earlier: preview suites, an engine
   status-flag suite, both fixed meanwhile). No failure involves a render file; every render, sprite, gallery and touched
   content suite passes.
+
+## Review (finish) — REVIEWER (Nov 14)
+
+Nothing in this area changed in the finish run or its review (sprites, FX, audio and these screens were re-shot at
+1280x720 and 1920x1080 and are fine). The review's findings, fixes and requests: docs/notes/hud-v2.md "Review (finish)".

@@ -934,3 +934,25 @@
     t.eq(b.k.ap, 2, '1 AP');
   });
 })();
+
+// ---- playtest fixes (Nov 12) ----------------------------------------------------------------------------------------
+(function () {
+  'use strict';
+  const T = window.DD_TEST, DD = window.DD;
+  if (!T || !DD || !DD.getHero('kiri')) return;
+  T.suite('hero_kiri: playtest fixes (Nov 12) — her texts give the range she really has (Ghostwood Longbow, range items)', function (t) {
+    DD.Combat.sandbox({ w: 9, h: 9, seed: 3, enemyAi: false, heroes: [{ id: 'kiri', x: 1, y: 4, level: 1 }], enemies: [{ id: 'test_grunt', x: 7, y: 4 }],
+      objective: { type: 'custom', text: 'Testing' }, encounter: { id: 'kir_pt', checkObjective: function () { return null; } } });
+    const k = DD.Combat.state.units.filter(function (u) { return u.defId === 'kiri'; })[0];
+    const d = function (id, lv) { return DD.skillDesc(DD.getSkill(id), lv || 1, k); };
+    t.ok(/a foe within 5,/.test(d('kir_basic')), 'no bow: Ghost Arrow within 5');
+    k.rangeBonus = 1;   // what the Ghostwood Longbow (stats.range 1) gives in a fight
+    const r = DD.Targeting.range(k, DD.getSkill('kir_basic'), 1)[1];
+    t.eq(r, 6, 'targeting: range 6');
+    t.ok(new RegExp('a foe within ' + r + ',').test(d('kir_basic')), 'Ghost Arrow says within ' + r + ': ' + d('kir_basic'));
+    t.ok(/within 7:/.test(d('kir_mark')) && /within 8 takes/.test(d('kir_beyond')) && /within 5 and push/.test(d('kir_banish')), 'Mark 7, Arrow from Beyond 8, Banishing Shot 5');
+    const lp = DD.skillLevel(DD.getSkill('kir_phase'), 1).len;
+    t.ok(d('kir_phase').indexOf('straight line of ' + (lp + 1) + ' tiles') >= 0, 'Phase Shot: a line of ' + (lp + 1));
+    t.ok(/a foe within 5,/.test(DD.skillDesc(DD.getSkill('kir_basic'), 1, null)), 'no user (shop, codex): the listed 5');
+  });
+})();

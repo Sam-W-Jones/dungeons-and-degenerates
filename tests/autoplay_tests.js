@@ -7,6 +7,8 @@
  * guards protected objects, walks by walking distance, values dice by their expected value, saves signatures for a big
  * moment, never runs an enemy planner, breaks stalemates and finishes whole fights (fixtures; one suite with real hero
  * kits). Scenes are quiet sandboxes: nobody else acts unless asked. Turn-order suites run each scene in both orders.
+ * Pass 3 ('autoplay: pass 3 — …'): closing in (two moves + a skill), the two-step disengage, the Help-Up loop breaker,
+ * summons before their hero, signatures at 100 Hype, the next-turn buff term and deterrents (the Polearm pins a foe).
  */
 (function () {
   'use strict';
@@ -219,7 +221,8 @@
     const wall = function (tl) { if (tl.x === 5 && tl.y >= 2 && tl.y <= 6) tl.t = 'wall'; };
     arena({ w: 12, h: 9, heroes: [hero('test_mage', 3, 4)], enemies: [{ id: 'test_archer', x: 10, y: 4 }], terrain: wall });
     const m = unitOf('test_mage'), a = unitOf('test_archer');
-    t.ok(DD.AI.reachOf(a).tiles.has('3,4'), 'premise: the engine\'s rough reach (sight ignored past its walk) covers the mage');
+    // (the engine's rough reach, DD.AI.reachOf, may or may not ignore sight past the walk: AutoPlay never relies on it)
+    t.log('the engine\'s rough reach covers the mage: ' + DD.AI.reachOf(a).tiles.has('3,4'));
     t.eq(DD.AutoPlay.incomingAt(m, 3, 4).dmg, 0, 'behind the wall: no line of sight from any tile it can walk to → nothing');
     t.ok(DD.AutoPlay.incomingAt(m, 6, 1).dmg > 3, 'in the open, in range and in sight: its 4-damage arrow counts (' + DD.AutoPlay.incomingAt(m, 6, 1).dmg.toFixed(2) + ')');
     t.eq(DD.AutoPlay.incomingAt(m, 2, 8).dmg, 0, 'out of its range after its walk: nothing');
@@ -813,5 +816,529 @@
     t.eq(end(r, 4, 5), end(r, 3, 5), 'a flyer: lava costs nothing either');
     w = play(r);
     t.ok(w.stabs > 0 && w.lost === 0, 'a flying rogue hovers over it and stabs it (' + w.at + ', ' + w.log + ')');
+  });
+
+  // ---- pass 3: play like a good human (docs/notes/autoplay.md "Pass 3") ----------------------------------------------------
+  T.suite('autoplay: pass 3 — a melee hero two moves away closes in and attacks in the same turn', function (t) {
+    if (missing(t, ['test_knight', 'test_grunt', 'test_brute'])) return;
+    // a wounded grunt 6 tiles away (the knight walks 3 a move): only two moves + a slash finish it this turn; the first
+    // move alone just walks into the brute's reach for nothing
+    const scene = function () {
+      arena({ w: 12, h: 9, heroes: [hero('test_knight', 1, 4)], enemies: [{ id: 'test_grunt', x: 7, y: 4 }, { id: 'test_brute', x: 5, y: 7 }] });
+      unitOf('test_grunt').hp = 4;
+      return { k: unitOf('test_knight'), g: unitOf('test_grunt') };
+    };
+    let sc = scene();
+    let log = watch(function () { DD.AutoPlay.takeTurn(); });
+    t.ok(used(log, 'test_slash').length >= 1 && sc.g.dead, 'two moves, then the slash that finishes it (' + said(log) + ', ' + key(sc.k) + ')');
+    sc = scene();
+    DD.AutoPlay.engage = false;
+    try { log = watch(function () { DD.AutoPlay.takeTurn(); }); } finally { DD.AutoPlay.engage = true; }
+    t.ok(!sc.g.dead, 'premise: without the closing-in options (AP.engage = false) it walks once and stops (' + said(log) + ')');
+  });
+
+  T.suite('autoplay: pass 3 — two-step disengage: a Tactical Retreat out of reach of attacks of opportunity, then away', function (t) {
+    if (missing(t, ['test_mage', 'test_grunt', 'test_brute', 'gen_tactical_retreat'])) return;
+    // a wounded mage between a brute and a grunt that can follow her: a plain walk off provokes both, standing there downs
+    // her; Tactical Retreat (no attacks of opportunity) to a tile they don't touch, then a free walk out of their reach
+    arena({ heroes: [hero('test_mage', 4, 5, 3, ['gen_tactical_retreat'])], enemies: [{ id: 'test_brute', x: 5, y: 5 }, { id: 'test_grunt', x: 4, y: 4 }] });
+    const m = unitOf('test_mage');
+    m.hp = 9;
+    t.ok(DD.AutoPlay.incomingAt(m, 4, 5).down > 0.5, 'premise: staying next to them would likely down her');
+    let log = [];
+    const seen = opps(function () { log = watch(function () { DD.AutoPlay.takeTurn(); }); });
+    t.eq(used(log, 'gen_tactical_retreat').length, 1, 'she Tactical-Retreats (' + said(log) + ')');
+    t.ok(seen.length === 0 && m.hp === 9, 'without provoking anything');
+    t.ok(DD.AutoPlay.incomingAt(m, m.x, m.y).down < 0.2, 'and ends out of their reach (' + key(m) + ', odds of going down ' + DD.AutoPlay.incomingAt(m, m.x, m.y).down.toFixed(2) + ')');
+  });
+
+  T.suite('autoplay: pass 3 — the Help-Up loop: a revive undone before the ally could act is not repeated while its killer acts', function (t) {
+    if (missing(t, ['test_knight', 'test_cleric', 'test_grunt'])) return;
+    arena({ heroes: [hero('test_knight', 3, 5), hero('test_cleric', 4, 5)], enemies: [{ id: 'test_grunt', x: 9, y: 9 }] });
+    const k = unitOf('test_knight'), c = unitOf('test_cleric'), g = unitOf('test_grunt');
+    DD.Combat.setOrder([k, g, c]);
+    A().damage(g, c, 999);
+    A().addStatus(k, 'root', { turns: 9 }, g);   // he stays by her side (Help Up needs no walk)
+    t.ok(c.downed && DD.AutoPlay.incomingAsAlly(c, 4, 5, k).dmg === 0, 'premise: the cleric is down and nothing on the board reaches her');
+    // something the board doesn't show (a sniper, say) downs her on the grunt's turn every time she gets up
+    const off = DD.Events.on('turn:start', function (e) { if (e.unit === g && !c.downed && !c.dead) A().damage(g, c, 999); });
+    try {
+      let log = [];
+      const helps = function () { const n = S().log.length; log = watch(function () { DD.AutoPlay.takeTurn(); }); return S().log.slice(n).filter(function (l) { return /helps .* up/.test(l.text); }).length; };
+      t.eq(helps(), 1, 'round 1: the knight helps her up (' + said(log) + ')');
+      DD.Combat.endTurn();
+      t.ok(c.downed && DD.Combat.current() === k, 'premise: she went straight back down on the grunt\'s turn, before hers');
+      t.eq(helps(), 0, 'round 2: no second Help Up while that grunt still acts (' + said(log) + ')');
+      DD.Combat.endTurn();
+      A().addStatus(g, 'stun', { turns: 1 }, k);
+      t.eq(helps(), 1, 'round 3: the grunt is stunned (loses its turn): now he helps her up (' + said(log) + ', knight ' + key(k) + ', cleric ' + key(c) + ', stunned ' + DD.Combat.isStunned(g) + ')');
+    } finally { off(); }
+  });
+
+  T.suite('autoplay: pass 3 — summons act before their hero (combos: a corgi that bit first sets up the owner\'s skill)', function (t) {
+    if (missing(t, ['test_summoner', 'test_hound', 'test_grunt'])) return;
+    arena({ heroes: [hero('test_summoner', 2, 5)], enemies: [{ id: 'test_grunt', x: 6, y: 5 }] });
+    const sm = unitOf('test_summoner');
+    const pup = S().units.filter(function (u) { return u.kind === 'summon' && u.ownerId === sm.id && !u.dead; })[0] ||
+      A().summon(sm, 'test_hound', 3, 5, { ready: true });
+    pup.ap = pup.maxAp || 2;
+    const log = watch(function () { DD.AutoPlay.takeTurn(); });
+    const first = log.filter(function (e) { return e.kind !== 'move' || e.uid === pup.id; })[0];
+    t.ok(log.some(function (e) { return e.uid === pup.id; }) && log[0].uid === pup.id, 'the hound moves and acts first (' + said(log) + ')');
+    t.ok(!first || first.uid === pup.id, 'then the summoner plays the board it left');
+    if (!DD.getHero('ellaria') || !DD.getSkill('ell_zoomies')) { t.log('(Ellaria not loaded: no Zoomies check)'); return; }
+    // Ellaria with Zoomies: her corgi walks into the gap between two grunts and bites first, then both get the Zoomies
+    DD.Combat.sandbox({ w: 12, h: 10, seed: 'ap-zoomies', theme: 'cellar', noPlan: true, enemyAi: false,
+      objective: { type: 'custom', text: 'AutoPlay test' }, encounter: { id: 'ap_arena', checkObjective: function () { return null; } },
+      heroes: [hero('ellaria', 1, 5, 3, ['ell_zoomies'])], enemies: [{ id: 'test_grunt', x: 5, y: 4 }, { id: 'test_grunt', x: 5, y: 6 }] });
+    const ell = S().units.filter(function (u) { return u.defId === 'ellaria'; })[0];
+    const corgi = S().units.filter(function (u) { return u.kind === 'summon' && u.ownerId === ell.id; })[0];
+    if (!corgi) { t.log('(no starting corgi)'); return; }
+    A().teleport(corgi, 3, 5, { noEnter: true });   // two steps from the gap between the two grunts
+    corgi.ap = DD.Combat.turnAp(corgi);
+    if (t.param('trace', '') === '1') { DD.AutoPlay.trace = 'all'; DD.AutoPlay.log = []; }
+    const zlog = watch(function () { DD.AutoPlay.takeTurn(); });
+    if (DD.AutoPlay.trace) { DD.AutoPlay.trace = false; DD.AutoPlay.log.forEach(function (l) { t.log(JSON.stringify(l)); }); t.log('corgi at ' + key(corgi) + ' ell at ' + key(ell)); }
+    const zi = zlog.map(function (e) { return e.id; }).indexOf('ell_zoomies'), ci = zlog.map(function (e) { return e.uid; }).indexOf(corgi.id);
+    t.ok(ci >= 0 && (zi < 0 || ci < zi), 'the corgi acts before Ellaria (' + said(zlog) + ')');
+    t.ok(zi >= 0, 'and Zoomies follows up on the foes next to it (' + said(zlog) + ')');
+  });
+
+  T.suite('autoplay: pass 3 — a ready signature fires when it is worth it (Hype stops at 100), a party heal too', function (t) {
+    if (missing(t, ['test_cleric', 'test_knight', 'test_mage', 'test_cleric_sig', 'test_grunt'])) return;
+    // two allies badly hurt, three grunts on their way: Green Build heals both (the old rule wanted 3 allies)
+    arena({ w: 12, h: 10, heroes: [hero('test_cleric', 2, 5), hero('test_knight', 3, 4), hero('test_mage', 3, 6)],
+      enemies: [{ id: 'test_grunt', x: 8, y: 3 }, { id: 'test_grunt', x: 8, y: 5 }, { id: 'test_grunt', x: 8, y: 7 }] });
+    const k = unitOf('test_knight'), m = unitOf('test_mage');
+    k.hp = Math.round(k.maxHp * 0.35); m.hp = Math.round(m.maxHp * 0.35);
+    S().hype = 100;
+    const log = watch(function () { DD.AutoPlay.takeTurn(); });
+    t.eq(used(log, 'test_cleric_sig').length, 1, 'Father Unittest heals the party with Green Build (' + said(log) + ')');
+  });
+  T.suite('autoplay: pass 3 — a damage buff goes to the ally who will hit with it on its next turn (next-turn buff term)', function (t) {
+    if (missing(t, ['test_cleric', 'test_rogue', 'test_knight', 'test_bless', 'test_grunt'])) return;
+    // Pep Talk (Inspired) on the rogue next to a grunt, whose turn comes next, not on the harder-hitting knight who is
+    // stunned (his next turn is lost); the old value read the allies' AP right now (0 for both)
+    arena({ heroes: [hero('test_cleric', 1, 4, 3, ['test_bless']), hero('test_rogue', 4, 4), hero('test_knight', 2, 6)], enemies: [{ id: 'test_grunt', x: 5, y: 4 }] });
+    const r = unitOf('test_rogue'), k = unitOf('test_knight');
+    A().addStatus(k, 'stun', { turns: 1 }, unitOf('test_grunt'));
+    unitOf('test_cleric').ap = 1;   // one action: the grunt is out of her Smite's reach
+    const log = watch(function () { DD.AutoPlay.takeTurn(); });
+    const b = used(log, 'test_bless');
+    t.ok(b.length === 1 && b[0].x === r.x && b[0].y === r.y, 'Pep Talk on the rogue (' + said(log) + (b[0] ? ' at ' + key(b[0]) : '') + ')');
+  });
+
+  T.suite('autoplay: pass 3 — deterrents: a foe next to a hero whose attack of opportunity stops walkers stays put (Polearm)', function (t) {
+    if (missing(t, ['test_knight', 'test_mage', 'test_grunt'])) return;
+    if (!DD.getItem('passive_aggressive_polearm')) { t.skip('needs passive_aggressive_polearm'); return; }
+    // the knight holds the grunt; the wounded mage is a walk away from it. With the Polearm (a hit that stops the walk)
+    // the grunt can't get to her this turn; without it, it might
+    const scene = function (items) {
+      arena({ heroes: [hero('test_knight', 4, 5, 3, null, { items: items }), hero('test_mage', 5, 8)], enemies: [{ id: 'test_grunt', x: 5, y: 5 }] });
+      unitOf('test_mage').hp = 4;
+      return DD.AutoPlay.incomingAsAlly(unitOf('test_mage'), 5, 8, unitOf('test_knight'));
+    };
+    const plain = scene([]);
+    t.ok(plain.dmg > 0, 'premise: a plain knight next to it: the grunt may still walk over to the mage (' + plain.dmg.toFixed(2) + ')');
+    const held = scene(['passive_aggressive_polearm']);
+    t.eq(held.dmg, 0, 'with the Polearm it is pinned: the mage is out of its reach');
+  });
+
+  // ---- review (balance run): fixes from the adversarial review (docs/notes/autoplay.md "Review (balance run)") ----------
+  T.suite('autoplay: review — a revive undone on no enemy\'s turn (the party\'s own blast) does not block later revives', function (t) {
+    if (missing(t, ['test_knight', 'test_cleric', 'test_grunt'])) return;
+    arena({ heroes: [hero('test_knight', 3, 5), hero('test_cleric', 4, 5)], enemies: [{ id: 'test_grunt', x: 9, y: 9 }] });
+    const k = unitOf('test_knight'), c = unitOf('test_cleric'), g = unitOf('test_grunt');
+    DD.Combat.setOrder([k, g, c]);
+    A().damage(g, c, 999);
+    A().addStatus(k, 'root', { turns: 9 }, g);   // he stays by her side (Help Up needs no walk)
+    // once: something of the party's own (a barrel the knight set off, say) downs her again at the end of HIS turn
+    let once = true;
+    const off = DD.Events.on('turn:end', function (e) { if (once && e.unit === k && !c.downed && !c.dead) { once = false; A().damage(k, c, 999); } });
+    try {
+      let log = [];
+      const helps = function () { const n = S().log.length; log = watch(function () { DD.AutoPlay.takeTurn(); }); return S().log.slice(n).filter(function (l) { return /helps .* up/.test(l.text); }).length; };
+      t.eq(helps(), 1, 'round 1: the knight helps her up (' + said(log) + ')');
+      DD.Combat.endTurn();
+      t.ok(c.downed && DD.Combat.current() === k, 'premise: she went straight back down, on the knight\'s own turn (no enemy did it)');
+      t.eq(helps(), 1, 'round 2: no enemy to wait out, so he helps her up again (' + said(log) + ')');
+    } finally { off(); }
+  });
+
+  T.suite('autoplay: review — the Help-Up loop: earlier revives that held don\'t dilute the last one coming undone', function (t) {
+    if (missing(t, ['test_knight', 'test_cleric', 'test_grunt'])) return;
+    arena({ heroes: [hero('test_knight', 3, 5), hero('test_cleric', 4, 5)], enemies: [{ id: 'test_grunt', x: 9, y: 9 }] });
+    const k = unitOf('test_knight'), c = unitOf('test_cleric'), g = unitOf('test_grunt');
+    DD.Combat.setOrder([k, g, c]);
+    A().damage(g, c, 999);
+    A().addStatus(k, 'root', { turns: 9 }, g);   // he stays by her side (Help Up needs no walk)
+    // a sniper the board doesn't show: from round 2 on it downs her on the grunt's turn whenever she is up
+    let armed = false;
+    const off = DD.Events.on('turn:start', function (e) { if (armed && e.unit === g && !c.downed && !c.dead) A().damage(g, c, 999); });
+    try {
+      let log = [];
+      const helps = function () { const n = S().log.length; log = watch(function () { DD.AutoPlay.takeTurn(); }); return S().log.slice(n).filter(function (l) { return /helps .* up/.test(l.text); }).length; };
+      t.eq(helps(), 1, 'round 1: the knight helps her up (' + said(log) + ')');
+      DD.Combat.endTurn();
+      DD.Combat.endTurn();
+      t.ok(!c.downed && DD.Combat.current() === k, 'premise: she got her turn (that revive held)');
+      A().damage(g, c, 999);   // downed again on the knight's turn: no revive pending, no evidence
+      t.eq(helps(), 1, 'round 2: he helps her up again (' + said(log) + ')');
+      armed = true;
+      DD.Combat.endTurn();
+      t.ok(c.downed && DD.Combat.current() === k, 'premise: this time the grunt\'s turn put her straight back down, before hers');
+      t.eq(helps(), 0, 'round 3: the last revive came undone while that grunt still acts: no Help Up, even with 1 of 2 tries undone (' + said(log) + ')');
+      DD.Combat.endTurn();
+      A().addStatus(g, 'stun', { turns: 1 }, k);
+      t.eq(helps(), 1, 'round 4: the grunt is stunned: now he helps her up (' + said(log) + ')');
+    } finally { off(); }
+  });
+
+  T.suite('autoplay: review — hit and run: after striking it may step back to a tile it stood on (no "no going back" then)', function (t) {
+    if (missing(t, ['test_rogue', 'test_grunt', 'test_archer'])) return;
+    // a nook: the rogue (4 HP, 1 tile a move) at (1,3); (2,3) between two walls is the only way out, next to a stunned
+    // grunt; a rooted archer at (8,3) can shoot (2,3) (6 tiles) but not (1,3) (7). Step out, stab, step back in.
+    arena({ w: 9, h: 7, heroes: [hero('test_rogue', 1, 3)], enemies: [{ id: 'test_grunt', x: 3, y: 3 }, { id: 'test_archer', x: 8, y: 3 }],
+      terrain: function (tl) { if (tl.x === 2 && (tl.y === 2 || tl.y === 4)) tl.t = 'wall'; } });
+    const r = unitOf('test_rogue'), g = unitOf('test_grunt');
+    r.mov = 1; r.hp = 4; g.hp = g.maxHp = 30;
+    A().addStatus(g, 'stun', { turns: 1 }, r);
+    A().addStatus(unitOf('test_archer'), 'root', { turns: 9 }, r);
+    t.ok(DD.AutoPlay.incomingAt(r, 2, 3).down > 0.5 && DD.AutoPlay.incomingAt(r, 1, 3).dmg === 0, 'premise: (2,3) is deadly to end on, the nook is safe');
+    const log = watch(function () { DD.AutoPlay.takeTurn(); });
+    t.ok(used(log, 'test_stab').length >= 1, 'it pokes out and stabs (' + said(log) + ')');
+    t.ok(r.x === 1 && r.y === 3, 'then steps back into the nook it came from (' + key(r) + ', ' + said(log) + ')');
+  });
+
+  T.suite('autoplay: review — a flyer still goes for a hinted loot pile (flyers pocket loot)', function (t) {
+    if (missing(t, ['test_rogue', 'test_grunt'])) return;
+    if (!DD.getObject('gold_pile') || !DD.Grid.isLoot({ id: 'gold_pile' })) { t.skip('needs a loot gold_pile'); return; }
+    const scene = function (fly) {
+      // the pile lies behind her (away from the grunt): only its hint takes her there
+      arena({ heroes: [hero('test_rogue', 4, 1)], enemies: [{ id: 'test_grunt', x: 9, y: 9 }], objects: [{ x: 1, y: 1, id: 'gold_pile', autoplay: 12 }] });
+      const r = unitOf('test_rogue');
+      if (fly) r.flags = Object.assign({}, r.flags, { flying: true });
+      return r;
+    };
+    let r = scene(false);
+    let log = watch(function () { DD.AutoPlay.takeTurn(); });
+    t.ok(!DD.Grid.tile(1, 1).obj, 'a walker picks up the hinted pile (' + said(log) + ', ' + key(r) + ')');
+    r = scene(true);
+    t.ok(!DD.Grid.feelsFloor(r), 'premise: the rogue flies');
+    log = watch(function () { DD.AutoPlay.takeTurn(); });
+    t.ok(!DD.Grid.tile(1, 1).obj, 'so does a flyer: loot is not a floor effect (' + said(log) + ', ' + key(r) + ')');
+  });
+
+  T.suite('autoplay: review — the danger model skips wind-up-only skills and reads fromStand ones from where the foe stands', function (t) {
+    if (missing(t, ['test_mage', 'test_grunt', 'test_grunt_stab'])) return;
+    const tmp = [
+      { id: 'test_tmp_ap_slam', name: 'Wound-Up Slam', owner: 'enemy', anchor: 'unit', windupOnly: true, tags: ['melee'], levels: [{ dmg: 30 }],
+        target: { type: 'unit', range: [1, 1], filter: 'enemy' }, desc: 'Wind-up: 30 damage.', execute: function () {} },
+      { id: 'test_tmp_ap_lunge', name: 'Standing Lunge', owner: 'enemy', anchor: 'unit', fromStand: true, levels: [{ dmg: 6 }],
+        target: { type: 'unit', range: [1, 3], filter: 'enemy' }, desc: 'Lunge 1-3 tiles from where it stands: 6 damage.', execute: function () {} },
+    ];
+    tmp.forEach(function (d) { DD.registerSkill(d); });
+    try {
+      // the grunt (walks 3) 4 tiles from the mage: a walk + a melee hit reaches her
+      arena({ heroes: [hero('test_mage', 1, 4)], enemies: [{ id: 'test_grunt', x: 5, y: 4 }] });
+      const m = unitOf('test_mage'), g = unitOf('test_grunt');
+      g.skillSlots = [DD.Act.makeSlot('test_grunt_stab', 1)];
+      const stab = DD.AutoPlay.incomingAt(m, 1, 4).dmg;
+      t.ok(stab > 0 && stab <= 4, 'premise: the stab (4) after its walk is the danger (' + stab + ')');
+      g.skillSlots = [DD.Act.makeSlot('test_grunt_stab', 1), DD.Act.makeSlot('test_tmp_ap_slam', 1)];
+      t.eq(DD.AutoPlay.incomingAt(m, 1, 4).dmg, stab, 'a windupOnly slam (30) is never an instant strike: the danger is still the stab\'s');
+      // a lunge that only goes off from where it stands (range 3): 4 tiles off is safe, 3 tiles off is not
+      g.skillSlots = [DD.Act.makeSlot('test_tmp_ap_lunge', 1)];
+      t.eq(DD.AutoPlay.incomingAt(m, 1, 4).dmg, 0, 'fromStand: no walk first, the mage 4 tiles off is out of its reach');
+      t.ok(DD.AutoPlay.incomingAt(m, 2, 4).dmg > 0, '... 3 tiles off she is in it');
+      DD.getSkill('test_tmp_ap_lunge').fromStand = false;
+      t.ok(DD.AutoPlay.incomingAt(m, 1, 4).dmg > 0, 'control: without the flag the same lunge reaches her after a walk');
+    } finally { tmp.forEach(function (d) { delete DD.defs.skills[d.id]; }); }
+  });
+
+  T.suite('autoplay: review — deterrents declared by content: o.stop in a pure modifyOpportunity, Hall Monitor III (not II), once a round', function (t) {
+    if (missing(t, ['test_knight', 'test_mage', 'test_grunt'])) return;
+    // the same scene as the Polearm suite: the knight holds the grunt, the wounded mage is a walk away from it
+    const scene = function (extra, hooks) {
+      arena({ heroes: [hero('test_knight', 4, 5, 3, null, extra), hero('test_mage', 5, 8)], enemies: [{ id: 'test_grunt', x: 5, y: 5 }] });
+      const k = unitOf('test_knight');
+      if (hooks) k.hooks = hooks;
+      unitOf('test_mage').hp = 4;
+      return function () { return DD.AutoPlay.incomingAsAlly(unitOf('test_mage'), 5, 8, k).dmg; };
+    };
+    t.ok(scene(null)() > 0, 'premise: a plain knight next to it: the grunt may walk over to the mage');
+    let dmg = scene(null, { modifyOpportunity: function (o) { if (o.attacker && o.attacker.defId === 'test_knight') o.stop = true; } });
+    t.eq(dmg(), 0, 'a pure modifyOpportunity that sets o.stop pins it (any content can declare a stopper)');
+    unitOf('test_knight').oppRound = S().round;
+    t.ok(dmg() > 0, '... unless the knight already made its attack of opportunity this round (no strike, no stop)');
+    if (!DD.getPassive || !DD.getPassive('rp_hall_monitor')) { t.skip('needs rp_hall_monitor'); return; }
+    t.eq(scene({ passives: [{ id: 'rp_hall_monitor', level: 3 }] })(), 0, 'Hall Monitor III (ends the walk) pins it');
+    t.ok(scene({ passives: [{ id: 'rp_hall_monitor', level: 2 }] })() > 0, 'Hall Monitor II (+5, no stop) does not');
+  });
+
+  // ---- rules run: moving through allies, swapping places, breaking objects --------------------------------------------
+  function corridor(tl) { return tl.y === 2 ? null : { t: 'wall' }; }
+  /** Run fn and record AutoPlay's real swaps (Combat.swap): ['who>ally@x,y']. */
+  function swaps(fn) {
+    const C = DD.Combat, out = [], sw = C.swap;
+    C.swap = function (u, x, y) {
+      const ally = DD.Grid.unitAt(x, y);
+      const ok = sw.apply(this, arguments);
+      if (ok && !A().simulating) out.push(u.defId.replace('test_', '') + '>' + (ally ? ally.defId.replace('test_', '') : '?') + '@' + x + ',' + y);
+      return ok;
+    };
+    try { fn(); } finally { C.swap = sw; }
+    return out;
+  }
+
+  T.suite('autoplay: rules run — a melee hero walks through its allies in a corridor to reach the foe', function (t) {
+    if (missing(t, ['test_knight', 'test_mage', 'test_grunt'])) return;
+    arena({ w: 9, h: 5, terrain: corridor, heroes: [hero('test_knight', 1, 2), hero('test_mage', 2, 2), hero('test_cleric', 0, 2)], enemies: [{ id: 'test_grunt', x: 5, y: 2 }] });
+    const k = unitOf('test_knight'), m = unitOf('test_mage'), g = unitOf('test_grunt'), g0 = g.hp;
+    let sw = [];
+    const log = watch(function () { sw = swaps(function () { DD.AutoPlay.takeTurn(); }); });
+    t.ok(k.x === 4 && k.y === 2 && m.x === 2, 'the knight walked through the mage to the tile next to the grunt (' + key(k) + '; ' + said(log) + ')');
+    t.ok(used(log, 'test_slash').length >= 1 && g.hp < g0, 'and slashes it');
+    t.eq(sw.length, 0, 'no swap needed: the tile next to the foe was free');
+  });
+
+  T.suite('autoplay: rules run — swaps: a melee hero takes the one tile next to the foe from a ranged ally; a tank steps in for a hurt one', function (t) {
+    if (missing(t, ['test_knight', 'test_mage', 'test_grunt', 'test_brute'])) return;
+    // a corridor: the mage stands in the only tile next to the grunt, the knight behind her
+    let sc = function () {
+      arena({ w: 9, h: 5, terrain: corridor, heroes: [hero('test_knight', 2, 2), hero('test_mage', 3, 2)], enemies: [{ id: 'test_grunt', x: 4, y: 2 }] });
+      return { k: unitOf('test_knight'), m: unitOf('test_mage'), g: unitOf('test_grunt') };
+    };
+    let s = sc();
+    const g0 = s.g.hp;
+    let log = [], sw = [];
+    log = watch(function () { sw = swaps(function () { DD.AutoPlay.takeTurn(); }); });
+    t.eq(sw.join(' '), 'knight>mage@3,2', 'the knight swaps with the mage (' + sw.join(' ') + '; ' + said(log) + ')');
+    t.ok(s.k.x === 3 && s.m.x === 2 && used(log, 'test_slash').length >= 1 && s.g.hp < g0, 'then slashes the grunt from her tile');
+    s = sc();
+    DD.AutoPlay.swap = false;
+    try { log = watch(function () { sw = swaps(function () { DD.AutoPlay.takeTurn(); }); }); } finally { DD.AutoPlay.swap = true; }
+    t.ok(sw.length === 0 && s.g.hp === s.g.maxHp, 'premise: without swaps (AP.swap = false) the knight can\'t reach it (' + said(log) + ')');
+    // open floor: a wounded mage next to the brute, who acts before her; the knight next to her swaps in, taking her place
+    // and the brute's attention (with the mage acting first she could step away herself: no swap needed then)
+    sc = function () {
+      arena({ heroes: [hero('test_knight', 3, 5), hero('test_mage', 4, 5)], enemies: [{ id: 'test_brute', x: 5, y: 5 }] });
+      const m = unitOf('test_mage'), k = unitOf('test_knight'), b = unitOf('test_brute');
+      m.hp = 6;
+      DD.Combat.setOrder([k, b, m]);
+      return { k: k, m: m, b: b };
+    };
+    s = sc();
+    const before = DD.AutoPlay.incomingAsAlly(s.m, 4, 5, s.k);
+    t.ok(before.down > 0.25, 'premise: the mage may well go down where she stands (' + Math.round(before.down * 100) + '%)');
+    log = watch(function () { sw = swaps(function () { DD.AutoPlay.takeTurn(); }); });
+    t.eq(sw.join(' '), 'knight>mage@4,5', 'the knight swaps in (' + sw.join(' ') + '; ' + said(log) + ')');
+    t.ok(s.k.x === 4 && s.m.x === 3 && DD.Grid.dist(s.m, s.b) === 2, 'the mage is out of the brute\'s reach-without-a-walk, the knight holds it');
+    const after = DD.AutoPlay.incomingAsAlly(s.m, s.m.x, s.m.y, s.k);
+    t.ok(after.down < before.down, 'her odds of going down dropped (' + Math.round(before.down * 100) + '% → ' + Math.round(after.down * 100) + '%)');
+    // no ping-pong: the mage's own turn right after doesn't swap back
+    DD.Combat.giveTurnTo(s.m);
+    sw = swaps(function () { DD.AutoPlay.takeTurn(); });
+    t.ok(!sw.some(function (x) { return /^mage>knight/.test(x); }), 'the mage does not swap straight back (' + sw.join(' ') + ')');
+  });
+
+  T.suite('autoplay: rules run — breaks objects when it pays (objective, blast, loot), never plain cover', function (t) {
+    if (missing(t, ['test_mage', 'test_minion', 'test_grunt'])) return;
+    const defs = [{ id: 'test_tmp_ap_pinata', name: 'Pinata', blocksMove: true, hp: 3, desc: 'Full of hornets.',
+      onDestroyed: function (o, tl, src) { DD.Act.explode(src, tl.x, tl.y, { radius: 1, dmg: 7, element: null }); } },
+    { id: 'test_tmp_ap_piggy', name: 'Piggy Bank', blocksMove: true, hp: 2, desc: 'Oink.', onDestroyed: function () { DD.Act.gainGold(6); } }];
+    defs.forEach(function (d) { DD.registerObject(d); });
+    try {
+      // 1. a destroy-objective totem in range, the only foe far away: shoot the totem
+      arena({ heroes: [hero('test_mage', 1, 4, 1, [])], enemies: [{ id: 'test_grunt', x: 9, y: 9 }], objects: [{ x: 4, y: 4, id: 'totem' }],
+        objective: { type: 'destroy', objId: 'totem', count: 1 } });
+      const tot = DD.Grid.tile(4, 4).obj;
+      let log = watch(function () { DD.AutoPlay.takeTurn(); });
+      t.ok(!DD.Grid.tile(4, 4).obj || tot.hp <= 2, 'the totem is shot (' + said(log) + ', ' + (DD.Grid.tile(4, 4).obj ? tot.hp + ' HP left' : 'destroyed') + ')');
+      // 2. a pinata between two minions: breaking it kills both (Magic Missile alone kills nobody)
+      arena({ heroes: [hero('test_mage', 1, 4, 1, [])], enemies: [{ id: 'test_minion', x: 5, y: 4 }, { id: 'test_minion', x: 4, y: 5 }], objects: [{ x: 4, y: 4, id: 'test_tmp_ap_pinata' }] });
+      log = watch(function () { DD.AutoPlay.takeTurn(); });
+      t.ok(!DD.Grid.tile(4, 4).obj && log.some(function (e) { return e.kind === 'skill' && e.x === 4 && e.y === 4; }), 'the pinata is shot (' + said(log) + ')');
+      t.eq(S().units.filter(function (u) { return u.defId === 'test_minion' && !u.dead; }).length, 0, 'its blast kills both minions');
+      // 3. loot: rooted, nothing in reach but a piggy bank: break it for the gold
+      arena({ heroes: [hero('test_mage', 1, 4, 1, [])], enemies: [{ id: 'test_grunt', x: 9, y: 9 }], objects: [{ x: 3, y: 4, id: 'test_tmp_ap_piggy' }, { x: 2, y: 2, id: 'crate' }] });
+      let m = unitOf('test_mage');
+      A().addStatus(m, 'root', { turns: 2 });
+      const gold0 = A().gold();
+      log = watch(function () { DD.AutoPlay.takeTurn(); });
+      t.ok(!DD.Grid.tile(3, 4).obj && A().gold() === gold0 + 6, 'it breaks the piggy bank for 6 gold (' + said(log) + ')');
+      t.ok(DD.Grid.tile(2, 2).obj && DD.Grid.tile(2, 2).obj.hp === 6, '... and leaves the plain crate alone');
+      // 4. plain crates around a fight are left alone
+      arena({ heroes: [hero('test_mage', 1, 4, 1, [])], enemies: [{ id: 'test_grunt', x: 5, y: 4 }], objects: [{ x: 3, y: 3, id: 'crate' }, { x: 3, y: 5, id: 'barrel' }, { x: 2, y: 4, id: 'bookshelf' }] });
+      log = watch(function () { DD.AutoPlay.takeTurn(); });
+      t.ok([[3, 3, 6], [3, 5, 5], [2, 4, 8]].every(function (c) { const o = DD.Grid.tile(c[0], c[1]).obj; return o && o.hp === c[2]; }), 'crates, barrels and shelves untouched (' + said(log) + ')');
+      // 5. the object the party protects is never shot (it isn't a target at all)
+      arena({ heroes: [hero('test_mage', 1, 4, 1, [])], enemies: [{ id: 'test_grunt', x: 9, y: 9 }], objects: [{ x: 3, y: 4, id: 'keg' }], objective: { type: 'protect', objId: 'keg' } });
+      m = unitOf('test_mage');
+      A().addStatus(m, 'root', { turns: 2 });
+      DD.AutoPlay.takeTurn();
+      t.ok(DD.Grid.tile(3, 4).obj && DD.Grid.tile(3, 4).obj.hp === 6, 'the protected keg is never a target');
+    } finally { defs.forEach(function (d) { delete DD.defs.objects[d.id]; }); }
+  });
+
+  // ---- playtest fixes (Nov 12, fix:engine) -----------------------------------------------------------------------------
+  T.suite('autoplay: playtest fixes — bosses-objectives-8: with a boss up, adds dying is no progress for the stalemate breaker', function (t) {
+    if (missing(t, ['test_knight', 'test_boss', 'test_minion'])) return;
+    arena({ heroes: [hero('test_knight', 0, 0)], enemies: [{ id: 'test_boss', x: 7, y: 7 }, { id: 'test_minion', x: 7, y: 2 }, { id: 'test_minion', x: 8, y: 2 },
+      { id: 'test_minion', x: 9, y: 2 }, { id: 'test_minion', x: 6, y: 2 }, { id: 'test_minion', x: 5, y: 2 }, { id: 'test_minion', x: 4, y: 2 },
+      { id: 'test_minion', x: 3, y: 2 }, { id: 'test_minion', x: 2, y: 2 }, { id: 'test_minion', x: 9, y: 4 }] });
+    const k = unitOf('test_knight');
+    // every round an add dies (the boss's own beams, the party picking off floaters): the boss is never touched
+    for (let i = 0; i < 9; i++) {
+      DD.AutoPlay.stall();
+      const m = unitOf('test_minion');
+      if (m) A().kill(m, null, { force: true });
+      DD.Combat.endRound();
+    }
+    const st = DD.AutoPlay.stall();
+    t.ok(st.quiet >= 3 && st.caution === 0, 'round ' + S().round + ': ' + st.quiet + ' quiet rounds, caution 0 (adds dying did not reset it)');
+    A().damage(k, unitOf('test_boss'), 3, { cause: 'other', ignoreArmor: true });
+    DD.Combat.endRound();
+    t.ok(DD.AutoPlay.stall().quiet === 0, 'the boss losing HP is progress');
+  });
+})();
+
+// ---- review of the playtest fixes (Nov 12): AutoPlay reads a Dazzled boss's drawn wind-up tiles as certain ---------
+(function () {
+  'use strict';
+  const T = window.DD_TEST;
+  const DD = window.DD;
+  const H = T.helpers.H, E = T.helpers.E, hero = T.helpers.hero, foe = T.helpers.foe, quiet = T.helpers.quiet;
+
+  T.suite('autoplay: playtest review — bosses-objectives-2: a Dazzled boss\'s wind-up is priced in full on the tiles drawn (not as a coin flip)', function (t) {
+    const A = DD.Act, AI = DD.AI, AP = DD.AutoPlay;
+    quiet({ w: 11, h: 11, heroes: [H(4, 4), H(1, 9, 'test_knight')], enemies: [E(6, 6, 'test_boss')], enemyAi: false });
+    const h = hero(0), b = foe();
+    h.maxHp = h.hp = 99;
+    const it = AI.windUp(b, 'test_boss_meteor', h, {});
+    const free = function (tiles) { return tiles.filter(function (p) { return !DD.Grid.unitAt(p.x, p.y) && DD.Grid.isWalkable(p.x, p.y, h); })[0]; };
+    const p0 = free(AI.intentTiles(b, it));
+    const before = AP.incomingAt(h, p0.x, p0.y).dmg;
+    t.ok(before > 0, 'a marked tile: ' + before + ' expected');
+    A.addStatus(b, 'dazzled', { turns: 1 }, h);
+    t.ok(it.skew && it.skew.off, 'the skew is rolled');
+    const p1 = free(AI.intentTiles(b, it));
+    const after = AP.incomingAt(h, p1.x, p1.y).dmg;
+    t.ok(Math.abs(after - before) < 0.01, 'Dazzled: a tile marked now is priced in full (' + after + ' vs ' + before + '), not halved');
+  });
+})();
+
+// ---- finish (Nov 14): D5 (bone piles for flyers), audit-3 (stalemates past a split), audit-7 (holds), FF-3 (sealed in) --
+(function () {
+  'use strict';
+  const T = window.DD_TEST;
+  const DD = window.DD;
+  function S() { return DD.Combat.state; }
+  function unitOf(defId, n) { return S().units.filter(function (u) { return u.defId === defId && !u.dead; })[n || 0] || null; }
+  function arena(cfg) {
+    DD.Combat.sandbox(Object.assign({
+      w: 10, h: 10, seed: 'autoplay-finish', noPlan: true, enemyAi: false, theme: 'cellar',
+      objective: { type: 'custom', text: 'AutoPlay test' }, encounter: { id: 'ap_finish', checkObjective: function () { return null; } },
+    }, cfg));
+    return S();
+  }
+  function H(id, x, y) { return { id: id, x: x, y: y, level: 1, skills: [] }; }
+  function uses(fn) {
+    const C = DD.Combat, log = [];
+    const use = C.useSkill;
+    C.useSkill = function (u, slot, x, y) {
+      const ok = use.apply(this, arguments);
+      if (ok && !DD.Act.simulating) log.push(u.defId.replace('test_', '') + ':' + (slot && slot.id) + '@' + x + ',' + y);
+      return ok;
+    };
+    try { fn(); } finally { C.useSkill = use; }
+    return log;
+  }
+
+  T.suite('autoplay: finish — D5: breaking a bone pile is worth it to a flyer too (the hint is told it is a break, not a stomp)', function (t) {
+    const hows = [];
+    DD.registerObject({ id: 'test_tmp_pile', name: 'Bone Pile', blocksMove: false, blocksLos: false, hp: 3, smashable: true, targetable: true, desc: 'Rattles.',
+      // the content's hint: a stomp needs the floor, a break doesn't (ARCHITECTURE §5.7: the 5th argument)
+      autoplay: function (unit, obj, tile, s, how) { hows.push(how); return unit && unit.side === 'hero' && (how === 'break' || DD.Grid.feelsFloor(unit)) ? 9 : 0; } });
+    try {
+      [false, true].forEach(function (fly) {
+        arena({ heroes: [H('test_mage', 1, 4)], enemies: [{ id: 'test_grunt', x: 9, y: 9 }], objects: [{ x: 4, y: 4, id: 'test_tmp_pile' }] });
+        const m = unitOf('test_mage');
+        if (fly) m.flags = Object.assign({}, m.flags, { flying: true });
+        DD.Act.addStatus(m, 'root', { turns: 2 });
+        t.ok(fly === !DD.Grid.feelsFloor(m), 'premise: the mage ' + (fly ? 'flies' : 'walks'));
+        const log = uses(function () { DD.AutoPlay.takeTurn(); });
+        t.ok(!DD.Grid.tile(4, 4).obj, (fly ? 'a flying' : 'a walking') + ' mage shoots the pile from range (' + log.join(', ') + ')');
+      });
+      t.ok(hows.indexOf('break') >= 0, 'the hint was asked about a break (' + hows.filter(function (h, i) { return hows.indexOf(h) === i; }).join(', ') + ')');
+    } finally { delete DD.defs.objects.test_tmp_pile; }
+  });
+
+  T.suite('autoplay: finish — audit-3: in a stalemate a hit that calls in adds (a boss splitting) is taken, not dodged forever', function (t) {
+    const base = DD.getEnemy('test_grunt');
+    DD.registerEnemy(Object.assign({}, base, { id: 'test_tmp_splitter', name: 'Test Splitter', hp: 40, hooks: {
+      // splits at the first hit: a minion breaks off (like the Rat King's Rat Lawyers at 66%)
+      onTakeDamage: function (d) {
+        const u = d.target;
+        u.data = u.data || {};
+        if (!(d.dealt > 0) || u.data.split) return;
+        u.data.split = true;
+        const p = DD.Grid.emptyTilesNear(u.x, u.y, 2).filter(function (q) { return !DD.Grid.unitAt(q.x, q.y); })[0];
+        if (p) DD.Act.spawn('test_minion', p.x, p.y);
+      } } }));
+    try {
+      function scene() {
+        arena({ heroes: [H('test_mage', 1, 4)], enemies: [{ id: 'test_tmp_splitter', x: 5, y: 4 }] });
+        DD.Act.addStatus(unitOf('test_mage'), 'root', { turns: 99 });
+        return unitOf('test_tmp_splitter');
+      }
+      let sp = scene();
+      let log = uses(function () { DD.AutoPlay.takeTurn(); });
+      t.ok(sp.hp === 40 && !log.length, 'round 1 (caution 1): the hit that calls in an add is not worth it (' + (log.join(', ') || 'passes') + ')');
+      sp = scene();
+      for (let i = 0; i < 9; i++) { DD.AutoPlay.stall(); DD.Combat.endRound(); }
+      const st = DD.AutoPlay.stall();
+      t.ok(st.quiet >= 3 && st.caution === 0, 'round ' + S().round + ': a stalemate (' + st.quiet + ' quiet rounds, caution 0)');
+      log = uses(function () { DD.AutoPlay.takeTurn(); });
+      t.ok(sp.hp < 40, 'in the stalemate the mage hits it anyway (' + (log.join(', ') || 'passes') + ', ' + sp.hp + ' HP)');
+    } finally { delete DD.defs.enemies.test_tmp_splitter; }
+  });
+
+  T.suite('autoplay: finish — audit-7: a held foe free by its next turn threatens the tiles it can walk to (the danger model asks the hold)', function (t) {
+    let answer = true;
+    DD.registerStatus({ id: 'test_tmp_held', name: 'Held', icon: '🤼', type: 'debuff', stacking: 'refresh', maxStacks: 1, decay: 'never', defaultTurns: 1, noMove: true,
+      heldThrough: function () { return answer; }, desc: function () { return 'Held.'; } });
+    try {
+      arena({ heroes: [H('test_mage', 1, 4)], enemies: [{ id: 'test_grunt', x: 4, y: 4 }] });
+      const m = unitOf('test_mage'), g = unitOf('test_grunt');
+      DD.Act.addStatus(g, 'test_tmp_held', { turns: 1 });
+      const held = DD.AutoPlay.incomingAt(m, m.x, m.y).dmg;
+      answer = false;
+      const free = DD.AutoPlay.incomingAt(m, m.x, m.y).dmg;
+      t.ok(held === 0 && free > 0, 'a grunt 3 tiles away: held through its turn → ' + held + ', free by then → ' + free + ' incoming');
+    } finally { delete DD.defs.statuses.test_tmp_held; }
+  });
+
+  T.suite('autoplay: finish — FF-3: a hero sealed in by crates and cliffs breaks its way out instead of passing every turn', function (t) {
+    // the knight's corner: a 3x3 room shut by crates (east) and a 2-high ledge (south); the grunt waits far away
+    function scene(crates) {
+      arena({ heroes: [H('test_knight', 1, 1)], enemies: [{ id: 'test_grunt', x: 8, y: 8 }],
+        objects: crates ? [{ x: 3, y: 0, id: 'crate' }, { x: 3, y: 1, id: 'crate' }, { x: 3, y: 2, id: 'crate' }] : [],
+        terrain: function (tl) { if (tl.y === 3 && tl.x <= 3) tl.h = 2; if (tl.x === 3 && tl.y === 3) tl.t = 'wall'; } });
+      return unitOf('test_knight');
+    }
+    const hp = function () { return [0, 1, 2].map(function (y) { const o = DD.Grid.tile(3, y).obj; return o ? o.hp : 0; }); };
+    let k = scene(true);
+    const before = hp().join(',');
+    let log = uses(function () { DD.AutoPlay.takeTurn(); });
+    t.ok(hp().join(',') !== before, 'sealed in: it whacks a crate on the way out (' + log.join(', ') + '; crates ' + before + ' → ' + hp().join(',') + ')');
+    // a few turns later it is out and heading for the grunt
+    for (let i = 0; i < 4; i++) { DD.Combat.endRound(); DD.AutoPlay.takeTurn(); }
+    t.ok(k.x >= 3, 'a few turns later it is out of the corner (' + k.x + ',' + k.y + ')');
+    // no box: the crates are just cover, left alone
+    k = scene(false);
+    arena({ heroes: [H('test_knight', 1, 1)], enemies: [{ id: 'test_grunt', x: 8, y: 8 }], objects: [{ x: 3, y: 5, id: 'crate' }] });
+    DD.AutoPlay.takeTurn();
+    t.eq(DD.Grid.tile(3, 5).obj && DD.Grid.tile(3, 5).obj.hp, 6, 'with a way out, a crate is left alone');
   });
 })();

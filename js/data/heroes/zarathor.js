@@ -11,6 +11,16 @@
 (function () {
   'use strict';
   const DD = window.DD;
+  /**
+   * A range number in a desc as targeting resolves it for this user (range items such as the Yardstick of Reach, Dazzle,
+   * modifyRange hooks: what the card's Range pill says; playtest heroes-v1) via DD.Targeting.reach. No user: the number.
+   */
+  function reach(user, id, base) {
+    const d = DD.getSkill(id);
+    if (!user || !d || !DD.Targeting) return base;
+    if (typeof DD.Targeting.reach === 'function') return DD.Targeting.reach(d, null, user, base);
+    return Math.max(0, base + DD.Targeting.range(user, d, 1)[1] - DD.Targeting.range(null, d, 1)[1]);
+  }
   const U = DD.util;
 
   const DRIP_STEP = 50, DRIP_STEP_RING = 30, DRIP_MAX = 3;
@@ -253,7 +263,7 @@
     ap: 1, cooldown: 0,
     levels: [{ dmg: 5, vsBurn: 2 }],
     target: { type: 'unit', range: [1, 4], los: true, filter: 'enemy' },
-    desc: function (L) { return 'Deal ' + L.dmg + ' fire damage to a foe within 4 (+' + L.vsBurn + ' if it is Burning).'; },
+    desc: function (L, user) { return 'Deal ' + L.dmg + ' fire damage to a foe within ' + reach(user, 'zar_basic', 4) + ' (+' + L.vsBurn + ' if it is Burning).'; },
     flavor: 'Eldritch Blast, but bedazzled. Anything already on fire is, in his words, "pre-heated".',
     execute: function (ctx) {
       const u = ctx.user, t = ctx.targetUnit;
@@ -292,10 +302,10 @@
     id: 'zar_bling_throw', name: 'Throw Money At It', icon: '💸', kind: 'attack', tags: ['ranged', 'gold'],
     ap: 1, cooldown: 2, hpCost: debtHp,
     levels: [{ dmg: 8, gold: 5 }, { dmg: 10, gold: 5 }, { dmg: 12, gold: 5 }],
-    // never at an explosive barrel: the gold is paid in execute, so a barrel shot would be free (Eldritch Bling does barrels)
+    // never at an object: the gold is paid in execute, so a shot at a barrel or a crate would be free (Eldritch Bling does those)
     target: { type: 'unit', range: [1, 5], los: true, filter: 'enemy', objects: false },
     canUse: canPay,
-    desc: function (L) { return 'Spend ' + L.gold + ' gold: hit a foe within 5 for ' + L.dmg + ' damage and Dazzle it.'; },
+    desc: function (L, user) { return 'Spend ' + L.gold + ' gold: hit a foe within ' + reach(user, 'zar_bling_throw', 5) + ' for ' + L.dmg + ' damage and Dazzle it.'; },
     flavor: 'When fire can\'t solve it, throw money at it. He has never once picked the coins back up.',
     execute: function (ctx) {
       const u = ctx.user, t = ctx.targetUnit;
@@ -314,8 +324,9 @@
     levels: [{ turns: 2, r: 0 }, { turns: 3, r: 0 }, { turns: 3, r: 1 }],
     target: { type: 'unit', range: [1, 5], los: true, filter: 'enemy' },
     area: { shape: 'circle', size: function (L) { return L.r || 0; } },
-    desc: function (L) {
-      return (L.r ? 'Hex a foe within 5 and every foe next to it: they are' : 'Hex a foe within 5: it is') +
+    desc: function (L, user) {
+      const r = reach(user, 'zar_hex', 5);
+      return (L.r ? 'Hex a foe within ' + r + ' and every foe next to it: they are' : 'Hex a foe within ' + r + ': it is') +
         ' Vulnerable (+25% damage taken) for ' + (L.r ? 'their' : 'its') + ' next ' + L.turns + ' turns.';
     },
     flavor: 'He curses its outfit: socks with sandals, a novelty tie. It will never recover, emotionally or defensively.',
@@ -338,7 +349,7 @@
     ap: 1, cooldown: 1,
     levels: [{ bonus: 4 }, { bonus: 5 }, { bonus: 6 }],
     target: { type: 'unit', range: [1, 4], los: false, filter: 'ally' },
-    desc: function (L) { return 'Bedazzle an ally within 4: its next damaging skill deals +' + L.bonus + ' damage to each foe it hits.'; },
+    desc: function (L, user) { return 'Bedazzle an ally within ' + reach(user, 'zar_bedazzle', 4) + ': its next damaging skill deals +' + L.bonus + ' damage to each foe it hits.'; },
     flavor: 'Every weapon is better with rhinestones. Marwyn\'s axe now spells MAGNIFICENT in sequins.',
     aiScore: function (ctx) { return ctx.targetUnit && !DD.Act.hasStatus(ctx.targetUnit, 'zar_bedazzled') ? ctx.L.bonus : 0; },
     execute: function (ctx) {
@@ -357,7 +368,7 @@
     ap: 1, cooldown: 2,
     levels: [{ fire: 5 }, { fire: 7 }, { fire: 9 }],
     target: { type: 'unit', range: [0, 4], los: false, filter: 'allyOrSelf' },
-    desc: function (L) { return 'Ward himself or an ally within 4 until its next turn: enemies whose attacks hit it take ' + L.fire + ' fire damage.'; },
+    desc: function (L, user) { return 'Ward himself or an ally within ' + reach(user, 'zar_rebuke', 4) + ' until its next turn: enemies whose attacks hit it take ' + L.fire + ' fire damage.'; },
     flavor: 'Hit me? In THIS economy? In THIS outfit?',
     execute: function (ctx) {
       const u = ctx.user, t = ctx.targetUnit;
@@ -375,7 +386,7 @@
     ap: 1, cooldown: 2,
     levels: [{ dmg: 3, pull: 3, range: 4 }, { dmg: 4, pull: 3, range: 5 }, { dmg: 5, pull: 4, range: 5 }],
     target: { type: 'unit', range: function (L) { return [2, L.range]; }, los: true, filter: 'enemy', straight: true },
-    desc: function (L) { return 'Lash a foe in a straight line within ' + L.range + ': deal ' + L.dmg + ' damage and pull it up to ' + L.pull + ' tiles toward him.'; },
+    desc: function (L, user) { return 'Lash a foe in a straight line within ' + reach(user, 'zar_lasso', L.range) + ': deal ' + L.dmg + ' damage and pull it up to ' + L.pull + ' tiles toward him.'; },
     flavor: 'Heavy, gold, and alarmingly long. He insists it is "for emergencies".',
     execute: function (ctx) {
       const u = ctx.user, t = ctx.targetUnit;
@@ -387,7 +398,8 @@
     },
   });
 
-  // Fabulous Strut: straight dash that leaves a fire lane (allies push foes into it, the AI walks around it)
+  // Fabulous Strut: straight dash that leaves a fire lane (allies push foes into it, the AI walks around it). Like any
+  // walk it passes through allies (never ends on one; playtest combat-controls-5); a foe in the way stops the runway.
   function strutPath(u, p) {
     if (!u || !p || (p.x !== u.x && p.y !== u.y) || (p.x === u.x && p.y === u.y)) return null;
     const dir = U.dirTo(u, p), n = Math.abs(p.x - u.x) + Math.abs(p.y - u.y);
@@ -395,7 +407,9 @@
     let prev = { x: u.x, y: u.y };
     for (let i = 1; i <= n; i++) {
       const q = { x: u.x + dir.x * i, y: u.y + dir.y * i };
-      if (!DD.Grid.isFree(q.x, q.y, u) || DD.Grid.isDrop(q.x, q.y) || !DD.Grid.canStep(u, prev, q)) return null;
+      const o = DD.Grid.unitAt(q.x, q.y);
+      if (o && o !== u && (i === n || DD.Grid.hostile(u, o))) return null;
+      if (!DD.Grid.isWalkable(q.x, q.y, u) || DD.Grid.isDrop(q.x, q.y) || !DD.Grid.canStep(u, prev, q)) return null;
       out.push(q);
       prev = q;
     }
@@ -420,7 +434,7 @@
       canTarget: function (ctx) { return strutPath(ctx.user, ctx.target) ? true : 'Something is in the way of the runway.'; },
     },
     canUse: function (ctx) { return ctx.user && DD.Act.cantMove(ctx.user) ? 'Can\'t move! The strut is cancelled.' : true; },
-    desc: function (L) { return 'Strut up to ' + L.len + ' tiles in a straight line, leaving fire (' + L.turns + ' rounds) on every tile he leaves.'; },
+    desc: function (L, user) { return 'Strut up to ' + reach(user, 'zar_strut', L.len) + ' tiles in a straight line, leaving fire (' + L.turns + ' rounds) on every tile he leaves.'; },
     flavor: 'The runway is wherever he says it is. The runway is also on fire.',
     execute: function (ctx) {
       const u = ctx.user;
@@ -442,7 +456,7 @@
     levels: [{ block: 8, gold: 6 }, { block: 10, gold: 6 }, { block: 12, gold: 6 }],
     target: { type: 'unit', range: [0, 4], los: false, filter: 'allyOrSelf' },
     canUse: canPay,
-    desc: function (L) { return 'Spend ' + L.gold + ' gold: gold-plate himself or an ally within 4 for ' + L.block + ' Block.'; },
+    desc: function (L, user) { return 'Spend ' + L.gold + ' gold: gold-plate himself or an ally within ' + reach(user, 'zar_gold_plating', 4) + ' for ' + L.block + ' Block.'; },
     flavor: 'Armor is just jewelry that commits.',
     execute: function (ctx) {
       const t = ctx.targetUnit;
@@ -458,8 +472,8 @@
     ap: 2, cooldown: 0, charges: 1,
     levels: [{ hp: 12, r: 2 }, { hp: 18, r: 2 }, { hp: 24, r: 3 }],
     target: { type: 'tile', range: [1, 3], los: false, filter: 'empty' },
-    desc: function (L) {
-      return 'Unveil a ' + L.hp + '-HP gold statue of himself within 3. It Taunts foes within ' + L.r +
+    desc: function (L, user) {
+      return 'Unveil ' + (L.hp === 8 || L.hp === 11 || L.hp === 18 ? 'an ' : 'a ') + L.hp + '-HP gold statue of himself within ' + reach(user, 'zar_statue', 3) + '. It Taunts foes within ' + L.r +
         ' now and whenever his turn starts. Once per combat.';
     },
     flavor: 'Life-size. Well, life-size if life were nine feet tall, had abs, and wore sunglasses indoors.',
@@ -583,9 +597,10 @@
     summons: ['zar_statue'],
     barks: {
       select: ['Zarathor, the Bedazzled. Autographs after the fight.', 'Drip check? Passed. Obviously.', 'Point me at something flammable.',
-        'Careful. The rings are load-bearing.', 'Sunglasses stay on. The future is too bright.'],
+        'Careful. The rings are insured.', 'Sunglasses stay on. The future is too bright.'],
       start: ['Let\'s light this place up. Literally.', 'Nobody scuff the bling and nobody gets hurt. Much.', 'Roll for initiative! Mine\'s a gold d20.',
         'Marwyn, you\'re standing in my good light.', 'Hope these goons brought a fire extinguisher.'],
+      swap: ['Step aside, {ally}. The main character needs that mark.', 'Thank you, {ally}. The spotlight was on your tile.'],
       move: ['Strutting. Do not interrupt the strut.', 'Make way for the main character.', 'Every floor is a runway if you believe.',
         'This dungeon should be honored, frankly.', 'Attacks of opportunity? I only take opportunities.'],
       kill: ['And THAT is why you accessorize.', 'Crispy. Golden brown. Perfection.', 'You\'ve been bedazzled. Fatally.',

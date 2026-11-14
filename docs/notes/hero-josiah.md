@@ -311,3 +311,23 @@ targetting them" · "Allow targetting o fheals on downed characters to heal and 
   self-heal never revives.
 - **Requests.** INTEGRATOR: `docs/notes/v2-digest.md` §2 (generated kit text) still quotes "Your raven (or a new one)" /
   "Your raven calls the flock" / "Josiah's raven has double max HP": regenerate.
+
+## Playtest fixes (Nov 12)
+
+- **text-tone-2 (content part, fixed)**: "Basanos, I am a doctor, not a vet! ...Fine. I am both." (it assumed Basanos was
+  the patient) → "Basanos, stop licking the patient! I am a doctor, not a vet!" (a standing helper). "Marwyn, stop
+  flexing over the body and HELP!" was already a helper line. Engine request: hero-syllamin.md.
+- **text-tone-23 (polish, fixed)**: Onyx's hurt bark "It's load-bearing!" → "It's vintage!".
+- **heroes-v1 (fixed)**: the target-range numbers in his descs follow his real reach (range items, Dazzle) through `reach()` → `DD.Targeting.reach`; details and the cross-hero suite in hero-kiri.md.
+
+## Finish (Nov 14) — playtest desc-sweep-10 (FIX: CONTENT)
+
+- Onyx's text: "10 HP, +10% per Josiah level after the first" (was "+10% per Josiah level", one level off: Onyx has 10
+  HP at level 1, 12 at level 3). Suite `hero_josiah: finish …` checks levels 1 / 3 / 5. D7: two swap barks.
+
+## Review (finish, Nov 14) — REVIEWER
+
+- desc-sweep-10 holds (Onyx 10 / 12 / 14 HP at levels 1 / 3 / 5). Onyx's Peck aims at objects (a hero-side summon, D1)
+  and hits a crate for exactly its 🔨 number. Note for his kit: since FF-6 (engine) a poison-immune foe (undead, oozes,
+  constructs: resist poison 0) takes no Poisoned stacks at all, so nothing that reads "a Poisoned foe" counts them —
+  before, the stacks sat there doing 0. His run share stays over 1.5× the median (1.76× in the review batch).

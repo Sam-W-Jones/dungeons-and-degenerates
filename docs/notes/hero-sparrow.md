@@ -46,7 +46,7 @@ instead): every foe within 3 takes 16 damage and gains Bleed 3.
 | id | name | cost | desc (level I) | II / III |
 |---|---|---|---|---|
 | `spa_hemoglob` ⭐ | Hemo-Glob 🩸 (spell) | 1 AP, 2♥, cd 1 | lob blood at a foe within 5 (LOS): 6 damage + Bleed 1 | 8 + B1 / 9 + B2 |
-| `spa_juicebox` ⭐ | Juice Box 🧃 (spell) | 2 AP, cd 2 | drain a foe within 2: 5 damage +3 per Bleed on it, heal half the damage dealt (rounded up) | 7 +3 / 8 +4 |
+| `spa_juicebox` ⭐ | Juice Box 🧃 (spell) | 2 AP, cd 2 | drain a foe within 2: 5 damage +3 per Bleed on it, heal the damage dealt (all of it since D9, Nov 12) | 7 +3 / 8 +4 |
 | `spa_papercuts` | Thousand Paper Cuts 📄 (spell) | 2 AP, 2♥, cd 2 | tile within 4, radius 1: 4 damage + Bleed 2 | 5 + B2 / 6 + B3 |
 | `spa_spray` | Say It, Don't Spray It 💦 (spell) | 2 AP, 2♥, cd 2 | cone 2: 4 damage + Dazzled (its next turn) | 5 / 6, cone 3 |
 | `spa_scab` | Scab Armor 🩹 | 1 AP, 3♥, cd 2 | 8 Block | 10 / 10 + Thorns 3 through her next turn (III: the rider only) |
@@ -302,3 +302,97 @@ Suite: `hero_sparrow: v2 requests — …`. Rules: `docs/notes/rules.md` "v2 req
   it would have been a 3-AP ranged blast with no dart. Hemo-Glob is a spell (not barrel-aimable by the rule).
 - **Flyers.** Bloodsucker's Bib checks `DD.Grid.feelsSurface(unit, tile)`: a flying Sparrow (wings from a status, an
   item or a Blessing) floats over blood and slurps nothing (tested); landed, she slurps again.
+
+## Sustain (Nov 12) — Juice Box drinks it all (D9; spec `.tmp/wf13/sustain-spec.md` §1.3, owner HERO-TRIO)
+
+The user (D9): no generic heal for every party (the First-Aid Fanny Pack left the starting kit); sustain comes from each
+hero's own verbs, spread over skills, items and passives. Sparrow's is her starting skill Juice Box: she is the vampire
+goblin with a juice box, and draining a Bleeding foe was already her sustain fantasy. Why her: the lowest run-win share
+(0.38x the median) and the most downs (0.54 a fight) in the no-pack sim, from a 22-HP pool and her own HP costs.
+
+- **Juice Box** (`spa_juicebox`, AP 2, cd 2, range 1-2, LOS, levels `{5, +3}`, `{7, +3}`, `{8, +4}` unchanged) now heals
+  **all the damage dealt** (was half, rounded up). `dealt` = the return of `Act.damage`: the HP the foe really lost (no
+  overkill; HP that Block soaked up doesn't count). Objects are never targets (`foeOf`). It never revives anyone (self,
+  active only). A `Slurrrp!` pop-up (blood red) over her; the log is Act.heal's `Sparrow heals N HP.`
+- **Desc** (18 words, one sentence, no if/else words; her cap is 22): `Drain a foe within 2: deal 5 damage +3 per Bleed on
+  it, and heal the damage dealt.` (II: 7 / +3; III: 8 / +4).
+- **AutoPlay** (`aiScore`): the Bleed on the target as before, plus, in the **quick pass only**, `min(AI.estimate(dmg +
+  per × Bleed), missing HP) × (1.5 below half HP, else 0.8)`. The quick pass credits `L.heal` only to friends in the
+  area, so it never saw a self-heal on a skill aimed at a foe (AutoPlay drank 0.5 times a fight). With `ctx.autoplay`
+  (the exact pass) it returns the Bleed only: the dry run already prices the real heal.
+- **Loading tip** (her file, `DD.registerNarration('tips', …)`): `Juice Box heals Sparrow for every point it drains.
+  Bleed it first: every Bleed on the foe makes the box bigger.`
+- Example: level I against 1 Bleed, 8 damage heals 8, about every 3rd turn (it healed 4 before).
+- Unchanged: Blood Price, her HP costs never take her below 1 HP, the Bib, Blood Drive.
+
+**Tests** (`hero_sparrow: Juice Box`): each level with 3 Bleed heals exactly `6 + dealt` (run at hero level 3, 28 max HP,
+so no cap hides the III drink of 20; asserted to fit); no Bleed: `10 + L.dmg` ("heals all of it"); a kill heals the 3 HP
+actually drained (`10 + 3`); Block soaking 2 heals only the HP that got through; full HP: no overheal; the `Slurrrp!`
+pop-up over her; `aiScore` at full HP = the Bleed, hurt in a quick ctx = Bleed + `min(est, missing) × 0.8` (× 1.5 below
+half), with `ctx.autoplay` = the Bleed; the loading tip exists (≤ 140 chars). `v2 requests`: Juice Box next to a downed knight heals her `10 + 5` and the knight
+stays down. The simplicity suite (18 words, `damage+heal`) passes unchanged.
+
+**Fallbacks** (balance pass 3 decides, spec §9): if she runs hot (more than ~8 HP a normal fight, or above ~1.2x the
+median), heal two-thirds of the damage dealt, rounded up. If she stays below ~0.6x, raise the range 1-2 to 1-3 (desc
+`within 3`).
+
+**Deviations**: none from the spec's mechanics or texts. Test-only: the spec's `:503 hp == 6 + dealt` runs at hero level 3
+(at level 1, 22 max HP, the III drink of 20 would cap at 22); two extra cases (Block, pop-up) were added.
+
+## Review (sustain, Nov 12) — adversarial review: the user's intent and the rules text (ADVERSARIAL REVIEWER role)
+
+- **Verified** (suites; scratch harness `.tmp/rev13/rt.js` on real encounters with real allies; `tools/sim.sh`): Juice
+  Box heals exactly the HP the foe lost (no overkill, nothing Block soaked), self only, never a revive; desc == execute
+  at I-III ("Drain a foe within 2: deal 5/7/8 damage +3/3/4 per Bleed on it, and heal the damage dealt."); the
+  `Slurrrp!` pop-up, Act.heal's log line and the preview agree; the quick-pass `aiScore` adds the drain, the exact pass
+  leaves it to the dry run. In real fights (harness, 9 / 7 / 7 fights at I / II / III): 0.1 / 0.7 / 1.0 uses and
+  0.4 / 4.1 / 8.0 HP a fight; in the act 1 sim (`seeds=8&from=7000&stop=1&party=slate,basanos,sparrow,marwyn&dump=1`,
+  33 fights): **1.2 uses a fight** (the spec's target: at least 0.9; it was 0.5).
+- **Fixed**: nothing. **Not changed**: III's 8 HP a fight sits at the spec's "hot" line (about 8 a normal fight): a
+  balance-pass watch (fallback: two-thirds of the damage dealt, rounded up). Her tip and texts use no he / him.
+
+## Review (sustain, Nov 12) — engine, AutoPlay and tests (ADVERSARIAL REVIEWER role)
+
+Probes: `.tmp/rev-engine/probe.js` (scratch page, one Chrome slot; real act 1 encounters through `DD.Encounter.build` +
+`DD.AutoPlay.runBattle`; AutoPlay traces with `DD.AutoPlay.trace = 'all'`); in-memory mutants (`&mut=`, no file on disk
+changed).
+
+**Verified (by running code)**
+- The Juice Box preview shows her exact heal (+8 at level I on a 1-Bleed grunt) and leaves the board and the log
+  untouched; over 20 AutoPlay fights all 17 real drinks healed through a real (non-simulated) `DD.Act.heal`.
+- AutoPlay drinks when it matters: at 1 HP next to a Bleeding grunt the exact pass rates Juice Box about 100 against
+  23 for the next option; at 9 / 22 with the grunt 2 tiles away she drinks from where she stands. In real fights, on her
+  hurt turns (below 60% HP) with Juice Box ready and a foe in reach at the start of her turn, she drank 6 times in 9.
+- The tests catch it: a mutant that heals half again fails 7 assertions (Juice Box, the v2 requests suite).
+
+**Not changed (minor)**: the quick-pass term prices `min(estimate, missing)`, and `DD.AI.estimate` is after armor but
+before the foe's Block and uncapped by its HP, so a drink at a 2-HP foe is over-rated in the quick pass. The exact pass
+(dry run) prices the real heal and makes the decision, so only the shortlist can be off; spec formula kept.
+
+## Balance refit (Nov 12) — Juice Box range 2 → 3 (BALANCE REFIT 1, spec §9 fallback; docs/notes/balance.md "Sustain refit - act 1")
+
+- **Why**: her run-win share stayed far under 0.6× the median with the D9 drain: 0.47× (10 of 47 runs, campaign 200
+  runs, seeds 11000+; the audit's no-pack B0: 0.38×), and Juice Box was cast only 0.7 times a regular fight (target 0.9)
+  at range 2. The spec's pre-agreed fallback for "still below 0.6×" is range 3 (she isn't hot: 4.2 HP a fight).
+- **Change**: `JUICE_RANGE = 3` (target range [1, 3]; desc `Drain a foe within 3: …`, 18 words as before). Nothing else.
+- **Measured** (act 1 only, 300 runs, seeds 7000+, same seeds as before): Juice Box 0.7 → **0.9** casts a regular fight
+  (elite 1.0 → 1.4, boss 0.5 → 0.9); she heals herself 4.1 / 7.2 / 5.8 HP a regular / elite / boss fight (≤ ~8, not
+  hot); her downs 0.40 → **0.29** a fight. Whole-run share: see balance.md (campaign validation).
+- **Tests**: `hero_sparrow: Juice Box` now drinks from 3 tiles away, asserts range 3, the "within 3" desc and a foe 4
+  tiles away out of reach.
+- **Docs** (request to DOCS): DESIGN §6 Sparrow brief and the v2-digest §2 Juice Box line say "within 2"; they should say
+  "within 3".
+
+## Finish (Nov 14) — the playtest findings held for the sustain build (FIX: CONTENT)
+
+- **text-tone-8 / review-open-10 (fixed)**: her "Tell my blood... I loved it..." (a twin of the Rat's "Tell the
+  cheese... I loved it...") is now "Return my blood... to sender...".
+- **heroes-v1 / desc-sweep-5 / review-open-7 (fixed)**: Hemo-Glob, Juice Box, Thousand Paper Cuts, Goblin Mode, Evil
+  Twin, Blood Drive and Vein Glory print `DD.Targeting.reach`.
+- Suite `hero_sparrow: finish — her last words are her own …`. D1 opt-out kept: Vein Glory (the dart is the point; a
+  22-damage point-blank barrel selfie). D7: two swap barks. Numbers: none changed.
+
+## Review (finish, Nov 14) — REVIEWER
+
+- D1 / D4 with her real kit: Hemoglobin and Juice Box now hit a crate for exactly their 🔨 number and drain nothing (no
+  heal from a crate: D1's "no lifesteal"); Vein Glory stays an opt-out. Her twin death line and the range texts hold.

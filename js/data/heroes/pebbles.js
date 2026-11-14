@@ -9,6 +9,16 @@
 (function () {
   'use strict';
   const DD = window.DD;
+  /**
+   * A range number in a desc as targeting resolves it for this user (range items such as the Yardstick of Reach, Dazzle,
+   * modifyRange hooks: what the card's Range pill says; playtest heroes-v1) via DD.Targeting.reach. No user: the number.
+   */
+  function reach(user, id, base) {
+    const d = DD.getSkill(id);
+    if (!user || !d || !DD.Targeting) return base;
+    if (typeof DD.Targeting.reach === 'function') return DD.Targeting.reach(d, null, user, base);
+    return Math.max(0, base + DD.Targeting.range(user, d, 1)[1] - DD.Targeting.range(null, d, 1)[1]);
+  }
 
   const HERO = 'pebbles';
   const FLAME = '#ff8a1f', FLAME_HOT = '#ffd34d', FLAME_DEEP = '#e2450f', EMBER = '#9c2a08';
@@ -295,8 +305,8 @@
       },
     },
     canUse: function (ctx) { return ctx.user && DD.Act.cantMove(ctx.user) ? 'Can\'t move! No zoomies.' : true; },
-    desc: function (L) {
-      return 'Dash up to ' + plural(L.len, 'tile') + ', leaving fire (' + plural(L.turns, 'round') + ') on every tile Pebbles leaves, except under allies.';
+    desc: function (L, user) {
+      return 'Dash up to ' + plural(reach(user, 'peb_zoomies', L.len), 'tile') + ', leaving fire (' + plural(L.turns, 'round') + ') on every tile Pebbles leaves, except under allies.';
     },
     flavor: 'Nobody knows what starts the zoomies. Everybody knows what ends them: the carpet.',
     execute: function (ctx) {
@@ -323,8 +333,8 @@
     ap: 1, cooldown: 2,
     levels: [{ dmg: 3, pull: 2, range: 4 }, { dmg: 4, pull: 2, range: 4 }, { dmg: 5, pull: 3, range: 5 }],
     target: { type: 'unit', range: function (L) { return [2, L.range]; }, los: true, filter: 'enemy' },
-    desc: function (L) {
-      return 'Deal ' + L.dmg + ' fire damage to a foe 2-' + L.range + ' tiles away and pull it ' + plural(L.pull, 'tile') + ' toward Pebbles.';
+    desc: function (L, user) {
+      return 'Deal ' + L.dmg + ' fire damage to a foe 2-' + reach(user, 'peb_fetch', L.range) + ' tiles away and pull it ' + plural(L.pull, 'tile') + ' toward Pebbles.';
     },
     flavor: 'The quest: fetch. The reward: the goblin, slightly chewed, smouldering, at your feet.',
     execute: function (ctx) {
@@ -475,7 +485,7 @@
     ap: 2, cooldown: function (L) { return L.cd; },
     levels: [{ range: 3, cd: 4 }, { range: 4, cd: 4 }, { range: 4, cd: 3 }],
     target: { type: 'unit', range: function (L) { return [1, L.range]; }, los: true, filter: 'enemy', canTarget: puppyCheck },
-    desc: function (L) { return 'Charm a foe within ' + L.range + ' (not a boss): on its next turn it fights for your side.'; },
+    desc: function (L, user) { return 'Charm a foe within ' + reach(user, 'peb_puppy_eyes', L.range) + ' (not a boss): on its next turn it fights for your side.'; },
     flavor: 'The goblin raised its knife. Then it looked into his eyes. Now it\'s on our side and crying a little.',
     execute: function (ctx) {
       const u = ctx.user, t = ctx.targetUnit;
@@ -592,6 +602,7 @@
       start: ['New friends to meet! Oh. They have knives. Bad friends.', 'BORK BORK! That means hello. And also you\'re toast.',
         'Roll for initiative? I\'ll roll in the embers!', 'Everyone stay calm! I\'m calm! I\'m on fire, but calm!',
         'Who wants to play? Everyone? GOOD!'],
+      swap: ['SWAP! {ally}! SWAP! Again? No? Okay!', 'Hi {ally}! Bye {ally}! I\'m over here now!'],
       move: ['ZOOMIES!', 'SQUIRREL!', 'Coming! Coming! Sorry about the rug!', 'Hot paws! Hot paws! Hot paws!',
         'Fetching! I don\'t know what! Fetching!'],
       kill: ['I fetched it! It\'s... a bit crispy.', 'Good boy! I\'m the good boy! BORK!', 'Bad goblin. Very bad. Now very toasty.',

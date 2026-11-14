@@ -1169,8 +1169,10 @@
         enemies: [{ id: 'test_grunt', x: 5, y: 3 }, { id: 'test_grunt', x: 5, y: 5 }, { id: 'test_grunt', x: 6, y: 4 }] });
       const seen = [];
       DD.Act.addRule({ id: 'hb_plant', name: 'Plant', hooks: { onSkillUsed: function (ctx) {
-        if (DD.Act.simulating || !ctx || !ctx.user || ctx.user.defId !== 'buga' || !ctx.target) return;
-        seen.push({ id: ctx.skill.id, at: ctx.target.x + ',' + ctx.target.y, obj: ctx.targetObj ? ctx.targetObj.id : null });
+        // [finish D4] an object hit reports ctx.objectHit (and no target, so nothing rides on it)
+        const p = ctx && (ctx.objectHit || ctx.target);
+        if (DD.Act.simulating || !ctx || !ctx.user || ctx.user.defId !== 'buga' || !p) return;
+        seen.push({ id: ctx.skill.id, at: p.x + ',' + p.y, obj: ctx.objectHit ? ctx.objectHit.id : ctx.targetObj ? ctx.targetObj.id : null });
       } } });
       const grunts = DD.Combat.enemies().slice();
       DD.AutoPlay.takeTurn();
@@ -1240,7 +1242,7 @@
   });
 
   // ---- v2 requests (Nov 3): barrels, flyers ---------------------------------------------------------------------------
-  T.suite('hero_buga: v2 requests — the Pork Barrel is volatile: a single-target attack sets it off (credit, skim, kickbacks); a fine served on it collects nothing; flyers float over the crumbs', function (t) {
+  T.suite('hero_buga: v2 requests — the Pork Barrel is volatile: a single-target damage skill sets it off (credit, skim, kickbacks); a fine served on it collects nothing; flyers float over the crumbs', function (t) {
     t.ok(DD.getObject('buga_pork_barrel').volatile === true && DD.Act.isVolatile({ id: 'buga_pork_barrel' }), 'the Pork Barrel is flagged volatile');
     // 1. Buga fines his own barrel: it goes off at once, his blast and his kill (no credit for his own work), no fine gold
     arena({ heroes: [buga([sk('buga_pork_barrel', 3), sk('buga_fine', 1)], 1, 4)],
@@ -1280,5 +1282,26 @@
     DD.Act.teleport(g, 4, 4, { fx: false });
     t.ok(!st(g, 'slow'), 'nor when it comes back over them');
     t.eq(DD.Grid.hazardAt(4, 4, g), null, 'the crumbs are no hazard to anyone');
+  });
+})();
+
+// ---- playtest fixes (Nov 12) ----------------------------------------------------------------------------------------
+(function () {
+  'use strict';
+  const T = window.DD_TEST, DD = window.DD;
+  if (!T || !DD || !DD.getHero('buga')) return;
+  T.suite('hero_buga: playtest fixes (Nov 12) — the Pen\'s Mark is in Campaign Pamphlet\'s text', function (t) {
+    DD.Combat.sandbox({ w: 7, h: 7, seed: 3, enemyAi: false, heroes: [{ id: 'buga', x: 1, y: 3, level: 1 }], enemies: [{ id: 'test_grunt', x: 4, y: 3 }],
+      objective: { type: 'custom', text: 'Testing' }, encounter: { id: 'buga_pt', checkObjective: function () { return null; } } });
+    const b = DD.Combat.state.units.filter(function (u) { return u.defId === 'buga'; })[0];
+    const pam = DD.getSkill('buga_pamphlet');
+    t.eq(DD.skillDesc(pam, 1, b), 'Deal 4 damage to a foe within 4 tiles.', 'no Pen');
+    b.items = (b.items || []).concat(['buga_golden_pen']);
+    t.ok(/and Mark it: the next hit it takes deals \+2 damage\.$/.test(DD.skillDesc(pam, 1, b)), 'with the Pen: ' + DD.skillDesc(pam, 1, b));
+    b.rangeBonus = 1;
+    t.ok(/within 5 tiles/.test(DD.skillDesc(pam, 1, b)), 'a range item: within 5');
+    // text-tone-8: his last words are his own, not the shared "Tell X... I loved them..." template
+    const downed = DD.getHero('buga').barks.downed;
+    t.ok(downed.length >= 4 && !downed.some(function (l) { return /^Tell |I loved/.test(l); }), 'no "Tell X... I loved them..." downed bark');
   });
 })();

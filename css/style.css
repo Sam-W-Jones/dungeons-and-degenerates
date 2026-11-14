@@ -144,6 +144,21 @@ b, strong { font-weight: 700; color: var(--gold-4); }
 }
 .panel.slim { box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .5), inset 0 0 0 3px rgba(198, 156, 75, .1), var(--shadow-md); }
 .panel.slim::before { inset: 3px; }
+/* [playtest first-hour-6] a panel that scrolls itself keeps its rivets on its own background (fixed to the panel box:
+   an absolutely placed ::before would scroll away with the content and cut across it) */
+.panel.scroll::before, .hud-inspect.panel::before { display: none; }
+.panel.scroll, .hud-inspect.panel {
+  --rv: 5px;
+  background:
+    radial-gradient(circle, var(--gold-3) 0 1.6px, transparent 2.2px) left var(--rv) top var(--rv) / 9px 9px no-repeat,
+    radial-gradient(circle, var(--gold-3) 0 1.6px, transparent 2.2px) right var(--rv) top var(--rv) / 9px 9px no-repeat,
+    radial-gradient(circle, var(--gold-3) 0 1.6px, transparent 2.2px) left var(--rv) bottom var(--rv) / 9px 9px no-repeat,
+    radial-gradient(circle, var(--gold-3) 0 1.6px, transparent 2.2px) right var(--rv) bottom var(--rv) / 9px 9px no-repeat,
+    var(--grain),
+    linear-gradient(180deg, rgba(255, 220, 160, .07), rgba(0, 0, 0, .2)),
+    linear-gradient(180deg, var(--wood-2), var(--wood-1));
+}
+.hud-inspect.panel { --rv: 3px; }
 .parchment {
   position: relative;
   pointer-events: auto;
@@ -556,6 +571,8 @@ b, strong { font-weight: 700; color: var(--gold-4); }
 .rp-grid .skill-card { padding-bottom: 1.6rem; }
 .rp-grid .skill-card:hover { border-color: #ff8a76; box-shadow: 0 0 14px rgba(255, 110, 90, .35); }
 .rp-note { font-size: .82rem; color: var(--text-3); font-style: italic; }
+.rp-warn { margin-top: .35rem; padding: .25rem .45rem; border-radius: 6px; font-size: .76rem; font-weight: 700; color: #ffd2a8; background: rgba(150, 70, 20, .35); border: 1px solid rgba(255, 160, 90, .45); }
+.rp-grid .skill-card.rp-keystone { border-color: rgba(255, 160, 90, .6); }
 
 /* ---------------------------------------------------------------------------------------------------------------
  * Toasts
@@ -719,6 +736,7 @@ b, strong { font-weight: 700; color: var(--gold-4); }
 .psd-epithet { font-style: italic; color: var(--text-2); font-size: .95rem; }
 .psd-class { font-size: .8rem; text-transform: uppercase; letter-spacing: .08em; color: var(--text-3); }
 .psd-role { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-top: .2rem; font-size: .8rem; color: var(--text-3); }
+.psd-init { padding: .05rem .45rem; border-radius: 999px; font-weight: 700; color: var(--text-2); background: rgba(0, 0, 0, .3); border: 1px solid rgba(198, 156, 75, .3); white-space: nowrap; }
 .psd-locked { padding: .4rem .7rem; border-radius: 6px; background: rgba(0, 0, 0, .35); border: 1px dashed rgba(198, 156, 75, .5); color: var(--gold-3); font-size: .88rem; }
 .psd-blurb { font-size: .86rem; color: var(--text-2); line-height: 1.4; }
 .psd-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: .45rem; }
@@ -850,6 +868,10 @@ b, strong { font-weight: 700; color: var(--gold-4); }
 .compass { position: absolute; right: 1rem; top: .8rem; width: 4.2rem; height: 4.2rem; color: #6b4a24; opacity: .55; pointer-events: none; }
 .map-narration { position: absolute; left: 1.2rem; top: .9rem; max-width: min(34rem, 55%); padding: .45rem .8rem; border-radius: 10px; background: rgba(250, 238, 210, .78); border: 1px solid rgba(91, 61, 28, .3); }
 .map-narration .narration { color: var(--ink-2); font-size: .9rem; }
+/* [release gate] act-1 intro box up: the map is laid out below it (map.js clearIntro sets --intro-pad) */
+.map-board.intro > .map-nodes { top: var(--intro-pad, 0px); }
+.map-board.intro > .map-links { top: var(--intro-pad, 0px); height: calc(100% - var(--intro-pad, 0px)); }
+.map-board.intro > .map-start, .map-board.intro > .party-token { top: calc(var(--intro-pad, 0px) + (100% - var(--intro-pad, 0px)) * .5) !important; }
 /* act 1 start: each hero's Session Zero quirk (starting Blessing) */
 .sz-quirks { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .7rem; margin-top: .35rem; padding-top: .35rem; border-top: 1px dashed rgba(91, 61, 28, .35); }
 .sz-head { pointer-events: auto; cursor: help; font-family: var(--f-display); font-weight: 800; font-size: .78rem; color: var(--ink); }
@@ -911,6 +933,7 @@ b, strong { font-weight: 700; color: var(--gold-4); }
 .rwl-lv { padding: 0 .4em; border-radius: 4px; font-size: .74rem; font-weight: 800; color: #1f1040; background: linear-gradient(180deg, #e6d9ff, #a98bff); vertical-align: middle; }
 .rwl-quip { font-size: .8rem; font-style: italic; color: var(--text-3); }
 .rwl-row:not(.landed) .rwl-result { visibility: hidden; }
+.rwl-row:not(.landed) .rwl-next { visibility: hidden; }
 .rwl-row.landed .rwl-result { animation: rise-in .35s ease-out both; }
 .rwl-lineup { display: flex; flex-wrap: wrap; gap: .35rem .5rem; margin-top: .1rem; }
 .rwl-hero { --hc: #c9a24f; position: relative; display: inline-flex; align-items: center; gap: .35rem; padding: .15rem .5rem .15rem .2rem; border-radius: 999px; background: rgba(0, 0, 0, .28); border: 1px solid rgba(198, 156, 75, .22); pointer-events: auto; }

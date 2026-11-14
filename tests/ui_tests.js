@@ -1589,6 +1589,61 @@
     }
   });
 
+  /**
+   * [release gate, Nov 14] The act-1 start map's intro box (the DM's line + the Session Zero quirks) covered a
+   * first-column node on 40 of 40 start maps at 1280×720 (26 of 40 at 1920×1080). While it is up the map is laid out
+   * below it; once the party has moved on the plain layout is back.
+   */
+  T.suite('ui: release gate — the act-1 intro box never covers a map node (1024×640, 1280×720, 1920×1080, real page)', async function (t) {
+    if (!DD.getHero('kiri')) { t.skip('real hero content not loaded'); return; }
+    const parties = [['zarathor', 'syllamin', 'ellaria', 'slate'], ['marbles', 'marwyn', 'josiah', 'sparrow'], ['corelos', 'buga', 'kiri', 'betty'], ['basanos', 'valdris', 'hjalmar', 'pebbles']];
+    const sizes = [[1024, 640], [1280, 720], [1920, 1080]];
+    for (let i = 0; i < sizes.length; i++) {
+      const w = sizes[i][0], h = sizes[i][1];
+      const f = await gameFrame('debug=1&screen=map&seed=4&party=' + parties[0].join(','), w, h);
+      try {
+        const W = f.contentWindow;
+        const ok = await frameUntil(function () { return W.DD && W.DD.UI && W.DD.UI.current === 'map' && W.document.querySelector('.map-node'); }, 15000);
+        t.ok(ok, w + '×' + h + ': the map is up');
+        if (!ok) continue;
+        if (W.document.fonts && W.document.fonts.ready) await W.document.fonts.ready;
+        const doc = W.document;
+        const hits = [];
+        let boxes = 0, squeezed = 0;
+        for (let s = 1; s <= 12; s++) {
+          W.DD.Run.newRun(parties[s % 4], 'normal', 7000 + s);
+          W.DD.UI.show('map');
+          await tick(20);
+          const narr = doc.querySelector('.map-narration');
+          if (!narr || !narr.querySelector('.sz-quirks')) continue;
+          boxes++;
+          if (doc.querySelector('.map-board.intro')) squeezed++;
+          const b = narr.getBoundingClientRect();
+          doc.querySelectorAll('.map-node').forEach(function (nd) {
+            const r = nd.getBoundingClientRect();
+            if (Math.min(b.right, r.right) - Math.max(b.left, r.left) > 0 && Math.min(b.bottom, r.bottom) - Math.max(b.top, r.top) > 0) hits.push('seed ' + (7000 + s) + ' ' + nd.dataset.id);
+          });
+        }
+        t.ok(boxes >= 10, w + '×' + h + ': the start maps show the quirks box (' + boxes + ' of 12)');
+        t.eq(hits.length, 0, w + '×' + h + ': no map node under the intro box' + (hits.length ? ' — ' + hits.slice(0, 4).join(' | ') : ''));
+        t.ok(squeezed === boxes, w + '×' + h + ': each start map is laid out below its intro box (' + squeezed + ' of ' + boxes + ')');
+        // the camp, the party token and the links' start follow the squeezed layout (the camp sits mid-way down the area)
+        const board = doc.querySelector('.map-board'), camp = doc.querySelector('.map-start'), nodes = doc.querySelector('.map-nodes');
+        if (board && camp && nodes && board.classList.contains('intro')) {
+          const nb = nodes.getBoundingClientRect(), cb = camp.getBoundingClientRect();
+          t.ok(Math.abs((cb.top + cb.bottom) / 2 - (nb.top + nb.height / 2)) <= 3, w + '×' + h + ': the camp is centred on the squeezed node area');
+        }
+        // the party moves on without leaving the map (run:changed → update): the quirks and the squeeze go
+        const run = W.DD.UI.run();
+        run.nodeId = (run.map.start || [])[0];
+        run.visited = [run.nodeId];
+        W.DD.UI.update('run:changed');
+        await tick(20);
+        t.ok(!doc.querySelector('.map-board.intro') && !doc.querySelector('.map-narration .sz-quirks'), w + '×' + h + ': after the first step the quirks line and the squeeze are gone');
+      } finally { f.remove(); }
+    }
+  });
+
   T.suite('ui: v2 — debug screen=rewards (js/main.js) shows the level-up block; screen=levelup levels one hero; DDdbg.levelUp', async function (t) {
     if (!DD.getHero('kiri') || !DD.Run || typeof DD.Run.grantLevelUps !== 'function') { t.skip('real heroes or the v2 run layer missing'); return; }
     let f = await gameFrame('debug=1&screen=rewards&seed=12&party=kiri,betty,valdris,pebbles', 1280, 720);
@@ -1622,6 +1677,269 @@
         const lv = W.DD.Run.state.party.map(function (h) { return h.level; });
         t.eq(lv.filter(function (x) { return x === 2; }).length, 1, 'after one rotation level-up (' + lv.join(',') + ')');
       }
+    } finally { f.remove(); }
+  });
+
+  // ---- render / HUD polish (wf10) ------------------------------------------------------------------------------------
+  T.suite('ui: polish — item stat lines say initiative; UI.portrait(…, { unit }) follows the unit\'s look', function (t) {
+    const lines = DD.UI.statLines({ hp: 4, init: 2, mov: -1 }).map(function (l) { return l.text; });
+    t.ok(lines.indexOf('+2 initiative') >= 0, 'an init stat has its line: ' + lines.join(' | '));
+    t.ok(lines.indexOf('+4 max HP') < lines.indexOf('+2 initiative'), 'in the stat order (HP, AP, Move, Armor, initiative, ...)');
+    t.ok(DD.UI.statLines({ init: -1 }).some(function (l) { return l.text === '−1 initiative' || l.text === '-1 initiative'; }) &&
+      DD.UI.statLines({ init: -1 })[0].good === false, 'a negative one is marked bad');
+    if (DD.getItem && DD.getItem('adrenaline_jar')) {
+      const tip = DD.UI.itemTooltipHtml ? DD.UI.itemTooltipHtml('adrenaline_jar') : '';
+      t.ok(!tip || /initiative/.test(tip), 'the Adrenaline Jar tooltip lists its initiative');
+    }
+    // portraits of a live unit follow its look (vis.sprite / unit.sprite / its def)
+    const heroId = Object.keys(DD.defs.heroes)[0];
+    if (!heroId || !DD.Sprites) { t.skip('no hero or sprites'); return; }
+    const u = { id: 'ui_port_u', defId: heroId, kind: 'hero', side: 'hero', name: 'Test', x: 0, y: 0, statuses: [], flags: {}, vis: {} };
+    const src = function (el) { const img = el.querySelector('img'); return img ? img.getAttribute('src') : (el.querySelector('canvas') ? 'canvas' : ''); };
+    const plain = src(DD.UI.portrait(heroId, 40));
+    t.eq(src(DD.UI.portrait(heroId, 40, { unit: u })), plain, 'a unit in its own look: the def portrait');
+    u.sprite = { base: 'quadruped', palette: { skin: '#8f8c98' } };
+    const wolf = src(DD.UI.portrait(heroId, 40, { unit: u }));
+    t.ok(wolf && wolf !== plain, 'unit.sprite (a form): another portrait');
+    u.vis.sprite = { base: 'blob', palette: { skin: '#59d36a' } };
+    t.ok(src(DD.UI.portrait(heroId, 40, { unit: u })) !== wolf, 'the on-screen pin (vis.sprite) wins');
+    t.ok(DD.UI.portrait(heroId, 40, { unit: u }).style.getPropertyValue('--pc') !== '', 'the frame keeps the hero colour');
+  });
+
+  // ---- playtest fixes (Nov 12; .tmp/wf12/confirmed-findings.json) -----------------------------------------------------------
+  const THEY = /\b(they|them|their|theirs|themselves|themself)\b/i;
+
+  T.suite('ui: playtest first-hour-8 / text-tone-15 — Settings and the combat menu share one current controls list', function (t) {
+    const UI = DD.UI;
+    reset();
+    try {
+      t.ok(Array.isArray(UI.CONTROLS) && UI.CONTROLS.length >= 15, 'DD.UI.CONTROLS');
+      t.tryRun('show settings', function () { UI.show('settings', {}); });
+      const rows = qa('.controls .ctrl').map(function (c) { return c.querySelector('.ctrl-key').textContent + ' = ' + c.querySelector('.ctrl-desc').textContent; });
+      ['Tab = Next unit of this turn (hero + summons)', 'Hold Alt / T = Threat shading: where enemies can reach',
+        'Click an adjacent ally = While moving: swap places (costs the move; the ally pays nothing)',
+        'Shift + click an ally = Swap with a summon of this turn (a plain click selects it)'].forEach(function (r) {
+        t.ok(rows.indexOf(r) >= 0, 'Settings lists: ' + r);
+      });
+      t.ok(!rows.some(function (r) { return /Cycle heroes/.test(r); }), 'no v1 "Cycle heroes"');
+      t.eq(rows.length, UI.CONTROLS.length, 'every shared row, no other');
+    } finally { reset(); }
+  });
+
+  T.suite('ui: playtest text-tone-22 / heroes-8 / text-tone-21 / text-tone-18 — area and range labels, boss titles, Balance-driven difficulty text', function (t) {
+    const UI = DD.UI;
+    ['gen_pocket_sand', 'gen_taunt'].forEach(function (id) {
+      if (!DD.getSkill(id)) return;
+      const info = UI.skillInfo(id, 1);
+      t.ok(!/Radius 0/.test(info.area), id + ': no "Radius 0" chip (' + JSON.stringify(info.area) + ')');
+    });
+    if (DD.getSkill('ell_switcheroo')) t.eq(UI.skillInfo('ell_switcheroo', 1).range, 'Anywhere', 'The Ol\' Switcheroo reaches anywhere');
+    t.eq(UI.bossWithTitle('The Rat King', 'and the Rat Bar Association'), 'The Rat King and the Rat Bar Association', 'a title that starts with "and"');
+    t.eq(UI.bossWithTitle('Grimble', 'The Goblin Tax Collector'), 'Grimble, the Goblin Tax Collector', 'a title that starts with "The"');
+    t.eq(UI.bossWithTitle('Dr. Iris', ''), 'Dr. Iris', 'no title');
+    const brutal = UI.DIFFICULTIES.filter(function (d) { return d.id === 'brutal'; })[0];
+    if (!DD.Balance || !brutal) { t.skip('no DD.Balance'); return; }
+    const row = DD.Balance.difficulty.brutal, hp0 = row.hp;
+    try {
+      const want = Math.round((row.hp - 1) * 100) + '% more HP';
+      t.ok(brutal.desc.indexOf(want) >= 0 && brutal.desc.indexOf(Math.round((row.dmg - 1) * 100) + '% more damage') >= 0, 'Brutal reads DD.Balance: ' + brutal.desc);
+      row.hp = 1.5;
+      t.ok(/50% more HP/.test(brutal.desc), 'and follows it when the balance changes: ' + brutal.desc);
+    } finally { row.hp = hp0; }
+    t.eq(UI.DIFFICULTIES.filter(function (d) { return d.id === 'normal'; })[0].desc, 'Standard enemy HP and damage.', 'Normal stays plain');
+  });
+
+  T.suite('ui: finish text-tone-17 / balance audit — the title quips say bosses AND a few elites wind up; brutal\'s fallback text matches DD.Balance', function (t) {
+    const sc = DD.UI.screens && DD.UI.screens.title;
+    const tl = sc && sc.taglines;
+    t.ok(Array.isArray(tl) && tl.length > 5, 'the title screen exposes its quips (' + (tl && tl.length) + ')');
+    const tele = (tl || []).filter(function (s) { return /telegraph|wind[- ]?up/i.test(s); });
+    t.ok(tele.length > 0, 'the telegraph quip is still there');
+    tele.forEach(function (s) { t.ok(/elite/i.test(s), 'a quip about who telegraphs names the few elites too: ' + s); });
+    // the fallback desc (shown only without a DD.Balance row) says the same numbers as the row
+    const brutal = DD.UI.DIFFICULTIES.filter(function (d) { return d.id === 'brutal'; })[0];
+    if (!DD.Balance || !DD.Balance.difficulty || !DD.Balance.difficulty.brutal || !brutal) { t.skip('no DD.Balance'); return; }
+    const B = DD.Balance, rows = B.difficulty, row = rows.brutal;
+    const want = [Math.round((row.hp - 1) * 100) + '% more HP', Math.round((row.dmg - 1) * 100) + '% more damage'];
+    let fb = '';
+    try {
+      B.difficulty = {};
+      fb = brutal.desc;
+    } finally { B.difficulty = rows; }
+    t.ok(fb.indexOf(want[0]) >= 0 && fb.indexOf(want[1]) >= 0, 'the fallback says ' + want.join(' / ') + ': ' + fb);
+    t.ok(/one extra enemy/.test(fb), 'and the extra grunt');
+  });
+
+  T.suite('ui: review (finish) — every title quip fits one line; ARCHITECTURE §3.7 / §7.5 / §8.1 / §8.3 say what the UI and input do', function (t) {
+    const sc = DD.UI.screens && DD.UI.screens.title;
+    const tl = (sc && sc.taglines) || [];
+    t.ok(tl.length > 5, 'the title screen exposes its quips (' + tl.length + ')');
+    // the tagline box is 38rem of 1.02rem italics with the title scene (~88 characters to a line) and 1.15rem without it
+    // (~78), quotes included: a longer quip wraps, and the rotating tagline jumps between one and two lines (the finish
+    // run's 101-character telegraph quip did, at 1280x720 and 1920x1080)
+    tl.forEach(function (s) { t.ok(s.length <= 76, 'one line (≤ 76 characters, ' + s.length + '): ' + s); });
+    // the docs: read through the page (tools/test.sh allows file:// reads); a page that can't read files skips
+    let arch = null;
+    try {
+      const x = new XMLHttpRequest();
+      x.open('GET', (window.DD_BASE || '../') + 'docs/ARCHITECTURE.md', false);
+      if (x.overrideMimeType) x.overrideMimeType('text/plain; charset=utf-8');
+      x.send();
+      if ((x.status === 0 || x.status === 200) && x.responseText) arch = x.responseText.replace(/\s+/g, ' ');
+    } catch (e) { arch = null; }
+    if (!arch) { t.skip('this page can\'t read docs/ARCHITECTURE.md (run it through tools/test.sh)'); return; }
+    t.ok(/volatile: false, \/\/ v2: it explodes when destroyed \(onDestroyed → DD\.Act\.explode\): any single-target damage skill \/\/ can be aimed at it/.test(arch),
+      '§3.7: the volatile flag quotes D1 ("any single-target damage skill"), not "single-target attacks"');
+    t.ok(arch.indexOf('single-target attacks can be aimed') < 0, '§3.7: no pre-D1 wording left');
+    t.ok(/`input:tileHover \{x, y, unitId, under\?, shift\} \| null`/.test(arch), '§7.5: input:tileHover carries shift');
+    ['CONTROLS', 'partyLines', 'bossWithTitle', 'consumableDesc', 'chooseSkillSlot'].forEach(function (k) {
+      t.ok(new RegExp('\\b' + k + '[ (→]').test(arch) && DD.UI[k] !== undefined, '§8.1 documents DD.UI.' + k + ' and it exists');
+    });
+    t.ok(/forgetWarning/.test(arch) && /means \*\*⇄ swap\*\* with that ally, or \*\*Help Up\*\* when the ally is downed/.test(arch), '§8.1 / §8.3: forgetWarning and the adjacent-ally click');
+    t.ok(/a ✖ between them when blocked: refused, or a free hit calls it off/.test(arch), '§7.2: overlay.swap.blocked covers a refused swap');
+  });
+
+  T.suite('ui: playtest heroes-v1 — a consumable\'s text and range can follow the holder\'s reach (desc(L, user), the HUD pocket passes the unit)', function (t) {
+    const UI = DD.UI;
+    if (!DD.Targeting || typeof DD.Targeting.reach !== 'function') { t.skip('no DD.Targeting.reach'); return; }
+    const id = 'test_ui_reach_jar';
+    DD.defs.consumables[id] = { id: id, name: 'Jar of Reach', icon: '🫙', rarity: 'common', ap: 1, area: { shape: 'single' }, flavor: '',
+      target: { type: 'unit', filter: 'enemy', range: [1, 4] },
+      desc: function (L, user) { return 'Throw it at a foe within ' + DD.Targeting.reach(this, L, user, 4) + '.'; },
+      execute: function () {} };
+    try {
+      const holder = { id: 'ui_rj', kind: 'hero', side: 'hero', x: 0, y: 0, statuses: [], rangeBonus: 1, flags: {}, tags: [] };
+      const plain = UI.consumableTooltipHtml(id), held = UI.consumableTooltipHtml(id, { user: holder });
+      t.ok(/within 4\./.test(plain) && /Range 1–4/.test(plain), 'no holder: the listed numbers');
+      t.ok(/within 5\./.test(held) && /Range 1–5/.test(held), 'a holder with +1 range: the text and the 🎯 range agree on 5');
+      t.eq(UI.consumableDesc(DD.getConsumable(id)), 'Throw it at a foe within 4.', 'UI.consumableDesc without a unit');
+      t.eq(UI.consumableDesc({ desc: 'Plain.' }, holder), 'Plain.', 'a string desc stays as it is');
+      const card = UI.consumableCard(id, { user: holder });
+      t.ok(/within 5\./.test(card.textContent), 'the card prints the holder\'s reach: ' + card.textContent);
+    } finally { delete DD.defs.consumables[id]; }
+  });
+
+  T.suite('ui: playtest robustness-4 / text-tone-4 / text-tone-6 / heroes-9 / heroes-v2 — no "they" for a named hero, party-filtered barks, Init on the card, the forget note', function (t) {
+    const UI = DD.UI;
+    const meta = DD.util.deepClone(DD.Meta.data);
+    try {
+      const run = runWith(t, ['ellaria', 'josiah', 'syllamin', 'slate']);
+      if (!run) return;
+      // barks out of a fight skip heroes who aren't in the party (Ellaria's Pebbles line, Josiah's Valdris line)
+      const lines = ['Pebbles and the corgis signed a ceasefire.', 'Valdris, forge me a smaller beak.', 'Josiah, hold my staff.', 'Nobody named here.'];
+      t.eq(UI.partyLines(lines).join(' | '), 'Josiah, hold my staff. | Nobody named here.', 'UI.partyLines keeps lines that name only party members');
+      t.eq(UI.partyLines(lines, ['pebbles', 'valdris']).length, 3, 'an explicit party list');
+      // the TPK tombstones: no they / their, no repeats in one party, by the run seed
+      UI.show('gameover', { summary: { act: 1, party: ['syllamin', 'sparrow', 'josiah', 'betty'].map(function (id) { return { id: id, level: 2 }; }), stats: {}, seed: 99 } });
+      const eps = qa('.tomb-ep').map(function (e) { return e.textContent; });
+      t.eq(eps.length, 4, 'four epitaphs');
+      t.ok(!eps.some(function (e) { return THEY.test(e); }), 'none uses they / their: ' + eps.join(' | '));
+      t.eq(eps.filter(function (e, i) { return eps.indexOf(e) !== i; }).length, 0, 'no epitaph twice in one party');
+      // [first-hour-3] downs only count after a fight someone survived: the TPK screen says "before the wipe"
+      const labels = qa('.end-stat .es-label').map(function (e) { return e.textContent; });
+      t.ok(labels.indexOf('Downs before the wipe') >= 0 && labels.indexOf('Heroes lost before the wipe') >= 0 && labels.indexOf('Times downed') < 0,
+        'the TPK stat labels: ' + labels.join(' | '));
+      // [playtest review] the act-clear unlock banner names one hero: no "Recruit them…"
+      UI.show('victory', { act: 1, unlocked: ['valdris'] });
+      const ub = qa('.ub-role').map(function (e) { return e.textContent; });
+      t.ok(ub.length === 1 && !THEY.test(ub[0]), 'the unlock banner has no they / them: ' + ub.join(' | '));
+      // party sheet of a hero written out; the Blessing roll's Discard tooltip
+      run.party[3].dead = true;
+      UI.show('party', { hero: 3 });
+      t.ok(/Replace Slate at a tavern/.test((q('.sheet-dead') || {}).textContent || ''), 'a written-out hero\'s sheet names him: ' + ((q('.sheet-dead') || {}).textContent || ''));
+      run.party[3].dead = false;
+      if (typeof DD.Run.grantRoll === 'function') {
+        DD.Run.grantRoll(0, 'event');
+        const pm = UI.passiveRoll(0, { instant: true });
+        const btns = pm ? Array.prototype.slice.call(pm.el.querySelectorAll('button')) : [];
+        const disc = btns.filter(function (b) { return /Discard/.test(b.textContent); })[0];
+        const tip = disc && disc._ddTip ? String(disc._ddTip.content) : '';
+        t.ok(/Ellaria keeps every Blessing as it is/.test(tip) && !THEY.test(tip), 'the Blessing roll\'s Discard tooltip has no "they": ' + tip);
+        UI.closeAllModals('test');
+      }
+      // the party select card shows the initiative modifier
+      UI.show('partySelect', {});
+      const initTxt = (q('.psd-init') || {}).textContent || '';
+      t.ok(/🎲 Init [+−]\d/.test(initTxt), 'the party select card shows Init: ' + initTxt);
+      // the forget picker: a forgotten skill goes back in the pile; a skill's forgetWarning shows on its card
+      const rh = run.party[0];
+      const pool = DD.Run.learnableFor ? DD.Run.learnableFor(rh, { generic: true }) : [];
+      while (rh.skills.length < 4 && pool.length) rh.skills.push({ id: pool.shift(), level: 1 });
+      const sk0 = DD.getSkill(rh.skills[0].id);
+      const had = Object.prototype.hasOwnProperty.call(sk0, 'forgetWarning'), old = sk0.forgetWarning;
+      sk0.forgetWarning = 'Without it nothing works.';
+      try {
+        const m = UI.chooseSkillSlot(0, pool[0] || rh.skills[0].id, {}, function () {});
+        const body = m ? m.el.textContent : '';
+        t.ok(/A forgotten skill goes back in the pile/.test(body) && !/gone for good/.test(body.replace(/Pick a Blessing to lose \(it is gone for good\)/, '')), 'the note: the skill can come back');
+        t.ok(m && m.el.querySelector('.rp-warn') && /Without it nothing works\./.test(m.el.querySelector('.rp-warn').textContent), 'the keystone warning shows on its card');
+        UI.closeAllModals('test');
+      } finally { if (had) sk0.forgetWarning = old; else delete sk0.forgetWarning; }
+    } finally {
+      endRun(t);
+      DD.Meta.data = meta;
+      DD.Meta.save();
+    }
+  });
+
+  T.suite('ui: playtest first-hour-10 — the inspect panel ends above the hint pill at 1024×768 and 1280×720 (real page)', async function (t) {
+    if (!DD.getEnemy('a1_kid') && !DD.getEncounter('a1_goblin_ambush')) { t.skip('real content not loaded'); return; }
+    const sizes = [[1024, 768], [1280, 720]];
+    for (let i = 0; i < sizes.length; i++) {
+      const w = sizes[i][0], h = sizes[i][1];
+      const f = await gameFrame('debug=1&screen=combat&encounter=a1_goblin_ambush&party=zarathor,syllamin,marbles,marwyn&seed=3', w, h);
+      try {
+        const W = f.contentWindow;
+        const ok = await frameUntil(function () { return W.DD && W.DD.HUD && W.DD.HUD.mounted() && W.DD.Combat.state; }, 15000);
+        t.ok(ok, w + '×' + h + ': the fight is up');
+        if (!ok) continue;
+        await tick(120);
+        const foes = W.DD.Combat.state.units.filter(function (u) { return u.side === 'enemy' && !u.dead; });
+        let checked = 0, bad = [];
+        foes.forEach(function (u) {
+          W.DD.HUD.hover(u.x, u.y);
+          const els = W.DD.HUD.els();
+          const ir = els.inspect.getBoundingClientRect(), hr = els.hint.getBoundingClientRect();
+          if (els.inspect.classList.contains('hud-hidden') || !hr.height || hr.right <= ir.left || hr.left >= ir.right) return;
+          checked++;
+          if (ir.bottom > hr.top) bad.push(u.name + ' (' + Math.round(ir.bottom) + ' > ' + Math.round(hr.top) + ')');
+        });
+        t.ok(checked > 0, w + '×' + h + ': ' + checked + ' inspected foes share the hint\'s column');
+        t.eq(bad.length, 0, w + '×' + h + ': over ' + checked + ' inspected foes sharing the hint\'s column, the panel never runs under the pill' + (bad.length ? ': ' + bad.join(', ') : ''));
+      } finally { f.remove(); }
+    }
+  });
+
+  T.suite('ui: playtest first-hour-6 / first-hour-4 / heroes-9 — scrolling panels keep their rivets fixed; the next level-up hides until the die lands; the Init box fits (real page)', async function (t) {
+    const f = await gameFrame('debug=1&screen=settings', 1024, 768);
+    try {
+      const W = f.contentWindow;
+      const ok = await frameUntil(function () { return W.DD && W.DD.UI && W.DD.UI.current === 'settings' && W.document.querySelector('.settings-panel'); }, 15000);
+      t.ok(ok, 'the settings screen is up');
+      if (!ok) return;
+      const doc = W.document;
+      const sc = doc.querySelector('.settings-panel');
+      t.ok(sc.classList.contains('scroll') && sc.scrollHeight > sc.clientHeight, 'at 1024×768 the settings panel scrolls (' + sc.scrollHeight + ' / ' + sc.clientHeight + ')');
+      t.eq(W.getComputedStyle(sc, '::before').display, 'none', 'a scrolling panel has no ::before frame (it would scroll with the content)');
+      t.ok(/radial-gradient/.test(W.getComputedStyle(sc).backgroundImage) && W.getComputedStyle(sc).backgroundAttachment.split(',')[0].trim() === 'scroll', 'its rivets are its own background, fixed to the panel');
+      const host = doc.createElement('div');
+      host.innerHTML = '<div class="panel" style="position:fixed;left:0;top:0;width:50px;height:50px"></div><div class="rwl-row"><span class="rwl-next">x</span></div>';
+      doc.body.appendChild(host);
+      t.ok(W.getComputedStyle(host.children[0], '::before').display !== 'none', 'a plain panel keeps its frame');
+      const row = host.children[1];
+      t.eq(W.getComputedStyle(row.firstChild).visibility, 'hidden', 'the "Next level-up" line is hidden while the die rolls');
+      row.classList.add('landed');
+      t.eq(W.getComputedStyle(row.firstChild).visibility, 'visible', 'and shows once it lands');
+      host.remove();
+      // the party select card: the 🎲 Init chip and the four stat boxes sit inside the details panel at 1024
+      W.DD.UI.show('partySelect', {});
+      await tick(80);
+      const panel = doc.querySelector('.ps-details');
+      const init = doc.querySelector('.ps-details .psd-init');
+      t.ok(init && /🎲 Init [+−]\d/.test(init.textContent), 'the hero card shows the initiative modifier: ' + (init && init.textContent));
+      const pr = panel.getBoundingClientRect();
+      const out = Array.prototype.slice.call(doc.querySelectorAll('.psd-stats .stat-box')).concat(init ? [init] : []).filter(function (b) { const r = b.getBoundingClientRect(); return r.right > pr.right - 2 || r.left < pr.left; });
+      t.eq(out.length, 0, 'nothing pokes out of the panel at 1024×768' + (out.length ? ': ' + out.map(function (b) { return b.textContent; }).join(' | ') : ''));
     } finally { f.remove(); }
   });
 })();

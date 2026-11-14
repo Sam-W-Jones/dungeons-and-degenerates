@@ -1728,7 +1728,13 @@
     const cv = canvas(640, 360);
     const res = t.tryRun('title', function () { return r.renderTo(cv, { scene: 'title', width: 640, height: 360 }); });
     t.ok(res && res.objects >= 8, 'title diorama objects drawn (' + (res && res.objects) + ')');
-    t.ok(res && res.units === Math.min(8, Object.keys(DD.defs.heroes).length) || (res && res.units <= 8), 'title heroes (' + (res && res.units) + ')');
+    // the whole table at the fire: every unlocked hero, up to 16 seats (all 16 real heroes are unlocked in v2)
+    const ids = Object.keys(DD.defs.heroes);
+    const open = ids.filter(function (id) { return !DD.Meta || typeof DD.Meta.isUnlocked !== 'function' || DD.Meta.isUnlocked(id); });
+    t.eq(res && res.units, Math.min(16, (open.length ? open : ids).length), 'title heroes (' + (res && res.units) + ')');
+    if (DD.UI && DD.UI.HERO_ORDER && DD.UI.HERO_ORDER.every(function (id) { return open.indexOf(id) >= 0; })) {
+      t.eq(res && res.units, 16, 'all 16 real heroes sit at the campfire');
+    }
     t.ok(colourVariety(cv) > 40, 'title produced a varied image');
     const none = t.tryRun('none', function () { return r.renderTo(cv, { scene: 'none', width: 320, height: 200 }); });
     t.eq(none, null, 'empty scene returns null');
@@ -2176,4 +2182,479 @@
     if (ms > 1) t.ok(ms30 <= ms * 1.35 + 0.5, 'a turned view costs at most ~1.35x the classic one (' + ms30.toFixed(1) + ' vs ' + ms.toFixed(1) + ' ms)');
     else t.ok(ms30 < 60, 'turned frames render too');
   }, { tags: ['render', 'perf'] });
+
+  // ---- render / HUD polish (wf10): the fit vs the HUD's panels, status flight, threat shading, kept silhouettes,
+  // the 💥 marker in the badge layout ----------------------------------------------------------------------------
+  /** Screen points the fit keeps clear: tile-top centres and unit heads (feet - sprite height), at the live camera. */
+  function fitProbe(r, st) {
+    const out = { tiles: [], heads: [] };
+    st.grid.tiles.forEach(function (tl) { out.tiles.push(r.worldToScreen(tl.x, tl.y, r.tileTop(tl.x, tl.y))); });
+    st.units.forEach(function (u) {
+      if (u.dead) return;
+      const p = r.worldToScreen(u.x, u.y), m = DD.Sprites.metrics(u);
+      out.heads.push({ x: p.x, y: p.y - m.height * r.camera.zoom, id: u.id });
+    });
+    return out;
+  }
+  function inBox(p, b) { return p.x > b.x0 && p.x < b.x1 && p.y > b.y0 && p.y < b.y1; }
+
+  T.suite('render: the fit keeps the board out of the HUD\'s panels at every yaw (hudMargins avoid)', function (t) {
+    const r = R(), size = r.size(), W = size.width, H = size.height;
+    // a wide board with units on its far corners: the diagonal views fill the board area's corners
+    const st = makeState(makeGrid(12, 8), [makeUnit('fa_h', 'hero', 1, 6), makeUnit('fa_e', 'enemy', 0, 0), makeUnit('fa_e2', 'enemy', 11, 0), makeUnit('fa_e3', 'enemy', 11, 7)]);
+    const saved = r.hudMargins, prevScene = r.getScene();
+    let hiddenPlain = 0, changed = 0;
+    try {
+      r.stateOverride = st;
+      r.setScene('combat');
+      r.hudMargins = null;
+      const m = r.margins();
+      // a "combat log" in the board area's top-right corner, a soft "objective" across the top middle
+      const log = { x0: W - m.right - Math.min(270, W * 0.22), y0: m.top, x1: W - m.right, y1: m.top + Math.min(160, H * 0.22) };
+      const obj = { x0: W * 0.36, y0: m.top, x1: W * 0.64, y1: m.top + 44, soft: true };
+      // review (balance run): a head counts with its HP pill (the pill's ends, at the widgets' clamped zoom), as the fit does
+      const pillIn = function (q, b) {
+        const z = r.camera.zoom, zc = Math.max(0.65, Math.min(1.5, z)), u = st.units.filter(function (x) { return x.id === q.id; })[0];
+        const y = q.y - 16 * z, ex = 30 * zc + 9;
+        return q.x > b.x0 - ex && q.x < b.x1 + ex && y > b.y0 && y < b.y1 || (u && inBox(q, b));
+      };
+      const count = function () {
+        const p = fitProbe(r, st);
+        return p.tiles.filter(function (q) { return inBox(q, log); }).length +
+          p.heads.filter(function (q) { return pillIn(q, log) || pillIn(q, obj); }).length;
+      };
+      [0, 30, 45, 90, 135, 200, 225, 315].forEach(function (y) {
+        r.setYaw(y, { keepFocus: false });
+        r.hudMargins = null;
+        r.fitMap({ instant: true });
+        const plain = { x: r.camera.x, y: r.camera.y, zoom: r.camera.zoom };
+        const before = count();
+        r.hudMargins = function () { return { avoid: [log, obj] }; };
+        r.fitMap({ instant: true });
+        const after = count();
+        const same = r.camera.x === plain.x && r.camera.y === plain.y && r.camera.zoom === plain.zoom;
+        if (before) hiddenPlain++;
+        if (!same) changed++;
+        t.eq(after, 0, 'yaw ' + y + ': no tile centre under the log and no unit head under the log or the objective (plain fit: ' + before + ')');
+        if (!before) t.ok(same, 'yaw ' + y + ': nothing was under a panel, so the plain fit stands exactly');
+        t.ok(r.camera.zoom <= plain.zoom + 1e-9 && r.camera.zoom >= plain.zoom * 0.69, 'yaw ' + y + ': never larger, at most 30% smaller (' + (r.camera.zoom / plain.zoom).toFixed(2) + ')');
+        // the whole board stays inside the HUD margins
+        const p = fitProbe(r, st);
+        t.ok(p.tiles.every(function (q) { return q.x > m.left - 1 && q.x < W - m.right + 1 && q.y > m.top - 1 && q.y < H - m.bottom + 1; }), 'yaw ' + y + ': every tile still inside the board area');
+      });
+      t.ok(hiddenPlain > 0 && changed > 0, 'the plain fit hid something at some views (' + hiddenPlain + ') and those were refitted (' + changed + ')');
+      // tiles may tuck under a soft panel; units may not
+      r.setYaw(0, { keepFocus: false });
+      r.hudMargins = null; r.fitMap({ instant: true });
+      const plain0 = { x: r.camera.x, y: r.camera.y, zoom: r.camera.zoom };
+      const tilesOnly = { x0: m.left, y0: m.top, x1: W - m.right, y1: H - m.bottom, soft: true };
+      const emptyState = makeState(makeGrid(12, 8), []);
+      r.stateOverride = emptyState;
+      r.hudMargins = null; r.fitMap({ instant: true });
+      const plainEmpty = { x: r.camera.x, y: r.camera.y, zoom: r.camera.zoom };
+      r.hudMargins = function () { return { avoid: [tilesOnly] }; };
+      r.fitMap({ instant: true });
+      t.ok(r.camera.zoom === plainEmpty.zoom && r.camera.x === plainEmpty.x, 'a soft panel over bare tiles changes nothing');
+      r.stateOverride = st;
+      // boxes outside the board area and garbage boxes change nothing
+      r.hudMargins = function () { return { avoid: [{ x0: 0, y0: 0, x1: 4, y1: 4 }, null, { x0: 'a', y0: 1, x1: 2, y1: 3 }, { x0: 10, y0: 10, x1: 10, y1: 400 }, 7] }; };
+      r.fitMap({ instant: true });
+      t.ok(r.camera.zoom === plain0.zoom && r.camera.x === plain0.x && r.camera.y === plain0.y, 'panels off the board area and garbage boxes leave the plain fit');
+      // a panel nothing can clear (the whole board area, hard) leaves the plain fit rather than a tiny board
+      r.hudMargins = function () { return { avoid: [{ x0: m.left, y0: m.top, x1: W - m.right, y1: H - m.bottom }] }; };
+      r.fitMap({ instant: true });
+      t.ok(r.camera.zoom === plain0.zoom, 'an unclearable panel keeps the plain fit');
+      // renderTo without a camera fits the same way
+      r.hudMargins = function () { return { avoid: [log, obj] }; };
+      r.setYaw(45, { keepFocus: false });
+      r.fitMap({ instant: true });
+      const live = { x: r.camera.x, y: r.camera.y, zoom: r.camera.zoom };
+      const cv = canvas(W, H);
+      t.ok(!!withState(st, function () { return r.renderTo(cv, { state: st, width: W, height: H }); }), 'renderTo fits with the panels too');
+      t.ok(live.zoom > 0, 'fit at 45 deg (zoom ' + live.zoom.toFixed(3) + ')');
+    } finally {
+      r.hudMargins = saved;
+      r.setYaw(0, { keepFocus: false });
+      r.setScene(prevScene);
+      r.stateOverride = null;
+    }
+  }, { tags: ['render'] });
+
+  // Review (balance run): the board re-framed itself 7 times in one 8-round fight (zoom 0.73 → 0.66 → 0.73, one 291 px
+  // jump) because every panel change (a party card's status line, a portrait leaving the tracker, the next hero's skill
+  // bar) refitted with the units where they stood. And the fit only kept the HP pill's centre clear, so a pill's end
+  // still faded the objective at the classic view.
+  T.suite('render: a panel change mid-fight refits only to clear a panel, never back and forth; HP pills clear whole', function (t) {
+    const r = R(), size = r.size(), W = size.width, H = size.height, rot = r._rot;
+    if (!rot || typeof rot.watchMargins !== 'function') { t.skip('no watchMargins hook'); return; }
+    const st = makeState(makeGrid(10, 8), [makeUnit('wm_h', 'hero', 2, 6), makeUnit('wm_e', 'enemy', 7, 1)]);
+    const saved = r.hudMargins, prevScene = r.getScene();
+    let boxes = [];
+    try {
+      r.stateOverride = st;
+      r.setScene('combat');
+      r.setYaw(0, { keepFocus: false });
+      r.hudMargins = function () { return { avoid: boxes }; };
+      rot.watchMargins();
+      r.fitMap({ instant: true });
+      const fit0 = rot.camTarget();
+      const tileBox = function (x, y) {
+        const p = r.worldToScreen(x, y, r.tileTop(x, y));
+        return { x0: p.x - 30, y0: p.y - 20, x1: p.x + 30, y1: p.y + 20 };
+      };
+      const same = function (a, b) { return Math.abs(a.x - b.x) < 1e-6 && Math.abs(a.y - b.y) < 1e-6 && Math.abs(a.zoom - b.zoom) < 1e-9; };
+      // a panel that grows over empty screen (no tile, no unit under it): the framing holds
+      boxes = [{ x0: 0, y0: 0, x1: 40, y1: 40 }];
+      rot.watchMargins();
+      t.ok(same(rot.camTarget(), fit0), 'a panel change with nothing under it keeps the framing');
+      // a panel that now covers board tiles: the fit moves to clear it
+      boxes = [tileBox(0, 0)];
+      rot.watchMargins();
+      const fit1 = rot.camTarget();
+      t.ok(!same(fit1, fit0), 'a panel that now covers board tiles refits');
+      // the panel shrinks again: no zooming back in mid-fight (that was the back and forth)
+      boxes = [{ x0: 0, y0: 0, x1: 40, y1: 40 }];
+      rot.watchMargins();
+      t.ok(same(rot.camTarget(), fit1), 'a panel that shrinks away does not re-frame the board');
+      // under way (no deployment), a soft panel over a unit is not a reason to move: it fades for units
+      r.fitMap({ instant: true });
+      const fit2 = rot.camTarget();
+      const ep = r.worldToScreen(7, 1);
+      boxes = [{ x0: ep.x - 25, y0: ep.y - 140, x1: ep.x + 25, y1: ep.y - 20, soft: true }];
+      rot.watchMargins();
+      t.ok(same(rot.camTarget(), fit2), 'mid-fight a unit under the soft objective keeps the framing');
+      // while deploying, a unit under a panel still refits (nobody has moved yet)
+      st.deploy = { active: true };
+      boxes = [{ x0: ep.x - 60, y0: ep.y - 170, x1: ep.x + 60, y1: ep.y - 20, soft: true }];
+      rot.watchMargins();
+      t.ok(!same(rot.camTarget(), fit2), 'during deployment a unit under the objective refits');
+      st.deploy = null;
+      // the HP pill's end counts: a panel ending just left of the pill's centre still has to clear the pill
+      boxes = [];
+      r.hudMargins = null;
+      r.fitMap({ instant: true });
+      const plain = rot.camTarget();
+      const z = plain.zoom, zc = Math.max(0.65, Math.min(1.5, z)), m = DD.Sprites.metrics(st.units[1]);
+      const head = { x: ep.x, y: ep.y - (m.height + 16) * z };
+      // a soft panel (units only) whose right edge sits 12 px left of the pill's centre, around the pill's height: centre clear, end not
+      const edge = { x0: head.x - 200, y0: head.y - 10, x1: head.x - 12, y1: head.y + 6, soft: true };
+      t.ok(30 * zc + 9 > 12 + 4, '(the pill reaches past the panel edge: half-width ' + Math.round(30 * zc + 9) + ' px)');
+      r.hudMargins = function () { return { avoid: [edge] }; };
+      r.fitMap({ instant: true });
+      const after = rot.camTarget();
+      t.ok(!same(after, plain), 'the fit moves the board so the pill clears the panel, not just its centre');
+      const hp = r.worldToScreen(7, 1), hz = r.camera.zoom, hzc = Math.max(0.65, Math.min(1.5, hz));
+      const hy = hp.y - (m.height + 16) * hz;
+      const pillHit = hp.x - (30 * hzc + 9) < edge.x1 && hp.x + (30 * hzc + 9) > edge.x0 && hy > edge.y0 && hy < edge.y1;
+      t.ok(!pillHit, 'after the fit the whole pill is clear of the panel');
+    } finally {
+      r.hudMargins = saved;
+      r.setYaw(0, { keepFocus: false });
+      r.setScene(prevScene);
+      r.stateOverride = null;
+    }
+  }, { tags: ['render'] });
+
+  T.suite('render: a status that grants flight hovers the sprite like a natural flyer', function (t) {
+    const r = R(), S = DD.Sprites;
+    const sid = 'test_render_levitating';
+    DD.defs.statuses[sid] = { id: sid, name: 'Levitating', __kind: 'statuses', icon: '🪶', type: 'buff', flying: true };
+    try {
+      const heroId = Object.keys(DD.defs.heroes).filter(function (id) { const d = DD.defs.heroes[id]; return !(d.flags && d.flags.flying); })[0];
+      t.ok(!!heroId, 'a grounded hero def to test with (' + heroId + ')');
+      const u = makeUnit('lev_h', 'hero', 2, 2, { defId: heroId });
+      t.eq(S.metrics(u).hover, 0, 'grounded: no hover');
+      u.statuses = [{ id: sid, turns: 2 }];
+      t.ok(DD.Grid.isFlying(u), 'the engine says the status makes it fly');
+      t.ok(S.metrics(u).hover > 0, 'with the status: it hovers like a flyer (' + S.metrics(u).hover + ' px)');
+      // drawn higher: the topmost painted row of the sprite moves up
+      const top = function () {
+        const cv = canvas(200, 200), k = cv.getContext('2d');
+        S.drawUnit(k, u, 100, 160, 2, 0.6);
+        const d = k.getImageData(0, 0, 200, 200).data;
+        for (let y = 0; y < 200; y++) for (let x = 0; x < 200; x++) if (d[(y * 200 + x) * 4 + 3] > 40) return y;
+        return 200;
+      };
+      const flyTop = top();
+      u.statuses = [];
+      const groundTop = top();
+      t.ok(flyTop < groundTop - 4, 'the flying sprite is drawn higher (top row ' + flyTop + ' vs ' + groundTop + ')');
+      // the renderer shrinks its shadow like a flyer's
+      u.statuses = [{ id: sid, turns: 2 }];
+      const st = makeState(makeGrid(5, 5), [u]);
+      const res = withState(st, function () { return r.renderTo(canvas(320, 240), { state: st, width: 320, height: 240 }); });
+      t.ok(res && res.units === 1, 'renders');
+      // a status whose flying is a function that throws is contained
+      DD.defs.statuses[sid].flying = function () { throw new Error('levitation exploded'); };
+      const p0 = DD.problems.length;
+      t.ok(S.metrics(u).hover === 0 || S.metrics(u).hover > 0, 'a throwing flight check does not break metrics');
+      for (let i = DD.problems.length - 1; i >= p0; i--) if (/levitation exploded/.test(DD.problems[i])) DD.problems.splice(i, 1);
+    } finally {
+      delete DD.defs.statuses[sid];
+    }
+  }, { tags: ['render'] });
+
+  T.suite('render: threat shading reads on warm floors (wood, carpet, gold) at any view', function (t) {
+    const r = R();
+    ['wood', 'carpet', 'gold', 'stone'].forEach(function (ter) {
+      const grid = makeGrid(6, 6, function (tl) { tl.t = ter; });
+      const st = makeState(grid, [], { theme: 'hoard' });
+      const threat = { tiles: [], ref: 20 };
+      grid.tiles.forEach(function (tl) { if (tl.x < 3) threat.tiles.push({ x: tl.x, y: tl.y, dmg: 8, lethal: false }); });
+      [0, 45].forEach(function (yaw) {
+        const W = 480, H = 320;
+        const cam = DD.Iso.withYaw(yaw, function () { const w = DD.Iso.toWorld(2.5, 2.5, 0); return { x: w.x, y: w.y, zoom: 1.6 }; });
+        const shot = function (ov) {
+          r.resetOverlay();
+          Object.assign(r.overlay, ov || {});
+          const cv = canvas(W, H);
+          withState(st, function () { r.renderTo(cv, { state: st, width: W, height: H, camera: cam, yaw: yaw }); });
+          return cv.getContext('2d').getImageData(0, 0, W, H).data;
+        };
+        const off = shot(null), on = shot({ threat: threat });
+        r.resetOverlay();
+        // mean colour change inside a threatened tile vs inside a safe one (screen boxes around the tile centres)
+        const diff = function (tx, ty) {
+          const p = DD.Iso.withYaw(yaw, function () { const w = DD.Iso.toWorld(tx, ty, 0); return { x: (w.x - cam.x) * cam.zoom + W / 2, y: (w.y - cam.y) * cam.zoom + H / 2 }; });
+          let s = 0, n = 0;
+          for (let y = Math.round(p.y - 6); y <= Math.round(p.y + 6); y++) {
+            for (let x = Math.round(p.x - 14); x <= Math.round(p.x + 14); x++) {
+              const i = (y * W + x) * 4;
+              s += Math.abs(on[i] - off[i]) + Math.abs(on[i + 1] - off[i + 1]) + Math.abs(on[i + 2] - off[i + 2]);
+              n++;
+            }
+          }
+          return s / n / 3;
+        };
+        const hit = diff(1, 2), safe = diff(4, 2);
+        t.ok(hit >= 18, ter + ' @' + yaw + ': a threatened tile clearly changes (' + hit.toFixed(1) + ' per channel; the old orange wash alone moved wood ~12)');
+        t.ok(safe < 3, ter + ' @' + yaw + ': a safe tile stays as it was (' + safe.toFixed(1) + ')');
+      });
+    });
+  }, { tags: ['render'] });
+
+  T.suite('render: live frames keep a resting unit\'s silhouette, repaint it when it changes, and turning views reuse its body', function (t) {
+    const r = R();
+    const grid = makeGrid(9, 9, function (tl) { if (tl.x === 4 && tl.y === 4) tl.h = 3; });   // a column in front of the hero
+    const hero = makeUnit('kept_h', 'hero', 3, 3);
+    const st = makeState(grid, [hero]);
+    const W = 640, H = 400;
+    const cam = (function () { const w = DD.Iso.toWorld(4, 4, 0); return { x: w.x, y: w.y - 20, zoom: 1.4 }; })();
+    const cv = canvas(W, H);
+    const live = function () { r._rot.reset(); return withState(st, function () { return r.renderTo(cv, { state: st, width: W, height: H, camera: cam, live: true }); }); };
+    const prevScene = r.getScene();
+    try {
+      r.stateOverride = st;
+      r.setScene('combat');
+      r.setYaw(0, { keepFocus: false });
+      r.invalidate();
+      let res = live();
+      t.ok(res && res.silhouettes.some(function (s) { return s.id === 'kept_h'; }), 'the hero behind the column has a silhouette');
+      t.eq(r._rot.stats.silPaints, 1, 'first live frame: painted');
+      const h1 = canvasHash(cv);
+      res = live();
+      t.eq(r._rot.stats.silPaints, 0, 'second live frame, nothing changed: not painted again');
+      t.eq(r._rot.stats.silKept, 1, '...the kept one is drawn');
+      t.eq(canvasHash(cv), h1, '...and the frame is the same picture');
+      withState(st, function () { r.renderTo(cv, { state: st, width: W, height: H, camera: cam }); });
+      t.eq(canvasHash(cv), h1, 'the kept frame equals the exact full-detail render (same clock)');
+      t.ok(r._rot.caches().silKept >= 1, 'one kept silhouette in the cache');
+      // anything that shapes it repaints it: a step, a camera move, a status, an FX pose
+      hero.vis.x = 3.2;
+      live();
+      t.eq(r._rot.stats.silPaints, 1, 'the unit moved: repainted');
+      hero.vis.x = 3;
+      live();
+      const cam2 = { x: cam.x + 3, y: cam.y, zoom: cam.zoom };
+      r._rot.reset();
+      withState(st, function () { r.renderTo(cv, { state: st, width: W, height: H, camera: cam2, live: true }); });
+      t.eq(r._rot.stats.silPaints, 1, 'the camera moved: repainted');
+      live();
+      hero.statuses = [{ id: Object.keys(DD.defs.statuses)[0], turns: 2 }];
+      live();
+      t.eq(r._rot.stats.silPaints, 1, 'a status came: repainted');
+      hero.statuses = [];
+      live();
+      hero.vis._fxAt = performance.now(); hero.vis.pose = 'attack';
+      live(); const a1 = r._rot.stats.silPaints;
+      live(); const a2 = r._rot.stats.silPaints;
+      t.ok(a1 === 1 && a2 === 1, 'a unit in an FX pose is painted fresh every frame (' + a1 + ', ' + a2 + ')');
+      delete hero.vis._fxAt; delete hero.vis.pose;
+      live();
+      // the idle motion: a kept silhouette is repainted once it is older than its time-to-live (stepped clock)
+      r._rot.sim(true);
+      live();
+      r._rot.step(600);
+      live();
+      t.eq(r._rot.stats.silPaints, 1, 'after 0.6 s of idle motion it is repainted');
+      live();
+      t.eq(r._rot.stats.silPaints, 0, '...and kept again');
+      r._rot.sim(false);
+      // a turning view: the body is painted once and reused while the board spins
+      t.ok(r.beginRotate(), 'a rotate drag begins');
+      r.rotateDrag(-10 / 0.35);
+      res = live();
+      t.ok(res.silScale === 0.5 && res.silhouettes.some(function (s) { return s.id === 'kept_h'; }), 'turning: a half-resolution silhouette');
+      const firstBody = r._rot.stats.bodyPaints;
+      let reused = 0;
+      for (let i = 0; i < 4; i++) {
+        r.rotateDrag(-2 / 0.35);
+        res = live();
+        if (res.silhouettes.some(function (s) { return s.id === 'kept_h'; }) && r._rot.stats.bodyPaints === 0 && r._rot.stats.silPaints === 0) reused++;
+      }
+      t.ok(firstBody <= 1 && reused >= 3, 'its body is painted once and reused while the view turns (' + firstBody + ', ' + reused + ' of 4)');
+      r.endRotate({ snap: false });
+      // renderTo (full detail) never uses the kept ones
+      r._rot.reset();
+      withState(st, function () { r.renderTo(cv, { state: st, width: W, height: H, camera: cam }); });
+      withState(st, function () { r.renderTo(cv, { state: st, width: W, height: H, camera: cam }); });
+      t.eq(r._rot.stats.silKept, 0, 'offscreen full-detail renders always paint exactly');
+      r.invalidate();
+      t.eq(r._rot.caches().silKept + r._rot.caches().bodies, 0, 'invalidate() forgets them');
+    } finally {
+      r._rot.sim(false);
+      r.setYaw(0, { keepFocus: false });
+      r.setScene(prevScene);
+      r.stateOverride = null;
+    }
+  }, { tags: ['render'] });
+
+  T.suite('render: the 💥 marker joins the badge layout (never on a neighbour\'s HP pill)', function (t) {
+    const r = R();
+    const grid = makeGrid(7, 7, function (tl) { if (tl.x === 3 && tl.y === 3) tl.obj = { id: 'barrel_explosive', hp: 3, maxHp: 3, data: {} }; });
+    // units right behind the barrel: their HP widgets sit where the marker wants to be
+    const units = [makeUnit('bm_a', 'enemy', 2, 2), makeUnit('bm_b', 'enemy', 3, 2), makeUnit('bm_c', 'enemy', 2, 3), makeUnit('bm_h', 'hero', 5, 5)];
+    const st = makeState(grid, units);
+    const W = 640, H = 400;
+    [0, 30, 200].forEach(function (yaw) {
+      const cam = DD.Iso.withYaw(yaw, function () { const w = DD.Iso.toWorld(3, 3, 0); return { x: w.x, y: w.y - 30, zoom: 1.6 }; });
+      r.resetOverlay();
+      r.overlay.objTargets = [{ x: 3, y: 3 }];
+      const res = withState(st, function () { return r.renderTo(canvas(W, H), { state: st, width: W, height: H, camera: cam, yaw: yaw }); });
+      const b = res && res.booms && res.booms[0];
+      t.ok(!!b && b.x === 3 && b.y === 3, 'yaw ' + yaw + ': one marker, on the barrel');
+      const hits = (res.widgets || []).filter(function (w) { return b && w.x1 > b.x0 + 1 && w.x0 < b.x1 - 1 && w.y1 > b.y0 + 1 && w.y0 < b.y1 - 1; });
+      t.eq(hits.length, 0, 'yaw ' + yaw + ': the marker overlaps no HP widget (' + (hits.map(function (w) { return w.id; }).join(', ') || 'none') + ')');
+      // without the overlay field: no marker
+      r.resetOverlay();
+      const res2 = withState(st, function () { return r.renderTo(canvas(W, H), { state: st, width: W, height: H, camera: cam, yaw: yaw }); });
+      t.eq((res2.booms || []).length, 0, 'yaw ' + yaw + ': no marker without objTargets');
+    });
+    r.resetOverlay();
+  }, { tags: ['render'] });
+
+  // ---- rules run: moving through allies (pass tiles, ⇄ swaps, faded allies) and breaking objects (🔨, HP preview) ------
+  T.suite('render: rules run — pass tiles, ⇄ rings and swap arrows, faded allies, 🔨 markers and the HP preview follow the rotation', function (t) {
+    const r = R();
+    const grid = makeGrid(8, 8, function (tl) { if (tl.x === 5 && tl.y === 2) tl.obj = { id: 'crate', hp: 6, maxHp: 6, data: {} }; });
+    const mover = makeUnit('rr_m', 'hero', 2, 3), ally = makeUnit('rr_a', 'hero', 3, 3), far = makeUnit('rr_f', 'hero', 4, 3);
+    const st = makeState(grid, [mover, ally, far, makeUnit('rr_e', 'enemy', 7, 7)]);
+    const W = 560, H = 380;
+    const rand = Math.random;
+    const diffBox = function (a, b) {
+      let x0 = W, y0 = H, x1 = -1, y1 = -1;
+      for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+          const i = (y * W + x) * 4;
+          if (Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]) > 24) {
+            if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+          }
+        }
+      }
+      return x1 < 0 ? null : { x0: x0, y0: y0, x1: x1, y1: y1, cx: (x0 + x1) / 2, cy: (y0 + y1) / 2 };
+    };
+    const move = [];
+    for (let x = 0; x < 8; x++) for (let y = 1; y < 6; y++) if (!(x === 2 && y === 3) && !(x === 3 && y === 3) && !(x === 4 && y === 3)) move.push({ x: x, y: y });
+    try {
+      [0, 30, 200].forEach(function (yaw) {
+        const cam = DD.Iso.withYaw(yaw, function () { const w = DD.Iso.toWorld(3.5, 3, 0); return { x: w.x, y: w.y - 20, zoom: 1.5 }; });
+        const scr = function (tx, ty) { return DD.Iso.withYaw(yaw, function () { const w = DD.Iso.toWorld(tx, ty, 0); return { x: (w.x - cam.x) * cam.zoom + W / 2, y: (w.y - cam.y) * cam.zoom + H / 2 }; }); };
+        const shot = function (ov) {
+          let s = 7;
+          Math.random = function () { s = (s * 16807) % 2147483647; return s / 2147483647; };
+          try {
+            r.resetOverlay();
+            Object.assign(r.overlay, { selectedId: 'rr_m', moveTiles: move }, ov || {});
+            const cv = canvas(W, H);
+            const res = withState(st, function () { return r.renderTo(cv, { state: st, width: W, height: H, camera: cam, yaw: yaw }); });
+            return { px: cv.getContext('2d').getImageData(0, 0, W, H).data, res: res };
+          } finally { Math.random = rand; }
+        };
+        const base = shot(null);
+        // the new fields left empty / null: the same picture as an overlay that never heard of them
+        const empty = shot({ passTiles: [], swapTiles: [], swap: null, ghosts: null, breakTargets: [], objPreview: null });
+        t.eq(diffBox(base.px, empty.px), null, 'yaw ' + yaw + ': empty rules-run fields draw nothing');
+        // the far ally's tile as pass-through: the move region closes round it, nothing else changes
+        const pass = shot({ passTiles: [{ x: 4, y: 3 }] });
+        const pb = diffBox(base.px, pass.px), pf = scr(4, 3);
+        t.ok(pb && Math.abs(pb.cx - pf.x) <= 40 && Math.abs(pb.cy - pf.y) <= 26, 'yaw ' + yaw + ': the pass tile is drawn on the far ally\'s tile ' + JSON.stringify(pb) + ' vs ' + JSON.stringify(pf));
+        // the adjacent ally as a ⇄ end: a ring under it; hovering it: arrows between the two tiles
+        const ring = shot({ swapTiles: [{ x: 3, y: 3 }] });
+        t.eq(ring.res.swapRings, 1, 'yaw ' + yaw + ': one ⇄ ring');
+        t.eq(base.res.swapRings, 0, 'yaw ' + yaw + ': none without swapTiles');
+        const sw = shot({ swapTiles: [{ x: 3, y: 3 }], swap: { from: { x: 2, y: 3 }, to: { x: 3, y: 3 } } });
+        const sb = diffBox(ring.px, sw.px), sa = scr(2, 3), sz = scr(3, 3);
+        t.ok(sb && Math.abs(sb.cx - (sa.x + sz.x) / 2) <= 24 && sb.x1 - sb.x0 >= Math.abs(sz.x - sa.x) * 0.5, 'yaw ' + yaw + ': the swap arrows run between the two tiles ' + JSON.stringify(sb));
+        // faded allies (overlay.ghosts): drawn, counted, only that ally changes; a junk id or alpha is harmless
+        const gh = shot({ ghosts: { rr_a: 0.35, nobody: 0.2, rr_f: 'x' } });
+        t.eq(gh.res.ghosted, 2, 'yaw ' + yaw + ': the faded allies are counted (a junk alpha clamps, an unknown id is ignored)');
+        const gb = diffBox(base.px, shot({ ghosts: { rr_a: 0.35 } }).px), ga = scr(3, 3);
+        t.ok(gb && Math.abs(gb.cx - ga.x) <= 30 && gb.y1 <= ga.y + 30, 'yaw ' + yaw + ': only the faded ally changes ' + JSON.stringify(gb));
+        // 🔨 on the crate, and its HP bar with the hit when previewed
+        const brk = shot({ breakTargets: [{ x: 5, y: 2 }], targetTiles: [{ x: 5, y: 2 }] });
+        const bm = (brk.res.booms || [])[0], bc = scr(5, 2);
+        t.ok(bm && bm.kind === 'break' && bm.x === 5 && bm.y === 2 && Math.abs((bm.x0 + bm.x1) / 2 - bc.x) <= 4 && bm.y1 < bc.y, 'yaw ' + yaw + ': a 🔨 marker over the crate ' + JSON.stringify(bm));
+        const pv = shot({ breakTargets: [{ x: 5, y: 2 }], targetTiles: [{ x: 5, y: 2 }], hover: { x: 5, y: 2 }, objPreview: { x: 5, y: 2, dmg: 4, breaks: false } });
+        const nopv = shot({ breakTargets: [{ x: 5, y: 2 }], targetTiles: [{ x: 5, y: 2 }], hover: { x: 5, y: 2 } });
+        const vb = diffBox(nopv.px, pv.px);
+        t.ok(vb && Math.abs(vb.cx - bc.x) <= 16 && vb.y1 < bc.y && vb.x1 - vb.x0 < 60, 'yaw ' + yaw + ': the previewed hit shows the crate\'s HP bar (full HP otherwise has none) ' + JSON.stringify(vb));
+        // junk never throws
+        const junk = shot({ passTiles: [{ x: 99, y: -4 }, null], swapTiles: [{ x: 'a' }], swap: { from: { x: 2, y: 3 }, to: { x: 40, y: 40 } }, breakTargets: [{ x: -1, y: 0 }], objPreview: { x: 1, y: 1, dmg: 'lots' } });
+        t.ok(!!junk.res, 'yaw ' + yaw + ': junk fields render without throwing');
+        // [playtest combat-controls-1] a free hit that calls the swap off: a ✖ between the arrows (and nowhere else)
+        const swOk = shot({ swapTiles: [{ x: 3, y: 3 }], swap: { from: { x: 2, y: 3 }, to: { x: 3, y: 3 }, bad: true } });
+        const swNo = shot({ swapTiles: [{ x: 3, y: 3 }], swap: { from: { x: 2, y: 3 }, to: { x: 3, y: 3 }, bad: true, blocked: true } });
+        const xb = diffBox(swOk.px, swNo.px);
+        t.ok(xb && Math.abs(xb.cx - (sa.x + sz.x) / 2) <= 14 && Math.abs(xb.cy - (sa.y + sz.y) / 2) <= 22 && xb.x1 - xb.x0 <= 40,
+          'yaw ' + yaw + ': a called-off swap draws a ✖ between the two tiles ' + JSON.stringify(xb));
+      });
+    } finally {
+      Math.random = rand;
+      r.resetOverlay();
+    }
+  }, { tags: ['render'] });
+
+  T.suite('render: playtest bosses-objectives-2 — a wind-up badge\'s "?" follows DD.AI.describe (uncertain), not the bare Dazzled status', function (t) {
+    const r = R();
+    const AI = DD.AI;
+    if (!AI) { t.skip('no DD.AI'); return; }
+    const had = Object.prototype.hasOwnProperty.call(AI, 'describe'), old = AI.describe;
+    const mk = function (tag, statuses) {
+      const grid = makeGrid(8, 8);
+      const boss = makeUnit('bo2_' + tag, 'enemy', 5, 5, { order: 1, tier: 'boss', statuses: statuses || [],
+        intents: [{ skillId: 'test_none', anchor: 'ground', abs: { x: 2, y: 2 }, tiles: [{ x: 2, y: 2 }, { x: 3, y: 2 }], label: 'Audit', icon: '📋', dmg: 9, delay: 2 }] });
+      return makeState(grid, [makeUnit('bo2_h_' + tag, 'hero', 1, 1), boss]);
+    };
+    const badge = function (st) {
+      r.resetOverlay();
+      r.overlay.showIntents = true;
+      const res = withState(st, function () { return r.renderTo(canvas(420, 300), { state: st, width: 420, height: 300 }); });
+      return ((res && res.badges) || []).filter(function (b) { return b.label === 'Audit'; })[0] || null;
+    };
+    const dazzled = [{ id: 'dazzled', stacks: 1, turns: 1 }];
+    try {
+      AI.describe = function () { return { label: 'Audit', dmg: 9, uncertain: false }; };
+      const settled = badge(mk('a', dazzled));
+      t.ok(settled && settled.unknown === false, 'a Dazzled boss whose skew is already rolled (the tiles show it): no "?" ' + JSON.stringify(settled));
+      AI.describe = function () { return { label: 'Audit', dmg: 9, uncertain: true }; };
+      const open = badge(mk('b', null));
+      t.ok(open && open.unknown === true, 'describe says the landing is still unknown: "?" ' + JSON.stringify(open));
+      if (had) AI.describe = old; else delete AI.describe;
+      const fallback = badge(mk('c', dazzled));
+      t.ok(!!fallback, 'the real describe (or none) still draws the badge ' + JSON.stringify(fallback));
+    } finally {
+      if (had) AI.describe = old; else delete AI.describe;
+      r.resetOverlay();
+    }
+  }, { tags: ['render'] });
 })();

@@ -14,6 +14,16 @@
 (function () {
   'use strict';
   const DD = window.DD;
+  /**
+   * A range number in a desc as targeting resolves it for this user (range items such as the Yardstick of Reach, Dazzle,
+   * modifyRange hooks: what the card's Range pill says; playtest heroes-v1) via DD.Targeting.reach. No user: the number.
+   */
+  function reach(user, id, base) {
+    const d = DD.getSkill(id);
+    if (!user || !d || !DD.Targeting) return base;
+    if (typeof DD.Targeting.reach === 'function') return DD.Targeting.reach(d, null, user, base);
+    return Math.max(0, base + DD.Targeting.range(user, d, 1)[1] - DD.Targeting.range(null, d, 1)[1]);
+  }
 
   const PINK = '#ff3fa4', HOT = '#ff5fd2', GOLD = '#ffd23f', MINT = '#2fffa0', TEAR = '#7fc8ff', BLUE = '#8fb7ff';
   const ROAST_MAX = 3;      // Roasted stacks that trigger Emotional Damage
@@ -186,7 +196,12 @@
     id: 'syl_basic', name: 'Your Mom Joke', icon: '🤬', kind: 'attack', tags: ['ranged', 'psychic'],
     ap: 1, cooldown: 0, levels: [{ dmg: 5, range: 4 }],
     target: { type: 'unit', range: function (L) { return [1, L.range]; }, los: true, filter: 'enemy' },
-    desc: function (L) { return 'Deal ' + L.dmg + ' psychic damage to a foe up to ' + L.range + ' tiles away.'; },
+    // [playtest desc-sweep-7] with The Electric Lute it is lightning, and it electrifies the water under the target
+    desc: function (L, user) {
+      const lute = hasItem(user, 'syl_electric_lute');
+      return 'Deal ' + L.dmg + (lute ? ' lightning' : ' psychic') + ' damage to a foe up to ' + reach(user, 'syl_basic', L.range) + ' tiles away' +
+        (lute ? ', and electrify the water it stands in (everyone in that water is shocked, allies too; The Electric Lute).' : '.');
+    },
     flavor: 'Every monster has a mom. Every mom is fair game. Those are the rules.',
     execute: function (ctx) {
       const u = ctx.user, t = ctx.targetUnit;
@@ -203,8 +218,8 @@
     ap: 2, cooldown: 2,
     levels: [{ dmg: 4, range: 4 }, { dmg: 5, range: 4 }, { dmg: 6, range: 5 }],
     target: { type: 'unit', range: function (L) { return [1, L.range]; }, los: true, filter: 'enemy' },
-    desc: function (L) {
-      return 'Deal ' + L.dmg + ' psychic damage to a foe up to ' + L.range + ' tiles away and Charm it: on its next turn it fights ' +
+    desc: function (L, user) {
+      return 'Deal ' + L.dmg + ' psychic damage to a foe up to ' + reach(user, 'syl_heckle', L.range) + ' tiles away and Charm it: on its next turn it fights ' +
         'for your side.';
     },
     flavor: '"Did you hear what HE said about your mom?" He did not. It does not matter.',
@@ -245,8 +260,8 @@
     ap: 1, cooldown: function (L) { return L.cd; },
     levels: [{ gain: 1, cd: 2 }, { gain: 1, cd: 1 }, { gain: 2, cd: 1 }],
     target: { type: 'unit', range: [1, 5], los: false, filter: 'ally', canTarget: readyAlly },
-    desc: function (L) {
-      return 'An ally up to 5 tiles away gains ' + L.gain + ' AP on its next turn and is Empowered (its next damaging skill deals +50%).';
+    desc: function (L, user) {
+      return 'An ally up to ' + reach(user, 'syl_hype_man', 5) + ' tiles away gains ' + L.gain + ' AP on its next turn and is Empowered (its next damaging skill deals +50%).';
     },
     flavor: '"WHO\'S THE BEST? YOU\'RE THE BEST! NOW GO HIT IT!" — at a volume fairies should not reach.',
     execute: function (ctx) {
@@ -347,8 +362,8 @@
         return busy || (ctx.L && ctx.L.gain > 0) ? true : 'Its skills are ready by its next turn anyway.';
       },
     },
-    desc: function (L) {
-      return 'Reset every skill cooldown of an ally up to 5 tiles away' + (L.gain ? ' and it gains ' + L.gain + ' AP on its next turn' : '') +
+    desc: function (L, user) {
+      return 'Reset every skill cooldown of an ally up to ' + reach(user, 'syl_encore', 5) + ' tiles away' + (L.gain ? ' and it gains ' + L.gain + ' AP on its next turn' : '') +
         '. 2 uses per combat.';
     },
     flavor: '"ONE MORE! ONE MORE!" — the crowd, the band, and the DM, who has run out of encounters.',
@@ -380,8 +395,8 @@
         return p ? [p] : [];
       },
     },
-    desc: function (L) {
-      return 'Teleport an ally 2-' + L.range + ' tiles away to a free tile next to you. It gains ' + L.block + ' Block.';
+    desc: function (L, user) {
+      return 'Teleport an ally 2-' + reach(user, 'syl_fae_blink', L.range) + ' tiles away to a free tile next to you. It gains ' + L.block + ' Block.';
     },
     flavor: 'Fairy dust: 10% magic, 90% glitter, 100% impossible to get out of Marwyn\'s beard.',
     execute: function (ctx) {
@@ -424,8 +439,8 @@
     ap: 3, cooldown: 0, charges: 1,
     levels: [{ dmg: 15 }, { dmg: 18 }, { dmg: 22 }],
     target: { type: 'unit', range: [1, 4], los: false, filter: 'enemy' },
-    desc: function (L) {
-      return 'Once per combat: deal ' + L.dmg + ' damage to a foe up to 4 tiles away (no line of sight needed) and Stun it.';
+    desc: function (L, user) {
+      return 'Once per combat: deal ' + L.dmg + ' damage to a foe up to ' + reach(user, 'syl_mic_drop', 4) + ' tiles away (no line of sight needed) and Stun it.';
     },
     flavor: 'He says "I\'m done." He is never done. The mic weighs about as much as a goblin.',
     execute: function (ctx) {
@@ -626,6 +641,7 @@
         'Zarathor, stop posing in the torchlight. We\'re ON.',
         'Betty, spit out the map. We need that.',
       ],
+      swap: ['Swap, {ally}! It\'s choreography, darling.', '{ally}, the bit where we switch places. Yes, that bit. Go!'],
       move: [
         'Flying over your problems. Literally.',
         'Out of the way, kneecaps.',
@@ -677,10 +693,10 @@
       ally_down: [
         'Get UP! I can\'t carry you, I\'m four inches!',
         'Oh no. Anyway— no, wait, get UP!',
-        'Marwyn, MAGNIFICENT people don\'t nap mid-fight!',
+        'Marwyn, flex at them until they wake up!',
         'Who did that? I\'ll roast your whole family tree.',
         'That\'s it. Now I\'m mad. Madder. Maddest.',
-        'Basanos, up! Bite something, you big puppy!',
+        'Basanos, go bite whoever did that, you big puppy!',
       ],
       levelup: [
         'Level up! My insults have footnotes now.',

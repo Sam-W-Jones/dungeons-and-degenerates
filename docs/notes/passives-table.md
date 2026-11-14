@@ -264,6 +264,13 @@ Loaded Dice III + Hall Monitor III, the party screen with Hall Monitor / Loaded 
   Echo Chamber re-checks the target (a detonated barrel is gone); Dad Jokes / Wild Conduit see a barrel shot as a use
   with no foes.
 
+## Rules run (Nov 6) — breaking objects (CONTENT SWEEP, shared)
+
+User: "objects should be targetable to break them" (engine rule: `docs/notes/rules.md` "Rules run"). Rocky the Pet Rock is
+an instance of the core `rock` with 10 HP, so he would have become a target: `ROCKY` now carries **`targetable: false`**
+(he is the party's pet; blasts still chip him), and a relocated Rocky keeps it. Covered in "passive-table: common entries
+do exactly what their desc says" (nobody aims at Rocky, not even from next to him).
+
 ## History (pre-v2 passes, condensed)
 
 - **Author's balance pass (v1)**: AutoPlay pairs with enemies ×2.5 HP / ×3 damage; Cooldowns Are a Myth I measured −26
@@ -275,3 +282,30 @@ Loaded Dice III + Hall Monitor III, the party screen with Hall Monitor / Loaded 
   harness the v2 balance above reuses); Gravitational Ego's icon 🕳️ → 🪐.
 - **Phase 4**: fair previews (rolled hits preview "?"), the hooks this pass now uses (`preventDeath`, `modifyHeal`,
   `onAllyDowned`, `modifyMoveCost`...).
+
+## Playtest fixes (Nov 12)
+
+Confirmed playtest findings that live in passives.js / scars.js / wildmagic.js (fix:content):
+- **text-tone-24 (polish, fixed)**: the status is called "Weakened" everywhere: Cursed Predatory Loan ("Vulnerable and
+  Weakened"), Stage Fright ("Start each combat Weakened"), the Butterfingers surge ("becomes Weakened"). Scars use the
+  typographic minus like the rest of the UI ("−1 move.", "−4 max HP.", "−1 range…", "−1 AP…"). Hjalmar's Pickpocket
+  ("it is Weak") is in a deferred file (hjalmar.js).
+- **text-tone-11 (passives part, fixed)**: Quantum Pockets "finds an Antidote / an Energy Drink" (article by the name).
+- **text-tone-23 (polish, fixed)**: Lucky Socks' flavor drops "load-bearing" ("The luck has started to smell.").
+
+## Finish (Nov 14) — FF-2: Ultra Instinct is visible to the AI (FIX: CONTENT)
+
+`rp_ultra_instinct` zeroes the first enemy skill hit each round (`d.flat -= 1e6`) but declared no `estimateTaken`, so
+DD.AI.estimate predicted a kill on a 3-HP holder every round and bosses spent their one hit a round on him (both
+round-cap loops of the audit: the Rat King on seed 43220, the DM on 43358). It now has the pure query hook
+`estimateTaken(e, p)`: before his first hit of the round an enemy's estimate on the holder is 0, after it the full hit.
+`passive-table: every entry is well-formed` accepts the two estimate hooks (ARCHITECTURE §5.3); the per-passive check
+asserts the estimate before and after the first hit. Both seeds no longer reproduce on the current build (the engine's
+audit-3 fight-ending-kill work changes the same fights); 200 Rat King and 200 DM harness fights: 0 at the round cap.
+The chance-based negators (Cat Reflexes, Uno Reverse) stay invisible on purpose: the AI can't know the dice.
+
+## Review (finish, Nov 14) — REVIEWER
+
+- FF-2 re-checked: `estimateTaken` mirrors `modifyIncomingDamage` exactly (same `hitByFoe`, same "first hit this round"
+  test, pure). D4 swept every table Blessing at max level on an object hit (procs forced): none fires a rider on a crate
+  (the D4 probe `.tmp/wf14/rev/d4.js`).

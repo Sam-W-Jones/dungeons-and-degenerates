@@ -638,7 +638,7 @@
 
   WM.register({
     id: 'wm_butterfingers', name: 'Butterfingers', icon: '🧈', weight: 2, good: false, enemySafe: true,
-    text: 'The surger becomes Weak (−25% damage) for 2 turns.',
+    text: 'The surger becomes Weakened (−25% damage) for 2 turns.',
     quip: 'Their hands are now, inexplicably, made of butter.',
     apply: function (unit) { status(unit, 'weak', 2, 1, null); },
   });

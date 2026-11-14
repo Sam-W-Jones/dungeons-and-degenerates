@@ -19,7 +19,7 @@
   const ALL_SKILLS = ['bet_family_hammer', 'bet_goat'].concat(POOL);
   const ITEMS = ['bet_grandmas_mallet', 'bet_name_plate', 'bet_cowbell'];
   const BARK_KEYS = ['select', 'start', 'move', 'kill', 'hurt', 'lowhp', 'downed', 'revive', 'ally_down', 'levelup', 'victory', 'idle', 'signature'];
-  const EXTRA_BARKS = ['ram', 'toss', 'bleat', 'eat', 'opportunity', 'pasture'];
+  const EXTRA_BARKS = ['ram', 'toss', 'bleat', 'eat', 'opportunity', 'pasture', 'swap'];   // swap: finish D7
 
   // ---- helpers -----------------------------------------------------------------------------------------
   function A() { return DD.Act; }
@@ -369,7 +369,7 @@
       const sl = give(b, 'bet_ram', lv);
       const g = at(gx, 4);
       t.ok(valid(b, sl, gx, 4) && !valid(b, sl, gx + 1, 4) && !valid(b, sl, gx, 5), 'L' + lv + ': straight line, range ' + L.range);
-      t.eq(DD.skillDesc(DD.getSkill('bet_ram'), lv, b), 'Charge up to ' + L.range + ' tiles in a straight line. The first foe in the way takes ' + L.dmg +
+      t.eq(DD.skillDesc(DD.getSkill('bet_ram'), lv, b), 'Charge up to ' + L.range + ' tiles in a straight line, through allies. The first foe in the way takes ' + L.dmg +
         ' damage and is pushed ' + L.push + ' tiles.', 'L' + lv + ': desc');
       use(t, b, sl, gx, 4, 'L' + lv + ' ram');
       t.eq(pos(b), (gx - 1) + ',4', 'L' + lv + ': charged ' + (L.range - 1) + ' tiles up to the foe');
@@ -389,7 +389,14 @@
     b = B();
     sl = give(b, 'bet_ram', 1);
     use(t, b, sl, 4, 4, 'ram through an ally');
-    t.ok(pos(b) === '2,4' && at(4, 4).hp === 14 && pos(hero('test_knight')) === '3,4', 'stopped before the ally, nobody hurt');
+    t.ok(pos(b) === '2,4' && at(4, 4).hp === 14 && pos(hero('test_knight')) === '3,4', 'an ally right in front of the foe: no room to ram, he stops before the ally');
+    // playtest combat-controls-5: he runs THROUGH an ally to ram the foe behind it (never ends on the ally)
+    fight({ heroes: [{ x: 1, y: 4 }, { id: 'test_knight', x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 4, y: 4 }] });
+    b = B();
+    sl = give(b, 'bet_ram', 1);
+    t.ok(valid(b, sl, 4, 4), 'the foe behind an ally is a valid charge');
+    use(t, b, sl, 4, 4, 'ram through an ally');
+    t.ok(pos(b) === '3,4' && at(6, 4) && at(6, 4).hp === 14 - 6 && pos(hero('test_knight')) === '2,4', 'ran through the knight, rammed the grunt 2 tiles back');
     fight({ heroes: [{ x: 3, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 7 }], objects: [{ x: 3, y: 6, id: 'crate' }] });
     b = B();
     sl = give(b, 'bet_ram', 1);
@@ -1466,5 +1473,23 @@
       t.eq(b.ap, 3 - DD.Combat.costOf(b, DD.getSkill(id), 1).ap, id + ': its AP is paid');
       t.ok(sl.cd > 0, id + ': and its cooldown');
     });
+  });
+
+  // ---- rules run (user: "objects should be targetable to break them") ------------------------------------------------
+  T.suite('hero_betty: rules run — Butt Out breaks a barrel (and he eats it); the hammer leaves alone what the party may not aim at', function (t) {
+    // any of his attacks can now break a plain object: Butt Out (6) on a barrel (5 HP) breaks it, Eats Anything heals 4
+    fight({ heroes: [{ x: 2, y: 4, hp: 10 }], objects: [{ x: 3, y: 4, id: 'barrel' }], enemies: [{ id: 'test_grunt', x: 8, y: 8 }] });
+    const b = B(), sl = give(b, 'bet_headbutt', 1);
+    const q = DD.Targeting.validTargets(b, sl).filter(function (e) { return e.x === 3 && e.y === 4; })[0];
+    t.ok(!!q && q.obj === 'barrel' && !q.detonates && q.dmg === 6, 'Butt Out: a plain barrel is a breakable target for 6 (' + JSON.stringify(q) + ')');
+    use(t, b, sl, 3, 4, 'Butt Out at a barrel');
+    t.ok(!tile(3, 4).obj && b.hp === 14, 'the barrel breaks and he eats it: 10 → 14 (' + b.hp + ')');
+    // the Family Hammer respects targetable: false and the protect objective, like every aimed attack
+    fight({ heroes: [{ x: 2, y: 4 }], objects: [{ x: 3, y: 4, id: 'keg' }, { x: 2, y: 3, id: 'crate', targetable: false }, { x: 1, y: 4, id: 'crate' }],
+      enemies: [{ id: 'test_grunt', x: 8, y: 8 }], objective: { type: 'protect', objId: 'keg' }, encounter: null });
+    const b2 = B();
+    t.ok(!valid(b2, b2.basic, 3, 4), 'the hammer won\'t swing at the keg the party protects');
+    t.ok(!valid(b2, b2.basic, 2, 3), 'nor at an object that says targetable: false');
+    t.ok(valid(b2, b2.basic, 1, 4), 'a plain crate is fair game');
   });
 })();

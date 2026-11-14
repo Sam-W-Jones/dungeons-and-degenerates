@@ -3,8 +3,8 @@
  * and her passive Blood Price makes an adjacent Bleeding foe pay those costs instead. Bleed is her signature status:
  * her own payoffs (Juice Box, Blood Puppet Show) and every ally who shoves a Bleeding foe cash it in. Her melee basic
  * is also her attack of opportunity (a foe walking off her gets shivved); Goblin Mode and Vein Glory teleport, so they
- * never provoke. Registers the hero, 12 skills (basic, signature, 10 pool skills), the Blood Clone summon (+2 summon
- * skills) and 3 hero items.
+ * never provoke. Juice Box is her sustain (D9: heals all the HP it drains). Registers the hero, 12 skills (basic,
+ * signature, 10 pool skills), the Blood Clone summon (+2 summon skills), 3 hero items and a loading tip.
  */
 (function () {
   'use strict';
@@ -15,12 +15,20 @@
   const DONOR_RANGE = 1;   // Blood Price: an adjacent Bleeding foe pays
   const CARD_RANGE = 3;    // ...up to 3 tiles away with the Organ Donor Card
   const SLURP = 3;         // Bloodsucker's Bib: HP per blood puddle slurped
+  // Juice Box's reach (sustain refit, spec §9 fallback: 2 -> 3; she sat at 0.47x the median run-win share without it)
+  const JUICE_RANGE = 3;
 
   // ---- helpers (runtime only) -----------------------------------------------------------------------
   function A() { return DD.Act; }
   function active(u) { return !!u && !u.dead && !u.downed; }
   function hasItem(u, id) { return !!u && Array.isArray(u.items) && u.items.indexOf(id) >= 0; }
   function bleedStacks(u) { const st = DD.Act.getStatus(u, 'bleed'); return st ? st.stacks : 0; }
+  /** A skill's target reach for this unit: the base plus its range items / Dazzle (DD.Targeting.reach; playtest heroes-v1). */
+  function reach(user, id, L, base) {
+    const d = DD.getSkill(id);
+    if (!user || !d || !DD.Targeting || typeof DD.Targeting.reach !== 'function') return base;
+    return DD.Targeting.reach(d, L, user, base);
+  }
 
   /** Bleed stacks Sparrow applies (the Shiv of Sharing adds 1). Works with user === null for descriptions. */
   function bleedN(n, user) { return n + (hasItem(user, 'spa_shiv_of_sharing') ? 1 : 0); }
@@ -176,7 +184,7 @@
     levels: [{ dmg: 6, bleed: 1 }, { dmg: 8, bleed: 1 }, { dmg: 9, bleed: 2 }],
     target: { type: 'unit', range: [1, 5], filter: 'enemy', los: true },
     // "Lob blood", not "your own blood": with a donor in reach it is someone else's (Blood Price)
-    desc: function (L, user) { return 'Lob blood at a foe within 5: deal ' + L.dmg + ' damage and Bleed ' + bleedN(L.bleed, user) + '.'; },
+    desc: function (L, user) { return 'Lob blood at a foe within ' + reach(user, 'spa_hemoglob', L, 5) + ': deal ' + L.dmg + ' damage and Bleed ' + bleedN(L.bleed, user) + '.'; },
     flavor: 'It\'s not a phase. It\'s a projectile.',
     execute: function (ctx) {
       const u = foeOf(ctx);
@@ -190,20 +198,37 @@
   skill({
     id: 'spa_juicebox', name: 'Juice Box', icon: '🧃', kind: 'spell', tags: ['blood', 'drain', 'heal'], ap: 2, cooldown: 2,
     levels: [{ dmg: 5, per: 3 }, { dmg: 7, per: 3 }, { dmg: 8, per: 4 }],
-    target: { type: 'unit', range: [1, 2], filter: 'enemy', los: true },
-    desc: function (L) {
-      return 'Drain a foe within 2: deal ' + L.dmg + ' damage +' + L.per + ' per Bleed on it, and heal half the damage dealt (rounded up).';
+    target: { type: 'unit', range: [1, JUICE_RANGE], filter: 'enemy', los: true },
+    desc: function (L, user) {
+      return 'Drain a foe within ' + reach(user, 'spa_juicebox', L, JUICE_RANGE) + ': deal ' + L.dmg + ' damage +' + L.per + ' per Bleed on it, and heal the damage dealt.';
     },
     flavor: 'Fruit punch flavor. The fruit is you.',
-    aiScore: function (ctx) { return ctx.targetUnit ? bleedStacks(ctx.targetUnit) : 0; },
+    /**
+     * Bleed on the target, plus (quick pass only) the self-heal: AutoPlay's quick pass credits L.heal to friends in the
+     * area, never a drain aimed at a foe. The exact pass (ctx.autoplay) dry-runs the real heal, so it only gets the Bleed.
+     */
+    aiScore: function (ctx) {
+      const t = ctx.targetUnit, u = ctx.user;
+      if (!t) return 0;
+      const stacks = bleedStacks(t);
+      if (ctx.autoplay || !u || !ctx.L) return stacks;
+      const miss = u.maxHp - u.hp;
+      if (!(miss > 0)) return stacks;
+      const est = DD.AI.estimate(u, t, ctx.L.dmg + ctx.L.per * stacks, null);
+      return stacks + Math.min(est, miss) * (miss > u.maxHp / 2 ? 1.5 : 0.8);
+    },
     execute: function (ctx) {
       const user = ctx.user, u = foeOf(ctx), L = ctx.L;
       if (!u) return;
       const stacks = bleedStacks(u);
       DD.FX.beam(u, user, { color: BLOOD, width: 2 });
       DD.FX.particles(u, { kind: 'blood', count: 6 + stacks * 3 });
+      // dealt = the HP the foe really lost (no overkill, nothing Block soaked up): she drinks all of it
       const dealt = A().damage(user, u, L.dmg + L.per * stacks, { tags: ['blood', 'drain'] });
-      if (dealt > 0 && active(user)) A().heal(user, user, Math.ceil(dealt / 2));
+      if (dealt > 0 && active(user)) {
+        A().heal(user, user, dealt);
+        DD.FX.text(user, 'Slurrrp!', { color: BLOOD, size: 15 });
+      }
     },
   });
 
@@ -212,7 +237,7 @@
     levels: [{ dmg: 4, bleed: 2 }, { dmg: 5, bleed: 2 }, { dmg: 6, bleed: 3 }],
     target: { type: 'tile', range: [1, 4], filter: 'any', los: true }, area: { shape: 'circle', size: 1 },
     desc: function (L, user) {
-      return 'Blood confetti on a tile within 4: every foe in radius 1 takes ' + L.dmg + ' damage and gains Bleed ' + bleedN(L.bleed, user) + '.';
+      return 'Blood confetti on a tile within ' + reach(user, 'spa_papercuts', L, 4) + ': every foe in radius 1 takes ' + L.dmg + ' damage and gains Bleed ' + bleedN(L.bleed, user) + '.';
     },
     flavor: 'She counted. It\'s exactly a thousand. Goblins have a lot of free time.',
     execute: function (ctx) {
@@ -272,8 +297,8 @@
     id: 'spa_goblinmode', name: 'Goblin Mode', icon: '👺', kind: 'move', tags: ['move', 'stealth'], ap: 1, cooldown: 3,
     levels: [{ r: 4 }, { r: 5 }, { r: 6 }],
     target: { type: 'tile', range: function (L) { return [1, L.r]; }, filter: 'empty', los: false },
-    desc: function (L) {
-      return 'Teleport to an empty tile within ' + L.r + ' and turn Stealthed until the end of your next turn (enemies ignore you).';
+    desc: function (L, user) {
+      return 'Teleport to an empty tile within ' + reach(user, 'spa_goblinmode', L, L.r) + ' and turn Stealthed until the end of your next turn (enemies ignore you).';
     },
     flavor: 'Unhinged. Feral. Gone. Classic goblin.',
     aiScore: function (ctx) { return ctx.user && ctx.user.hp < ctx.user.maxHp * 0.5 ? 3 : 0; },
@@ -312,8 +337,8 @@
     id: 'spa_twin', name: 'Evil Twin', icon: '👥', kind: 'summon', tags: ['summon', 'taunt', 'blood'], ap: 2, hpCost: 4, cooldown: 1, charges: 2,
     levels: [{ hp: 8, r: 1 }, { hp: 11, r: 1 }, { hp: 14, r: 2 }],
     target: { type: 'tile', range: [1, 3], filter: 'empty', los: false },
-    desc: function (L) {
-      return 'Summon a Blood Clone (' + L.hp + ' HP) within 3; foes ' + (L.r > 1 ? 'within ' + L.r + ' tiles of' : 'next to') +
+    desc: function (L, user) {
+      return 'Summon a Blood Clone (' + L.hp + ' HP) within ' + reach(user, 'spa_twin', L, 3) + '; foes ' + (L.r > 1 ? 'within ' + L.r + ' tiles of' : 'next to') +
         ' it are Taunted. 2 per fight.';
     },
     flavor: 'Same face, same knives, worse attitude. Somehow.',
@@ -335,7 +360,7 @@
     id: 'spa_blooddrive', name: 'Blood Drive', icon: '💉', kind: 'buff', tags: ['heal', 'buff', 'blood'], ap: 1, hpCost: 3, cooldown: 2,
     levels: [{ heal: 4 }, { heal: 6 }, { heal: 8 }],
     target: { type: 'unit', range: [1, 4], filter: 'ally', los: false },
-    desc: function (L) { return 'An ally within 4 heals ' + L.heal + ' HP and is Empowered (its next damaging skill deals +50%).'; },
+    desc: function (L, user) { return 'An ally within ' + reach(user, 'spa_blooddrive', L, 4) + ' heals ' + L.heal + ' HP and is Empowered (its next damaging skill deals +50%).'; },
     flavor: 'Free cookie with every pint. The cookie is also blood.',
     aiScore: function (ctx) { return ctx.targetUnit && !A().hasStatus(ctx.targetUnit, 'empowered') ? 3 : 0; },
     execute: function (ctx) {
@@ -354,11 +379,11 @@
     levels: [{ dmg: 15 }, { dmg: 19 }, { dmg: 22 }],
     target: {
       type: 'unit', range: [1, 3], filter: 'enemy', los: true,
-      // never at an explosive barrel: the dart is the point (and gutting a barrel point-blank is a 22-damage selfie)
+      // never at an object: the dart is the point (and gutting a barrel point-blank is a 22-damage selfie)
       objects: false,
       canTarget: function (ctx) { return ctx.targetUnit && landingSpot(ctx.user, ctx.targetUnit) ? true : 'No room to land next to it.'; },
     },
-    desc: function (L) { return 'Dart next to a foe within 3 and gut it for ' + L.dmg + ' damage.'; },
+    desc: function (L, user) { return 'Dart next to a foe within ' + reach(user, 'spa_veinglory', L, 3) + ' and gut it for ' + L.dmg + ' damage.'; },
     flavor: 'Glory to the veins! Specifically, theirs.',
     execute: function (ctx) {
       const u = ctx.user, f = foeOf(ctx);
@@ -568,6 +593,7 @@
         'Roll for initiative? I roll for arteries.',
         'Bleed for me. Or I bleed for you. Either way: bleeding.',
       ],
+      swap: ['Switcheroo, {ally}. Don\'t bleed on my spot.', 'Trade you, {ally}. My old spot has a lovely puddle.'],
       move: [
         'Scurry scurry.',
         'Moving through the shadows. Mostly shadows.',
@@ -601,7 +627,7 @@
         'Pebbles, sit on my wound. Cauterize it. Good boy.',
       ],
       downed: [
-        'Tell my blood... I loved it...',
+        'Return my blood... to sender...',
         'Everything\'s going dark. Finally. It suits me.',
         'Not dead. Just... resting my veins.',
         'Remember me as I was: edgy.',
@@ -660,4 +686,9 @@
       ],
     },
   });
+
+  // ---- loading-screen tips -------------------------------------------------------------------------------
+  DD.registerNarration('tips', [
+    'Juice Box heals Sparrow for every point it drains. Bleed it first: every Bleed on the foe makes the box bigger.',
+  ]);
 })();

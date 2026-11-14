@@ -111,9 +111,32 @@
     if (typeof surface === 'string') sd = DD.getSurface(surface);
     else if (surface && surface.surface !== undefined && surface.x !== undefined) sd = surface.surface ? DD.getSurface(surface.surface.id) : null;
     // [v2 review] an instance ({ id, turns, data }) carries no `airborne`: read its def
-    else if (surface && surface.id && surface.airborne === undefined) sd = DD.getSurface(surface.id) || surface;
-    if (sd && sd.airborne) return true;
+    else if (surface && surface.id && surface.airborne === undefined && surface.cloud === undefined) sd = DD.getSurface(surface.id) || surface;
+    if (isCloud(sd)) return true;
     return !isFlying(unit);
+  };
+  /**
+   * [engine requests, hero-kiri] A CLOUD surface (def, id or instance): `cloud: true` or the older `airborne: true` (the
+   * same flag; js/data/terrain.js gives every cloud both at load). Clouds touch flyers, hang over pits, lava and deep
+   * water, and stay when the floor under them changes.
+   */
+  function isCloud(sd) {
+    if (!sd) return false;
+    if (typeof sd === 'string') sd = DD.getSurface(sd);
+    else if (sd.cloud === undefined && sd.airborne === undefined && sd.id) sd = DD.getSurface(sd.id) || sd;
+    return !!(sd && (sd.cloud || sd.airborne));
+  }
+  Grid.isCloud = isCloud;
+  /**
+   * LOOT (lead's call, v2): an object flagged `loot` (def or instance: gold piles, a dragon's hoard) is picked up by
+   * whoever enters its tile, flyers included — picking up is not a floor effect. Everything else on the floor still
+   * ignores flyers.
+   */
+  Grid.isLoot = function (obj) {
+    if (!obj) return false;
+    if (obj.loot !== undefined) return !!obj.loot;
+    const od = DD.getObject(obj.id);
+    return !!(od && od.loot);
   };
 
   Grid.isPit = function (x, y) { const t = Grid.tile(x, y); return !!t && !!Grid.terrain(t).pit; };
@@ -231,7 +254,7 @@
   function surfaceHazard(t, unit) {
     if (!t.surface) return null;
     const sd = DD.getSurface(t.surface.id);
-    if (!sd || !sd.hazard || (!sd.airborne && isFlying(unit))) return null;
+    if (!sd || !sd.hazard || (!isCloud(sd) && isFlying(unit))) return null;
     return flaggedFor(sd, null, unit, t) ? sd.id : null;
   }
   function terrainHazard(t, unit) {
@@ -257,6 +280,40 @@
   };
   /** The tile's surface is a hazard for this unit (per unit, as hazardAt): its id or null. */
   Grid.surfaceHazard = function (x, y, unit) { const t = Grid.tile(x, y); return t ? surfaceHazard(t, unit) : null; };
+
+  /**
+   * Playtest fix (combat-controls-2): a floor feature that SNAGS a walker without hurting it: `stops` (entering ends the
+   * walk: a web roots) or `hinders` (a nuisance: Cheeto Dust slows), each true or (unit, tile) => bool on a surface,
+   * terrain or object def / instance. Per unit like hazardAt: flyers feel only clouds; a unit immune to the def's
+   * `snagStatus` (default 'root' for stops, 'slow' for hinders) shrugs it off. { id, name, stops } or null (a stop wins).
+   */
+  function snagOf(src, inst, unit, tile) {
+    if (!src && !inst) return null;
+    const pick = function (k) { return inst && inst[k] !== undefined ? inst[k] : src ? src[k] : undefined; };
+    let stops = pick('stops'), hinders = pick('hinders');
+    stops = !!stops && hazardFlag(stops, src || inst, unit, tile);
+    hinders = !stops && !!hinders && hazardFlag(hinders, src || inst, unit, tile);
+    if (!stops && !hinders) return null;
+    const st = pick('snagStatus') || (stops ? 'root' : 'slow');
+    if (unit && statusProof(unit, st)) return null;
+    return { id: (src || inst).id, name: (src && src.name) || (inst && inst.name) || (src || inst).id, stops: stops };
+  }
+  Grid.snagAt = function (x, y, unit) {
+    const t = Grid.tile(x, y);
+    if (!t) return null;
+    const fly = isFlying(unit);
+    let best = null;
+    function take(sn) { if (sn && (!best || (sn.stops && !best.stops))) best = sn; }
+    if (t.surface) {
+      const sd = DD.getSurface(t.surface.id);
+      if (sd && (isCloud(sd) || !fly)) take(snagOf(sd, null, unit, t));
+    }
+    if (!fly) {
+      take(snagOf(Grid.terrain(t), null, unit, t));
+      if (t.obj && !objBlocksMove(t.obj)) take(snagOf(DD.getObject(t.obj.id), t.obj, unit, t));
+    }
+    return best;
+  };
 
   function hazardNumbers(src, inst, unit, tile) {
     if (!flaggedFor(src, inst, unit, tile)) return null;
@@ -286,7 +343,7 @@
     }
     if (t.surface) {
       const sd = DD.getSurface(t.surface.id);
-      if (sd && (!fly || sd.airborne)) add(hazardNumbers(sd, null, unit, t), sd.id);
+      if (sd && (!fly || isCloud(sd))) add(hazardNumbers(sd, null, unit, t), sd.id);
     }
     if (fly) return out;
     const td = Grid.terrain(t);
@@ -360,6 +417,8 @@
     const prev = new Int32Array(n).fill(-1);
     const hzCount = new Int32Array(n);
     const hzName = new Array(n);
+    const stopAt = new Int32Array(n).fill(-1), hinderAt = new Int32Array(n).fill(-1);
+    const snags = snagCache(unit, n, w);
     const done = new Uint8Array(n);
     const occ = new Array(n);
     const s = state();
@@ -389,20 +448,38 @@
         if (!Grid.isWalkable(nx, ny, unit)) continue;
         if (!Grid.canStep(unit, { x: x, y: y }, { x: nx, y: ny })) continue;
         const o = occ[j];
-        if (o && !ignoreUnits && Grid.hostile(unit, o)) continue;
+        if (o && !ignoreUnits && Grid.hostile(unit, o) && !(opts.passDowned && o.downed)) continue;
         const c = cost[i] + Grid.stepCost(unit, { x: x, y: y }, { x: nx, y: ny });
         if (c > maxCost) continue;
         const hz = Grid.hazardAt(nx, ny, unit);
-        const hc = hzCount[i] + (hz ? 1 : 0);
+        const sn = snags(j);
+        const hc = hzCount[i] + (hz ? 1 : 0) + (sn ? 1 : 0);
         const p = c * 1000 + hc;
         if (p < prio[j]) {
           prio[j] = p; cost[j] = c; prev[j] = i; hzCount[j] = hc;
           hzName[j] = hzName[i] || hz || null;
+          stopAt[j] = stopAt[i] >= 0 ? stopAt[i] : sn && sn.stops ? j : -1;
+          hinderAt[j] = hinderAt[i] >= 0 ? hinderAt[i] : sn && !sn.stops ? j : -1;
           heap.push(j, p);
         }
       }
     }
-    return { cost: cost, prev: prev, hzName: hzName, w: w, occ: occ, startIdx: startIdx, done: done };
+    return { cost: cost, prev: prev, hzName: hzName, stopAt: stopAt, hinderAt: hinderAt, snags: snags, w: w, occ: occ, startIdx: startIdx, done: done };
+  }
+  /** Grid.snagAt per tile index for one search (each tile looked up once). */
+  function snagCache(unit, n, w) {
+    const memo = new Array(n);
+    return function (i) {
+      const k = i % n;
+      if (memo[k] === undefined) memo[k] = Grid.snagAt(k % w, (k / w) | 0, unit);
+      return memo[k];
+    };
+  }
+  /** The snag at a tile index of a search, as a reachable entry reports it: { x, y, id, name } or null. */
+  function snagEntry(res, si) {
+    if (si < 0) return null;
+    const k = si % (res.n || Infinity), sn = res.snags(k);
+    return sn ? { x: k % res.w, y: (k / res.w) | 0, id: sn.id, name: sn.name } : null;
   }
 
   function buildPath(res, idx) {
@@ -453,6 +530,8 @@
     const prev = new Int32Array(N).fill(-1);
     const hzCount = new Int32Array(N);
     const hzName = new Array(N);
+    const stopAt = new Int32Array(N).fill(-1), hinderAt = new Int32Array(N).fill(-1);
+    const snags = snagCache(unit, n, w);
     const done = new Uint8Array(N);
     const occ = new Array(n);
     const s = state();
@@ -482,15 +561,18 @@
         if (!Grid.isWalkable(nx, ny, unit)) continue;
         if (!Grid.canStep(unit, { x: x, y: y }, { x: nx, y: ny })) continue;
         const o = occ[j];
-        if (o && Grid.hostile(unit, o)) continue;
+        if (o && Grid.hostile(unit, o) && !(opts.passDowned && o.downed)) continue;
         const c = cost[si] + Grid.stepCost(unit, { x: x, y: y }, { x: nx, y: ny });
         if (c > maxCost) continue;
         const hz = Grid.hazardAt(nx, ny, unit);
-        const hc = hzCount[si] + (hz ? 1 : 0);
+        const sn = snags(j);
+        const hc = hzCount[si] + (hz ? 1 : 0) + (sn ? 1 : 0);
         const p = c * 1000 + hc;
         if (p < prio[sj]) {
           prio[sj] = p; cost[sj] = c; prev[sj] = si; hzCount[sj] = hc;
           hzName[sj] = hzName[si] || hz || null;
+          stopAt[sj] = stopAt[si] >= 0 ? stopAt[si] : sn && sn.stops ? sj : -1;
+          hinderAt[sj] = hinderAt[si] >= 0 ? hinderAt[si] : sn && !sn.stops ? sj : -1;
           heap.push(sj, p);
         }
       }
@@ -522,7 +604,8 @@
       }
       best[i] = b;
     }
-    return { n: n, cost: cost, prev: prev, hzName: hzName, w: w, occ: occ, startIdx: startIdx, best: best, zl: zl };
+    return { n: n, cost: cost, prev: prev, hzName: hzName, stopAt: stopAt, hinderAt: hinderAt, snags: snags, w: w, occ: occ, startIdx: startIdx,
+      best: best, zl: zl };
   }
   /** Distinct attackers along the stored path to state si (every tile it leaves: the start and the steps before si). */
   function exactProvokes(prev, si, n, zl) {
@@ -549,6 +632,8 @@
         const hz = Grid.hazardDamage(x, y, unit);
         harm += Math.max(hz ? hz.enter : 0, 2);
       }
+      // a web (the walk ends there) weighs like a solid hit; Cheeto Dust like a small one
+      if (k < tiles.length - 1) { const sn = Grid.snagAt(x, y, unit); if (sn) harm += sn.stops ? 5 : 2; }
       const list = k > 0 ? zl[i] : null;   // the destination is not left
       if (!list) continue;
       for (let a = 0; a < list.length; a++) {
@@ -575,12 +660,16 @@
   }
 
   /**
-   * Tiles a unit can move to within maxCost: Map<"x,y", { x, y, cost, path, hazard, edge }>.
+   * Tiles a unit can move to within maxCost: Map<"x,y", { x, y, cost, path, hazard, edge, stop, hinder }>.
    * Passes through friends (not foes), never ends on a unit, excludes the start tile.
    * hazard = first damaging hazard id along the path (incl. destination) or null; edge = destination borders
-   * a pit / deep water / lava. opts: ignoreUnits, from {x,y}, includeOccupied (report occupied tiles too),
+   * a pit / deep water / lava. Playtest fix (combat-controls-2): equal-cost paths also avoid SNAGS (Grid.snagAt: a web
+   * roots and ends the walk, Cheeto Dust slows); stop = the first tile on the path (incl. the destination) whose floor
+   * ends the walk { x, y, id, name } or null (before the destination: the walk ends THERE), hinder = the first
+   * hindering one, the same shape. opts: ignoreUnits, from {x,y}, includeOccupied (report occupied tiles too),
    * aoo (a MOVE action: each path provokes as few attacks of opportunity as possible within maxCost, and entries get
-   * `provokes: [unitIds]` — who would strike on the way, in order; see DD.Act.opportunityOf).
+   * `provokes: [unitIds]` — who would strike on the way, in order; see DD.Act.opportunityOf), passDowned (the bodies of
+   * downed foes can be stepped over, never ended on: the AI's boxed-in fallback).
    */
   Grid.reachable = function (unit, maxCost, opts) {
     opts = opts || {};
@@ -599,7 +688,7 @@
         const x = i % w, y = (i / w) | 0;
         const path = buildPath(res, si);
         out.set(x + ',' + y, { x: x, y: y, cost: res.cost[si], path: path, hazard: res.hzName[si] || null, edge: Grid.isEdge(x, y, unit),
-          provokes: provokesOf(zl, res.startIdx, path, w) });
+          provokes: provokesOf(zl, res.startIdx, path, w), stop: snagEntry(res, res.stopAt[si]), hinder: snagEntry(res, res.hinderAt[si]) });
       }
       return out;
     }
@@ -610,7 +699,8 @@
       if (i === res.startIdx || res.cost[i] === Infinity) continue;
       if (res.occ[i] && !opts.includeOccupied && !opts.ignoreUnits) continue;
       const x = i % w, y = (i / w) | 0;
-      const e = { x: x, y: y, cost: res.cost[i], path: buildPath(res, i), hazard: res.hzName[i] || null, edge: Grid.isEdge(x, y, unit) };
+      const e = { x: x, y: y, cost: res.cost[i], path: buildPath(res, i), hazard: res.hzName[i] || null, edge: Grid.isEdge(x, y, unit),
+        stop: snagEntry(res, res.stopAt[i]), hinder: snagEntry(res, res.hinderAt[i]) };
       if (opts.aoo) e.provokes = [];
       out.set(x + ',' + y, e);
     }
@@ -619,7 +709,7 @@
 
   /**
    * Cheapest path to (x, y) excluding the start, or null. opts: maxCost, ignoreUnits, allowOccupied (end on a unit),
-   * aoo (the path provoking the fewest attacks of opportunity within maxCost, then the cheapest).
+   * aoo (the path provoking the fewest attacks of opportunity within maxCost, then the cheapest), passDowned (as reachable).
    */
   Grid.path = function (unit, x, y, opts) {
     opts = opts || {};
@@ -771,10 +861,18 @@
         break;
       }
       case 'cone': {
+        // [engine requests] walls stop a cone like a line: a tile is in it when the apex sees it (Grid.los) and it is no
+        // block itself (a wall, a sight-blocking object, a cliff 2+ above the apex) — no breath around corners
         const p = perp(d);
+        const t0 = Grid.tile(apex.x, apex.y);
+        const baseH = t0 ? t0.h || 0 : 0;
         for (let k = 1; k <= size; k++) {
           const cx = apex.x + d.x * k, cy = apex.y + d.y * k;
-          for (let j = -(k - 1); j <= k - 1; j++) add(cx + p.x * j, cy + p.y * j);
+          for (let j = -(k - 1); j <= k - 1; j++) {
+            const x = cx + p.x * j, y = cy + p.y * j;
+            if (!Grid.inBounds(x, y) || tallBlock(x, y, baseH) || !Grid.los(apex, { x: x, y: y })) continue;
+            add(x, y);
+          }
         }
         break;
       }

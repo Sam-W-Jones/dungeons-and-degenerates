@@ -126,13 +126,13 @@ Not in my files (Requests): threat shading is nearly invisible on warm floors; l
 
 ## Requests
 - **RENDER-WORLD** (`js/render/renderer.js`):
-  - Threat shading is nearly invisible on warm floors (Grimble's wood + red carpet, `.tmp/uiv2/shots/c_boss_threat.png`):
+  - **DONE (polish, Nov 5: dot texture + stronger wash + dark-backed outline, render-world.md).** Threat shading is nearly invisible on warm floors (Grimble's wood + red carpet, `.tmp/uiv2/shots/c_boss_threat.png`):
     `threatFill` uses `rgba(255,96,36, 0.13 + 0.3k)` + an orange outline. Suggest a higher floor (≈0.22 + 0.4k), a dark
     contrasting outline or a light diagonal hatch on every threatened tile, so "can they reach me?" reads on any floor.
   - Optional: a dedicated look for a provoking walk (e.g. `overlay.pathProvokes: [{ x, y, unitId }]` → crossed swords
     on the tiles where a hit lands) and a mark on provoking move tiles (`moveTiles[i].provokes`) — the HUD would fill
     them from `Combat.reachable` entries.
-  - The title campfire's `HERO_ORDER` (renderer.js ~3504) lists nine old heroes; use `DD.UI.HERO_ORDER` (16).
+  - **DONE (polish, Nov 5: 16 seats).** The title campfire's `HERO_ORDER` (renderer.js ~3504) lists nine old heroes; use `DD.UI.HERO_ORDER` (16).
 - **META-UI** (`js/ui/screens/gameover.js`, `settings.js`): v2 has no locks, but the game-over screen shows "Heroes
   unlocked: 16 / 16" + a lock-progress portrait row + "🔒 Next: …"; Settings offers "I'm the DM's Favorite — Unlock
   every hero right now" and "Delete unlocks, …". Suggest dropping the unlock block (or showing the party's records) and
@@ -240,7 +240,7 @@ fired real `KeyboardEvent`s every 40 ms after the skip, and none acted until the
   This is the existing HINT_MS behaviour.
 
 ## Known issues
-- Threat shading visibility on warm floors (RENDER request above).
+- ~~Threat shading visibility on warm floors~~ (fixed in the polish pass, Nov 5).
 - The objective fade reads unit screen boxes (same estimate as the DM caption's placement), ~3× a second.
 - Long enemy / boss inspect panels scroll (the new "holds the line" line adds one row); the abilities come last.
 - `.tmp/uiv2/probe.js` is scratch (not shipped); its `frames` probe is the quickest way to re-check the four sizes.
@@ -317,7 +317,7 @@ Run: `bash tools/test.sh "suite=hud: v2 requests"` (5 suites). Scratch scenes: `
   `finally` (a suite asserts it). The engine preview carries only the blast tiles. Request ENGINE below.
 - Move mode keeps its click rules: a click on an adjacent downed ally still does Help Up (the explicit interaction); a
   heal is aimed by arming it first. A card / board click on a downed ally that is not adjacent explains both ways.
-- The 💥 marker and the UP! badge are not part of the badge-stack layout, so the marker can overlap a neighbour's HP pill
+- (Fixed in the polish pass, Nov 5: both are in the badge-stack layout now.) The 💥 marker and the UP! badge were not part of the badge-stack layout, so the marker can overlap a neighbour's HP pill
   in a crowd (it is drawn last, so it stays readable).
 
 ### Requests
@@ -359,3 +359,54 @@ Run: `bash tools/test.sh "suite=hud: v2 requests"` (5 suites). Scratch scenes: `
   boss_grimble differ because their content objects now paint with `g.faces` (the content-boxes sweep), which HEAD's
   renderer copy in `.tmp/rot/base/` lacks ("Error in object draw lich_shelf: g.faces is not a function" in the base
   run). My renderer additions draw nothing without the new overlay fields.
+
+## Rules run (Nov 6-10) — breaking objects in tooltips (HUD / RENDER role)
+
+- `UI.aimNotes(def, unit, level)` adds "🔨 Can also hit a breakable object in range (crates, totems…) for N damage; it
+  breaks at 0 HP." when the skill aims at objects and `DD.Targeting.objectDamage(unit, def at level) > 0` (the
+  skill-tooltip passes its level, so an upgraded skill shows its upgraded number). The HUD side: `docs/notes/hud-v2.md`
+  "Rules run"; suite `hud: rules run — breaking: what it does …; tooltips offer it`.
+
+## Playtest fixes (Nov 12) — fix:ui
+
+Full table, requests and deviations: docs/notes/hud-v2.md "Playtest fixes (Nov 12)". UI-side changes:
+- ui.js: UI.CONTROLS (one controls list for Settings + the in-combat menu), UI.partyLines (bark lines that name only party
+  members), UI.bossWithTitle, UI.fightDmgMult + skillInfo.fightMult (a monster's skill text at the fight's damage factor,
+  DD.AI.fightLevel when present), rangeLabel 'Anywhere' (range ≥ 30), areaLabel drops size-0 circles / squares / crosses,
+  UI.DIFFICULTIES descs read DD.Balance (getters), UI.flyLine(who, loot), the forget picker's note + `forgetWarning`, the
+  Blessing roll's Discard tooltip without "they", Elite node blurb.
+- Screens: gameover (pronoun-free epitaphs, seeded, no repeats), levelup + tavern (party-filtered barks; "so X learned
+  humility"), party ("Replace X at a tavern"), party_select (🎲 Init box), map (boss + title join), rewards (the "Next
+  level-up" line and chip tooltips wait for the die), settings (shared controls), title (Settings blurb).
+- css: scrolling panels draw their rivets as their own background (`.panel.scroll`, the inspect panel), `.rwl-next` hidden
+  until `.landed`, the forget-picker warning, five stat boxes on the party-select card.
+- Re-check after the restart (Nov 12 ~20:15): the Blessing roll's Discard tooltip still said "keeps the Blessings they
+  have" (now "keeps every Blessing as it is", asserted); gameover's TPK stats read "Downs before the wipe" / "Heroes lost
+  before the wipe" (first-hour-3: those counters never include the wipe); `UI.consumableDesc(d, user)` + `opts.user` on
+  consumableTooltipHtml / consumableCard (heroes-v1, fix:content's request in hero-kiri.md); the rewards screen uses it.
+- Suites: `ui: playtest …` (6) in tests/ui_tests.js.
+
+## Review (playtest fixes, Nov 12 ~20:45) — REVIEWER role
+
+- robustness-4 / text-tone-4 leftover: the act-clear unlock banner said "Recruit them at a tavern or pick them in your
+  next campaign." under one named hero. Now "Now on the menu at every tavern, and in the lineup for your next campaign."
+  Asserted in `ui: playtest robustness-4 / …` (the victory screen with an unlock).
+
+## Finish (Nov 14) — fix:ui
+
+Full table, tests and requests: docs/notes/hud-v2.md "Finish (Nov 14)". UI-side changes:
+- ui.js: `UI.aimNotes` asks `DD.Targeting.aimsAtObjects` at the tooltip's level, and the 🔨 line says "for N damage and
+  nothing else" (D1 / D4); brutal's fallback desc now matches DD.Balance (15% / 5%, the balance audit's request).
+- title.js: the telegraph quip names "the bosses and a few show-off elites" (text-tone-17 leftover); the screen def
+  exposes `taglines` for tests.
+- README: Slate's swap rule (D2). ARCHITECTURE §8.1 (`aimNotes`, `flyLine(who, loot)`) and §8.3 (object and swap texts).
+- Suite: `ui: finish text-tone-17 / balance audit`.
+
+## Review (finish) — REVIEWER (Nov 14)
+
+Full table, probes, docs-truth list and requests: docs/notes/hud-v2.md "Review (finish)". UI-side:
+- title.js: the telegraph quip is one line again ("Nobody telegraphs. Bosses and a few elites wind up. You still stand in
+  it."): the finish run's 101-character version wrapped at both shot sizes and made the rotating tagline jump.
+- ARCHITECTURE §8.1 now lists `CONTROLS`, `partyLines`, `bossWithTitle`, `consumableDesc`, `chooseSkillSlot`
+  (`forgetWarning`); §8.3 the adjacent-ally click in one sentence and the ✖ on a refused swap.
+- Suite: `ui: review (finish) — every title quip fits one line; ARCHITECTURE §3.7 / §7.5 / §8.1 / §8.3 …`.

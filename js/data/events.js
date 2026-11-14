@@ -43,12 +43,23 @@
   }
   /** Ends a sentence that may close on a name with its own punctuation ("Fetch!", "Back In My Day..."). */
   function stop(s) { return /[.!?…]["”')]?$/.test(s) ? s : s + '.'; }
-  /** ['A', 'B', 'A'] -> 'two A and B' (consumable lists repeat names). */
+  /** 'a' / 'an' before a number or a word (an 8, an 11, an 18, an Antidote). */
+  function an(x) { return /^(8|11|18)$/.test(String(x)) || /^8\d*$/.test(String(x)) || /^[aeiou]/i.test(String(x)) ? 'an' : 'a'; }
+  // names that don't take an -s (playtest text-tone-19: "two Holy Water")
+  const MASS = { 'Holy Water': 'flasks of Holy Water', 'Liquid Courage': 'bottles of Liquid Courage', 'Pocket Sand (Family Size)': 'bags of Pocket Sand (Family Size)' };
+  function pluralWord(w) { return /(s|x|ch|sh)$/.test(w) ? w + 'es' : /[^aeiou]y$/.test(w) ? w.slice(0, -1) + 'ies' : w + 's'; }
+  /** 'Frost Flask' -> 'Frost Flasks', 'Bucket of Ice Water' -> 'Buckets of Ice Water', 'Holy Water' -> 'flasks of Holy Water'. */
+  function pluralName(n) {
+    if (MASS[n]) return MASS[n];
+    const m = /^(.*?)( of .*)$/.exec(n);
+    return m ? pluralWord(m[1]) + m[2] : pluralWord(n);
+  }
+  /** ['A', 'B', 'A'] -> 'two As and B' (consumable lists repeat names). */
   function tally(names) {
     const order = [];
     const count = {};
     names.forEach(function (n) { if (!count[n]) order.push(n); count[n] = (count[n] || 0) + 1; });
-    return list(order.map(function (n) { return count[n] > 1 ? (['', '', 'two', 'three'][count[n]] || count[n]) + ' ' + n : n; }));
+    return list(order.map(function (n) { return count[n] > 1 ? (['', '', 'two', 'three'][count[n]] || count[n]) + ' ' + pluralName(n) : n; }));
   }
   function fight(api, run, kind) { return { act: (run && run.act) || api.act || 1, kind: kind || 'normal' }; }
 
@@ -102,6 +113,15 @@
    *  item of that rarity the hero can use; equipped on the hero when that slot is free (api.giveItem heroIdx).
    *  Returns a phrase that says who ended up wearing it. */
   function heroItem(api, idx, rarity) {
+    const r = heroItemRec(api, idx, rarity);
+    return r.name + r.where;
+  }
+  /**
+   * heroItem's parts: { name, worn (on hero idx), where ('' | ' (into the bag)' | ' (X wears it)'), after (the same as
+   * a sentence of its own: '' | ' It goes into the bag.' | ' X wears it for now.') } — for lines that go on about the
+   * item (playtest text-tone-12 / -19).
+   */
+  function heroItemRec(api, idx, rarity) {
     const rh = api.hero(idx);
     const run = DD.Run && DD.Run.state;
     let id = null;
@@ -112,13 +132,15 @@
       });
       id = own.length ? api.rng.pick(own).id : DD.Rewards.randomItem({ rarity: rarity, hero: rh.id, act: api.act, run: run }, api.rng);
     }
-    if (!id) return partyItem(api, rarity);
+    if (!id) return { name: partyItem(api, rarity), worn: false, where: '', after: '' };
     const before = (api.party || []).map(function (h) { return h && h.items ? Object.assign({}, h.items) : {}; });
     api.giveItem({ id: id, heroIdx: idx });
     const eq = (api.party || []).findIndex(function (h, i) {
       return !!h && !!h.items && SLOTS.some(function (sl) { return h.items[sl] === id && before[i][sl] !== id; });
     });
-    return itemName(id) + (eq === idx ? '' : eq >= 0 ? ' (' + api.heroName(eq) + ' wears it)' : ' (into the bag)');
+    const who = eq >= 0 && eq !== idx ? api.heroName(eq) : null;
+    return { name: itemName(id), worn: eq === idx, where: eq === idx ? '' : who ? ' (' + who + ' wears it)' : ' (into the bag)',
+      after: eq === idx ? '' : who ? ' ' + who + ' wears it for now.' : ' It goes into the bag.' };
   }
 
   /** n random consumables; each one that does not fit (or does not exist) is sold for POCKET_GOLD. */
@@ -208,14 +230,14 @@
           }
           if (d >= 11) {
             const g = api.gold(50);
-            return 'You roll a ' + d + '. The goblin rolls a 3, then a 7, then a 2, then gives up and pays you ' + g + ' gold. "Rigged," he mutters.';
+            return 'You roll ' + an(d) + ' ' + d + '. The goblin rolls a 3, then a 7, then a 2, then gives up and pays you ' + g + ' gold. "Rigged," he mutters.';
           }
           if (d === 1) {
             api.damage(5);
             return 'Natural 1. The die bounces off the goblin, the ceiling and every member of the party, in that order. It ' +
               'stings, and the goblin keeps your 25 gold.';
           }
-          return 'You roll a ' + d + '. The goblin rolls a 19 without looking. He keeps your 25 gold and hands you a pamphlet ' +
+          return 'You roll ' + an(d) + ' ' + d + '. The goblin rolls a 19 without looking. He keeps your 25 gold and hands you a pamphlet ' +
             'about problem gambling.';
         },
       },
@@ -945,14 +967,17 @@
       'hazard. The rest of the party quietly checks their coin purses.',
     choices: [
       {
-        label: 'Buy the big chain.',
+        label: 'Buy the shiniest thing on the cart.',
         hint: 'Pay 50 gold. Zarathor gains a rare item.',
         requires: canPay(50),
         resolve: function (api) {
           const s = star(api, 'zarathor');
           api.gold(-50);
-          return standIn(s) + 'Glimmerjaw bites every coin, twice, then hands over ' + heroItem(api, s.idx, 'rare') + '. ' + s.name +
-            ' puts it on immediately, and then puts on his sunglasses. Indoors.';
+          const it = heroItemRec(api, s.idx, 'rare');
+          // playtest text-tone-12: he only puts it on when it really went onto him
+          return standIn(s) + 'Glimmerjaw bites every coin, twice, then hands over ' + it.name + '. ' + s.name +
+            (it.worn ? ' puts it on immediately, and then puts on his sunglasses. Indoors.' :
+              ' holds it up to the light, promises to wear it later, and puts on his sunglasses anyway. Indoors.' + it.after);
         },
       },
       {
@@ -1466,8 +1491,9 @@
         resolve: function (api, run) {
           const s = star(api, 'buga');
           if (api.rng.chance(0.6)) {
+            const key = heroItemRec(api, s.idx, 'rare');
             return standIn(s) + s.name + ' answers every question with "Toast." The crowd chants it back. Gerald goes stale on ' +
-              'live crystal ball. The key to the city turns out to be ' + heroItem(api, s.idx, 'rare') + '.';
+              'live crystal ball. The key to the city turns out to be ' + key.name + '.' + key.after;
           }
           return { text: standIn(s) + s.name + '\'s closing statement ("What\'s the worst that could happen?") is answered ' +
             'immediately by an angry mob of sourdough loyalists.', combat: fight(api, run, 'normal') };

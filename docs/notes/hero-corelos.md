@@ -306,3 +306,7 @@ Suite: `hero_corelos: v2 requests: …`. Rules: `docs/notes/rules.md` "v2 reques
 - **Flyers.** Runes are ground objects: the engine never sets one off under a flyer (walk, push, teleport); `runeValue`
   already skipped flyers. Tested: a flyer shoved across a rune by Restraining Order leaves it armed, a walker sets it off.
 - **Heals.** None (Soul Contract is Block).
+
+## Review (finish, Nov 14) — REVIEWER
+
+- D1: Collect Debt now breaks a crate for exactly its 🔨 number and nothing else (no riders on an object, D4); a spell's break reads "Corelos turns Collect Debt on the Crate…".

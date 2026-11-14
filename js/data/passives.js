@@ -194,7 +194,7 @@
     id: 'rp_lucky_socks', name: 'Lucky Socks', icon: '🧦', rarity: 'common', tags: ['offense', 'proc'],
     levels: [{ pct: 10 }, { pct: 15 }, { pct: 20 }],
     desc: function (L) { return 'Your skill hits on foes have a ' + L.pct + '% chance to deal +50% damage.'; },
-    flavor: 'Unwashed since session one. The luck is load-bearing.',
+    flavor: 'Unwashed since session one. The luck has started to smell.',
     hooks: {
       modifyOutgoingDamage: function (d, p) {
         if (!skillHit(d) || !roll(p.L.pct)) return;
@@ -285,8 +285,9 @@
     });
     return best;
   }
-  // height / googly are render-only (a pebble-sized rock with googly eyes, so he never reads as a blocking boulder)
-  const ROCKY = { label: 'Rocky', blocksLos: false, blocksMove: false, height: 0.45, googly: true };
+  // height / googly are render-only (a pebble-sized rock with googly eyes, so he never reads as a blocking boulder);
+  // targetable: false (rules run) — he is the party's pet, not a crate: nobody aims an attack at him (blasts still chip him)
+  const ROCKY = { label: 'Rocky', blocksLos: false, blocksMove: false, height: 0.45, googly: true, targetable: false };
   /** Rocky's object overrides; rockyOf (the owner's unit id) keeps two pet rocks in one party from swapping owners. */
   function rocky(unit, hp, maxHp) { return Object.assign({ hp: hp, maxHp: maxHp, rockyOf: unit.id }, ROCKY); }
   reg({
@@ -577,7 +578,8 @@
         if (!id) return;
         const c = DD.getConsumable(id);
         pop(unit, '👖 ' + (c ? c.name : id) + '!', '#bfefff');
-        say(unit, p, 'finds a ' + (c ? c.name : id) + ' in a pocket that was not there yesterday.', 'hero');
+        const nm = c ? c.name : id;
+        say(unit, p, 'finds ' + (/^[aeiou]/i.test(nm) ? 'an ' : 'a ') + nm + ' in a pocket that was not there yesterday.', 'hero');
       },
     },
   });
@@ -1380,6 +1382,11 @@
         pop(d.target, '🥋 Ultra Instinct!', '#bfefff');
         if (p.L.counter) p.data.counter = d.source.id;
       },
+      // [finish FF-2] the AI knows the round's first hit will whiff (DD.AI.estimate), so it spends that hit on purpose or
+      // aims where a hit lands, instead of "killing" a 3-HP holder every round forever
+      estimateTaken: function (e, p) {
+        if (hitByFoe(e) && p.data.round !== roundNo()) e.flat -= 1e6;
+      },
       onTakeDamage: function (d, p) {
         const id = p.data.counter;
         if (!id) return;
@@ -1533,7 +1540,7 @@
     stats: function (L) { return { hype: L.hype }; },
     desc: function (L) {
       return 'The party starts each fight with +' + L.hype + ' Hype. Downside: each fight costs ' + L.fee + ' gold in interest; if the party ' +
-        "can't pay, you start Vulnerable and Weak for 2 turns.";
+        "can't pay, you start Vulnerable and Weakened for 2 turns.";
     },
     flavor: 'Borrowed Hype from a loan shark named Gary. Gary is an actual shark. Gary has legs.',
     hooks: {

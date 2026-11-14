@@ -82,6 +82,19 @@
     return [min, max];
   };
 
+  /**
+   * Playtest fix (heroes-v1): the number a skill desc prints for its TARGET range ("a foe within N"): base plus whatever
+   * the user's range changes add to the skill's max range right now (an item's +range such as the Yardstick of Reach,
+   * Dazzle, modifyRange hooks), i.e. what the card's Range pill says; base itself without a user (a codex, a shop shelf).
+   * Use it only for the target range (not an area's size). desc: function (L, user) { … DD.Targeting.reach(this, L, user, 4) … }
+   * — or pass the def explicitly. Pure.
+   */
+  T.reach = function (def, L, user, base) {
+    if (!user || !def || !def.target) return base;
+    const lv = Array.isArray(def.levels) && def.levels.indexOf(L) >= 0 ? def.levels.indexOf(L) + 1 : 1;
+    return T.pure(function () { return base + (T.range(user, def, lv)[1] - T.range(null, def, lv)[1]); });
+  };
+
   /** Unit filter relative to user (§3.2). */
   T.unitMatches = function (user, u, filter, single) {
     if (!u || u.dead) return false;
@@ -106,10 +119,14 @@
   }
   function isConsumable(def) { return !!def && DD.getConsumable(def.id) === def; }
   /**
-   * This skill / consumable can be aimed at a VOLATILE object (an explosive barrel, DD.Act.isVolatile) to set it off:
-   * a player-controlled user; a 'unit' target with the 'enemy' filter; and target.objects true, or (unless
-   * target.objects is false) kind 'attack', a consumable without a kind, or the user's basic attack. Its normal range
-   * and line of sight apply; canTarget is not asked (it is about a unit and the skill's riders, which don't happen).
+   * This skill / consumable can be aimed at an OBJECT: a VOLATILE one (an explosive barrel, DD.Act.isVolatile) to set it
+   * off, and (v2 rules run) a BREAKABLE one (it has HP: a crate, a totem) to hit it for T.objectDamage — when that is
+   * more than 0. A player-controlled user; a 'unit' target with the 'enemy' filter; and target.objects true, or (unless
+   * target.objects is false) kind 'attack', a consumable without a kind, the user's basic attack, or (lead decision D1)
+   * any other skill that is single-target at its level and lists damage (objectDmg / L.dmg > 0): spells and utilities
+   * too. Its normal range and line of sight apply; canTarget is not asked (it is about a unit and the skill's riders,
+   * which don't happen).
+   * Objects with `targetable: false` and the protect objective's object are never targets (T.objectTargetable).
    */
   T.aimsAtObjects = function (user, skillOrSlot) {
     if (!playerSide(user)) return false;
@@ -119,8 +136,26 @@
     if ((tg.type || 'unit') !== 'unit' || (tg.filter || 'enemy') !== 'enemy' || tg.objects === false) return false;
     if (tg.objects === true || def.kind === 'attack') return true;
     if (isConsumable(def) && !def.kind) return true;
-    return !!(user.basic && user.basic.id === def.id);
+    if (user.basic && user.basic.id === def.id) return true;
+    // [finish D1] any other SINGLE-TARGET skill that deals damage at this level (a spell, a utility: Heckle, Anvil,
+    // Juice Box, Sand in Your Eye at I-II) — "any single-target damage skill can break it"
+    const L = DD.skillLevel(def, r.level) || {};
+    return singleTargetAt(def, L, user) && listedObjectDamage(def, L, user) > 0;
   };
+  // shapes whose size 0 is just the aimed tile (Sand in Your Eye's circle of 0 at I-II is a single-target skill)
+  const POINT_AT_ZERO = { circle: 1, square: 1, ring: 1, cross: 1, row: 1 };
+  /** The skill hits only the aimed unit at this level: no area, area 'single', or a point-like area of size 0. */
+  function singleTargetAt(def, L, user) {
+    const ar = def.area;
+    if (!ar || !ar.shape || ar.shape === 'single') return true;
+    if (!POINT_AT_ZERO[ar.shape]) return false;
+    return Math.max(0, Math.floor(+DD.resolve(ar.size, L, user, 1) || 0)) === 0;
+  }
+  /** The damage listed for an object hit before the user's modifiers: objectDmg (number | (L, user) => n), else L.dmg. */
+  function listedObjectDamage(def, L, user) {
+    const base = Number(def.objectDmg !== undefined ? DD.resolve(def.objectDmg, L, user, 0) : L.dmg);
+    return isFinite(base) && base > 0 ? base : 0;
+  }
   /**
    * This skill / consumable is a single-target heal that can be aimed at a DOWNED ally to get it back up (the heal's
    * amount becomes its HP: DD.Act.heal): a player-controlled user; kind 'heal' or tag 'heal'; a 'unit' target with the
@@ -141,13 +176,56 @@
   function downedAlly(user, u) {
     return !!u && !u.dead && !!u.downed && u.kind === 'hero' && u !== user && !DD.Grid.hostile(user, u);
   }
-  /** The volatile object on an otherwise empty tile, or null. */
+  /**
+   * v2 (user request, rules run): may the party aim at this object at all? Not when the def or instance says
+   * `targetable: false` (a puzzle object that must be interacted with, scenery that makes no sense to shoot), nor the
+   * object the party must protect (a protect objective).
+   */
+  function objectTargetable(o) {
+    if (!o) return false;
+    if (o.targetable !== undefined) { if (!o.targetable) return false; } else {
+      const d = DD.getObject(o.id);
+      if (d && d.targetable === false) return false;
+    }
+    const s = S(), ob = s && s.objective;
+    return !(ob && ob.type === 'protect' && ob.objId === o.id);
+  }
+  T.objectTargetable = objectTargetable;
+  /** A BREAKABLE object: it has HP left (hp / maxHp > 0: crates, barrels, totems, panels...). */
+  function breakable(o) { return !!o && o.maxHp > 0 && o.hp > 0; }
+  T.breakable = breakable;
+  /** The volatile object on an otherwise empty tile that the party may aim at, or null. */
   function volatileAt(x, y) {
     const t = DD.Grid.tile(x, y);
-    if (!t || !t.obj || !DD.Act.isVolatile(t.obj) || DD.Grid.unitAt(x, y)) return null;
+    if (!t || !t.obj || !DD.Act.isVolatile(t.obj) || DD.Grid.unitAt(x, y) || !objectTargetable(t.obj)) return null;
     return t.obj;
   }
   T.volatileAt = volatileAt;
+  /** v2 (rules run): the breakable, non-volatile object on an otherwise empty tile that the party may aim at, or null. */
+  function breakableAt(x, y) {
+    const t = DD.Grid.tile(x, y);
+    if (!t || !t.obj || DD.Act.isVolatile(t.obj) || !breakable(t.obj) || DD.Grid.unitAt(x, y) || !objectTargetable(t.obj)) return null;
+    return t.obj;
+  }
+  T.breakableAt = breakableAt;
+  /**
+   * v2 (rules run): the damage an attack aimed at a breakable object deals to it — the skill's listed damage
+   * (`objectDmg: number | (L, user) => number` on the def, else L.dmg) with the user's Weak (−25%), Inspired (+25%) and
+   * item damage bonus (dmgBonus); nothing else (no hooks, no Empowered, no high ground: an object is no foe). Rounded;
+   * 0 = the skill can't break objects (it may still set off a volatile one).
+   */
+  T.objectDamage = function (user, skillOrSlot) {
+    const r = T.resolve(skillOrSlot);
+    if (!r || !user) return 0;
+    const L = DD.skillLevel(r.def, r.level) || {};
+    const base = listedObjectDamage(r.def, L, user);
+    if (!(base > 0)) return 0;
+    let mult = 1;
+    if (hasStatus(user, 'weak')) mult *= 0.75;
+    if (hasStatus(user, 'inspired')) mult *= 1.25;
+    if (user.dmgBonus) mult *= 1 + user.dmgBonus;
+    return Math.max(0, Math.round(base * mult));
+  };
 
   T.tileMatches = function (user, x, y, filter) {
     const G = DD.Grid;
@@ -213,17 +291,20 @@
         if (down) p.revive = true;   // a heal aimed at a downed ally: it gets back up (HUD: highlight it)
         if (canTargetOk(user, r, p)) out.push(p);
       }
-      // a volatile object in range and sight (an explosive barrel): the attack sets it off
+      // an object in range and sight: a volatile one (an explosive barrel) is set off, a breakable one takes the hit
       if (T.aimsAtObjects(user, skillOrSlot)) {
-        // [v2 review] the object test first (cheap), the range / sight test (a LOS ray) only on a volatile object
+        // [v2 review] the object test first (cheap), the range / sight test (a LOS ray) only on an aimable object
         const max = rg[1];
+        const dmg = T.objectDamage(user, skillOrSlot);
         for (let dy = -max; dy <= max; dy++) {
           const rem = max - Math.abs(dy);
           for (let dx = -rem; dx <= rem; dx++) {
             const x = user.x + dx, y = user.y + dy;
             if (!G.inBounds(x, y)) continue;
             const o = volatileAt(x, y);
-            if (o && okTile(x, y)) out.push({ x: x, y: y, obj: o.id });
+            if (o) { if (okTile(x, y)) out.push({ x: x, y: y, obj: o.id, detonates: true }); continue; }
+            const b = dmg > 0 ? breakableAt(x, y) : null;
+            if (b && okTile(x, y)) out.push({ x: x, y: y, obj: b.id, dmg: dmg, hp: b.hp, breaks: dmg >= b.hp });
           }
         }
       }
@@ -293,6 +374,10 @@
         } else if (!u && tg.type === 'unit' && volatileAt(tgt.x, tgt.y) && T.aimsAtObjects(user, skillOrSlot)) {
           // v2: an attack aimed at a volatile object — DD.Combat.resolveSkill detonates it instead of running execute
           ctx.targetObj = DD.Grid.tile(tgt.x, tgt.y).obj;
+        } else if (!u && tg.type === 'unit' && breakableAt(tgt.x, tgt.y) && T.aimsAtObjects(user, skillOrSlot)) {
+          // v2 (rules run): an attack aimed at a breakable object — resolveSkill hits it for objectDmg (no execute)
+          const dmg = T.objectDamage(user, skillOrSlot);
+          if (dmg > 0) { ctx.targetObj = DD.Grid.tile(tgt.x, tgt.y).obj; ctx.objectDmg = dmg; }
         }
       }
     }
@@ -647,9 +732,41 @@
     out.perUnit = res.perUnit; out.spawned = res.spawned; out.objects = res.objects; out.hype = res.hype;
     out.blast = uniqTiles(blasts);
     // aimed at a barrel: the area to show is the blast (its tile first)
-    if (ctx0.targetObj) { out.tiles = uniqTiles([{ x: target.x, y: target.y }].concat(out.blast)); out.detonates = ctx0.targetObj.id; }
+    if (ctx0.targetObj) {
+      out.tiles = uniqTiles([{ x: target.x, y: target.y }].concat(out.blast));
+      if (ctx0.objectDmg === undefined) out.detonates = ctx0.targetObj.id;
+      else out.breaks = breakInfo(ctx0.targetObj, target, out.objects, ctx0.objectDmg, out.uncertain);
+    } else {
+      // [playtest heroes-3] a TILE-aimed hit on a breakable object (the Family Hammer, Hard Pass): the same Break /
+      // Detonate preview as a unit-aimed one, read from the dry run's object damage on the aimed tile
+      const tl = DD.Grid.tile(target.x, target.y), o = tl && tl.obj;
+      const hit = o ? (out.objects || []).filter(function (q) { return q.x === target.x && q.y === target.y; })[0] : null;
+      if (o && hit) {
+        if (hit.destroyed && DD.Act.isVolatile(o)) {
+          out.detonates = o.id;
+          out.tiles = uniqTiles(out.tiles.concat([{ x: target.x, y: target.y }], out.blast));
+        } else out.breaks = breakInfo(o, target, out.objects, hit.dmg, out.uncertain);
+      }
+    }
     if (ctx0.reviveTarget) out.revives = ctx0.reviveTarget.id;
     return out;
+  }
+  /**
+   * v2 (rules run): what an attack aimed at a breakable object does to it, for the HUD: { x, y, id, name, dmg, hp (before),
+   * left, destroyed, text } — text "Break: Crate − 5 damage, 1 HP left" or "Break: Crate − 6 damage — breaks!". The
+   * numbers are the dry run's (exact unless the preview is uncertain; dmg is the object's HP lost, at most its HP).
+   */
+  function breakInfo(o, at, objects, dmg, uncertain) {
+    const def = DD.getObject(o.id);
+    const name = String(o.label || (def ? def.name : o.id));
+    let e = null;
+    for (let i = 0; i < (objects || []).length; i++) if (objects[i].x === at.x && objects[i].y === at.y) { e = objects[i]; break; }
+    const hp = o.hp || 0;
+    const lost = e ? e.dmg || 0 : Math.min(dmg, hp);
+    const destroyed = e ? !!e.destroyed : dmg >= hp;
+    const left = destroyed ? 0 : Math.max(0, hp - lost);
+    const text = (uncertain ? '? ' : '') + 'Break: ' + name + ' − ' + lost + ' damage' + (destroyed ? ' — breaks!' : ', ' + left + ' HP left');
+    return { x: at.x, y: at.y, id: o.id, name: name, dmg: lost, hp: hp, left: left, destroyed: destroyed, text: text };
   }
   function uniqTiles(list) {
     const seen = {}, out = [];

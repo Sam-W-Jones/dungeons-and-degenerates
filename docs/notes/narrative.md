@@ -151,8 +151,10 @@ None.
 
 ## Requests
 
-- **Lead (ARCHITECTURE §3.10)**: add `initiative` (token `{hero}`: the first hero in the order or 'the party') to the
-  narration key list; DESIGN §11 lists the hero events of the first ten heroes only (the six new ones are above).
+- ~~**Lead (ARCHITECTURE §3.10)**: add `initiative` (token `{hero}`: the first hero in the order or 'the party') to the
+  narration key list; DESIGN §11 lists the hero events of the first ten heroes only (the six new ones are above).~~
+  Done (Nov 5 docs cleanup): ARCHITECTURE §3.10 lists `initiative`, `objective_failed` and `opportunity`; DESIGN §11
+  lists all 18 hero events.
 - **META-UI** (`js/ui/screens/title.js`): the title tagline "Every enemy telegraphs its attacks. You will still stand in
   them." is v1 and shows on every visit (seen in `.tmp/narrative-v2/title.png`); suggestion: "Nobody telegraphs
   anything. Except the bosses. You will still stand in it." `TIP_FALLBACK` (shown only when no tips are registered)
@@ -295,9 +297,114 @@ HP, gold or risk; about a third of the events offer one, and a typical run meets
   three gameplay tips in-engine (sections "heals get the downed up", "shoot the barrel", "flyers ignore the floor"); the
   map-turning tip is SOURCE_ONLY (js/render/input.js: middle drag, Q / R, Home).
 
+## Docs and content cleanup (Nov 5) — the `opportunity` key
+
+- **Added** narration key `opportunity` (an attack of opportunity): 10 token-free lines in `narrator.js`
+  (`TOKENS.opportunity = []`: either side can swing and the caller may pass nothing, so no line names anyone; no
+  pronouns). `tests/content/narrative.js` lists it in `NARRATION_KEYS`, so the static suite checks it like every key
+  (8+ lines, length, no v1 talk, no near-repeats, tokens). It is not in the "narrated in practice" list: nothing fires
+  it yet.
+- **Request — ENGINE (`js/engine/*`, the attack-of-opportunity code)**: decide whether and when to narrate it, e.g.
+  `DD.Act.narrate('opportunity')` on the first attack of opportunity of a fight (or one in N), so the DM's caption
+  doesn't repeat every round. Pass no vars (or add a token to `TOKENS.opportunity` together with lines that use it).
+  Once it fires, add `'opportunity'` to the in-practice `expected` list in `tests/content/narrative.js`.
+- ARCHITECTURE §3.10 now lists `initiative`, `objective_failed` and `opportunity`, with the token contract.
+
+## Review (balance run)
+
+- Verified in the browser: `opportunity` has 10 lines, `initiative` 9, `objective_failed` 8; 66 keys; 79 tips (DESIGN
+  §11 says 79). The `opportunity` lines are true to DESIGN §4.2 (leaps, teleports and shoves never provoke; one strike
+  per attacker per round) and name nobody. Every key in ARCHITECTURE §3.10 has 8+ lines; the content keys with fewer
+  (boss banners, Syllamin's roasts) are narrated by their own code, as §3.10 says. 35 content events (+ the run layer's
+  fallback = 36 registered), 18 hero events (Slate and Buga two each), as DESIGN §11 says.
+- Still open: nothing fires `opportunity` (engine request above).
+
+## Rules run (Nov 6) — moving through allies, swapping places, breaking things (CONTENT SWEEP, shared)
+
+User: "I find heroes get congersted when terrain is around" · "Yes, add swap" · "objects should be targetable to break
+them". Tips (each checked in-engine in "narrative: tips"):
+- new: "Heroes walk straight through each other, and monsters through theirs. Nobody can stop on an occupied tile, though:
+  that is a hug."
+- new (Nov 10, finishing pass): "No attack can be aimed at the DM's laminated screen (Smash it up close, or blast it) or
+  at what you swore to protect. Even the snacks." (tips stay ≤ 140 characters; checked: the panel is no
+  target even from next to it, Smash is offered, a blast hurts it; the Snack Bowl is no target; a keg is, until it is
+  the protect objective's)
+- new: "Stuck behind the wizard in a corridor? Click them while moving to swap places. It costs a move. The wizard pretends
+  not to mind." (the click is the HUD's, per the decisions file; the engine part is checked: cost, trade, undo, no swap
+  with a downed ally or a foe)
+- new: "Most things with HP are fair game: hit the crate, the totem, the Spore Pod next to three goblins. Property damage
+  is still damage."
+- changed: "Pushes, pulls, teleports, jumps, dashes and swapping skills never provoke attacks of opportunity. Only walking
+  (or a swap move) does." (the swap move provokes like a step — checked) · "Adjacent heroes can Smash objective objects
+  like totems: 1 AP for 5 damage. Or just hit them with any single-target attack."
+No swap narration: the engine logs its own quip ("X swaps places with Y. <quip>") and uses the `move` bark; a hook is
+requested below.
+
+Cross-content check (Nov 10, `tests/content/integration.js`): "integration: rules run — every breakable content object
+decides targetable, its desc says so, and the party's aim agrees". Every object with HP registered outside
+`js/data/terrain.js` states `targetable: true | false` (volatile ones excepted: they detonate), its desc gives its HP and
+says "any single-target attack" (targets) or that attacks are never aimed at it (opt-outs), and a 4-damage bolt agrees
+from 1 and 3 tiles (target entry, preview text, the hit itself). Today: targets `sla_boulder`, `a1_strike_fund`,
+`a2_bone_pile`, `a2_bone_wall`, `a2_chafing_dish`, `grim_cabinet`, `lich_shelf`; opted out `dm_screen_panel`,
+`a2_coffee_machine`, `a3_snack_bowl` (plus the Rocky instance, `passives.js`). DESIGN §4.6 now says destroy objectives
+take any single-target attack and protected objects are never aimed at.
+
+### Requests (rules run)
+- **Engine (`js/engine/actions.js` / `combat.js`)**: a content hook for the swap's comedy — e.g. `Act.maybeBark(mover,
+  'swap', p)` (falling back to `move`) and/or the quips read from `DD.Narrator.LINES.swap` when present — so heroes can
+  have swap barks and the narration owner can write the lines. Optional.
+- **HUD**: the swap tip says "Click them while moving"; if the swap gesture ends up different, tell the narrative owner
+  (`js/data/narrator.js`) so the tip follows.
+
 ## History (v1, kept short)
 
 The v1 pass (29 events, 49 tips) and its adversarial review (2026-10-31) fixed: culprit-less "gravity" sentences,
 broken outcome sentences ("learns Fetch!.", "X and X"), dominated choices (traps, dragon yard sale, Glimmerjaw, the
 patron's free upgrade, the sculptor's free gold, flat HP costs), near-repeat narration lines, and inexact tips. Those
 regression checks are all still in the suites.
+
+## Playtest fixes (Nov 12) — fix:ui (narrator.js)
+
+- hero_downed: "{hero} is down, and {enemy} is far too pleased about it." (was "…looks far too proud of itself": it misgendered
+  the bosses and, with a hero credit, the heroes) — bosses-objectives-10.
+- New keys `hero_downed_self` ['hero'] and `hero_downed_friendly` ['hero', 'enemy' = the ally] (8 lines each, no pronoun for
+  {hero}) for self-downs and friendly fire (text-tone-5; the engine picks them: request in docs/notes/hud-v2.md).
+- Tips: flyers "still pocket gold" (text-tone-v1); a forgotten skill "goes back in the pile" (heroes-v2).
+- act_intro_3: the "load-bearing" Cheeto dust is now "It has seniority." (text-tone-23, my one line of the 14).
+- tests/content/narrative.js NARRATION_KEYS lists the two new keys.
+
+## Playtest fixes (Nov 12)
+
+Confirmed playtest findings that live in events.js (fix:content; narrator.js is fix:ui's):
+- **text-tone-11 (events part, fixed)**: the Dice Goblin says "You roll an 8 / an 11 / an 18." (`an(x)`).
+- **text-tone-12 (fixed)**: Glimmerjaw's Discount Bling: Zarathor only "puts it on immediately" when the item really went
+  onto him (`heroItemRec(...).worn`); otherwise he "holds it up to the light, promises to wear it later, and puts on his
+  sunglasses anyway. Indoors." plus where it went ("It goes into the bag." / "X wears it for now."). The choice label is
+  item-agnostic: "Buy the shiniest thing on the cart." (the item is a random rare, rarely a chain).
+- **text-tone-19 (events part, polish, fixed)**: `tally()` pluralises ("two Frost Flasks", "two Buckets of Ice Water",
+  "two flasks of Holy Water"); Mayor Buga's debate ends "…turns out to be Chain of Office (Gold-Plated). It goes into the
+  bag." (no "(Gold-Plated) (into the bag)"). `heroItem` keeps its old one-phrase form for every other call site;
+  `heroItemRec` returns { name, worn, where, after }.
+- Test: `narrative: playtest fixes (Nov 12)`.
+- The tips suite follows fix:ui's reworded flyer tip (text-tone-v1: "…Clouds and blasts still hit them. They still
+  pocket gold.") and now checks that last sentence in-engine (a flyer pockets a gold pile and a Hoard Pile).
+
+## Finish (Nov 14) — FIX: CONTENT (narrator.js and the narrative suites)
+
+- **audit-2 (fixed)**: `narrative: tips`, section 'difficulty', builds the brutal tip's numbers from
+  `DD.Balance.difficulty.brutal` (and the extra enemy from `DD.Balance.extraOf`), checks the engine reads the same row,
+  and that a brutal regular fight really brings one more grunt. The tip text was already true (the audit fixed it).
+- **D7**: narration key `swap` (8 lines, tokens hero + ally); `narrative: narration` knows the key and fills `{ally}`.
+- **D1**: the barrel and Smash tips say "any single-target damage skill" (both now ≤ 140 chars).
+- **bosses-objectives-10**: not reproduced (the hero_downed line was rephrased in the pre-balance run; the engine picks
+  hero_downed_self / hero_downed_friendly for self-owns and friendly fire).
+- **D2 (content side)**: a tip in the rule's words: "Slate is immovable: he can start a swap with an ally next to him,
+  but nobody can swap with him. Walk around the golem." (`narrative: tips` checks it in-engine: Slate swaps with the
+  mage, the mage can't swap with Slate.) The DESIGN text is the docs owner's.
+
+## Review (finish, Nov 14) — REVIEWER
+
+- D7: the `swap` lines and every hero's swap barks name no other hero — now really checked: `kit: finish D7` built its
+  name test as `new RegExp('\b' + w + '\b')` (a backspace in a string, so it could never match); it uses `'\\b'` now and
+  the lines pass. The D1 / D2 tips read right ("aim any single-target damage skill at an explosive barrel", "Slate is
+  immovable: he can start a swap …").

@@ -154,3 +154,28 @@ CSS: `.rw-level`, `.rwl-*` (row, die, top, lead, next, result, lv, quip, lineup,
 - Named level-ups from hero events can leave the party two levels apart for a while (Deviation 1).
 - The rewards screen is a little taller than before; with three long loot cards it still fits at 1280×720 and
   1366×768 (checked with real content, `.tmp/runv2/shots/`); the panel scrolls on smaller screens as before.
+
+## Playtest fixes (Nov 12) — fix:engine
+
+- **first-hour-3** (fixed): `stats.combats` (shown as "Fights won" on the game-over screen, the Hall of Fame and the map
+  chip) counts victories only: the increment moved below the failed-objective and TPK returns in `resolveCombat`.
+  Assertions in `run: v2 leveling …` (a TPK and a lost objective leave it at 0). Times downed / Heroes lost on a TPK
+  stay as the rules count them (UI owner's call to hide them).
+
+## Finish (Nov 14) — fix:engine
+
+- **desc-sweep-9** (fixed): `DD.Run.goldPreview(n)` (run.js, pure) gives what `Run.addGold(n)` would add right now
+  (gold Blessings such as Trust Fund, with the carried fraction). The gold reward card (rewards.js `goldReward`) states it:
+  "Gain 38 gold (35 + 10% from Blessings)." with Trust Fund I, "Gain 35 gold." without. Suite `run: finish —
+  desc-sweep-9` (the card and the gold the pick really adds, Trust Fund I and III). Event hints (events.js) are content's:
+  request in `docs/notes/rules.md` "Finish (Nov 14)".
+
+## Review (finish, Nov 14) — REVIEWER
+
+- **desc-sweep-9, the event half (the content request, finished here because run.js owns the hint text).** Event hints
+  promised the raw gold ("Gain 50 gold") while `api.gold(50)` pays the gold Blessings on top (55 with Trust Fund I).
+  `Run.currentEvent()` now passes every hint through `goldHint`: while a gold Blessing is held, income phrases ("gain /
+  win N gold", "pays N", "N gold each") print `goldPreview(N)`; costs ("Pay 25 gold") and losses stay as written; without a
+  Blessing nothing changes. Suite `run: finish — desc-sweep-9 …` (extended: "Gain 55 gold.", "11-19 pays 55 gold, a
+  natural 20 pays 110 (16 gold each if full)", the stake unchanged, and the choice adds exactly 55).
+- The reward card (fix:engine) re-played: Trust Fund I "Gain 38 gold (35 + 10% from Blessings)." adds 38; III adds 42.

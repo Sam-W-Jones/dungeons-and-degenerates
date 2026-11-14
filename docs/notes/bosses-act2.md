@@ -285,6 +285,26 @@ not this area. All 23 `bosses_act2` suites (+2 debug-only skips) and all 8 `cont
 - (Review v2) Lich fights still average ~3 downs at L4 (3.6 at L3): the uncapped fees make a long fight brutal by
   design (shred to reset them).
 
+## Docs and content cleanup (Nov 5)
+
+- **Explicit initiative**: `lichtenstein` +2, `lich_intern` +1, `lich_mimic` 0, `dr_iris` +2, `iris_floater` +1 — the
+  values they had from the tier default (nothing in these notes argued for a change; the balance pass may). Suite
+  `bosses_act2: every boss-fight enemy states its initiative (same values as before)`.
+- No display-name clash here ("Paperback Chomp" is not Ellaria's "Chomp"); DESIGN §9 now describes both fights as
+  shipped (one turn a round, the rotations, Late Fees, the mirrors, the gaze).
+
+## Rules run (Nov 6) — breaking objects (CONTENT SWEEP)
+
+User: "objects should be targetable to break them" (engine rule: `docs/notes/rules.md` "Rules run"). `lich_shelf` stays a
+target (`targetable: true`): breaking it was always part of the puzzle ("or break it (8 HP)"), and 8 HP of attacks from
+range costs more than a 1-AP Search from next to it. A shot phylactery shelf is shredded and credited to the shooter; a shot
+mimic shelf still lets the mimic out (its surprise bite only lands on someone next to it). Desc: "Search it from next to it
+(1 AP), or break it (8 HP) with any single-target attack." The Card Catalog, the desk and Dr. Iris' chart and chair have no
+HP. Lich sims unchanged (engine probe: 7/12 → 6/12). Suite "bosses_act2: rules run — a Restricted Section Shelf can be shot
+open…". Nov 10: the objective subtitle says it too ("Look Up a Card Catalog (1 AP), then Search (or break) the shelf that
+glows"; "Search the glowing shelf (1 AP), or break it, to shred it: <N.phylactery> damage…", the number now read from the
+knob instead of a literal 25).
+
 ## History (v1, superseded)
 v1 (telegraph era, fixture party at level 7): Lich-tenstein 260 HP with a notice + 3-step rotation every planning,
 Late Fees with interest / cap 8 / closing time, Mortal Again +50%; Dr. Iris 280 HP with telegraphed beams planned and
@@ -293,3 +313,57 @@ time. Balance then: lich 58–71%, Iris 54–71% (fixture L7). The v1 review (fr
 stale subtitles, renewal skipping the phase-2 banner, Final Notice fallback area, `preventDeath` for instant kills) is
 all carried over: live wind-up numbers, "each of his foes" descs, subtitles that name the next step, `enterPhase2` on
 reform, the two-row fallback, `preventDeath`.
+
+## Playtest fixes (Nov 12)
+
+Confirmed playtest findings that live in lich.js / beholder.js (fix:content):
+- **text-tone-13 (fixed)**: the Slate cameo in `lich_victory` uses he/his ("packs up his desk", "peels off his name
+  badge, his runes flaring") and "waves you off" (not "follows you out"); with Slate in the party the Lich's death
+  narrates the new key `lich_victory_slate` ("Slate gives his old desk one long look and does not go back.").
+- **text-tone-9 (lich part, fixed)**: the catalog line starts with a capital when nobody looked it up ("A phylactery
+  hides in the shelf at 4,7 (it glows green)."). The lower-cased object names in the generic "… is destroyed." /
+  "takes a shot at the …" lines are the engine's (actions.js / combat.js; fix:engine has the id).
+- **text-tone-8 (polish, fixed)**: the Work-Study Skeleton's "Tell HR..." → "Does this count... for credit...?" (one of
+  the duplicate "Tell X... I quit" death barks).
+- Test: `bosses_act2: playtest fixes (Nov 12)`.
+- Known issue (seen while checking the Grimble / Rat King rule, NOT a playtest finding, not measured): a Bookshelf
+  Mimic's Paperback Chomp Roots the hero it bites for 1 turn, with no check for the Lich's pending Bookfall / Final
+  Notice tiles, so a hero who searched the wrong shelf inside a marked square could be held there. The playtest's Lich
+  fights did not flag it; the post-balance finish run can give the Chomp the same "no Root onto a pending wind-up" rule.
+
+## Balance rows (sustain refit 2, Nov 13)
+
+In a campaign the act 2 bosses fight with their own `DD.Balance.encounters` rows (`js/data/balance.js`): Lich-tenstein
+×1.25 HP / ×1.5 damage, Dr. Iris ×1.2 / ×1.45. At ×1 a campaign party (levels, items, Blessings) won them 98-100%; with
+the rows 82.8% (169 fights) and 80.6% (139), the Lich ~10 rounds, Iris ~12. The row multiplies the Overdue Notice's base
+(12 → 18), not the Late Fees (flat). Nothing in `lich.js` / `beholder.js` changed. This file's own sims (`realFight`)
+drop the row, so the numbers above stay the bosses' own. Details: `docs/notes/balance.md` "Sustain refit - acts 2-3".
+
+## Finish (Nov 14) — FIX: CONTENT (numbers re-measured: docs/notes/balance.md "Finish (Nov 14)")
+
+- **FF-1 (fixed): Late Fees stop at 12.** Uncapped, his fees ran to +35-60 once the three phylacteries were gone (AutoPlay
+  shreds them by round 2-3, spending the only reset) and every Overdue Notice (unblockable, any range, the nearest hero)
+  downed full-HP heroes. Now `N.feeCap` 12, grown faster (`feeRate` 4 → 6, `feeRate2` 5 → 7: the clock fills in two of
+  his turns), and his row ×1.3 HP (was 1.25) to hold his difficulty. Scratch harness, 500 paired boss fights (level 4,
+  random parties with Blessings): won 60% → 64%, Overdue Notices downing a hero at 90%+ HP 238 → 15, downs a fight 5.4 →
+  5.3, fights 11.9 → 12.5 rounds. The status says "up to 12 (the fine print has a ceiling)". Suite `bosses_act2: lich
+  late fees` checks the cap, its text and the capped notice.
+- **FF-4 (fixed): Dr. Iris's closing time is round 10 (was 14), her row ×1.1 HP (was 1.2).** Her fights were dodge-slogs:
+  13-14 rounds, 63% past 12. 500 paired fights: 11.1-11.5 rounds, 34-40% past 12, won 63% → 65%.
+- **review-open-15 (fixed)**: a Bookshelf Mimic's Paperback Chomp no longer Roots a hero standing under one of the
+  Lich's pending wind-ups (`lichMarked`, the bosses' "no pinned hero under a wind-up" rule); its text says so. Suite
+  `bosses_act2: finish — a Bookshelf Mimic never Roots …`.
+- **D1**: the Restricted Section Shelves say "break it (8 HP): any single-target damage skill can break it".
+
+Requests:
+- DOCS: DESIGN §5 (~line 298) "a 12 notice a turn plus uncapped Late Fees" → "plus Late Fees (+6 a turn, +7 below half
+  HP, up to 12)"; §5 rows (~line 307) "Lich-tenstein ×1.3 HP / ×1.5 damage, Dr. Iris ×1.1 HP / ×1.45" (tests/docs_tests.js
+  reads the live row and fails until it matches); DESIGN ~line 762 "uncapped Late Fees" → "Late Fees up to 12"; Iris's
+  closing time "round 10" wherever DESIGN gives 14.
+
+## Review (finish, Nov 14) — REVIEWER
+
+- FF-1 re-checked in code: `addFees` is the only writer of Late Fees and stops at `N.feeCap` 12 (the status's
+  `maxStacks` 99 is only the knob's headroom); the status text reads the live `N.feeRate` / `feeRate2` / `feeCap` ("+6 …
+  (7 below half HP) … up to 12"); phase 2 starts at half HP, as the text says. FF-4: every Iris text reads `N.closing`
+  (10). review-open-15: the Mimic's Root skips heroes under the Lich's pending tiles (suite passes).

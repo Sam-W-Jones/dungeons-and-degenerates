@@ -33,12 +33,12 @@ minions hold the line: interns' Paper Cut, lawyers' Billable Bite, plaintiffs' N
 Arena unchanged from v1 (12×12 tax office, DROP ZONE under the vault door, three Tax Loophole levers, filing cabinets
 for cover, interns from the break-room doors). **160 HP**, move 1 (+2 in phase 2), fire ×1.25.
 - Each turn: **Rubber Stamp of Denial** (11 + push 2 on the 4 adjacent tiles; cooldown 1 = never two of his turns in a
-  row) if a hero is next to him, otherwise his docket **Levy, Red Tape, Levy, Hire Intern** (phase 2: Garnish Wages,
-  Hire Interns, Garnish Wages, Red Tape). Then, if none is pending, he winds up an **Audit** (18 to every hero in a
+  row) if a hero is next to him, otherwise his docket **Levy, Please Hold, Levy, Hire Intern** (phase 2: Garnish Wages,
+  Hire Interns, Garnish Wages, Please Hold). Then, if none is pending, he winds up an **Audit** (18 to every hero in a
   whole row or column through the heroes; phase 2: a crossing row + column).
   - **Levy** 11 + steals up to 10 party gold, Block = half the gold, rounded up (range 7, **line of sight**: a cabinet is cover; a
     Levy step with nobody in sight is wasted). Target: the biggest spender (most damage dealt).
-  - **Red Tape** 3 + Root 1 turn, anywhere (no line of sight); prefers a hero standing in the pending Audit's lane
+  - **Please Hold** 3 + Root 1 turn, anywhere (no line of sight); prefers a hero standing in the pending Audit's lane
     (rooted, they can't walk out of it) — the designed combo; counterplay: stun him (cancels the Audit), dash or
     teleport out (not move actions), get pushed out by a friend.
   - **Hire Intern**: 1 (cap 3); phase 2: 2 Hasted (cap 4). Goblin Interns (7 HP, Paper Cut 4 + Bleed 1) walk to
@@ -84,8 +84,8 @@ Frozen, poison ×0.5.
 - **Swelling Ranks** (`rat_swarm`): +1 stack every round from round 2, **+1 damage per stack, no cap**, on his at-once
   attacks (not on wind-ups: it grows at the round start, after the heroes' last look at them). A flush washes it away.
 - **Recess** (stun guard, like Grimble's). The flush always lands.
-- **Splits** at 66% / 33% (not on the killing blow): 2 Rat Lawyers each time (14 HP, OBJECTION! 7 + push 1, Cease
-  and Desist 4 + Root 1 (likes heroes near the King), Billable Bite 6 = their attack of opportunity; max 3, 2 at start).
+- **Splits** at 66% / 33% (not on the killing blow): 2 Rat Lawyers each time (14 HP, Strike That! 7 + push 1, Temporary
+  Injunction 4 + Root 1 (likes heroes near the King), Billable Bite 6 = their attack of opportunity; max 3, 2 at start).
 - **Puzzle — the sluices**: Crank Sluice (1 AP) washes everyone in its channel into the drain: lawyers / plaintiffs
   drown (environmental kills), heroes lose 25% max HP and climb out dry, the King is **FLUSHED**: 30 damage, Stunned
   for both of his next turns (wind-ups cancelled), Wet, Swelling Ranks gone. **Each valve needs 4 rounds** (v1: 3; at
@@ -117,8 +117,8 @@ What tuning showed:
 - The v1 numbers mostly held. Under v2 the Rat King was the easy one (80% with items): the flush (30 + two lost turns +
   swarm reset) every 3 rounds per valve carried fights. Valve cooldown 4: −13%. HP 170/180, Tails 8, Pile 9, gavel 12,
   each alone: within noise (±8% at n=48).
-- Grimble: HP 150 → 160 (−5% in sims). A Red Tape fallback for blind Levy steps (tried as the anti-stall) took him from
-  68% to 43% (Red Tape → Audit landed every round): dropped for the round-10 takeover, which changed nothing measurable
+- Grimble: HP 150 → 160 (−5% in sims). A Please Hold fallback for blind Levy steps (tried as the anti-stall) took him from
+  68% to 43% (Please Hold → Audit landed every round): dropped for the round-10 takeover, which changed nothing measurable
   (fights end by round 9-10) but ends stalls.
 - Stalls found and fixed: Rat King help-up loop (targeting cap), boxed-in Rat King (Scurry), Grimble vs a lone hero
   behind cover (fiscal quarter). Fixture and campaign sims: 0 timeouts after.
@@ -251,8 +251,97 @@ items (`p2.js`, 48 fights, seeds 500+): Grimble 48%, Rat King 42% (the plain-par
   "downs by cause" line). It is his anti-crowd move (never two of his turns in a row, no AoO), and melee heroes' run
   win rates in this sample are within noise of the ranged ones, so no change; worth watching after playtests, given
   the "melee feels weak" feedback.
-- Red Tape + a pending Audit is a near-sure 21 on one hero every other round in phase 1 (designed combo; counters:
+- Please Hold + a pending Audit is a near-sure 21 on one hero every other round in phase 1 (designed combo; counters:
   stun him, dash / teleport out, a friend's push).
+
+## Docs and content cleanup (Nov 5)
+
+- **Renamed** (each had a hero skill's display name; ids unchanged): Grimble's Red Tape is now **Please Hold**
+  (`grim_redtape`; Mayor Buga keeps Red Tape; its FX text already said PLEASE HOLD, the flavor now reads "Your adventure
+  is important to us. Estimated wait: one turn."); the docket line reads "Levy, Please Hold, Levy, Hire Intern" and the
+  codex "puts you on Please Hold (Root)". The Rat Lawyer's OBJECTION! is now **Strike That!** (`rat_objection`; Corelos'
+  imp lawyer keeps Objection!) and its Cease and Desist (≈ Corelos' Cease & Desist) **Temporary Injunction**
+  (`rat_cease`): FX texts STRIKE THAT! / INJUNCTION!, the attack bark "Strike that from the record!", the passive and
+  the codex follow. The King's own courtroom barks ("Objection overruled!", "GLUB! Objection! GLUB!") are jokes, not a
+  skill, and stay. The bosses_act1 suites' regexes and labels follow.
+- **Explicit initiative**: `grim_intern` +1, `rat_plaintiff` +1, `rat_lawyer` 0 (the values they had from the tier
+  default; nothing argued for a change). Suite `bosses_act1: every boss-fight enemy states its initiative (same values
+  as before)`.
+
+## Rules run (Nov 6) — breaking objects (CONTENT SWEEP)
+
+User: "objects should be targetable to break them" (engine rule: `docs/notes/rules.md` "Rules run"). `grim_cabinet` stays a
+target and says so: `targetable: true`, desc "6 HP: any single-target attack can break it, and it releases a blizzard of
+receipts (smoke…)" — cover you can shoot open, and the smoke is cover too (Grimble sims unchanged, engine probe). The
+loopholes, vault, desk and the Rat King's valves have no HP: their puzzles stay interactions. Suite "bosses_act1: rules
+run — a Filing Cabinet can be shot open (smoke)…".
+
+## Balance pass 1 (Nov 10-11) — a knob, not a file change
+
+Neither boss file changed. Shipped: the act 1 bosses hit ×1.2 (`DD.Balance.act[1].boss = { dmg: 1.2 }`; HP unchanged), to
+pay for the starting kit's First-Aid Fanny Pack (a 3-HP heal at its wearer's every turn start). Act 1 only, 300 runs,
+seeds 7000+: Grimble 62% (no starting healer 48%, a healer 78%), the Rat King 74% (67% / 81%); both 68% (58% / 80%). With
+seeds 5000+ and two 200-run campaigns pooled (953 fights): 68% (57% / 80%). Grimble reads ~14 points harder than the Rat King
+for parties without a healer (~50% vs ~64%; H ~80% at both);
+`DD.Balance.encounters.boss_grimble` / `boss_rat_king` can level them.
+
+Earlier, pass 1 (`docs/notes/balance.md`) tried, on 300 act 1 runs a config (seeds 5000+, same parties):
+act 1 boss fights ×1.06 / ×1.12 damage or ×1.12 HP (`DD.Balance.act[1].boss`): −2 to −7 points of wins for parties with
+and without a starting healer alike; Grimble's Levy and the Rat King's contempt of court counting healing done (target the
+healer): no measurable change; Swelling Ranks capped at +6: no measurable change (fights rarely run past round 8). With
+the pass's starting kit and harder regular fights the first boss reads 69-71% overall (no healer 57%, a healer 86-89%).
+Knobs for later passes: `DD.Balance.act[1].boss` / `encounters.boss_grimble` / `encounters.boss_rat_king` (hp / dmg).
+
+## Playtest fixes (Nov 12)
+
+Fixes for the confirmed playtest findings (`.tmp/wf12/confirmed-findings.json`) that live in grimble.js / ratking.js.
+Rule for both two-turn bosses (DESIGN §4/§9: a wind-up is the heroes' window to dodge): **nothing of the boss's side
+roots a hero onto a pending wind-up before that hero's turn, and no wind-up is aimed at a hero who can't walk on his
+next turn** (`pinned` = `DD.Act.cantMove` or stunned).
+- **bosses-objectives-1 (Grimble, fixed)**: Please Hold never roots a hero standing in a pending Audit's row/column
+  (was: preferred them); `bestLanes` drops the +15 for a rooted hero and skips any lane with a pinned hero in it. Both
+  traps the verifier found are closed (rooted after the announcement, and rooted then audited in the same turn).
+  Harness `fight3.html enc=boss_grimble&n=16&from=300&level=2`: wind-up hits on heroes 37 → 5, trapped 33 → 0,
+  downs/fight 3.88 → 3.44, wins 5/16 → 6/16 (n=16, noisy). Test: the docket suite (Please Hold roots the hero OUTSIDE the
+  lane; the next Audit skips the Rooted hero's row and column; both in the lane: nobody put on hold; a stunned hero's
+  lane is skipped).
+- **bosses-objectives-v1 (Rat King, fixed)**: Tangled Tails never targets a hero on, or reeled onto, the tiles of his
+  pending Gnaw / Sewer Surge (the landing comes from the skill's dry-run preview); Gnaw never takes a pinned hero's tile
+  (was: 35 for a rooted one) and Sewer Surge never floods a channel with a pinned hero in it (was: rooted counted
+  twice). Harness `enc=boss_rat_king&n=24&from=900&level=2`: wind-up hits 24 → 2, trapped 20 → 0.
+- **bosses-objectives-5 (Rat Lawyer, fixed)**: Temporary Injunction has `cooldown: 2` (like every other rooting enemy
+  skill), and its aiScore is −30 on a hero the court (King's Tails or any lawyer) Rooted this round or last round
+  (`state.data.rat.held`), or on one standing on the King's marked tiles. "Downs after 2+ locked turns in a row" 13 → 5
+  in the same 24 fights (max 2 turns now; was 8).
+- **bosses-objectives-6 (both, fixed)**: a live objective subtitle like the act 2-3 bosses. Grimble: "Loopholes 1/3.
+  Exploit all 3 (1 AP each; interns close them) while Grimble stands in the striped DROP ZONE: the door hits everyone
+  there for 36 and Stuns them, and he coughs up your gold." / "The vault door is down. The loopholes are under review
+  for N rounds, then the interns winch it back up." (refreshed by `relabel`). Rat King: "Valve A ready · Valve B in 3
+  rounds. Crank a ready valve (1 AP) while the King wades in its channel: 30 damage, Stunned for a round, his Swelling
+  Ranks wash away (anyone else in that channel goes down the drain too)." (refreshed by `relabelValve`).
+- **text-tone-14 (Grimble, fixed)**: `refund(u, line)` takes the whole sentence; the death line reads "His ledger
+  bursts open: 17 gold flutters back to the party, refunded in full!".
+- **text-tone-8 (polish, fixed here)**: Grimble's "Tell my mom... it was unpaid..." → "This is going... in the
+  ledger..." (one of the duplicate death-bark templates).
+- **text-tone-19 (Rat King part, polish, fixed)**: Class Action's log takes the verb by count: "Class action! 2 Plaintiff
+  Rats crawl out of the drains…" / "Class action! 1 Plaintiff Rat crawls out…" (was "1 Plaintiff Rat crawl out").
+  Asserted in the Rat King playtest suite (re-run Nov 12, ~20:10: the second cast, capped at 3, logs the singular).
+- **text-tone-23 (Grimble part, polish, fixed)**: Grimble's Desk no longer repeats the "load-bearing" joke ("Blocks
+  movement. The paperwork on it is older than you.").
+- **bosses-objectives-3 (the Rat King's part, fixed)**: the threat map counting the two-turn bosses once is fix:engine's
+  (`AI.threatMap(side, { hero })` + `AI.turnsBefore`). Content side: Swelling Ranks' `telegraphFlat(st, u)` now reads
+  `swarmAhead(u)`: between his turns, when his next turn falls in the next round, the stack that round start adds is
+  counted (+`CFG.swarmDmg`); on his own turn (his planner) it is what he has. His wind-ups cancel the same amount
+  (`telegraphFlat: -swarmAhead`), so their numbers still carry none of it. Limits: round 1 (no status yet) is not
+  looked ahead, and with one of his two turns this round and one next round the shared per-turn number is the lower
+  one.
+- Balance impact (for the refits): both bosses lose their undodgeable wind-up damage. Grimble ~ +1 win in 16 and fewer
+  downs in the harness; the Rat King's docket wind-up steps now fall back to the gavel more often (an at-once 10 +
+  Swelling Ranks), 14/24 → 12/24 wins and 2.71 → 3.17 downs/fight in the harness (n=24, noisy). Re-measure both.
+
+### Requests (playtest, Nov 12)
+- **fix:engine (bosses-objectives-3)**: done on your side (AI.threatMap opts.hero); the Rat King's +1 is in ratking.js
+  (status `telegraphFlat(st, u)` reads the unit). Nothing more needed from content.
 
 ## History (v1, kept short)
 
@@ -260,3 +349,26 @@ v1 (pre-initiative) had telegraphed intents, several actions per boss turn and G
 flush, honest telegraph numbers for the tails-into-pile combo, the stun guards, killing-blow splits, raw refunds, the
 loophole hint and log noise (`git log` of this file for the full text). The v1 core fix in `js/engine/ai.js`
 `describe()` (a `los: false` tracking intent reads "fizzles if out of range.") still stands.
+
+## Review (playtest fixes) — adversarial review (REVIEWER role, Nov 12 ~20:45)
+
+Harness `.tmp/rev-pt/fight.js` (the wf12 fight3 harness + a "board lied" tally and forced Dazzles), AutoPlay, L2.
+- Grimble (s900, 24): 0 Audit hits on a hero with no free turn since the announce (playtest: 33). But **2 downs were heroes
+  knocked INTO the pending lane by the Rubber Stamp** after their one turn (Corelos 4,3 → 2,3; Sparrow 6,3 → 6,5). Fixed:
+  `stampTraps(unit)` dry-runs the Stamp and he skips it (works his docket instead) when it would land a hero in a pending
+  Audit lane. After: 0 dragged-in hits; 11/24 (s900) and 16/24 (s1000) won. Suite `bosses_act1: playtest review — Grimble's
+  Rubber Stamp never knocks a hero into a pending Audit lane`.
+- Rat King (s900, 24): 15/24 won, 0 wind-up hits on heroes, longest lock 2 turns (the Injunction cooldown holds).
+- Both bosses take two turns a round, so a 1-turn Dazzle on their one-round wind-up wore off before it landed while the
+  board showed it moved (7 / 3 "board lied" hits in 24 fights): fixed in the engine (rules.md "Review (playtest fixes)").
+
+## Finish (Nov 14) — FIX: CONTENT
+
+- **desc-sweep-2 (fixed)**: Grimble's rule line ("He keeps an Audit wound up: N damage …") reads
+  `DD.AI.fightLevel(grim_audit, 1, unit)`: 24 in a real act 1 boss fight (×1.35), like the wind-up row; a codex card
+  (no unit) keeps the raw 18. Suite `bosses_act1: finish — Grimble's rule line …`.
+- **D1**: the filing cabinet says "any single-target damage skill can break it".
+- **FF-2 (the Rat King's Help-Up loop, seed 43220)**: the seed no longer reproduces on the current build (the engine's
+  audit-3 work values a fight-ending kill; the Rat King won it in 6 rounds). The root cause for both round-cap loops,
+  Ultra Instinct being invisible to the AI, is fixed in passives.js (docs/notes/passives-table.md "Finish"). 200 Rat King
+  fights in the scratch harness (level 2, random parties with Blessings): 0 at the round cap.

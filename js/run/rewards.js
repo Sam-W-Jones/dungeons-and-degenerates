@@ -187,10 +187,15 @@
 
   function consumableReward(id) {
     const d = DD.getConsumable(id);
-    return d ? { type: 'consumable', id: id, icon: d.icon, rarity: d.rarity, label: d.name, desc: d.desc || '' } : null;
+    return d ? { type: 'consumable', id: id, icon: d.icon, rarity: d.rarity, label: d.name, desc: DD.skillDesc(d, 1, null) } : null;
   }
   function goldReward(n) {
-    return { type: 'gold', amount: n, icon: '💰', label: 'Suspiciously Heavy Sack', desc: 'Gain ' + n + ' gold.' };
+    // [finish desc-sweep-9] the card says what the pick adds: Run.addGold pays gold Blessings (Trust Fund) on top
+    const run = runOf(null);
+    const got = run && DD.Run && typeof DD.Run.goldPreview === 'function' && DD.Run.state === run ? DD.Run.goldPreview(n) : n;
+    const pct = DD.Passives && run ? Math.round((DD.Passives.goldMult(run) - 1) * 100) : 0;
+    const desc = got === n ? 'Gain ' + n + ' gold.' : 'Gain ' + got + ' gold (' + n + (pct ? ' + ' + pct + '% from Blessings' : '') + ').';
+    return { type: 'gold', amount: n, icon: '💰', label: 'Suspiciously Heavy Sack', desc: desc };
   }
   function goldPile(act, rng) {
     const g = BAL('gold'), r = range(g.pile, FALLBACK.gold.pile);

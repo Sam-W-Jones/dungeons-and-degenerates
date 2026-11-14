@@ -44,6 +44,13 @@
  * toward the fight by walking distance when nothing is in reach). The best total above 0.5 is done; otherwise the unit
  * walks toward the fight once (walking distance, around walls) and stops. Signatures wait for a big moment or the end
  * of the fight. Units given AP or made mid-turn (summons) act in a later pass of the same turn.
+ * Pass 3 (play like a good human): the summons act before their hero (combos); two moves + a skill are searched when
+ * nothing is in reach after one (closing in); melee heroes value the hits their end tile allows next turn (tempo); a
+ * repositioning skill counts when the new tile is worth more (two-step disengage); a revive undone before the ally could
+ * act is not repeated while the enemy that did it acts (the Help-Up loop); a ready signature fires when it is worth it
+ * (Hype stops at 100) and Hype is worth more while a signature can use it; damage buffs are worth the hits their holder
+ * lands while they last; Debt costs the HP it will take; a foe next to a hero whose attack of opportunity stops walkers
+ * is pinned.
  * Content hooks (all optional): skill aiScore(ctx) / autoplayValue(ctx) → number (ctx.autoplay = { preview } when exact);
  * object `autoplay: number | (unit, obj, tile, state) => number` puzzle hints (§5.7); enemy def or status
  * hooks.threatAt(enemy, unit, tile, extra) → number | { dmg, label, ignoreBlock } for damage that is not a wind-up.
@@ -64,6 +71,8 @@
   const REVIVE_GAIN = 12;    // a downed ally back on its feet (on top of its HP): it acts again (safe revives only)
   const HURT = 1.25;         // a hero's HP is worth more than a foe's (it carries through the run); summons 0.8
   const PROGRESS = 1;        // a tile of walking distance toward the fight, when nothing is in reach
+  const STALL_SPAWN = 0.25;  // weight of foes a hit calls in (a boss split) while the stalemate breaker is on
+  const GATE_VALUE = 2;      // hitting a crate that seals a unit off from the fight (+0.5 a damage, +4 when it breaks)
   const MAX_STEPS = 12;
   // v2 danger model (see the header)
   const RESPOND = 0.35;      // an enemy turn after the victim's own next turn: it can step away or deal with it first
@@ -74,9 +83,17 @@
   const TARGET_MIX = 0.25;   // share of "it may go for anyone in reach" (custom planners, styles, position)
   const TARGET_REF = 20;     // score offset inside exp() (keeps the weights small)
   const MOVE_OTHERS = 4;     // plain moves whose effect on the allies' danger (body-blocking, drawing attacks) is computed
+  const ENGAGE_TILES = 12;   // closing in: second-move tiles (nearest the foes) that get a quick pass
+  const ENGAGE_REFINE = 3;   // closing in: exact dry runs of the best two-moves-then-skill options
+  const SIG_MIN = 10;        // a signature must do at least this much (gain + danger taken off the party)
+  const HYPE_VALUE = 0.3;    // a Hype point while the party can still use a signature this fight (else 0.1)
+  const TEMPO = 0.35;        // next-turn potential of a melee hero's end tile (share of its next turn's hits; AP.tempo)
   const DP_CAP = 400;        // HP + Block cap of the damage-odds table
+  const GOLD = 0.4;          // a gold piece spilled by an object the party breaks (rules run: loot is worth a little)
+  const SWAP_COST = 0.5;     // a swap moves an ally off the tile it chose (on top of a move's 0.5): only for a real gain
   const OFF = { x: -99, y: -99 };
   const STUNLIKE = { stun: 1, sleep: 1, frozen: 1, sheep: 1 };
+  const DEBT = 'cor_debt';   // Corelos' Debt (js/data/heroes/corelos.js): HP owed, paid at the start of the holder's turn
   const ELEMENTS = ['fire', 'frost', 'lightning', 'poison', 'holy'];
   // what a hit costs on top of its damage, even fully Blocked (riders: statuses, pulls, lost turns)
   const RIDER_TAGS = ['root', 'poison', 'bleed', 'burn', 'weak', 'vulnerable', 'silence', 'mark', 'dazzle', 'confuse', 'pull', 'push', 'knockback'];
@@ -113,9 +130,18 @@
    * whom nobody dares to Help Up while the enemies can't get past, or a last hero kiting a boss it never hits.
    */
   const stall = { s: null, round: 0, hp: 0, n: 0, quiet: 0 };
+  /**
+   * What the party wears down: every enemy's HP and count, and damageable objects. Playtest fix (bosses-objectives-8):
+   * while a boss is up only the bosses count (and objects): adds that keep coming (Dr. Iris's Eye Floaters, killed by
+   * her own beams as often as not) are not progress, so a party picking off floaters in a corner is a stalemate.
+   */
   function wornSig(s) {
     let hp = 0, n = 0;
-    for (let i = 0; i < s.units.length; i++) { const u = s.units[i]; if (u.side === 'enemy' && active(u)) { hp += u.hp || 0; n++; } }
+    const boss = s.units.some(function (u) { return u.side === 'enemy' && active(u) && (u.tier === 'boss' || u.isBoss); });
+    for (let i = 0; i < s.units.length; i++) {
+      const u = s.units[i];
+      if (u.side === 'enemy' && active(u) && (!boss || u.tier === 'boss' || u.isBoss)) { hp += u.hp || 0; n++; }
+    }
     for (let i = 0; i < s.grid.tiles.length; i++) { const o = s.grid.tiles[i].obj; if (o && o.hp > 0) hp += o.hp; }
     return { hp: hp, n: n };
   }
@@ -198,7 +224,57 @@
     const r = o.units[snap.id] || (o.units[snap.id] = { n: 0, eq: 0 });
     r.n++; r.eq += eq;
   }
-  DD.afterLoad(function () { DD.Events.on('turn:start', onTurnStart); DD.Events.on('turn:end', onTurnEnd); });
+  // ---- revives that did not stick ---------------------------------------------------------------------------------------
+  /**
+   * A player who helps an ally up and watches it go straight back down before it could act changes plans (the Help-Up
+   * loop: a boss downing the same heroes every round while the rest of the party spends every turn picking them up). Per
+   * fight: the revives AutoPlay made (Help Up, a heal aimed at a downed ally) per ally, and how many of them were undone
+   * before that ally's next turn started (futile), and whether the LAST one was (undone) or held (the ally got its turn).
+   * safeToRevive reads them.
+   */
+  const rev = { s: null, pending: {}, tried: {}, futile: {}, by: {}, undone: {} };
+  function revNow() {
+    const s = S();
+    if (!DD.Act.simulating && rev.s !== s) { rev.s = s; rev.pending = {}; rev.tried = {}; rev.futile = {}; rev.by = {}; rev.undone = {}; }
+    return rev;
+  }
+  function noteRevive(h) {
+    if (!h) return;
+    const r = revNow();
+    r.pending[h.id] = true;
+    r.tried[h.id] = (r.tried[h.id] || 0) + 1;
+  }
+  function onDowned(ev) {
+    const u = ev && ev.unit;
+    if (!u || DD.Act.simulating || rev.s !== S() || !rev.pending[u.id]) return;
+    rev.pending[u.id] = false;
+    // whose turn it was: that enemy is the reason (while it stands and acts, the revive won't stick). [review] Undone on
+    // no enemy's turn (the party's own blast, a round-end effect) is no such evidence: with no culprit to wait out, it
+    // used to block every later revive of that ally for the rest of the fight.
+    const c = DD.Combat.current();
+    if (!c || c.side !== 'enemy') return;
+    rev.futile[u.id] = (rev.futile[u.id] || 0) + 1;
+    rev.undone[u.id] = true;
+    (rev.by[u.id] || (rev.by[u.id] = {}))[c.id] = 1;
+  }
+  /** Did a revive of h come undone before it could act, by an enemy that still stands and acts? (count, or 0) */
+  function futileRevives(h) {
+    const r = revNow(), f = r.futile[h.id] || 0;
+    if (!f) return 0;
+    const by = Object.keys(r.by[h.id] || {});
+    if (!by.length || by.every(function (id) { const e = DD.Combat.byId(id); return !active(e) || incapacitated(e) || !G().hostile(h, e); })) return 0;
+    return f;
+  }
+  function onRevivedTurn(ev) {
+    const u = ev && ev.unit;
+    if (u && !DD.Act.simulating && rev.s === S()) DD.Combat.groupOf(u).forEach(function (m) { if (rev.pending[m.id]) { rev.pending[m.id] = false; rev.undone[m.id] = false; } });
+  }
+  DD.afterLoad(function () {
+    DD.Events.on('turn:start', onTurnStart);
+    DD.Events.on('turn:end', onTurnEnd);
+    DD.Events.on('unit:downed', onDowned);
+    DD.Events.on('turn:start', onRevivedTurn);
+  });
 
   // ---- who acts when (initiative) -----------------------------------------------------------------------------------
   /** Rolled initiative order (as DD.Combat sorts it): higher total, then higher init, then heroes, then the coin flip. */
@@ -309,7 +385,9 @@
   /**
    * The damaging skills an AI unit has ready for its next turn (charges left, not cooling down then, no spells while
    * silenced), best first: { def, base (L.dmg), raw, flat, el, single (one target, needs range / sight / a straight
-   * line), r0, r1, los, straight, reach / rmin (areas: how far from where it stands it can hit), obj, ride }.
+   * line), r0, r1, los, straight, reach / rmin (areas: how far from where it stands it can hit), obj, ride, stand }.
+   * [review] Like DD.AI.reachOf: a windupOnly skill is never an instant strike (its marked tiles price it when wound up),
+   * a fromStand one (stand) only goes off from where the unit stands, never after its walk.
    */
   function readySkills(e) {
     const out = [];
@@ -317,7 +395,7 @@
     const flat = DD.AI.telegraphFlat ? num(+DD.AI.telegraphFlat(e)) : 0;
     DD.Combat.slotsOf(e).forEach(function (sl) {
       const def = DD.getSkill(sl.id);
-      if (!def) return;
+      if (!def || (DD.AI.windupOnly && DD.AI.windupOnly(def))) return;
       if (def.charges > 0 && (sl.uses || 0) >= def.charges) return;
       if ((sl.cd || 0) > 1 || ((sl.cd || 0) === 1 && sl.fresh)) return;   // still cooling down on its next turn
       if (def.kind === 'spell' && has(e, 'silenced')) return;
@@ -343,7 +421,8 @@
       const tags = def.tags || [];
       out.push({ def: def, base: L.dmg, raw: Math.max(0, Math.round(L.dmg * mult) + flat), flat: flat, el: elementOf(def),
         single: single, r0: rg[0], r1: rg[1], los: tg.los !== false, straight: !!tg.straight, reach: reach, rmin: rmin,
-        obj: tg.filter === 'object' || tags.indexOf('objects') >= 0, units: tg.filter !== 'object', ride: riderCost(def) });
+        obj: tg.filter === 'object' || tags.indexOf('objects') >= 0, units: tg.filter !== 'object', ride: riderCost(def),
+        stand: !!(DD.AI.fromStand && DD.AI.fromStand(def)) });
     });
     out.sort(function (a, b) { return b.raw - a.raw; });
     return out;
@@ -404,9 +483,13 @@
     if (v === undefined) { v = G().los(a, b); tm.los.set(k, v); }
     return v;
   }
-  /** Can skill sk hit tile X from one of the positions (not X itself when a unit will stand there)? */
+  /**
+   * Can skill sk hit tile X from one of the positions (not X itself when a unit will stand there)? positions[0] is where
+   * the unit stands (srcPositions): a fromStand skill only goes off from there.
+   */
   function canHitFrom(tm, sk, positions, X, hide) {
-    for (let i = 0; i < positions.length; i++) {
+    const n = sk.stand ? Math.min(1, positions.length) : positions.length;
+    for (let i = 0; i < n; i++) {
       const P = positions[i];
       if (hide && P.x === X.x && P.y === X.y) continue;
       const d = Math.abs(P.x - X.x) + Math.abs(P.y - X.y);
@@ -457,7 +540,8 @@
     if (DD.AI.targetBonus) {
       let thr = tm.thr[u.id];
       if (thr === undefined) thr = tm.thr[u.id] = DD.AI.threatOf ? num(DD.AI.threatOf(u)) : 0;
-      sc += DD.AI.targetBonus(src.style, { kill: kill, hurt: 1 - hp / Math.max(1, u.maxHp || 1), engaged: engaged, thr: thr, maxHp: u.maxHp, hero: u.kind === 'hero' });
+      sc += DD.AI.targetBonus(src.style, { kill: kill, hurt: 1 - hp / Math.max(1, u.maxHp || 1), engaged: engaged, thr: thr, maxHp: u.maxHp, hero: u.kind === 'hero',
+        last: kill && !!DD.AI.endsFight && DD.AI.endsFight(u) });
     } else {
       sc += 3 * (1 - hp / Math.max(1, u.maxHp || 1));
       if (kill) sc += 12 + (u.kind === 'hero' ? 6 : 0);
@@ -482,6 +566,26 @@
     const e = src.e;
     if (Math.abs(pos.x - e.x) + Math.abs(pos.y - e.y) === 1 || hitsFromHere(tm, src, pos)) return 1;
     return 0.3;
+  }
+  /**
+   * Deterrents: an enemy next to a hero whose attack of opportunity ends the walker's walk (the Polearm of Passive
+   * Aggression when it draws blood, Hall Monitor III, or any content that sets o.stop in a pure modifyOpportunity) can't
+   * walk anywhere this turn: its first step off provokes and stops it. It strikes from where it stands or not at all.
+   */
+  function pinned(e) {
+    if (!DD.Act.opportunityOf) return false;
+    const s = S();
+    for (let i = 0; i < s.units.length; i++) {
+      const a = s.units[i];
+      if (!active(a) || dist(a, e) !== 1 || !G().hostile(a, e) || G().effectiveSide(a) !== 'hero') continue;
+      const o = DD.Act.opportunityOf(a, e, null);
+      if (!o) continue;
+      if (o.stop) return true;
+      if ((a.passives || []).some(function (p) { return p && p.id === 'rp_hall_monitor' && p.L && p.L.stop; })) return true;
+      if ((a.items || []).indexOf('passive_aggressive_polearm') >= 0 && DD.AI.opportunityDmg &&
+        num(DD.AI.opportunityDmg(a, e, { x: e.x, y: e.y })) > (e.block || 0)) return true;
+    }
+    return false;
   }
   /**
    * What the AI source pays in attacks of opportunity to walk away from the hero-side units next to it now
@@ -566,7 +670,7 @@
       const taunt = DD.AI.taunter ? DD.AI.taunter(e) : null;
       const style = DD.AI.styleOf ? DD.AI.styleOf(e) : null;
       const src = {
-        e: e, entries: entries, skills: skills, maxReach: Math.min(maxReach, 99), mov: DD.Combat.cantMove(e) ? 0 : DD.Combat.effectiveMov(e),
+        e: e, entries: entries, skills: skills, maxReach: Math.min(maxReach, 99), mov: DD.Act.cantMoveNext(e) || pinned(e) ? 0 : DD.Combat.effectiveMov(e),   // [finish audit-7] held only if still held then
         only: taunt ? taunt.id : null, fuzzy: has(e, 'dazzled') || has(e, 'confused') ? 0.6 : 1, m: hitsPerTurn(e),
         ride: skills.reduce(function (m, k) { return Math.max(m, k.ride); }, 1), pos: {}, memo: new Map(), victims: {}, Z: 0, n: 0, M: 0, objV: null, threat: 0,
         style: style, leave: leaveCostOf(e, style),
@@ -615,10 +719,13 @@
    */
   function addWindups(tm, e, seqs) {
     const off = incapacitated(e) || has(e, 'charmed');
-    const fuzzy = has(e, 'dazzled') || has(e, 'confused') ? 0.5 : 1;
     for (let k = 0; k < e.intents.length; k++) {
       const it = e.intents[k];
       const sure = !!(it.data && it.data.unstoppable);
+      // [playtest review] a Dazzled / Confused unit's wind-up is drawn where it lands once its skew is rolled (when the
+      // status lands: bosses-objectives-2): only an unrolled one is a coin flip
+      const sk = it.skew || {};
+      const fuzzy = (has(e, 'dazzled') && !sk.off) || (has(e, 'confused') && !sk.turn) ? 0.5 : 1;
       if (off && !sure) continue;
       const def = DD.getSkill(it.skillId);
       if (!sure && def && def.kind === 'spell' && has(e, 'silenced')) continue;
@@ -838,16 +945,26 @@
     S().grid.tiles.forEach(function (tl) { if (tl.obj && objectiveObj(tl.obj.id) && tl.obj.hp > 0) out.push({ x: tl.x, y: tl.y }); });
     return out;
   }
-  function hintOf(obj, unit, tl) {
+  /**
+   * The object's puzzle hint for the unit (ARCHITECTURE §5.7). [finish D5] `how` tells the hint what is being priced:
+   * 'break' (hitting it: a Smash, an aimed hit, an area), 'interact' (its interaction) or 'step' (walking onto it). A
+   * Bone Pile is worth breaking for a flyer too, though a flyer can't stomp it.
+   */
+  function hintOf(obj, unit, tl, how) {
     if (!obj) return 0;
     const def = DD.getObject(obj.id) || {};
     const srcs = [obj, obj.interact, def, def.interact];
     let h;
     for (let i = 0; i < srcs.length && h === undefined; i++) if (srcs[i] && srcs[i].autoplay !== undefined) h = srcs[i].autoplay;
-    if (typeof h === 'function') h = DD.safe('AutoPlay hint ' + obj.id, h, null, [unit, obj, tl, S()]);
+    if (typeof h === 'function') h = DD.safe('AutoPlay hint ' + obj.id, h, null, [unit, obj, tl, S(), how || howFor(obj, unit)]);
     return typeof h === 'number' && isFinite(h) ? h : 0;
   }
-  function hintAt(unit, x, y) { const tl = G().tile(x, y); return tl && tl.obj ? hintOf(tl.obj, unit, tl) : 0; }
+  function hintAt(unit, x, y, how) { const tl = G().tile(x, y); return tl && tl.obj ? hintOf(tl.obj, unit, tl, how) : 0; }
+  /** What the unit would do with the object up close: its interaction, else a Smash ('break'), else step on it. */
+  function howFor(o, unit) {
+    if (DD.Act.interactionOf(o, unit)) return 'interact';
+    return DD.Combat.smashable(o) ? 'break' : 'step';
+  }
   /** An object that only works by being stepped on (a plate): nothing to interact with or smash. Flyers never press it. */
   function stepOnly(o, unit) {
     return !G().objBlocksMove(o) && !DD.Act.interactionOf(o, unit) && !DD.Combat.smashable(o);
@@ -856,7 +973,8 @@
     const out = [];
     const floor = G().feelsFloor(unit);
     S().grid.tiles.forEach(function (tl) {
-      if (!tl.obj || (!floor && stepOnly(tl.obj, unit))) return;   // v2: a flyer can't press a plate
+      // v2: a flyer can't press a plate; [review] loot (gold piles, Hoard Piles: DD.Grid.isLoot) it still picks up
+      if (!tl.obj || (!floor && !G().isLoot(tl.obj) && stepOnly(tl.obj, unit))) return;
       if (hintOf(tl.obj, unit, tl) >= min) out.push({ x: tl.x, y: tl.y });
     });
     return out;
@@ -894,12 +1012,59 @@
     return (ctx.blast[k] = num(v));
   }
 
-  /** Value of damaging an object: destroy-objective targets and hinted objects (0 for anything else). */
+  /**
+   * v2 (rules run): what hitting the breakable object on p for dmg is worth to the actor (an attack aimed at it): the
+   * destroy objective and puzzle hints (objectValue), and — when the hit breaks an object that does something when
+   * destroyed — a dry run of the break credited to the actor from where it stands (on other dice): foes hurt / killed,
+   * allies hurt, surfaces laid, loot (GOLD a gold piece). A plain crate is worth 0 (AutoPlay leaves cover alone). Cached
+   * per decision; the exact pass replays the actual use.
+   */
+  function breakValue(ctx, p, dmg) {
+    const k = key(p.x, p.y) + ':' + dmg;
+    ctx.brk = ctx.brk || {};
+    if (ctx.brk[k] !== undefined) return ctx.brk[k];
+    const unit = ctx.unit, tl = G().tile(p.x, p.y), o = tl && tl.obj;
+    if (!o || !(o.hp > 0)) return (ctx.brk[k] = 0);
+    const destroyed = dmg >= o.hp;
+    let v = objectValue(unit, tl, Math.min(dmg, o.hp), destroyed);
+    const def = DD.getObject(o.id);
+    if (destroyed && (typeof o.onDestroyed === 'function' || (def && typeof def.onDestroyed === 'function'))) {
+      const real = S();
+      const seed = (U.hash(real.rng.getState() + ':autoplay:break:' + k) >>> 0) || 1;
+      v += num(at(unit, ctx.here, function () { return DD.Targeting.simulate(function (sim) {
+        const su = DD.Combat.byId(unit.id);
+        if (!su) return 0;
+        DD.Act.withCredit(su, function () { DD.Act.damageObject(su, p.x, p.y, dmg); });
+        const diff = DD.Targeting.diff(real, sim, false);
+        let g = 0;
+        for (const id in diff.perUnit) {
+          const e = diff.perUnit[id], ru = DD.Combat.byId(id);
+          if (!ru) continue;
+          if (G().hostile(su, ru)) g += e.dmg + e.blocked * 0.5 + (e.lethal ? 15 + threatOf(ctx.tm0, ru) : 0);
+          else g -= e.dmg * 1.5 + (e.lethal ? 40 : 0);
+        }
+        g += surfaceGain(real, sim, su) + GOLD * goldOf(real, sim);
+        if (sim.result === 'victory') g += 100;
+        else if (sim.result === 'defeat') g -= 300;
+        return g;
+      }, { seed: seed }); }));
+    }
+    return (ctx.brk[k] = v);
+  }
+  /** Gold the dry run gained (fight stats: run gold itself is silenced in dry runs). */
+  function goldOf(real, sim) { return Math.max(0, num((sim.stats || {}).goldGained) - num((real.stats || {}).goldGained)); }
+
+  /**
+   * Value of damaging an object: destroy-objective targets and hinted objects; [finish FF-3] a GATE (a crate or keg on
+   * the cheapest way out for a unit no walk takes to the fight, breakOut) is worth breaking too. 0 for anything else.
+   */
   function objectValue(unit, tl, dmg, destroyed) {
     if (!tl || !tl.obj) return 0;
     if (objectiveObj(tl.obj.id)) return dmg + (destroyed ? 15 : 0);
-    const v = hintOf(tl.obj, unit, tl);
-    return v > 0 ? dmg * 0.5 + (destroyed ? v : 0) : 0;
+    const v = hintOf(tl.obj, unit, tl, 'break');
+    if (v > 0) return dmg * 0.5 + (destroyed ? v : 0);
+    const bo = G().objBlocksMove(tl.obj) ? breakOut(unit) : null;
+    return bo && bo.gates[key(tl.x, tl.y)] ? GATE_VALUE + dmg * 0.5 + (destroyed ? GATE_VALUE * 2 : 0) : 0;
   }
 
   // ---- helpers ---------------------------------------------------------------------------------------------------
@@ -1007,13 +1172,18 @@
     const tags = def.tags || [];
     const pushy = tags.indexOf('push') >= 0 || tags.indexOf('pull') >= 0 || L.push || L.pull;
     const stunny = tags.indexOf('stun') >= 0 || L.stun;
-    let sc = 0, bonus = 0;
+    let sc = 0, bonus = 0, foes = 0;
     const seen = {};
     // v2: an attack aimed at a volatile object sets it off — the blast's value from a dry run (foes hurt / killed minus
     // allies hurt); the exact pass replays the whole use from the tile it is made from
     if (target && DD.Targeting.volatileAt(target.x, target.y) && DD.Targeting.aimsAtObjects(unit, sk.slot)) {
       const v = blastValue(ctx, target);
-      return { q: v, base: 0 };
+      return { q: v, base: 0, foes: v > 0 ? 1 : 0 };
+    }
+    // v2 (rules run): an attack aimed at a breakable object (validTargets entries { obj, dmg }) hits it
+    if (target && target.obj && target.dmg > 0 && !target.detonates && DD.Targeting.breakableAt(target.x, target.y)) {
+      const v = breakValue(ctx, target, target.dmg);
+      return { q: v, base: 0, foes: v > 0 ? 1 : 0 };
     }
     const revive = DD.Targeting.revivesWith(unit, sk.slot);
     for (let i = 0; i < tiles.length; i++) {
@@ -1033,6 +1203,7 @@
       seen[o.id] = 1;
       if (G().hostile(unit, o)) {
         const thr = threatOf(ctx.tm0, o);
+        foes++;
         if (dmg) {
           const est = DD.AI.estimate(unit, o, dmg, null);
           sc += est + (1 - o.hp / Math.max(1, o.maxHp)) * 4;
@@ -1049,7 +1220,8 @@
     }
     if (def.kind === 'summon' || tags.indexOf('summon') >= 0) sc += 8;
     if (hasHooks(def)) sc += hookScore(def, hookCtx(unit, sk.slot, target), false);
-    return { q: sc + bonus, base: sc };
+    // foes: hostile units it reaches (an attack, not a self-buff: what "something to do in reach" means for approaching)
+    return { q: sc + bonus, base: sc, foes: foes + (bonus > 0 ? 1 : 0) };
   }
 
   /** The n targets whose area covers the most foes, then units (stable: earlier targets win ties). [core fix, kit] */
@@ -1082,6 +1254,8 @@
       mov: DD.Combat.effectiveMov(unit), plan: turnPlan(), posCache: new Map(), ar: {}, dud: {},
     };
     ctx.tm0 = threatModel(ctx);
+    hypeValue(ctx);   // from the real state (dry runs read it)
+    ctx.tempo0 = tempoAt(ctx, here);
     ctx.others0 = othersCost(ctx.tm0, unit.id);
     ctx.my0 = myCost(ctx, here, ap);
     ctx.consCost = consumableCost(s, ctx.tm0, unit);
@@ -1094,17 +1268,18 @@
    * then stepping to the safest tile within reach (hit and run: poke out from behind a pillar, then back into cover).
    */
   function endValue(ctx, pos, apLeft, used, stay) {
-    let v = fpAt(ctx, pos, apLeft, used) - (stay !== undefined ? stay : myCost(ctx, pos, apLeft));
+    let v = fpAt(ctx, pos, apLeft, used) - (stay !== undefined ? stay : myCost(ctx, pos, apLeft)) + tempoAt(ctx, pos);
     if (ctx.canWalk && apLeft >= ctx.moveCost) {
       const a = apLeft - ctx.moveCost;
       const esc = escapeCost(ctx, pos, a);
       if (esc !== null) v = Math.max(v, fpAt(ctx, pos, a, used) - esc - 0.5);
     }
-    return v;
+    return v - ctx.tempo0;
   }
   /**
    * Danger of the safest tile one move away from pos (a real walk: walls, heights, foes in the way), keeping apAfter,
-   * plus the attacks of opportunity that stepping off pos provokes (v2: hit and run next to a brute is not free).
+   * minus its next-turn potential (tempoAt), plus the attacks of opportunity that stepping off pos provokes (v2: hit and
+   * run next to a brute is not free).
    */
   function escapeCost(ctx, pos, apAfter) {
     const k = pos.x + ',' + pos.y + ':' + apAfter;
@@ -1112,12 +1287,90 @@
     let best = null;
     const tiles = walkFrom(ctx, pos);
     for (let i = 0; i < tiles.length; i++) {
-      const c = myCost(ctx, tiles[i], apAfter);
+      const c = myCost(ctx, tiles[i], apAfter) - tempoAt(ctx, tiles[i]);
       if (best === null || c < best) best = c;
-      if (best === 0) break;
     }
     if (best !== null) best += leaveCost(ctx, pos);
     return (ctx.esc[k] = best);
+  }
+
+  /**
+   * Next-turn potential (tempo) of ending the turn on pos, for melee and short-reach heroes: what it can deal on its next
+   * turn if the foes stay put — its best melee hit per AP × the AP left after the moves it needs to reach a foe (0, 1 or
+   * 2) × TEMPO. Retreating from a fight it has to fight anyway gives that up, closing to striking distance earns it, so a
+   * melee hero no longer hangs back out of every reach and walks the whole fight. Ranged heroes are in range from most
+   * tiles (0). Valued against where it stands (ctx.tempo0).
+   */
+  function tempoAt(ctx, pos) {
+    if (ctx.unit.kind === 'summon') return comboAt(ctx, pos);
+    const tf = tempoField(ctx);
+    if (!tf) return 0;
+    const v = tf.dist[pos.y * S().grid.w + pos.x];
+    if (!isFinite(v)) return 0;
+    const m = v <= tf.reach ? 0 : Math.ceil((v - tf.reach) / Math.max(1, ctx.mov));
+    if (m > 2) return 0;
+    return tf.w * tf.perAP * Math.max(0, tf.ap - m * ctx.moveCost);
+  }
+  /**
+   * A summon's side of a combo (it acts before its hero, see takeTurn): what its owner's ready skills that work off this
+   * kind of summon (self-centred areas tagged with the summon's kind: Zoomies hits the foes next to the corgis, Murder of
+   * Crows those around Onyx) would score with the summon standing on pos (half the owner's quick value), so a corgi
+   * bites from the gap between two foes. Cached per tile.
+   */
+  function comboAt(ctx, pos) {
+    const k = key(pos.x, pos.y);
+    ctx.combo = ctx.combo || {};
+    if (ctx.combo[k] !== undefined) return ctx.combo[k];
+    let v = 0;
+    const sks = comboSkills(ctx);
+    if (sks.length) {
+      const own = sks.owner, lite = { unit: own, tm0: ctx.tm0, here: { x: own.x, y: own.y }, blast: {} };
+      at(ctx.unit, pos, function () {
+        sks.forEach(function (sk) { v = Math.max(v, quickScore(lite, sk, { x: own.x, y: own.y }).q); });
+      });
+    }
+    return (ctx.combo[k] = 0.5 * v);
+  }
+  /** The owner's usable self-centred area skills tagged with this summon's kind (its tags or its id), if any. */
+  function comboSkills(ctx) {
+    if (ctx.comboSk) return ctx.comboSk;
+    const s = ctx.unit, own = s.ownerId ? DD.Combat.byId(s.ownerId) : null, out = [];
+    out.owner = own;
+    ctx.comboSk = out;
+    if (!active(own) || !((own.ap || 0) > 0) || AP.summonsFirst === false) return out;
+    const sd = DD.getSummon ? DD.getSummon(s.defId) : null;
+    const kinds = ((sd && sd.tags) || []).concat(s.tags || []);
+    const mine = function (tag) { return kinds.indexOf(tag) >= 0 || String(s.defId || '').indexOf(tag) >= 0; };
+    // ready and affordable (canUse is not asked: "no foe next to a corgi" is exactly what the summon can change)
+    DD.Combat.slotsOf(own).forEach(function (sl) {
+      const def = DD.getSkill(sl.id), tg = def && (def.target || {});
+      if (!def || tg.type !== 'self' || !def.area || (own.signature && sl === own.signature) || (sl.cd || 0) > 0) return;
+      if (def.charges > 0 && (sl.uses || 0) >= def.charges) return;
+      if (!(def.tags || []).some(function (t) { return t.length > 3 && mine(t); })) return;
+      const ap = DD.Combat.costOf(own, def, sl.level).ap;
+      if (ap > own.ap) return;
+      out.push({ slot: sl, def: def, L: DD.skillLevel(def, sl.level || 1) || {}, ap: ap, cd: true, util: false, sig: false });
+    });
+    return out;
+  }
+  function tempoField(ctx) {
+    if (ctx.tempo !== undefined) return ctx.tempo;
+    ctx.tempo = null;
+    const unit = ctx.unit, w = AP.tempo === undefined ? TEMPO : +AP.tempo;
+    if (!(w > 0) || unit.kind !== 'hero' || attackRange(unit)[1] > 2) return null;
+    let perAP = 0, reach = 1;
+    DD.Combat.slotsOf(unit).forEach(function (sl) {
+      if (unit.signature && sl === unit.signature) return;
+      const def = DD.getSkill(sl.id), L = def && DD.skillLevel(def, sl.level || 1);
+      if (!L || !(L.dmg > 0)) return;
+      perAP = Math.max(perAP, L.dmg / Math.max(1, DD.Combat.costOf(unit, def, sl.level).ap));
+      reach = Math.max(reach, Math.min(2, DD.Targeting.range(unit, def, sl.level || 1)[1]));
+    });
+    const foes = DD.Combat.foesOf(unit).filter(function (f) { return active(f) && !has(f, 'stealth'); });
+    if (!(perAP > 0) || !foes.length) return null;
+    ctx.tempo = { dist: distField(unit, foes.map(function (f) { return { x: f.x, y: f.y }; }), true), perAP: perAP, reach: reach,
+      ap: DD.Combat.turnAp ? DD.Combat.turnAp(unit) : unit.maxAp || 3, w: w };
+    return ctx.tempo;
   }
   /** The actor's passability for this decision: walkable, terrain cost, height, who stands where (its own tile free). */
   function walkGrid(ctx) {
@@ -1220,12 +1473,21 @@
     at(unit, pos, function () {
       ctx.slots.forEach(function (sk) {
         if (sk.sig) return;
-        let best = 0;
-        targetsFrom(unit, sk.slot).forEach(function (t) { const q = quickScore(ctx, sk, t); if (q.base > best) best = q.base; });
-        if (best > 0) row.push({ id: sk.slot.id, ap: Math.max(1, sk.ap), cd: sk.cd, perAP: best / Math.max(1, sk.ap) });
+        let best = 0, atk = 0;
+        targetsFrom(unit, sk.slot).forEach(function (t) {
+          const q = quickScore(ctx, sk, t);
+          if (q.base > best) best = q.base;
+          if (q.foes > 0 && q.base > atk) atk = q.base;
+        });
+        if (best > 0) row.push(fpEntry(sk, best, atk));
       });
     });
     return row;
+  }
+  /** A leftover-AP table entry: the best quick value per AP of a slot, and of its attacks only (atk: foes in reach). */
+  function fpEntry(sk, best, atk) {
+    const ap = Math.max(1, sk.ap);
+    return { id: sk.slot.id, ap: ap, cd: sk.cd, perAP: best / ap, atk: atk / ap };
   }
 
   /** Best damage number among a unit's skills, signature aside (for Empowered / Inspired). */
@@ -1290,19 +1552,71 @@
         default: return 1.5 + Math.min(n, 4) * 0.5;
       }
     }
-    if (debuff) return -2 * Math.min(n, 3);
+    if (debuff) return id === DEBT ? -debtCost(ru, su, n) : -2 * Math.min(n, 3);
     switch (id) {
       case 'empowered': return 0.5 * nextHit(ctx, su);
-      case 'inspired': return 0.25 * nextHit(ctx, su) * Math.max(1, Math.min(3, su.ap || 0));
+      case 'inspired': return 0.25 * nextHit(ctx, su) * hitsWhileBuffed(ctx, su, def);
       case 'haste': return 2.5;
       case 'regen': return Math.min(n * 2, Math.max(0, (ru.maxHp || 0) - (ru.hp || 0))) * 0.6;
       case 'stealth': return 1.5;
       case 'invulnerable': return 1;
       case 'thorns': return Math.min(n, 5) * 0.5 * (1 + hitsOn(ctx, ru));
       default:
-        // retaliation / mitigation buffs (Hellish Rebuke...): worth more on whoever is about to be hit
-        return 1.5 + (def.hooks && (def.hooks.onTakeDamage || def.hooks.modifyIncomingDamage) ? 2.5 * hitsOn(ctx, ru) : 0);
+        // retaliation / mitigation buffs (Hellish Rebuke...): worth more on whoever is about to be hit; damage buffs: what
+        // they add to the hits the holder lands while they last (unless the skill prices that itself: Forge Weapon,
+        // Bedazzle and Divine Forge carry aiScores, counted once)
+        return 1.5 + (def.hooks && (def.hooks.onTakeDamage || def.hooks.modifyIncomingDamage) ? 2.5 * hitsOn(ctx, ru) : 0) +
+          (def.hooks && def.hooks.modifyOutgoingDamage && !ctx.ownValue ? 0.8 * outgoingPerHit(ctx, su, id) * hitsWhileBuffed(ctx, su, def) : 0);
     }
+  }
+
+  /**
+   * The next-turn buff term: how many hits a friendly unit lands while a buff lasts. The actor uses the AP it has left;
+   * anyone else its next turn's AP (DD.Combat.turnAp), about a skill per 1.5 AP; a buff spent by "its next damaging skill"
+   * (never decays on its own) lasts one. 0 if it will not act (stunned, downed).
+   */
+  function hitsWhileBuffed(ctx, su, def) {
+    if (!active(su) || DD.Combat.isStunned(su)) return 0;
+    if (def && (def.decay === 'never' || def.defaultTurns < 0)) return 1;
+    const now = su.id === ctx.unit.id || ((su.ap || 0) > 0 && DD.Combat.groupOf(ctx.unit).indexOf(su) >= 0);
+    const ap = now ? su.ap || 0 : DD.Combat.turnAp ? DD.Combat.turnAp(su) : su.maxAp || 3;
+    return Math.max(now ? 0 : 1, Math.min(3, ap / 1.5));
+  }
+  /**
+   * What status id adds to one hit of the holder's best attack on its nearest foe (inside a dry run: the holder's
+   * modifyOutgoingDamage hooks fired on a probe hit, with and without the status; the copy is thrown away after).
+   */
+  function outgoingPerHit(ctx, su, id) {
+    const hit = nextHit(ctx, su);
+    const i = su.statuses.findIndex(function (st) { return st.id === id; });
+    if (!(hit > 0) || i < 0 || !DD.Act.simulating) return 0;
+    let foe = null, fd = Infinity;
+    S().units.forEach(function (o) { if (active(o) && G().hostile(su, o) && dist(o, su) < fd) { foe = o; fd = dist(o, su); } });
+    if (!foe) return 0;
+    const probe = function () {
+      const d = { source: su, target: foe, base: hit, amount: hit, mult: 1, flat: 0, element: null, skill: null, tags: [], cause: 'skill',
+        ignoreBlock: false, ignoreArmor: false, dealt: 0, blocked: 0, killed: false, overkill: 0, highGround: false, credit: su, opportunity: false };
+      DD.Act.beginSkill(su, { id: 'autoplay_probe', name: 'probe', tags: [] });
+      try { DD.Hooks.fire('modifyOutgoingDamage', su, d); } finally { DD.Act.endSkill(); }
+      return hit * num(d.mult) + num(d.flat);
+    };
+    const withIt = probe();
+    const st = su.statuses.splice(i, 1)[0];
+    let without;
+    try { without = probe(); } finally { su.statuses.splice(i, 0, st); }
+    return Math.max(0, Math.min(3 * hit, withIt - without));
+  }
+  /**
+   * Corelos' Debt: HP paid at the start of its next turn (never below 1 HP), so the new stacks cost the HP they will take
+   * (HURT, a little less: foes dying first pay some off, which his skills' autoplayValue counts), more when they leave
+   * it at a quarter of its HP or less.
+   */
+  function debtCost(ru, su, n) {
+    const before = stacksOf(ru, DEBT), after = before + n;
+    const cap = Math.max(0, (su.hp || 0) - 1);
+    const paid = Math.min(after, cap) - Math.min(before, cap);
+    const left = (su.hp || 0) - Math.min(after, cap);
+    return Math.max(0, paid) * HURT * 0.9 + (left <= (su.maxHp || 0) * 0.25 ? 4 : 0);
   }
 
   function cooldownGain(ru, su, used) {
@@ -1350,9 +1664,22 @@
     return Math.max(-4, Math.min(6, g));
   }
 
+  /**
+   * What a Hype point is worth this decision: Hype buys signatures (100 a shot, reset every fight), so while the fight
+   * goes on (2+ foes) and a hero with a signature stands, HYPE_VALUE; else a little.
+   */
+  function hypeValue(ctx) {
+    if (ctx.hypeV !== undefined) return ctx.hypeV;
+    let foes = 0;
+    DD.Combat.enemies().forEach(function (f) { if (f.kind !== 'summon' && active(f)) foes++; });
+    const sig = DD.Combat.heroes().some(function (h) { return active(h) && !!h.signature; });
+    return (ctx.hypeV = foes >= 2 && sig ? HYPE_VALUE : 0.1);
+  }
+
   /** Gains of a dry run that need both states (units, statuses, AP, cooldowns, summons, Hype, the result). */
   function simGain(ctx, real, sim, actor, su, o, diff) {
     let g = 0, moved = false;
+    ctx.ownValue = !!(o && o.def && hasHooks(o.def));   // the skill values its own buffs (aiScore / autoplayValue): no generic term
     const realById = {};
     for (let i = 0; i < real.units.length; i++) realById[real.units[i].id] = real.units[i];
     const pu = diff.perUnit;
@@ -1412,17 +1739,20 @@
     let foesLeft = 0;
     for (let i = 0; i < sim.units.length; i++) if (active(sim.units[i]) && G().hostile(actor, sim.units[i])) foesLeft++;
     const stay = foesLeft >= 3 ? 1 : foesLeft === 2 ? 0.8 : 0.5;
+    // [finish audit-3] in a stalemate (caution 0) foes a hit calls in (a boss splitting at an HP threshold: the Rat King's
+    // Rat Lawyers) weigh little: crossing the threshold is the only way on (a party that never did looped to the round cap)
+    const spawnW = caution() > 0 ? 1 : STALL_SPAWN;
     for (let i = 0; i < sim.units.length; i++) {
       const u = sim.units[i];
       if (realById[u.id] || u.dead) continue;
       if (u.side === actor.side) {
         const bite = nextHit(ctx, u);
         g += (5 + 0.2 * (u.maxHp || 0) + bite + (active(u) && (u.ap || 0) > 0 ? 0.8 * bite : 0)) * stay;
-      } else g -= 6 + 0.2 * (u.maxHp || 0);
+      } else g -= (6 + 0.2 * (u.maxHp || 0)) * spawnW;
     }
     if (moved && aoeReady(ctx)) g += 0.75 * Math.max(0, foePairs(sim, actor) - foePairs(real, actor));
     g += surfaceGain(real, sim, actor);
-    g += Math.max(0, diff.hype || 0) * 0.15;
+    g += Math.max(0, diff.hype || 0) * hypeValue(ctx);
     if (sim.result === 'victory') g += 100;
     else if (sim.result === 'defeat') g -= 300;
     return g;
@@ -1458,6 +1788,7 @@
           const diff = DD.Targeting.diff(real, sim, false);
           out.diff = diff;
           out.objects = diff.objects || [];
+          out.gold = goldOf(real, sim);
           out.gain = simGain(ctx, real, sim, unit, su, o, diff);
           out.others1 = 0; out.stay = 0;
           if (!sim.result) {
@@ -1477,31 +1808,36 @@
   }
 
   /**
-   * Is this a moment for a signature? It hits 2+ foes or a boss, or affects 3+ allies, or brings 2+ units, or pulls the
-   * party out of real danger, or the fight is nearly over (sigReserve 0). One lone minion is not worth 100 Hype.
+   * Is this a moment for a signature? It hits 2+ foes or a boss, or an elite for a lot (gain ≥ 20: everyone's free
+   * attacks on the big one), or affects 2+ allies, or brings 2+ units, or pulls the party out of real danger, or the fight
+   * is nearly over (sigReserve 0). One lone minion is not worth 100 Hype.
    */
-  function bigMoment(ctx, r) {
+  function bigMoment(ctx, r, gain) {
     const unit = ctx.unit, pu = r.diff ? r.diff.perUnit : {};
-    let foes = 0, friends = 0, boss = false;
+    let foes = 0, friends = 0, boss = false, elite = false;
     for (const id in pu) {
       const u = DD.Combat.byId(id), e = pu[id];
       if (!u) continue;
       if (G().hostile(unit, u)) {
-        if (e.dmg > 0 || e.lethal || (e.statuses && e.statuses.length)) { foes++; if (isBoss(u)) boss = true; }
+        if (e.dmg > 0 || e.lethal || (e.statuses && e.statuses.length)) { foes++; if (isBoss(u)) boss = true; if (u.tier === 'elite') elite = true; }
       } else if (e.heal > 0 || e.block > 0 || (e.statuses && e.statuses.length)) friends++;
     }
     const spawned = r.diff ? (r.diff.spawned || []).length : 0;
     const saved = ctx.my0 + ctx.others0 - r.stay - r.others1;
-    return foes >= 2 || boss || friends >= 3 || spawned >= 2 || saved >= 15 || sigReserve() === 0;
+    return foes >= 2 || boss || (elite && gain >= 20) || friends >= 2 || spawned >= 2 || saved >= 15 || sigReserve() === 0;
   }
 
-  /** Holding a signature for a better moment: costly to fire early unless the fight is nearly over. */
+  /**
+   * Holding a signature for a better moment. Hype stops at 100 and starts every fight at 0, so a ready signature held
+   * wastes every Hype point the party earns meanwhile: the reserve is small (4 with three foes or more, 2 with two, 0 for
+   * the last foe or a boss under 35%).
+   */
   function sigReserve() {
     let n = 0, boss = null;
     DD.Combat.enemies().forEach(function (f) { if (f.kind === 'summon') return; n++; if (isBoss(f)) boss = f; });
     if (n <= 1) return 0;
     if (boss && boss.hp <= boss.maxHp * 0.35) return 0;
-    return n <= 2 ? 4 : 10;
+    return n <= 2 ? 2 : 4;
   }
 
   /** Exact total of option o (averaged over dice when the outcome is random): { total, gain } or null. */
@@ -1522,6 +1858,8 @@
         if (protectedObj(ob.id) && ob.destroyed) g -= 60;
         else g += objectValue(unit, G().tile(ob.x, ob.y), ob.dmg || 0, ob.destroyed);
       });
+      // rules run: an attack aimed at an object is also worth the loot it spills (other uses: unchanged)
+      if (o.target && o.target.obj && !o.target.detonates) g += GOLD * num(r.gold);
       if (hctx) { hctx.autoplay = { preview: r.diff }; g += hookScore(o.def, hctx, true); }
       if (o.sk && o.sk.cd) {
         const cd = DD.Combat.cooldownOf(unit, o.def, o.slot.level);
@@ -1534,13 +1872,20 @@
       total += g + end + ctx.my0 + (ctx.others0 - r.others1);
     }
     gain /= runs.length;
-    total = total / runs.length - (o.moving ? 0.5 + walkCost(unit, o.pos) : 0) - 0.25 * o.ap;
+    total = total / runs.length - legCost(unit, o) - 0.25 * o.ap;
     if (o.sk && o.sk.sig) {
-      if (gain < 12 || !bigMoment(ctx, first)) return null;
+      // worth 100 Hype: what it does (gain) plus the danger it takes off the party (a mass stun, a party-wide buff)
+      const saved = ctx.my0 + ctx.others0 - first.stay - first.others1;
+      if (gain + Math.max(0, saved) < SIG_MIN || !bigMoment(ctx, first, gain)) return null;
       total -= sigReserve();
     }
-    // an option must do something: a free no-op would otherwise "keep the potential" forever
-    if (gain <= (o.ap > 0 ? 0.25 : 1) && ctx.my0 + ctx.others0 - first.stay - first.others1 <= 0.25) return null;
+    // an option must do something: a free no-op would otherwise "keep the potential" forever. Repositioning counts when
+    // the new tile is worth more with the AP left than the old one (the first step of a two-step disengage: a Tactical
+    // Retreat out of reach of attacks of opportunity, so that the next walk away provokes nothing)
+    if (gain <= (o.ap > 0 ? 0.25 : 1) && ctx.my0 + ctx.others0 - first.stay - first.others1 <= 0.25) {
+      const moved = first.ok && (first.x !== o.pos.x || first.y !== o.pos.y);
+      if (!moved || !(endValue(ctx, { x: first.x, y: first.y }, first.ap, o.slot, first.stay) - endValue(ctx, o.pos, first.ap, o.slot) > 1)) return null;
+    }
     return { total: total, gain: gain };
   }
 
@@ -1557,13 +1902,14 @@
       at(unit, pos, function () {
         ctx.slots.forEach(function (sk) {
           if (sk.ap > apLeft) return;
-          let best = 0;
+          let best = 0, atk = 0;
           targetsFrom(unit, sk.slot).forEach(function (t) {
             const q = quickScore(ctx, sk, t);
             if (q.base > best) best = q.base;
-            if (q.q > 0) opts.push({ pos: pos, moving: pos.moving, slot: sk.slot, def: sk.def, sk: sk, target: t, quick: q.q, ap: sk.ap, apLeft: apLeft });
+            if (q.foes > 0 && q.base > atk) atk = q.base;
+            if (q.q > 0) opts.push({ pos: pos, moving: pos.moving, slot: sk.slot, def: sk.def, sk: sk, target: t, quick: q.q, ap: sk.ap, apLeft: apLeft, foes: q.foes });
           });
-          if (best > 0 && !sk.sig) row.push({ id: sk.slot.id, ap: Math.max(1, sk.ap), cd: sk.cd, perAP: best / Math.max(1, sk.ap) });
+          if (best > 0 && !sk.sig) row.push(fpEntry(sk, best, atk));
         });
       });
       ctx.fp[key(pos.x, pos.y)] = row;
@@ -1571,6 +1917,63 @@
     refreshWalkBest(ctx);
     return opts;
   }
+  /**
+   * Closing in to act (two moves, then a skill): when no attack is in reach with one move but two moves and a skill are
+   * affordable, the tiles a second move reaches (a real walk from each first-leg tile) that put a foe in range get a quick
+   * pass too. Each option keeps its cheapest first leg (o.first, with o.legCost: its walking cost + the attacks of
+   * opportunity of stepping off it); choosing one walks that leg and decides again from there, so the attack itself is
+   * played with exact previews. Without it a melee hero two moves away walked once and stopped (nothing in reach, and
+   * standing closer only looked like danger).
+   */
+  function engageOptions(ctx, quick) {
+    const unit = ctx.unit, mc = ctx.moveCost, left = ctx.ap - 2 * mc;
+    if (AP.engage === false || !ctx.canWalk || !(mc > 0) || left < 1) return [];
+    for (let i = 0; i < quick.length; i++) if (quick[i].foes > 0 && quick[i].quick >= 2 && !quick[i].sk.sig) return [];
+    const foes = DD.Combat.foesOf(unit).filter(function (f) { return active(f) && !has(f, 'stealth'); });
+    if (!foes.length) return [];
+    const reach = attackRange(unit)[1] + 1;
+    const one = {};
+    ctx.positions.forEach(function (p) { one[key(p.x, p.y)] = 1; });
+    const via = new Map();
+    ctx.positions.forEach(function (p) {
+      if (!p.moving) return;
+      const c0 = walkCost(unit, p) + leaveCost(ctx, p);
+      const tiles = walkFrom(ctx, p);
+      for (let i = 0; i < tiles.length; i++) {
+        const t = tiles[i], k = key(t.x, t.y);
+        if (one[k]) continue;
+        let near = 99;
+        for (let j = 0; j < foes.length; j++) near = Math.min(near, dist(foes[j], t));
+        if (near > reach) continue;
+        const old = via.get(k);
+        if (!old || c0 < old.c) via.set(k, { t: t, p: p, c: c0, near: near });
+      }
+    });
+    if (!via.size) return [];
+    const ends = Array.from(via.values()).sort(function (a, b) { return a.near - b.near || a.c - b.c; }).slice(0, ENGAGE_TILES);
+    const opts = [];
+    ends.forEach(function (e) {
+      const pos = { x: e.t.x, y: e.t.y, cost: 0, path: [], moving: true, provokes: [] };
+      at(unit, pos, function () {
+        ctx.slots.forEach(function (sk) {
+          if (sk.ap > left) return;
+          targetsFrom(unit, sk.slot).forEach(function (t) {
+            const q = quickScore(ctx, sk, t);
+            if (q.q > 0 && q.foes > 0) {
+              opts.push({ pos: pos, moving: true, first: e.p, legCost: e.c, slot: sk.slot, def: sk.def, sk: sk, target: t, quick: q.q, ap: sk.ap, apLeft: left, foes: q.foes });
+            }
+          });
+        });
+      });
+    });
+    return opts;
+  }
+  /** What walking to an option's tile costs: a move (+ hazards and attacks of opportunity), two for a closing-in option. */
+  function legCost(unit, o) {
+    if (!o.moving) return 0;
+    return o.first ? 1 + o.legCost : 0.5 + walkCost(unit, o.pos);
+  }
+
   /** Walking somewhere else first: the best value per AP over the tiles one move away (skills that proved duds aside). */
   function refreshWalkBest(ctx) {
     ctx.walkBest = 0;
@@ -1694,16 +2097,16 @@
     ctx.positions.forEach(function (pos) {
       const apLeft = ctx.ap - (pos.moving ? ctx.moveCost : 0);
       if (pos.moving && apLeft >= 0) {
-        // stepping on a plate: walkers only (v2: flyers feel nothing of the floor)
+        // stepping on a plate: walkers only (v2: flyers feel nothing of the floor), loot: anyone (flyers swoop down for it)
         const tl = G().tile(pos.x, pos.y);
-        const v = tl && tl.obj && !G().objBlocksMove(tl.obj) && G().feelsFloor(unit) ? hintOf(tl.obj, unit, tl) : 0;
+        const v = tl && tl.obj && !G().objBlocksMove(tl.obj) && (G().feelsFloor(unit) || G().isLoot(tl.obj)) ? hintOf(tl.obj, unit, tl, 'step') : 0;
         if (v > 0) offer(pos, true, null, v, 0);
       }
       if (apLeft <= 0) return;
       at(unit, pos, function () {
         DD.Combat.interactions(unit).forEach(function (ix) {
           if ((ix.kind !== 'object' && ix.kind !== 'smash') || ix.ap > apLeft) return;
-          const v = hintAt(unit, ix.x, ix.y);
+          const v = hintAt(unit, ix.x, ix.y, ix.kind === 'smash' ? 'break' : 'interact');
           if (v > 0) { near[key(ix.x, ix.y)] = 1; offer(pos, pos.moving, ix, v, ix.ap); }
         });
       });
@@ -1764,14 +2167,14 @@
     const unit = ctx.unit, left = ctx.ap - ctx.moveCost;
     const list = [];
     ctx.positions.forEach(function (pos) {
-      if (!pos.moving) return;
+      if (!pos.moving || (ctx.seen && ctx.seen[key(pos.x, pos.y)])) return;
       // staying there keeps the progress toward the fight; walking on to cover afterwards gives it up again
-      let v = fpAt(ctx, pos, left, null) - myCost(ctx, pos, left) + progressAt(ctx, pos);
+      let v = fpAt(ctx, pos, left, null) - myCost(ctx, pos, left) + progressAt(ctx, pos) + tempoAt(ctx, pos);
       if (ctx.canWalk && left >= ctx.moveCost) {
         const esc = escapeCost(ctx, pos, left - ctx.moveCost);
         if (esc !== null) v = Math.max(v, fpAt(ctx, pos, left - ctx.moveCost, null) - esc - 0.5);
       }
-      list.push({ kind: 'move', pos: pos, total: v + ctx.my0 - 0.5 - pos.cost * 0.05 - walkCost(unit, pos) });
+      list.push({ kind: 'move', pos: pos, total: v - ctx.tempo0 + ctx.my0 - 0.5 - pos.cost * 0.05 - walkCost(unit, pos) });
     });
     if (!list.length) return null;
     list.sort(function (a, b) { return b.total - a.total; });
@@ -1797,6 +2200,59 @@
   }
 
   /**
+   * v2 (rules run): the best SWAP with an adjacent ally (DD.Combat.swapTargets; a move action). Priced like a plain move
+   * to the ally's tile — what the actor's AP can still do there (fpAt), the danger there, progress, tempo, the attacks of
+   * opportunity of leaving its tile — plus what it does to the others' danger with the ally on the actor's old tile
+   * (a fresh threat model with both moved; the ally's arrival hazard counts too) and SWAP_COST. So a tank steps to the
+   * front for a hurt ally, and a melee hero takes the one tile next to a foe from a ranged ally in a corridor. A cheap
+   * bound (the ally's whole danger as the best case) skips hopeless swaps; never straight back (the old tile is in
+   * ctx.seen) or the same pair again within a round (swapLog). { kind: 'swap', pos, allyId, total } or null.
+   */
+  function bestSwap(ctx) {
+    const unit = ctx.unit;
+    if (AP.swap === false || ctx.ap < ctx.moveCost || DD.Combat.cantMove(unit) || !DD.Combat.swapTargets) return null;
+    const list = DD.Combat.swapTargets(unit);
+    if (!list.length) return null;
+    const left = ctx.ap - ctx.moveCost, from = { x: unit.x, y: unit.y };
+    let best = null;
+    list.forEach(function (sw) {
+      const ally = DD.Combat.byId(sw.unitId);
+      if (!ally || (ctx.seen && ctx.seen[key(sw.x, sw.y)]) || swappedLately(unit, ally)) return;
+      const pos = { x: sw.x, y: sw.y, cost: G().stepCost(unit, from, sw), path: [{ x: sw.x, y: sw.y }], moving: true,
+        provokes: sw.provokes.map(function (p) { return p.unitId; }), swap: ally.id };
+      const hz = G().hazardDamage(from.x, from.y, ally);
+      const allyHurt = hz ? Math.max(hz.enter, 2) * (ally.kind === 'hero' ? HURT : 0.8) : 0;
+      const fixed = progressAt(ctx, pos) + tempoAt(ctx, pos) - ctx.tempo0 + ctx.my0 - 0.5 - SWAP_COST - pos.cost * 0.05 - walkCost(unit, pos) - allyHurt;
+      // best case first: the ally's whole danger lifted, the actor's AP potential there with today's danger estimate
+      const fp = at(ally, from, function () { return at(unit, pos, function () { return fpAt(ctx, pos, left, null); }); });
+      const bound = fixed + fp - myCost(ctx, pos) + costAt(ctx.tm0, ally, false) + 1;
+      if (bound <= 0.5 || (best && bound <= best.total)) return;
+      const r = at(ally, from, function () { return at(unit, pos, function () {
+        const tm1 = threatModel(ctx);
+        return { mine: costOf(unit, exposure(tm1, unit, pos, true)), others: othersCost(tm1, unit.id) };
+      }); });
+      const total = fixed + fp - r.mine + (ctx.others0 - r.others);
+      if (AP.trace === 'all') AP.log.push({ cand: 'swap with ' + ally.defId + ' at ' + key(sw.x, sw.y), total: Math.round(total * 10) / 10 });
+      if (!best || total > best.total) best = { kind: 'swap', pos: pos, allyId: ally.id, total: total };
+    });
+    return best;
+  }
+  // swaps made by AutoPlay per fight ('a|b' → round): the same pair doesn't swap again this round or the next
+  const swapLog = new WeakMap();
+  function pairKey(a, b) { return a.id < b.id ? a.id + '|' + b.id : b.id + '|' + a.id; }
+  function swappedLately(a, b) {
+    const m = swapLog.get(S());
+    const r = m && m[pairKey(a, b)];
+    return r !== undefined && S().round - r <= 1;
+  }
+  function noteSwap(a, b) {
+    const s = S();
+    let m = swapLog.get(s);
+    if (!m) { m = {}; swapLog.set(s, m); }
+    m[pairKey(a, b)] = s.round;
+  }
+
+  /**
    * Value of being on pos instead of here for the next turns when nothing is in reach: PROGRESS per tile of walking
    * distance gained toward the fight (destroy-objective targets, puzzle objects worth ≥ 10, else tiles to attack a foe
    * from), 0 when the unit can already act. The field is a flood fill, so walls and chasms are walked around.
@@ -1814,13 +2270,16 @@
   function approachField(ctx) {
     const unit = ctx.unit;
     if (!ctx.canWalk) return null;
+    // an attack worth doing in reach from here (a self-buff or a heal is no reason to stop walking toward the fight)
     const row = ctx.fp[key(unit.x, unit.y)];
-    if (row && row.length && row.some(function (r) { return r.perAP >= 3 && !ctx.dud[r.id]; })) return null;   // something worth doing in reach
+    if (row && row.length && row.some(function (r) { return r.atk >= 3 && !ctx.dud[r.id]; })) return null;
     if (nextHit(ctx, unit) <= 0 && !objectiveTiles().length) return null;   // healers / buffers don't charge in
     const goal = approachGoals(unit);
     if (!goal) return null;
-    const dist = distField(unit, goal.tiles, goal.adjacent);
-    const here = dist[unit.y * S().grid.w + unit.x];
+    let dist = distField(unit, goal.tiles, goal.adjacent);
+    let here = dist[unit.y * S().grid.w + unit.x];
+    // [finish FF-3] sealed off: walk toward the cheapest crate to break instead (breakOut)
+    if (!isFinite(here)) { const bo = breakOut(unit); if (bo) { dist = bo.dist; here = dist[unit.y * S().grid.w + unit.x]; } }
     if (!isFinite(here) || here === 0 || (goal.adjacent && here <= 1)) return null;
     return { dist: dist, here: here };
   }
@@ -1828,11 +2287,14 @@
   /** Best candidate for the unit right now (skills, consumables, hints, moves), or null. */
   function decide(ctx) {
     const quick = quickPass(ctx);
-    quick.forEach(function (o) {
-      const left = o.apLeft - o.ap;
-      o.est = o.quick + endValue(ctx, o.pos, left, o.slot) + ctx.my0 - (o.moving ? 0.5 + walkCost(ctx.unit, o.pos) : 0) - 0.25 * o.ap;
-    });
+    const engage = engageOptions(ctx, quick);
+    const estimate = function (o) {
+      o.est = o.quick + endValue(ctx, o.pos, o.apLeft - o.ap, o.slot) + ctx.my0 - legCost(ctx.unit, o) - 0.25 * o.ap;
+    };
+    quick.forEach(estimate);
+    engage.forEach(estimate);
     quick.sort(function (a, b) { return b.est - a.est; });
+    engage.sort(function (a, b) { return b.est - a.est; });
     const pick = [], seen = {};
     const add = function (o) { const k = optKey(o); if (!seen[k]) { seen[k] = 1; pick.push(o); } };
     let n = 0, sig = 0;
@@ -1840,6 +2302,7 @@
       const o = quick[i];
       if (o.sk.sig) { if (sig < 2) { sig++; add(o); } } else if (n < REFINE) { n++; add(o); }
     }
+    for (let i = 0; i < engage.length && i < ENGAGE_REFINE; i++) add(engage[i]);
     utilityOptions(ctx).forEach(add);
     consumableOptions(ctx).forEach(add);
     let best = null;
@@ -1852,7 +2315,7 @@
           est: o.est === undefined ? null : Math.round(o.est * 10) / 10, total: ex ? Math.round(ex.total * 10) / 10 : null, gain: ex ? Math.round(ex.gain * 10) / 10 : null });
       }
       if (!o.cons && o.slot) { tried[o.slot.id] = 1; if (ex && ex.gain > 0.25) worked[o.slot.id] = 1; }
-      if (ex) consider({ kind: o.cons ? 'consumable' : 'skill', o: o, total: ex.total, gain: ex.gain });
+      if (ex) consider({ kind: o.cons ? 'consumable' : o.first ? 'engage' : 'skill', o: o, total: ex.total, gain: ex.gain });
     });
     // a skill whose quick estimate promised something its exact previews never delivered is no leftover-AP potential
     // either (else the unit walks back and forth toward a phantom)
@@ -1863,6 +2326,7 @@
     const mv = bestMove(ctx);
     if (AP.trace === 'all' && mv) AP.log.push({ cand: 'move to ' + key(mv.pos.x, mv.pos.y), total: Math.round(mv.total * 10) / 10 });
     consider(mv);
+    consider(bestSwap(ctx));
     return best;
   }
 
@@ -1872,7 +2336,7 @@
    * tiles (heights and terrain cost included). adjacent: goals are things to stand next to (foes, levers), so the first
    * step off a goal ignores the height rule.
    */
-  function distField(unit, goals, adjacent) {
+  function distField(unit, goals, adjacent, breaking) {
     const g = S().grid;
     const dist = new Float64Array(g.w * g.h).fill(Infinity), queue = [];
     goals.forEach(function (p) { const i = p.y * g.w + p.x; if (dist[i] !== 0) { dist[i] = 0; queue.push(i); } });
@@ -1881,13 +2345,64 @@
       const fromGoal = adjacent && dist[i] === 0;
       for (let d = 0; d < 4; d++) {
         const nx = x + U.DIRS[d].x, ny = y + U.DIRS[d].y;
-        if (!G().inBounds(nx, ny) || !G().isWalkable(nx, ny, unit)) continue;
+        if (!G().inBounds(nx, ny)) continue;
+        // breaking: a breakable blocker the party may aim at is a tile that costs its breaking on top (breakOut)
+        const extra = G().isWalkable(nx, ny, unit) ? 0 : breaking ? breakCost(unit, nx, ny) : Infinity;
+        if (!isFinite(extra)) continue;
         if (!fromGoal && !G().canStep(unit, { x: nx, y: ny }, { x: x, y: y })) continue;
-        const j = ny * g.w + nx, c = dist[i] + (fromGoal ? 1 : G().stepCost(unit, { x: nx, y: ny }, { x: x, y: y }));
+        const j = ny * g.w + nx, c = dist[i] + extra + (fromGoal ? 1 : G().stepCost(unit, { x: nx, y: ny }, { x: x, y: y }));
         if (c < dist[j]) { dist[j] = c; queue.push(j); }
       }
     }
     return dist;
+  }
+  /** What clearing the object on (x, y) adds to a walk (Infinity: not a breakable blocker on walkable floor). */
+  function breakCost(unit, x, y) {
+    const t = G().tile(x, y), o = t && t.obj;
+    if (!o || !G().objBlocksMove(o) || !DD.Targeting.breakable(o) || !DD.Targeting.objectTargetable(o) || DD.Act.isVolatile(o)) return Infinity;
+    const td = G().terrain(t);
+    if (td.walkable === false || (td.pit && !G().isFlying(unit))) return Infinity;
+    return 2 + (o.hp || 0) / 4;
+  }
+  /**
+   * [finish FF-3] A unit no walk takes to a tile to attack from (a box of crates, kegs and 2-high ledges: seed 80183's
+   * Web of Lies kept three heroes passing for 15 rounds while the Critic shot them) breaks its way out: the approach
+   * field with breakable blockers as dearer tiles ({ dist, gates }), gates = the blockers next to the area it can walk
+   * in that lie on the cheapest way out. null when a walk reaches the fight, or nothing breakable opens one. Cached per
+   * unit until the board changes (positions inside the area, as AutoPlay tries them, change nothing).
+   */
+  const breakMemo = { s: null, m: -1, by: {} };
+  function breakOut(unit) {
+    const s = S();
+    if (!s || !unit || DD.Act.simulating) return null;
+    if (breakMemo.s !== s || breakMemo.m !== s.mutations) { breakMemo.s = s; breakMemo.m = s.mutations; breakMemo.by = {}; }
+    const k = unit.id + '@' + unit.x + ',' + unit.y;
+    if (breakMemo.by[k] !== undefined) return breakMemo.by[k];
+    let res = null;
+    const goal = unit.side === 'hero' && !DD.Combat.cantMove(unit) ? approachGoals(unit) : null;
+    if (goal && !isFinite(distField(unit, goal.tiles, goal.adjacent)[unit.y * s.grid.w + unit.x])) {
+      const dist = distField(unit, goal.tiles, goal.adjacent, true), w = s.grid.w;
+      if (isFinite(dist[unit.y * w + unit.x])) {
+        // the area it can walk in (allies and foes ignored), and the blockers on its rim
+        const seen = {}, queue = [{ x: unit.x, y: unit.y }], rim = [];
+        seen[key(unit.x, unit.y)] = 1;
+        for (let h = 0; h < queue.length; h++) {
+          const p = queue[h];
+          for (let d = 0; d < 4; d++) {
+            const q = { x: p.x + U.DIRS[d].x, y: p.y + U.DIRS[d].y }, kq = key(q.x, q.y);
+            if (seen[kq] || !G().inBounds(q.x, q.y) || !G().canStep(unit, p, q)) continue;
+            if (G().isWalkable(q.x, q.y, unit)) { seen[kq] = 1; queue.push(q); } else if (isFinite(breakCost(unit, q.x, q.y))) rim.push(q);
+          }
+        }
+        let best = Infinity;
+        rim.forEach(function (q) { best = Math.min(best, dist[q.y * w + q.x]); });
+        const gates = {};
+        rim.forEach(function (q) { if (dist[q.y * w + q.x] <= best + 1) gates[key(q.x, q.y)] = 1; });
+        if (isFinite(best)) res = { dist: dist, gates: gates };
+      }
+    }
+    breakMemo.by[k] = res;
+    return res;
   }
 
   /** Longest range of the unit's damaging skills (melee = 1), capped. */
@@ -1946,8 +2461,9 @@
     const goal = approachGoals(unit);
     if (!goal) return false;
     const g = S().grid;
-    const dist = distField(unit, goal.tiles, goal.adjacent);
-    const here = dist[unit.y * g.w + unit.x];
+    let dist = distField(unit, goal.tiles, goal.adjacent);
+    let here = dist[unit.y * g.w + unit.x];
+    if (!isFinite(here)) { const bo = breakOut(unit); if (bo) { dist = bo.dist; here = dist[unit.y * g.w + unit.x]; } }   // [finish FF-3]
     if (here === 0 || (goal.adjacent && here <= 1)) return false;
     const left = ctx.ap - ctx.moveCost;
     let best = null, bestSc = -Infinity;
@@ -2019,8 +2535,15 @@
     if (!h || !tm) return !!h;
     hp = hp > 0 ? Math.min(h.maxHp || hp, Math.round(hp)) : Math.max(1, Math.round((h.maxHp || 0) * 0.25));
     const ex = exposure(tm, h, h, false, hp);
-    const L = lossOf(ex.hits, ex.flat, ex.pierce, 0, hp);
-    return L.down < 0.4;
+    let p = lossOf(ex.hits, ex.flat, ex.pierce, 0, hp).down;
+    // what the party saw this fight beats the estimate: revives of this ally undone before it could act count as evidence
+    // (until the enemies that did it are gone or lose their next turn)
+    const f = futileRevives(h);
+    // [review] the LAST revive of this ally came undone (by an enemy that still acts): not now, however many earlier ones
+    // held. Diluted by those (undone / tried), seed 4032's Rat King re-downed Kiri twice in a row before her turn.
+    if (f > 0 && revNow().undone[h.id]) return false;
+    if (f > 0) p = (p + f) / (1 + Math.max(f, revNow().tried[h.id] || 0));
+    return p < 0.4;
   }
 
   // ---- acting -----------------------------------------------------------------------------------------------------
@@ -2032,11 +2555,19 @@
 
   function execute(unit, c) {
     if (c.kind === 'move') return DD.Combat.move(unit, c.pos.x, c.pos.y);
+    if (c.kind === 'swap') {
+      const ally = DD.Combat.byId(c.allyId);
+      const ok = DD.Combat.swap(unit, c.pos.x, c.pos.y);
+      if (ok && ally) noteSwap(unit, ally);
+      return ok;
+    }
     if (c.kind === 'hint') {
       if (c.moving && !DD.Combat.move(unit, c.pos.x, c.pos.y)) return false;
       return !c.ix || DD.Combat.interact(unit, c.ix.x, c.ix.y) || c.moving;
     }
     const o = c.o;
+    // closing in (two moves, then a skill): walk the first leg, then decide again from there
+    if (o.first) return DD.Combat.move(unit, o.first.x, o.first.y);
     if (o.moving && !DD.Combat.move(unit, o.pos.x, o.pos.y)) return false;
     // the walk may have changed things (a trap, a plate): a vanished target just means "decide again"
     if (o.cons) {
@@ -2058,23 +2589,33 @@
       const tmH = helps.length ? threatModel(null, unit) : null;
       const healReach = helps.length ? healReviveReach(unit) : {};
       const help = helps.filter(function (o) { return !healReach[key(o.x, o.y)] && safeToRevive(tmH, DD.Combat.byId(o.unitId)); })[0];
-      if (help && DD.Combat.interact(unit, help.x, help.y)) { trace(unit, 'helpUp'); continue; }
+      if (help && DD.Combat.interact(unit, help.x, help.y)) { noteRevive(DD.Combat.byId(help.unitId)); approached.seen = null; trace(unit, 'helpUp'); continue; }
       const smash = DD.Combat.interactions(unit).filter(function (o) { return o.kind === 'smash' && objectiveObj(o.objId) && o.ap <= unit.ap; })[0];
-      if (smash && DD.Combat.interact(unit, smash.x, smash.y)) { trace(unit, 'smash'); continue; }
+      if (smash && DD.Combat.interact(unit, smash.x, smash.y)) { approached.seen = null; trace(unit, 'smash'); continue; }
       const ctx = makeCtx(unit);
+      // tiles it already stood on this turn since it last acted: a plain move never walks back to one (no A → B → A
+      // dithering). [review] Acting starts the list over: after poking out to strike, the step back into cover (the
+      // hit and run endValue counts on) is no dithering; blocking it left a hero on a lethal tile.
+      const seen = approached.seen || (approached.seen = {});
+      seen[key(unit.x, unit.y)] = 1;
+      ctx.seen = seen;
       const rescue = rescueMove(unit, ctx.tm0);
       if (rescue && DD.Combat.move(unit, rescue.x, rescue.y)) { trace(unit, 'rescue'); continue; }
       const best = decide(ctx);
       if (AP.measure) AP.samples.step.push(clock() - t0);
       if (best && best.total > 0.5) {
         trace(unit, best.kind, best);
-        if (execute(unit, best)) continue;
+        const down = DD.Combat.heroes().filter(function (h) { return h.downed && !h.dead; });
+        const ok = execute(unit, best);
+        if (best.kind === 'skill' || best.kind === 'consumable' || (best.kind === 'hint' && best.ix)) approached.seen = null;
+        down.forEach(function (h) { if (active(h)) noteRevive(h); });   // a heal aimed at a downed ally got it up
+        if (ok) continue;
         return;
       }
       // nothing worth doing here: walk toward the fight once, otherwise stop (v2: leftover AP is lost)
       if (!approached.done && step === 0 && approachMove(ctx)) { approached.done = true; trace(unit, 'approach'); continue; }
       const useful = DD.Combat.interactions(unit).filter(function (o) { return o.kind === 'object' && o.ap <= unit.ap && /Drink|Open/.test(o.label); })[0];
-      if (useful && DD.Combat.interact(unit, useful.x, useful.y)) { trace(unit, 'interact'); continue; }
+      if (useful && DD.Combat.interact(unit, useful.x, useful.y)) { approached.seen = null; trace(unit, 'interact'); continue; }
       trace(unit, 'pass');
       return;
     }
@@ -2082,8 +2623,8 @@
 
   /**
    * Greedy control of the CURRENT turn (v2: the current hero and the hero-side summons acting on its turn; does not end
-   * the turn): the hero first, then its summons; later passes let units that gained AP, summons made mid-turn and units
-   * whose situation changed act again. In deployment it rolls initiative first.
+   * the turn): its summons first (pass 3: they set up the hero's combos), then the hero; later passes let units that
+   * gained AP, summons made mid-turn and units whose situation changed act again. In deployment it rolls initiative first.
    */
   AP.takeTurn = function () {
     let s = S();
@@ -2096,8 +2637,11 @@
     const mark = {};
     for (let pass = 0; pass < 3; pass++) {
       let acted = false;
+      // the summons first: a corgi that has walked up and bitten sets up Zoomies, Onyx in the crowd a Murder of Crows, a
+      // corgi in place the Ol' Switcheroo; the hero then plays the board they left (AP.summonsFirst = false: hero first)
+      const first = AP.summonsFirst === false ? 'hero' : 'summon';
       const order = DD.Combat.turnGroup().filter(function (u) { return active(u) && DD.Combat.controllable(u) && (u.ap || 0) > 0; }).sort(function (a, b) {
-        if (a.kind !== b.kind) return a.kind === 'hero' ? -1 : 1;
+        if (a.kind !== b.kind) return a.kind === first ? -1 : b.kind === first ? 1 : 0;
         return 0;
       }).map(function (u) { return u.id; });
       for (let i = 0; i < order.length; i++) {

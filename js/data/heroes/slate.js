@@ -1,14 +1,18 @@
 /* Dungeons and Degenerates — js/data/heroes/slate.js
  * Slate, the Unamused: Lich-tenstein's grumpy pale-blue library golem. Grappler / thrower / bruiser (v2, simple kit).
- * Passive Short Fuse: +1 Rage (sla_rage, max 5) whenever someone else hits, heals or buffs him; at 3+ Rage his runes
- * flare and his skills deal +2 damage. Rage never drains; Blow a Gasket spends it, the signature maxes it.
+ * Passive Short Fuse: +1 Rage (sla_rage, max 5) whenever someone else hits him, heals him or gives him a buff status
+ * (Block from an ally is no buff status: playtest heroes-6); at 3+ Rage his runes flare and his skills deal +2 damage. Rage never drains; Blow a Gasket spends it, the signature maxes it.
  * Grappled (sla_grappled, on the victim, noMove): it can't move, and when Slate walks it is dragged into the tile he
- * left (it gets no attack of opportunity on him); it ends when its turns run out, when they are apart or when he can't
- * hold on (stunned, sheep, downed).
+ * left (it gets no attack of opportunity on him); it ends when they are apart, when he can't hold on (stunned, sheep,
+ * downed) or when he lets go. Sustain (D9, Nov 12): the hold counts SLATE's turns (decay 'never'; Short Fuse's
+ * onTurnEnd ticks it, the grab turn's own end doesn't count), so it lasts until the end of his next 1-2 turns and he can
+ * still squeeze (Stress Ball: damage + a self-heal), drag or throw it then; the victim is held for the same number of
+ * its own turns as before. Only Hold Still grabs: another caller of DD.Slate.grab whose holder has no Short Fuse must
+ * call DD.Slate.tickHold(holder) at that holder's turn ends itself.
  * Throws lift an adjacent unit or object and land it up to N tiles away in a line, over units and low clutter: it and
  * the foe it hits take the damage, pits / lava / water do the rest, thrown objects shatter (barrels explode). Throws,
  * slams, drags and pulls are forced movement: they never provoke attacks of opportunity (Air Mail is an escape hatch).
- * Registers the hero, 11 skills, 2 statuses, the Boulder object, 3 items and loading tips. All state lives on units /
+ * Registers the hero, 12 skills, 2 statuses, the Boulder object, 3 items and loading tips. All state lives on units /
  * statuses (previews are dry runs of the same code).
  */
 (function () {
@@ -18,6 +22,9 @@
   const RAGE = 'sla_rage', HELD = 'sla_grappled', BOULDER = 'sla_boulder';
   const MITTS = 'sla_mitts', CARDIGAN = 'sla_cardigan', LEDGER = 'sla_ledger';
   const MAX_RAGE = 5, FLARE = 3, FLARE_DMG = 2, CARDIGAN_BLOCK = 2;
+  // AutoPlay: pinning a foe through its next turn, on top of the generic Grappled debuff term (sustain refit: 1.5 -> 2.5,
+  // the spec's fallback: he grabbed 0.9 times an act 1 regular fight, target 1.2; docs/notes/balance.md)
+  const HOLD_AI = 2.5;
   const RUNE = '#7af0ff';
   // canonical loose objects Slate can pick up (plus any object def / instance flagged `throwable: true`)
   const THROWABLE = { crate: 1, barrel: 1, barrel_explosive: 1, keg: 1, mushroom: 1, coffin: 1, candles: 1, brazier: 1, sla_boulder: 1 };
@@ -35,10 +42,20 @@
   function dirTo(a, b) { return DD.util.dirTo(a, b); }
   function step(p, d, k) { return { x: p.x + d.x * k, y: p.y + d.y * k }; }
   function plural(n, word) { return n + ' ' + word + (n === 1 ? '' : 's'); }
-  function left(st) { return st && st.turns > 0 ? ' (' + plural(st.turns, 'turn') + ' left)' : ''; }
   function objName(o) { const d = DD.getObject(o.id); return String(o.label || (d ? d.name : o.id)).toLowerCase(); }
-  /** Throw distance with the Mitts of Unreasonable Velocity (+1). */
-  function throwRange(L, user) { return L.range + (hasItem(user, MITTS) ? 1 : 0); }
+  /** A skill's target reach for this unit: the base number plus its range changes (DD.Targeting.reach: a Yardstick, Dazzle,
+   *  the Mitts' modifyRange; playtest heroes-v1 / desc-sweep-5). Without a combat unit (codex, shop): the base. */
+  function reach(user, id, L, base) {
+    const d = DD.getSkill(id);
+    if (!user || !user.side || !d || !DD.Targeting || typeof DD.Targeting.reach !== 'function') return base;
+    return DD.Targeting.reach(d, L, user, base);
+  }
+  /** Throw distance: the throw's target range less the tile it is lifted from (the Mitts of Unreasonable Velocity +1,
+   *  a +range item +1); out of a fight, the Mitts alone. */
+  function throwRange(L, user, id) {
+    if (user && user.side) return reach(user, id, L, L.range);
+    return L.range + (hasItem(user, MITTS) ? 1 : 0);
+  }
 
   // ---- Rage (Short Fuse) -------------------------------------------------------------------------------
   function rage(u) { const st = getSt(u, RAGE); return st ? st.stacks : 0; }
@@ -114,16 +131,41 @@
     for (let guard = 0; guard < 8; guard++) { const v = heldBy(slate); if (!v || !release(v, text)) return; }
   }
 
-  /** Seize v through its next `turns` turns (one hold at a time). Returns true if it is now held. */
+  /** Seize v until the end of Slate's next `turns` turns (one hold at a time). Returns true if it is now held. */
   function grab(slate, v, turns) {
     if (!canHold(slate) || !liftable(slate, v) || G().dist(slate, v) !== 1) return false;
     const old = heldBy(slate);
     if (old && old !== v) release(old, 'Dropped!');
     const st = DD.Act.addStatus(v, HELD, { turns: turns, silent: true }, slate);
     if (!st) return false;
+    // a grab on his own turn: that turn's end doesn't count (tickHold); a refresh keeps the same instance and data
+    st.data = st.data || {};
+    st.data.slaFresh = DD.Act.isOwnTurn(slate);
     DD.FX.text(v, 'Grappled!', { color: RUNE, size: 15 });
     DD.Act.log(slate.name + ' grabs ' + v.name + '. It is not a hug.', 'hero');
     return true;
+  }
+
+  /** Grappled counts Slate's turns: the grab turn's own end doesn't count, then each of his turn ends takes one. */
+  function tickHold(slate) {
+    const v = heldBy(slate), st = v && getSt(v, HELD);
+    if (!st || st.turns < 0) return;
+    if (st.data && st.data.slaFresh) { st.data.slaFresh = false; return; }
+    st.turns -= 1;
+    if (st.turns <= 0) release(v, 'Let go.');
+    else DD.Act.touch();
+  }
+  /** Pure: v's hold ends at the end of the turn under way (its holder is acting, last turn, not the grab turn). */
+  function releasesThisTurn(v) {
+    const st = getSt(v, HELD), h = st && byId(st.source);
+    return !!h && DD.Act.isOwnTurn(h) && !(st.data && st.data.slaFresh) && st.turns <= 1;
+  }
+  /** When the hold ends, in the holder's turns (the Grappled desc). */
+  function holdEnds(h, st) {
+    const n = st && st.turns > 0 ? st.turns : 1;
+    const own = !!h && DD.Act.isOwnTurn(h) && !(st && st.data && st.data.slaFresh);
+    if (own) return n === 1 ? 'this turn' : 'his next ' + (n - 1 === 1 ? 'turn' : (n - 1) + ' turns');
+    return 'his next ' + (n === 1 ? 'turn' : n + ' turns');
   }
 
   /** Slate entered a tile: when he walks, the held foe is dragged into the tile he just left. */
@@ -325,17 +367,26 @@
     decay: 'never', defaultTurns: -1,
     desc: function (st) {
       return 'Rage ' + st.stacks + '/' + MAX_RAGE + '. At ' + FLARE + '+ his runes flare: his skills deal +' + FLARE_DMG + ' damage. ' +
-        '+1 whenever someone else hits, heals or buffs him.';
+        '+1 whenever someone else hits him, heals him or gives him a buff status (Block doesn\'t count).';
     },
   });
 
   DD.registerStatus({
     id: HELD, name: 'Grappled', icon: '🤼', color: RUNE, type: 'debuff', stacking: 'refresh', maxStacks: 1,
-    decay: 'turnEnd', defaultTurns: 1, noMove: true,
-    desc: function (st) {
+    // turns = the holder's turns: Short Fuse's onTurnEnd ticks it (tickHold), never the victim's own turn ends
+    decay: 'never', defaultTurns: 1, noMove: true,
+    // [finish review, audit-7] predictions (DD.Act.cantMoveNext: threat shading, AutoPlay's danger): still held when the
+    // victim's next turn starts? Each of Slate's turn ends before then takes one (the grab turn's own end doesn't count)
+    heldThrough: function (st, v) {
       const h = byId(st && st.source);
-      return 'Held by ' + (h ? h.name : 'Slate') + ': can\'t move, and is dragged along when he walks (no attack of opportunity ' +
-        'on him: they move together). Free once they are apart.' + left(st);
+      if (!holdOk(h, v)) return false;
+      const ends = (DD.Act.isOwnTurn(h) ? 1 : 0) + (DD.AI && DD.AI.turnsBefore ? DD.AI.turnsBefore(h, v) : 1);
+      return ends < (st.turns > 0 ? st.turns : 1) + (st.data && st.data.slaFresh ? 1 : 0);
+    },
+    desc: function (st) {
+      const h = byId(st && st.source), name = h ? h.name : 'Slate';
+      return 'Held by ' + name + ': can\'t move, and is dragged along when he walks (no attack of opportunity on him: they ' +
+        'move together). Free once they are apart, or when ' + name + ' lets go at the end of ' + holdEnds(h, st) + '.';
     },
     hooks: {
       // a hold that went stale (he was stunned, sheeped or downed, or they were moved apart) lets go
@@ -352,8 +403,10 @@
   // ---- the Boulder (Hard Pass leaves one; Personal Space can throw it) ----------------------------------
   DD.registerObject({
     id: BOULDER, name: 'Boulder', blocksMove: true, blocksLos: false, hp: 5, height: 0.75, color: '#8ea6b8',
-    smashable: true, throwable: true,
-    desc: 'A chunk of floor Slate ripped up and threw. Blocks movement. 5 HP (Smash it). Slate can throw it again.',
+    // rules run: anyone can clear it, by hand or from range
+    smashable: true, throwable: true, targetable: true,
+    desc: 'A chunk of floor Slate ripped up and threw. Blocks movement. 5 HP: Smash it, or any single-target damage skill can break it. ' +
+      'Slate can throw it again.',
     draw: function (g, obj, t) {
       g.ellipse(1, 2, 15, 6.5, 'rgba(0,0,0,0.3)', null);
       g.poly([[-14, 0], [-15, -9], [-9, -18], [1, -21], [11, -16], [15, -7], [12, 2], [0, 5]], '#8ea6b8', true);
@@ -366,6 +419,32 @@
       g.line(7, -4, 9, 0, '#4f6577', 1);
     },
   });
+
+  // ---- AutoPlay values (content side) --------------------------------------------------------------------
+  /** HP worth of a self-heal, the way AutoPlay prices heals (more below half HP). */
+  function healWorth(u, heal) {
+    const miss = u.maxHp - u.hp;
+    return miss > 0 ? Math.min(heal, miss) * (miss > u.maxHp / 2 ? 1.5 : 0.8) : 0;
+  }
+  /** Stress Ball, quick pass only: it can't see a self-heal on a foe-aimed skill (the exact pass's dry run does). */
+  function stressScore(ctx) {
+    const u = ctx.user;
+    if (ctx.autoplay || !active(u) || !ctx.L) return 0;
+    return healWorth(u, ctx.L.heal);
+  }
+  /** Hold Still: the hold itself, plus the squeeze it sets up (usable now, or next turn: the hold lasts through it). */
+  function holdValue(ctx) {
+    const u = ctx.user, v = ctx.targetUnit;
+    if (!active(u) || !active(v) || !liftable(u, v)) return 0;
+    let val = HOLD_AI;
+    const sl = (u.skills || []).filter(function (s) { return s && s.id === 'sla_stress_ball'; })[0];
+    // cd 0, or cd 1 already past a turn start (it reaches 0 at his next one)
+    if (sl && (!(sl.cd > 0) || (sl.cd === 1 && !sl.fresh))) {
+      const L = DD.skillLevel(DD.getSkill('sla_stress_ball'), sl.level || 1);
+      val += healWorth(u, L.heal) + 0.5 * L.dmg;
+    }
+    return val;
+  }
 
   // ---- skills ------------------------------------------------------------------------------------------
   function skill(def) { def.owner = 'slate'; return DD.registerSkill(def); }
@@ -392,13 +471,14 @@
   skill({
     id: 'sla_hold_still', name: 'Hold Still', icon: '🤼', kind: 'attack', tags: ['melee', 'grapple', 'root'], ap: 1, cooldown: 2,
     levels: [{ dmg: 4, turns: 1 }, { dmg: 5, turns: 1 }, { dmg: 6, turns: 2 }],
-    // objects: false — he grapples foes, not barrels (Love Tap pops one; Personal Space throws it)
+    // objects: false — he grapples foes, not barrels or crates (Love Tap pops or breaks one; Personal Space throws it)
     target: { type: 'unit', range: [1, 1], filter: 'enemy', canTarget: liftTarget, objects: false },
     desc: function (L) {
-      return 'Grab an adjacent foe: ' + L.dmg + ' damage, and it is Grappled through its next ' + (L.turns === 1 ? 'turn' : L.turns + ' turns') +
-        ' (can\'t move; dragged along when you walk).';
+      return 'Grab an adjacent foe: ' + L.dmg + ' damage, and it is Grappled until the end of your next ' +
+        (L.turns === 1 ? 'turn' : L.turns + ' turns') + ' (can\'t move; dragged along when you walk).';
     },
     flavor: 'He hates being touched. He has no problem touching YOU.',
+    autoplayValue: holdValue,
     execute: function (ctx) {
       const u = ctx.user, v = ctx.targetUnit;
       if (!active(u) || !active(v)) return;
@@ -436,7 +516,7 @@
     },
     area: { shape: 'custom', fn: throwArea },
     desc: function (L, user) {
-      return 'Throw an adjacent foe or object up to ' + plural(throwRange(L, user), 'tile') + ': it and the foe it hits take ' + L.dmg +
+      return 'Throw an adjacent foe or object up to ' + plural(throwRange(L, user, 'sla_personal_space'), 'tile') + ': it and the foe it hits take ' + L.dmg +
         ' damage. Objects shatter.';
     },
     flavor: 'He does not do hugs. He does trajectories.',
@@ -465,11 +545,16 @@
         if (td && td.walkable === false && !td.pit && !td.liquid) return 'That is a wall. He checked.';
         const o = ctx.target && G().unitAt(ctx.target.x, ctx.target.y);
         if (o && ctx.user && !G().hostile(ctx.user, o)) return 'Not on a friend. Probably.';
+        // rules run: what the party may not aim at (targetable: false, the object it protects) is no boulder target either
+        const Tg = DD.Targeting;
+        if (!o && t && t.obj && t.obj.maxHp > 0 && t.obj.hp > 0 && G().objBlocksMove(t.obj) && Tg && Tg.objectTargetable && !Tg.objectTargetable(t.obj)) {
+          return 'He has been asked not to throw rocks at that.';
+        }
         return true;
       },
     },
-    desc: function (L) {
-      return 'Lob a boulder up to ' + L.range + ' tiles, over walls: ' + L.dmg + ' damage to the foe or object there. On empty floor, ' +
+    desc: function (L, user) {
+      return 'Lob a boulder up to ' + reach(user, 'sla_rocks_fall', L, L.range) + ' tiles, over walls: ' + L.dmg + ' damage to the foe or object there. On empty floor, ' +
         'the Boulder stays.';
     },
     flavor: 'Someone asked him to pass the rock. He gave it a HARD pass.',
@@ -520,7 +605,7 @@
       return out;
     } },
     desc: function (L, user) {
-      return 'Throw an adjacent ally up to ' + plural(throwRange(L, user), 'tile') + ' onto a safe empty tile. Foes next to the landing take ' +
+      return 'Throw an adjacent ally up to ' + plural(throwRange(L, user, 'sla_air_mail'), 'tile') + ' onto a safe empty tile. Foes next to the landing take ' +
         L.thud + ' damage.';
     },
     flavor: 'The party\'s fastest travel option. Also the most complained about.',
@@ -593,7 +678,7 @@
   skill({
     id: 'sla_rock_bottom', name: 'Rock Bottom', icon: '🙃', kind: 'attack', tags: ['melee', 'throw', 'stun'], ap: 2, cooldown: 2,
     levels: [{ dmg: 10 }, { dmg: 12 }, { dmg: 12, stun: 1 }],
-    // objects: false — a slam over the shoulder is for foes (a barrel goes through Personal Space)
+    // objects: false — a slam over the shoulder is for foes (a barrel or a crate goes through Personal Space)
     target: { type: 'unit', range: [1, 1], filter: 'enemy', canTarget: liftTarget, objects: false },
     area: { shape: 'custom', fn: function (ctx) {
       const u = ctx.user, tg = ctx.target;
@@ -665,8 +750,8 @@
     id: 'sla_get_over_here', name: 'Get Over Here', icon: '⛓️', kind: 'spell', tags: ['ranged', 'pull', 'rune', 'combo'], ap: 1, cooldown: 2,
     levels: [{ dmg: 2, range: 4 }, { dmg: 3, range: 5 }, { dmg: 4, range: 6 }],
     target: { type: 'unit', filter: 'enemy', straight: true, los: true, range: function (L) { return [2, L.range]; } },
-    desc: function (L) {
-      return 'Rune-chain a foe up to ' + L.range + ' tiles away in a line: ' + L.dmg + ' damage, and pull it next to you.';
+    desc: function (L, user) {
+      return 'Rune-chain a foe up to ' + reach(user, 'sla_get_over_here', L, L.range) + ' tiles away in a line: ' + L.dmg + ' damage, and pull it next to you.';
     },
     flavor: 'Runes: for writing, warding, and yanking people by the collar.',
     execute: function (ctx) {
@@ -674,7 +759,33 @@
       if (!active(u) || !active(v)) return;
       DD.FX.beam(u, v, { color: RUNE, width: 3 });
       DD.Act.damage(u, v, ctx.L.dmg, { tags: ['rune'] });
-      if (active(v) && active(u)) DD.Act.pull(u, v, u, ctx.L.range);
+      // all the way in, from however far his range items let him reach ("next to you")
+      if (active(v) && active(u)) DD.Act.pull(u, v, u, Math.max(ctx.L.range, G().dist(u, v) - 1));
+    },
+  });
+
+  // D9 sustain: his heal comes from his own verb (the hold). No 'heal' tag: it must not make him a healer (REQ.healer).
+  // His own heal is nobody else touching him, so it never feeds Short Fuse; the squeeze is a skill hit (the flare's +2).
+  skill({
+    id: 'sla_stress_ball', name: 'Stress Ball', icon: '✊', kind: 'attack', tags: ['melee', 'grapple'], ap: 1, cooldown: 1,
+    levels: [{ dmg: 3, heal: 4 }, { dmg: 4, heal: 5 }, { dmg: 5, heal: 6 }],
+    // objects: false — he squeezes the foe he is holding, not a crate (D1 opt-out)
+    target: { type: 'unit', range: [1, 1], filter: 'enemy', objects: false,
+      canTarget: function (ctx) { return ctx.targetUnit && holderOf(ctx.targetUnit) === ctx.user ? true : 'Grab it first (Hold Still).'; } },
+    desc: function (L) { return 'Squeeze the foe you\'re holding: ' + L.dmg + ' damage, and you heal ' + L.heal + ' HP.'; },
+    flavor: 'His therapist said to get a stress ball. He got a goblin. Close enough.',
+    aiScore: stressScore,
+    execute: function (ctx) {
+      const u = ctx.user, v = ctx.targetUnit;
+      if (!active(u) || !active(v) || holderOf(v) !== u) return;
+      DD.FX.lunge(u, v);
+      DD.FX.text(v, 'SQUEAK!', { color: RUNE, size: 15 });
+      DD.Act.damage(u, v, ctx.L.dmg, { tags: ['grapple', 'squeeze'] });
+      if (!active(u)) return;
+      // the heal lands even when the squeeze kills (the hold ends with the foe); self, active only: never a revive
+      const n = DD.Act.heal(u, u, ctx.L.heal);
+      if (n > 0) DD.Act.log(u.name + ' squeezes ' + v.name + ' like a stress ball. He feels marginally less furious.', 'hero');
+      DD.Act.maybeBark(u, 'squeeze', 0.35);
     },
   });
 
@@ -909,7 +1020,10 @@
       'runes glow when he\'s mad. They glow a lot.',
     color: '#6fd3e6',
     unlock: null, // v2: every hero is available from the start (user request; was: beat Lich-tenstein)
-    stats: { hp: 32, ap: 3, mov: 3, armor: 1, init: -2 },
+    // finish audit-8 (Nov 14): move 3 -> 4. He was the weakest hero (0.54x the median run-win share): fine in act 1,
+    // too slow to reach the fight in acts 2-3. Same 200 seeds with Slate in every party: 23.5% -> 28.5% of runs won,
+    // 33 -> 38 damage a fight (Love Tap 5 -> 6 measured 23.5%: no change). docs/notes/balance.md "Finish (Nov 14)"
+    stats: { hp: 32, ap: 3, mov: 4, armor: 1, init: -2 },
     growth: { hp: 4 },
     flags: { immovable: true },
     sprite: SPRITE,
@@ -917,7 +1031,8 @@
     signature: 'sla_tantrum',
     passive: {
       name: 'Short Fuse',
-      desc: 'Gains 1 Rage (max ' + MAX_RAGE + ') whenever someone else hits, heals or buffs him. At ' + FLARE + '+ Rage his runes ' +
+      desc: 'Gains 1 Rage (max ' + MAX_RAGE + ') whenever someone else hits him, heals him or gives him a buff status ' +
+        '(Block doesn\'t count). At ' + FLARE + '+ Rage his runes ' +
         'flare: his skills deal +' + FLARE_DMG + ' damage.',
       hooks: {
         onTakeDamage: function (d) {
@@ -944,17 +1059,20 @@
         onEnterTile: function (u, tile, cause) { dragStep(u, cause); },
         onMove: function (u) { afterWalk(u); },
         onDowned: function (u) { releaseAll(u, 'Dropped!'); },
+        // the hold counts his turns (fires before turn-end decay)
+        onTurnEnd: function (u) { tickHold(u); },
       },
     },
     startingSkills: ['sla_hold_still', 'sla_personal_space'],
     skillPool: ['sla_hold_still', 'sla_personal_space', 'sla_rocks_fall', 'sla_air_mail', 'sla_foot_down', 'sla_lawn',
-      'sla_rock_bottom', 'sla_gasket', 'sla_get_over_here'],
+      'sla_rock_bottom', 'sla_gasket', 'sla_get_over_here', 'sla_stress_ball'],
     summons: [],
     barks: {
       select: ['Hmph.', 'What. WHAT.', 'I was napping. For a century.', 'Don\'t touch me. Just point.', 'Fine. Who needs throwing?',
         'Kiri. Stop walking through me.'],
       start: ['Get off my lawn.', 'Fighting. Again. Wonderful.', 'Nine hundred years of shushing. No more whispering.',
         'Everybody stay where I can throw you.', 'Hjalmar. If I step on ONE banana peel...', 'Betty. Do NOT eat the map.'],
+      swap: ['Move, {ally}. Or be moved. Same thing.', 'Out of my way, {ally}. Politely. That was polite.'],
       move: ['My knees are gravel.', 'Walking. Hate it.', 'Coming through. Move or be moved.', 'One step at a time. Literally.',
         'Hmph. Stairs. Of course.'],
       kill: ['Stay down.', 'Hmph. Kids.', 'And STAY off my lawn.', 'That\'s what you get.', 'Next.', 'Basanos, drop it. That one\'s mine.'],
@@ -974,6 +1092,8 @@
         'Marbles, you\'re asleep on my foot again.', 'Ellaria, if that corgi licks me one more time...',
         'Buga. Stop buttering my shoulder.'],
       signature: ['THAT\'S IT. EVERYBODY OUT.', 'I\'VE HAD IT UP TO HERE!', 'TANTRUM. TIME.', 'THE FLOOR GOES TOO!', 'GET. OFF. MY. LAWN!'],
+      squeeze: ['Hmph. Better.', 'Squeeze. Breathe. Squeeze.', 'Stop wriggling. This is for my health.',
+        'Anger management. Very effective. For me.'],
     },
   });
 
@@ -1000,15 +1120,18 @@
 
   // ---- loading-screen tips -------------------------------------------------------------------------------
   DD.registerNarration('tips', [
-    'Slate gains Rage whenever someone else hits, heals or buffs him. At 3 Rage his runes flare: +2 damage on his skills.',
+    'Slate gains Rage whenever someone else hits him, heals him or gives him a buff status (Block doesn\'t count). At 3 Rage his runes flare: +2 damage on his skills.',
     'Heal Slate anyway. He hates it, and it makes him angrier. Everybody wins.',
     'A foe Slate is holding can\'t move, and it comes along when he walks. Drag it somewhere unpleasant, then throw it.',
     'Throw goblins at goblins. Throw them into pits. Throw them into water, then call someone with lightning.',
     'Air Mail throws an ally out of a brawl without provoking a single attack of opportunity. The landing is their problem.',
     'A foe Taunted by Get Off My Lawn only swings at Slate, so the wizard next to it can walk away without getting stabbed.',
+    'Slate\'s Stress Ball squeezes whatever he is holding. It hurts them. It helps him. He will deny both.',
+    'Slate holds on at least until the end of his next turn: grab a foe, then drag it, throw it or squeeze it next turn.',
   ]);
 
   // a tiny public surface for other content (bosses / items / events that want to poke Slate)
   DD.Slate = { rage: rage, flared: flared, gainRage: gainRage, spendRage: spendRage, heldBy: heldBy, holderOf: holderOf,
-    grab: grab, release: release, flight: flight, throwUnit: throwUnit, throwObject: throwObject, objThrowable: objThrowable };
+    grab: grab, release: release, tickHold: tickHold, releasesThisTurn: releasesThisTurn, flight: flight, throwUnit: throwUnit,
+    throwObject: throwObject, objThrowable: objThrowable, HOLD_AI: HOLD_AI, holdValue: holdValue };
 })();

@@ -105,6 +105,7 @@
   let renderErrorShown = {};
   let liveYaw = 0;                // the battlefield's view yaw in degrees (rotation plan §2.2; 0 = the classic view)
   let lodOff = false;             // offscreen renders (renderTo) always draw at full detail
+  let offscreen = 0;              // > 0 while renderTo draws (hudMargins(w, h, { live: false }))
   /** Cheaper level of detail while the view turns (texture bake buckets, half-res silhouettes); live frames only. */
   function viewMoving() { return !lodOff && isViewMoving(); }
   const camera = { x: 0, y: 0, zoom: 1 };
@@ -187,7 +188,8 @@
    * Rotation counters for tests / perf runs (DD.Render._rot): warped draws, bakes, budget fallbacks, and budgetMax = the
    * most budgeted (odd-angle) bake painting one frame did, in ms; prefetched = bakes done ahead for a turn's target.
    */
-  const ROT = { warpDraws: 0, texBakes: 0, faceBakes: 0, fallbacks: 0, texMs: 0, budgetMax: 0, prefetched: 0 };
+  // silPaints: silhouettes painted (exact or kept repaints) · silKept: kept ones reused · bodyPaints: turning-view bodies painted
+  const ROT = { warpDraws: 0, texBakes: 0, faceBakes: 0, fallbacks: 0, texMs: 0, budgetMax: 0, prefetched: 0, silPaints: 0, silKept: 0, bodyPaints: 0 };
   /** Times texture bakes (tests swap in a fake clock: the harness clock is virtual). */
   let bakeClock = function () { return performance.now(); };
 
@@ -1820,6 +1822,25 @@
     return pat;
   }
 
+  /**
+   * Threat shading's still texture: a staggered grid of cream dots ringed in umber. Dots line up with no plank, tile
+   * edge or wind-up tape at any view, so the shading shows on light, dark and busy floors alike.
+   */
+  const threatPatCache = new WeakMap();
+  function threatPattern(c) {
+    if (threatPatCache.has(c)) return threatPatCache.get(c);
+    const cv = document.createElement('canvas');
+    cv.width = 10; cv.height = 10;
+    const k = cv.getContext('2d');
+    [[2.5, 2.5], [7.5, 7.5]].forEach(function (p) {
+      k.beginPath(); k.arc(p[0], p[1], 1.8, 0, TAU);
+      k.fillStyle = 'rgba(255,238,210,0.98)'; k.fill();
+      k.lineWidth = 1.1; k.strokeStyle = 'rgba(70,16,0,0.85)'; k.stroke();
+    });
+    const pat = c.createPattern(cv, 'repeat');
+    threatPatCache.set(c, pat);
+    return pat;
+  }
   function inSet(F, set, x, y, top) {
     if (x < 0 || y < 0 || x >= F.gw || y >= F.gh) return false;
     if (!set[y * F.gw + x]) return false;
@@ -1844,6 +1865,48 @@
     stroke(c, line, width || 1.8);
   }
 
+  /**
+   * Rules run (moving through allies): an ally's tile that a move walks through but can't end on. Part of the move
+   * region (its outline runs round it, no hole), a lighter fill and a dashed inner ring: "through, not to".
+   */
+  function passTile(F, c, t, cx, cy, top) {
+    regionTile(F, c, t, cx, cy, top, F.ov.moveAll, 'rgba(60,140,255,0.13)', 'rgba(150,205,255,0.95)');
+    c.save();
+    c.beginPath(); diamond(c, cx, cy, HW - 8, HH - 4);
+    c.setLineDash([4, 3]);
+    stroke(c, 'rgba(176,218,255,0.85)', 1.3);
+    c.restore();
+  }
+  /**
+   * Rules run (swap): an adjacent ally the mover can trade places with — a blue ring round its feet made of two arcs
+   * chasing each other (⇄), drawn under the sprite like the selection ring; brighter while hovered (hot).
+   */
+  function swapRing(c, x, y, s, hot) {
+    const rx = 18 * s, ry = 9 * s, a0 = hot ? time * 2.2 : 0.35;
+    c.save();
+    c.beginPath(); c.ellipse(x, y, rx, ry, 0, 0, TAU);
+    c.fillStyle = 'rgba(80,160,255,' + (hot ? 0.2 : 0.1) + ')'; c.fill();
+    c.lineCap = 'round'; c.lineJoin = 'round';
+    for (let i = 0; i < 2; i++) {
+      const a = a0 + i * Math.PI, b = a + Math.PI * 0.72;
+      c.beginPath(); c.ellipse(x, y, rx, ry, 0, a, b);
+      c.lineWidth = 3.6; c.strokeStyle = 'rgba(8,18,40,0.7)'; c.stroke();
+      c.lineWidth = 1.9; c.strokeStyle = hot ? '#e2f2ff' : 'rgba(170,215,255,0.95)'; c.stroke();
+      // the arrow head at the arc's end, along the ellipse's tangent
+      const ex = x + rx * Math.cos(b), ey = y + ry * Math.sin(b);
+      const tx = -rx * Math.sin(b), ty = ry * Math.cos(b), tl = Math.hypot(tx, ty) || 1;
+      const ux = tx / tl, uy = ty / tl, k = 4.6 * s;
+      c.beginPath();
+      c.moveTo(ex + ux * k, ey + uy * k);
+      c.lineTo(ex - ux * k * 0.6 - uy * k * 0.8, ey - uy * k * 0.6 + ux * k * 0.8);
+      c.lineTo(ex - ux * k * 0.6 + uy * k * 0.8, ey - uy * k * 0.6 - ux * k * 0.8);
+      c.closePath();
+      c.fillStyle = hot ? '#e2f2ff' : 'rgba(170,215,255,0.95)'; c.fill();
+      c.lineWidth = 0.9; c.strokeStyle = 'rgba(8,18,40,0.7)'; c.stroke();
+    }
+    c.restore();
+  }
+
   /** A wind-up tile: red pulsing fill + moving hatch (calmer for one landing in 2+ of its owner's turns). */
   function telegraphFill(F, c, cx, cy, info) {
     const a = info.a;
@@ -1863,7 +1926,17 @@
   function threatFill(F, c, t, cx, cy, top, i) {
     const ov = F.ov;
     const k = clamp(ov.threatD[i] / ov.threatRef, 0, 1);
-    regionTile(F, c, t, cx, cy, top, ov.threatSet, 'rgba(255,96,36,' + (0.13 + 0.3 * k) + ')', 'rgba(255,176,104,0.92)', 1.7);
+    // reads on any floor (warm wood and red carpet too): a stronger orange wash, a still dot texture across every
+    // threatened tile (it does not crawl like the wind-up tape), and a dark-backed outline round the region
+    c.beginPath(); diamond(c, cx, cy, HW, HH);
+    c.fillStyle = 'rgba(255,90,30,' + (0.22 + 0.32 * k) + ')'; c.fill();
+    const pat = threatPattern(c);
+    if (pat) { c.save(); c.globalAlpha = 0.55 + 0.3 * k; c.fillStyle = pat; c.fill(); c.restore(); }
+    c.beginPath();
+    quadEdges(c, cx, cy, (HW - 2.5) / HW, function (e) { return !inSet(F, ov.threatSet, t.x + e.dx, t.y + e.dy, top); });
+    c.lineCap = 'round';
+    stroke(c, 'rgba(36,8,0,0.78)', 3.6);
+    stroke(c, 'rgba(255,186,112,0.96)', 1.7);
     if (ov.threatL[i]) {
       c.beginPath(); diamond(c, cx, cy, HW, HH);
       c.fillStyle = 'rgba(150,0,20,0.22)'; c.fill();
@@ -1877,7 +1950,8 @@
     if (!ov) return;
     const i = t.y * F.gw + t.x;
     if (ov.deploy[i]) regionTile(F, c, t, cx, cy, top, ov.deploy, 'rgba(80,220,120,' + (0.18 + 0.07 * pulse(2.5)) + ')', 'rgba(150,255,170,0.9)');
-    if (ov.move[i]) regionTile(F, c, t, cx, cy, top, ov.move, 'rgba(60,140,255,0.27)', 'rgba(150,205,255,0.95)');
+    if (ov.move[i] || (ov.swapSet && ov.swapSet[i])) regionTile(F, c, t, cx, cy, top, ov.moveAll, 'rgba(60,140,255,0.27)', 'rgba(150,205,255,0.95)');
+    else if (ov.pass && ov.pass[i]) passTile(F, c, t, cx, cy, top);
     if (ov.threatSet && ov.threatSet[i]) threatFill(F, c, t, cx, cy, top, i);
     if (ov.reach && ov.reach[i]) regionTile(F, c, t, cx, cy, top, ov.reach, 'rgba(255,70,60,' + (0.08 + 0.05 * pulse(3)) + ')', 'rgba(255,128,112,0.9)', 1.5);
     if (ov.interact[i]) {
@@ -2706,10 +2780,12 @@
     const s = d && d.sprite && d.sprite.scale;
     return clamp(+s || (u.flags && u.flags.large ? 1.35 : 1), 0.4, 3);
   }
+  /** Flies: its def, its flags (items, Blessings) or a status that grants flight (DD.Grid.isFlying): it hovers. */
   function isFlying(u) {
     if (u.flags && u.flags.flying) return true;
     const d = unitDef(u);
-    return !!(d && d.flags && d.flags.flying);
+    if (d && d.flags && d.flags.flying) return true;
+    return !!(u.statuses && u.statuses.length && DD.Grid && typeof DD.Grid.isFlying === 'function' && DD.Grid.isFlying(u));
   }
   function sideColor(u) {
     if (u.side !== 'hero') return '#ff6a5a';
@@ -2865,6 +2941,17 @@
     const u = d.u, s = Math.max(0.6, d.scale);
     if (F.ov && F.ov.turnUnitId === u.id && !d.downed && d.alpha > 0.3) turnRing(c, d.gwx, d.gwy, Math.max(0.8, s), u.side !== 'hero');
     if (F.ov && F.ov.selectedId === u.id && !d.downed) selectionRing(c, d.gwx, d.gwy, Math.max(0.8, s));
+    // rules run: an adjacent ally the selected hero can swap with (⇄ ring; brighter while that swap is hovered)
+    if (F.ov && F.ov.swapSet && !d.downed) {
+      const tx = Math.round(d.x), ty = Math.round(d.y);
+      if (tx >= 0 && ty >= 0 && tx < F.gw && ty < F.gh && F.ov.swapSet[ty * F.gw + tx]) {
+        const sw = F.ov.swap;
+        swapRing(c, d.gwx, d.gwy, Math.max(0.8, s), !!sw && sw.to.x === tx && sw.to.y === ty);
+        F.swapRings = (F.swapRings || 0) + 1;
+      }
+    }
+    // rules run: an ally faded while a move is aimed through or behind it (the HUD's overlay.ghosts: id → alpha)
+    const ghost = F.ov && F.ov.ghosts && F.ov.ghosts[u.id] !== undefined ? clamp(+F.ov.ghosts[u.id] || 0, 0.15, 1) : 1;
     const air = Math.max(0, d.h - d.groundH) + (d.flying ? 0.8 : 0) + d.lift / STEP;
     const k = 1 / (1 + air * 0.35);
     const rx = clamp(d.mw * 0.55, 8, 60) * k * (d.downed ? 1.35 : 1);
@@ -2875,6 +2962,7 @@
     const sp = w2s(F, d.wx, d.wy);
     setScreenTransform(F);
     c.save();
+    if (ghost < 1) { c.globalAlpha *= ghost; F.ghosted = (F.ghosted || 0) + 1; }
     drawSprite(c, u, sp.x, sp.y, F.zoom, d.downed);
     c.restore();
     setWorldTransform(F);
@@ -3018,6 +3106,117 @@
     return cv;
   }
   /**
+   * Paint one silhouette into set.sil (team-coloured fill) and set.ring (outline), both already masked to where
+   * something covers the unit; set.mask is scratch. Returns true when d's feet sit behind a unit in front.
+   */
+  function paintSilhouette(F, d, polys, fronts, set, SD, bx, by, pw, ph) {
+    const z = F.zoom;
+    let feetHidden = false;
+    const silCanvas = scratch(set.sil), ringCanvas = scratch(set.ring), maskCanvas = scratch(set.mask);
+    // 1) the whole sprite as a flat team-coloured shape
+    const k = silCanvas.getContext('2d');
+    k.setTransform(SD, 0, 0, SD, -bx * SD, -by * SD);
+    drawSprite(k, d.u, d.sx, d.sy, z, d.downed, true);
+    k.setTransform(1, 0, 0, 1, 0, 0);
+    k.globalCompositeOperation = 'source-in';
+    k.fillStyle = sideColor(d.u);
+    k.fillRect(0, 0, pw, ph);
+    // 2) outline ring = shape dilated by ~1.5 px minus the shape (computed before masking: no line along the occluder)
+    const r = ringCanvas.getContext('2d');
+    const o = Math.max(1, Math.round(1.5 * SD));
+    [[o, 0], [-o, 0], [0, o], [0, -o]].forEach(function (q) { r.drawImage(silCanvas, 0, 0, pw, ph, q[0], q[1], pw, ph); });
+    r.globalCompositeOperation = 'destination-out';
+    r.drawImage(silCanvas, 0, 0, pw, ph, 0, 0, pw, ph);
+    // 3) the occluders: taller tiles/objects in front as polygons, bigger units in front by their real pixels
+    const m = maskCanvas.getContext('2d');
+    m.setTransform(SD, 0, 0, SD, -bx * SD, -by * SD);
+    if (polys.length) {
+      m.beginPath();
+      for (let p = 0; p < polys.length; p++) {
+        const poly = polys[p];
+        for (let q = 0; q < poly.length; q++) {
+          const sp = w2s(F, poly[q][0], poly[q][1]);
+          if (q) m.lineTo(sp.x, sp.y); else m.moveTo(sp.x, sp.y);
+        }
+        m.closePath();
+      }
+      m.fillStyle = '#ffffff';
+      m.fill('nonzero');
+    }
+    if (fronts) {
+      for (let f = 0; f < fronts.length; f++) {
+        const e = fronts[f], b = spriteBox(e, z);
+        drawSprite(m, e.u, e.sx, e.sy, z, e.downed, true);
+        // feet behind another sprite: its AP pips would sit on that unit's body and read as theirs
+        if (d.sx >= b.x0 && d.sx <= b.x1 && d.sy + 8 * z >= b.y0 && d.sy + 8 * z <= b.y1) feetHidden = true;
+      }
+    }
+    m.setTransform(1, 0, 0, 1, 0, 0);
+    // 4) keep fill and ring only where something covers the unit
+    [k, r].forEach(function (cx) {
+      cx.globalCompositeOperation = 'destination-in';
+      cx.drawImage(maskCanvas, 0, 0, pw, ph, 0, 0, pw, ph);
+      cx.globalCompositeOperation = 'source-over';
+    });
+    return feetHidden;
+  }
+
+  // Live frames keep each unit's last silhouette (its own masked fill + ring canvases) and reuse it while nothing that
+  // shapes it changed: the unit's look, mirror, statuses and screen spot, the camera, the occluders and the units in
+  // front. Only the idle bob, breath and blink move a resting sprite, so a kept silhouette is repainted every
+  // SIL_TTL_S (+ a per-unit jitter, at most SIL_REFRESH_PER_FRAME stale repaints a frame). A unit or front in an FX
+  // (walk, lunge, hit flash, fade) is painted fresh every frame. Offscreen renders (renderTo, full detail) never use it.
+  const SIL_TTL_S = 0.25;
+  const SIL_REFRESH_PER_FRAME = 1;
+  const silKept = new Map();   // unit id -> { key, at, ttl, seen, set: { sil, ring, mask }, w, h, feetHidden }
+  let silFrame = 0;
+  const lookIds = new WeakMap();
+  let lookSeq = 0;
+  function lookId(u) {
+    const S = DD.Sprites;
+    const spec = S && typeof S.specFor === 'function' ? safeGet('sprites:specFor', 'DD.Sprites.specFor', function () { return S.specFor(u); }) : null;
+    if (!spec || typeof spec !== 'object') return 0;
+    let k = lookIds.get(spec);
+    if (!k) { k = ++lookSeq; lookIds.set(spec, k); }
+    return k;
+  }
+  /** The bare sprite of u is animating (an FX pose, a hit flash, a fade): it must be painted fresh. */
+  function silBusy(d) {
+    const v = d.u.vis;
+    if (d.alpha < 0.999 || d.lift > 0) return true;
+    if (!v) return false;
+    if (v._fxAt !== undefined && performance.now() - v._fxAt < 450) return true;
+    return v.flash > 0.01;
+  }
+  /** What shapes a unit's bare sprite on screen (noPos: wherever it stands). */
+  function silUnitKey(e, noPos) {
+    const u = e.u, v = u.vis || {}, S = DD.Sprites;
+    const f = S && typeof S.facingOf === 'function' ? S.facingOf(u) : u.facing;
+    let st = '';
+    const list = u.statuses || [];
+    for (let i = 0; i < list.length; i++) if (list[i] && list[i].id) st += list[i].id + ',';
+    return u.id + ':' + lookId(u) + ':' + f + ':' + (noPos ? '' : e.sx + ',' + e.sy) + ':' + (e.downed ? 1 : 0) + ':' + (v.scale || 1) + ',' + (v.offX || 0) + ',' + (v.offY || 0) + ':' + st;
+  }
+  function silKey(F, d, polys, fronts, SD) {
+    let h = polys.length;
+    for (let p = 0; p < polys.length; p++) {
+      const poly = polys[p];
+      for (let q = 0; q < poly.length; q++) h += (poly[q][0] * 0.6180339887 + poly[q][1] * 1.4142135623) * (q + 1) * (p + 1);
+    }
+    let k = silUnitKey(d) + '|' + F.zoom + ',' + SD + ',' + F.cam.x + ',' + F.cam.y + '|' + h;
+    if (fronts) for (let f = 0; f < fronts.length; f++) k += '|' + silUnitKey(fronts[f]);
+    return k;
+  }
+  function keptSet(entry, pw, ph) {
+    const w = Math.ceil(pw / 32) * 32, h = Math.ceil(ph / 32) * 32;
+    if (entry.set && entry.w === w && entry.h === h) return entry.set;
+    entry.w = w; entry.h = h;
+    // its own fill and ring (kept between frames, so unchanged canvases are composited as they are); mask from the pool
+    entry.set = { sil: scratchCanvas(w, h), ring: scratchCanvas(w, h), mask: null };
+    return entry.set;
+  }
+
+  /**
    * Units hidden behind taller geometry or bigger units: faint team-coloured fill + crisp outline, only where
    * occluded. Masks are the bare bodies (no spotlight underlays or status sparkles). F.silhouettes counts them.
    */
@@ -3025,76 +3224,175 @@
     const c = F.ctx;
     F.silhouettes = [];
     // half resolution while the view turns (drawn back at full size); exact again once it settles
-    const SD = DPR * (viewMoving() ? 0.5 : 1);
+    const moving = viewMoving();
+    const SD = DPR * (moving ? 0.5 : 1);
     F.silScale = SD / DPR;
+    const keep = !lodOff;
+    let refreshes = 0;
+    silFrame++;
+    bodyRefreshes = 0;
+    const prof = R.profile && typeof R.profile === 'object' ? R.profile : null;
     for (let i = 0; i < F.unitDraws.length; i++) {
       const d = F.unitDraws[i];
       if (d.alpha < 0.3 || d.sx === undefined) continue;
+      const tq = prof ? performance.now() : 0;
       const polys = occludersFor(F, d);
       const fronts = unitOccluders(F, i, d);
+      if (prof) prof['sil.tests'] = (prof['sil.tests'] || 0) + performance.now() - tq;
       if (!polys.length && !fronts) continue;
       const z = F.zoom;
       const bw = (Math.max(40, d.mw * 2.2) + 40) * z, bh = (d.mh + 56 + d.lift) * z;
       const bx = d.sx - bw / 2, by = d.sy - bh + 24 * z;
       const pw = Math.ceil(bw * SD), ph = Math.ceil(bh * SD);
       if (pw < 2 || ph < 2) continue;
-      const set = silCanvases(pw, ph);
-      const silCanvas = scratch(set.sil), ringCanvas = scratch(set.ring), maskCanvas = scratch(set.mask);
-      // 1) the whole sprite as a flat team-coloured shape
-      const k = silCanvas.getContext('2d');
-      k.setTransform(SD, 0, 0, SD, -bx * SD, -by * SD);
-      drawSprite(k, d.u, d.sx, d.sy, z, d.downed, true);
-      k.setTransform(1, 0, 0, 1, 0, 0);
-      k.globalCompositeOperation = 'source-in';
-      k.fillStyle = sideColor(d.u);
-      k.fillRect(0, 0, pw, ph);
-      // 2) outline ring = shape dilated by ~1.5 px minus the shape (computed before masking: no line along the occluder)
-      const r = ringCanvas.getContext('2d');
-      const o = Math.max(1, Math.round(1.5 * SD));
-      [[o, 0], [-o, 0], [0, o], [0, -o]].forEach(function (q) { r.drawImage(silCanvas, 0, 0, pw, ph, q[0], q[1], pw, ph); });
-      r.globalCompositeOperation = 'destination-out';
-      r.drawImage(silCanvas, 0, 0, pw, ph, 0, 0, pw, ph);
-      // 3) the occluders: taller tiles/objects in front as polygons, bigger units in front by their real pixels
-      const m = maskCanvas.getContext('2d');
-      m.setTransform(SD, 0, 0, SD, -bx * SD, -by * SD);
-      if (polys.length) {
-        m.beginPath();
-        for (let p = 0; p < polys.length; p++) {
-          const poly = polys[p];
-          for (let q = 0; q < poly.length; q++) {
-            const sp = w2s(F, poly[q][0], poly[q][1]);
-            if (q) m.lineTo(sp.x, sp.y); else m.moveTo(sp.x, sp.y);
-          }
-          m.closePath();
-        }
-        m.fillStyle = '#ffffff';
-        m.fill('nonzero');
+      let set = null;
+      const still = keep && !silBusy(d) && !(fronts && fronts.some(silBusy));
+      if (still && moving) {
+        // the turning view: the kept body, cut to the occluders (see bodyKept)
+        if (drawBodySilhouette(F, d, polys, fronts, SD)) d.feetHidden = true;
+        F.silhouettes.push({ id: d.u.id, geometry: polys.length, units: fronts ? fronts.map(function (e) { return e.u.id; }) : [] });
+        continue;
       }
-      if (fronts) {
-        for (let f = 0; f < fronts.length; f++) {
-          const e = fronts[f], b = spriteBox(e, z);
-          drawSprite(m, e.u, e.sx, e.sy, z, e.downed, true);
-          // feet behind another sprite: its AP pips would sit on that unit's body and read as theirs
-          if (d.sx >= b.x0 && d.sx <= b.x1 && d.sy + 8 * z >= b.y0 && d.sy + 8 * z <= b.y1) d.feetHidden = true;
-        }
+      if (still) {
+        const key = silKey(F, d, polys, fronts, SD);
+        let e = silKept.get(d.u.id);
+        if (!e) { e = { key: null, at: -1e9, ttl: SIL_TTL_S + (U.hash(String(d.u.id)) % 8) * 0.012, seen: 0, set: null, w: 0, h: 0, feetHidden: false }; silKept.set(d.u.id, e); }
+        e.seen = silFrame;
+        const stale = time - e.at >= e.ttl || time < e.at;
+        if (e.key !== key || (stale && refreshes < SIL_REFRESH_PER_FRAME)) {
+          if (e.key === key) refreshes++;
+          set = keptSet(e, pw, ph);
+          set.mask = silCanvases(pw, ph).mask;
+          e.feetHidden = paintSilhouette(F, d, polys, fronts, set, SD, bx, by, pw, ph);
+          e.key = key;
+          e.at = time;
+          ROT.silPaints++;
+        } else ROT.silKept++;
+        set = e.set;
+        if (e.feetHidden) d.feetHidden = true;
+      } else {
+        if (keep) silKept.delete(d.u.id);   // busy now: it is painted fresh until it rests again
+        set = silCanvases(pw, ph);
+        if (paintSilhouette(F, d, polys, fronts, set, SD, bx, by, pw, ph)) d.feetHidden = true;
+        ROT.silPaints++;
       }
-      m.setTransform(1, 0, 0, 1, 0, 0);
-      // 4) keep fill and ring only where something covers the unit
-      [k, r].forEach(function (cx) {
-        cx.globalCompositeOperation = 'destination-in';
-        cx.drawImage(maskCanvas, 0, 0, pw, ph, 0, 0, pw, ph);
-        cx.globalCompositeOperation = 'source-over';
-      });
       c.save();
       setScreenTransform(F);
       // over another unit the fill stays faint (the outline does the work) so the unit in front keeps its colours
       c.globalAlpha = (fronts ? 0.16 : 0.3) * d.alpha;
-      c.drawImage(silCanvas, 0, 0, pw, ph, bx, by, pw / SD, ph / SD);
+      c.drawImage(set.sil, 0, 0, pw, ph, bx, by, pw / SD, ph / SD);
       c.globalAlpha = 0.95 * d.alpha;
-      c.drawImage(ringCanvas, 0, 0, pw, ph, bx, by, pw / SD, ph / SD);
+      c.drawImage(set.ring, 0, 0, pw, ph, bx, by, pw / SD, ph / SD);
       c.restore();
       F.silhouettes.push({ id: d.u.id, geometry: polys.length, units: fronts ? fronts.map(function (e) { return e.u.id; }) : [] });
     }
+    // forget the kept silhouettes of units that have not needed one for a while (about 2 s of frames)
+    if (keep && silFrame % 30 === 0) {
+      silKept.forEach(function (e, id) { if (silFrame - e.seen > 120) silKept.delete(id); });
+      bodyKept.forEach(function (e, id) { if (silFrame - e.seen > 120) bodyKept.delete(id); });
+    }
+  }
+
+  // While the view turns every silhouette moves on screen each frame, so the kept silhouettes above never match. A
+  // unit hidden by geometry alone then reuses its kept body (the unmasked half-resolution fill + outline, with its feet
+  // at a fixed spot of its own canvases; repainted every SIL_TTL_S for the idle motion or when its look, mirror, zoom
+  // or resolution change) and the board clips it to the occluders: no sprite painting and no mask canvases a frame.
+  const bodyKept = new Map();   // unit id -> { key, at, ttl, seen, set: { sil, ring, mask }, w, h }
+  let bodyRefreshes = 0;
+  function drawBodySilhouette(F, d, polys, fronts, SD) {
+    const c = F.ctx, z = F.zoom;
+    const b = bodyOf(F, d, SD), pw = b.pw, ph = b.ph;
+    const bx = d.sx - b.fx / SD, by = d.sy - b.fy / SD;
+    const path = function (k) {
+      k.beginPath();
+      for (let p = 0; p < polys.length; p++) {
+        const poly = polys[p];
+        for (let q = 0; q < poly.length; q++) {
+          const sp = w2s(F, poly[q][0], poly[q][1]);
+          if (q) k.lineTo(sp.x, sp.y); else k.moveTo(sp.x, sp.y);
+        }
+        k.closePath();
+      }
+    };
+    let src = b.set, feetHidden = false;
+    c.save();
+    setScreenTransform(F);
+    if (!fronts) {
+      // geometry only: the board clips the kept body to the occluders
+      path(c);
+      c.clip('nonzero');
+    } else {
+      // units in front: a mask of the occluders and the front units' kept bodies, then the body cut to it
+      const set = silCanvases(pw, ph);
+      const mask = scratch(set.mask), sil = scratch(set.sil), ring = scratch(set.ring);
+      const m = mask.getContext('2d');
+      if (polys.length) {
+        m.setTransform(SD, 0, 0, SD, -bx * SD, -by * SD);
+        path(m);
+        m.fillStyle = '#ffffff';
+        m.fill('nonzero');
+        m.setTransform(1, 0, 0, 1, 0, 0);
+      }
+      for (let f = 0; f < fronts.length; f++) {
+        const e = fronts[f], eb = bodyOf(F, e, SD), sb = spriteBox(e, z);
+        m.drawImage(eb.set.sil, 0, 0, eb.pw, eb.ph, (e.sx - eb.fx / SD - bx) * SD, (e.sy - eb.fy / SD - by) * SD, eb.pw, eb.ph);
+        if (d.sx >= sb.x0 && d.sx <= sb.x1 && d.sy + 8 * z >= sb.y0 && d.sy + 8 * z <= sb.y1) feetHidden = true;
+      }
+      [[sil, b.set.sil], [ring, b.set.ring]].forEach(function (pr) {
+        const k = pr[0].getContext('2d');
+        k.drawImage(pr[1], 0, 0, pw, ph, 0, 0, pw, ph);
+        k.globalCompositeOperation = 'destination-in';
+        k.drawImage(mask, 0, 0, pw, ph, 0, 0, pw, ph);
+        k.globalCompositeOperation = 'source-over';
+      });
+      src = set;
+    }
+    c.globalAlpha = (fronts ? 0.16 : 0.3) * d.alpha;
+    c.drawImage(src.sil, 0, 0, pw, ph, bx, by, pw / SD, ph / SD);
+    c.globalAlpha = 0.95 * d.alpha;
+    c.drawImage(src.ring, 0, 0, pw, ph, bx, by, pw / SD, ph / SD);
+    c.restore();
+    return feetHidden;
+  }
+  /**
+   * A unit's kept body for the turning view: its bare sprite as a flat fill plus outline (unmasked), feet at (fx, fy)
+   * of its own canvases; repainted every SIL_TTL_S (at most SIL_REFRESH_PER_FRAME stale repaints a frame) or when its
+   * look, mirror, statuses, zoom or resolution change. Bodies of units in front double as their masks.
+   */
+  function bodyOf(F, d, SD) {
+    const z = F.zoom;
+    const bw = (Math.max(40, d.mw * 2.2) + 40) * z, bh = (d.mh + 56 + d.lift) * z;
+    const pw = Math.ceil(bw * SD), ph = Math.ceil(bh * SD);
+    const fx = (bw / 2) * SD, fy = (bh - 24 * z) * SD;
+    const key = silUnitKey(d, true) + '|' + z + ',' + SD + ',' + pw + 'x' + ph;
+    let e = bodyKept.get(d.u.id);
+    if (!e) { e = { key: null, at: -1e9, ttl: SIL_TTL_S + (U.hash(String(d.u.id)) % 8) * 0.012, seen: 0, set: null, w: 0, h: 0 }; bodyKept.set(d.u.id, e); }
+    e.seen = silFrame;
+    const stale = time - e.at >= e.ttl || time < e.at;
+    if (e.key !== key || (stale && bodyRefreshes < SIL_REFRESH_PER_FRAME)) {
+      if (e.key === key) bodyRefreshes++;
+      const set = keptSet(e, pw, ph);
+      const sil = scratch(set.sil), ring = scratch(set.ring);
+      const k = sil.getContext('2d');
+      k.setTransform(SD, 0, 0, SD, 0, 0);
+      drawSprite(k, d.u, fx / SD, fy / SD, z, d.downed, true);
+      k.setTransform(1, 0, 0, 1, 0, 0);
+      k.globalCompositeOperation = 'source-in';
+      k.fillStyle = sideColor(d.u);
+      k.fillRect(0, 0, pw, ph);
+      k.globalCompositeOperation = 'source-over';
+      const r = ring.getContext('2d');
+      const o = Math.max(1, Math.round(1.5 * SD));
+      [[o, 0], [-o, 0], [0, o], [0, -o]].forEach(function (q) { r.drawImage(sil, 0, 0, pw, ph, q[0], q[1], pw, ph); });
+      r.globalCompositeOperation = 'destination-out';
+      r.drawImage(sil, 0, 0, pw, ph, 0, 0, pw, ph);
+      r.globalCompositeOperation = 'source-over';
+      e.key = key;
+      e.at = time;
+      ROT.bodyPaints++;
+    }
+    e.pw = pw; e.ph = ph; e.fx = fx; e.fy = fy;
+    return e;
   }
 
   // ---- unit widgets (screen space) -----------------------------------------------------------------------
@@ -3217,7 +3515,7 @@
     }
   }
 
-  // Wind-up bubble over its owner (v2: only boss wind-ups are stored as intents): ⏳[n] icon dmg per wind-up.
+  // Wind-up bubble over its owner (v2: only wind-ups, bosses and a few elites, are stored as intents): ⏳[n] icon dmg per wind-up.
   // No order numbers any more (initiative lives in the HUD tracker). Measured first so colliding bubbles stack.
   function measureBubble(F, c, d, z) {
     const items = F.intentInfo && F.intentInfo[d.u.id];
@@ -3475,11 +3773,30 @@
         });
       }
     }
+    // v2 (UI requests): explosive objects the armed attack can set off get a pulsing 💥 target marker above them. The
+    // markers join the badge-stack layout, so one never sits on a neighbour's HP pill (a lifted one keeps a leader line)
+    // rules run: breakable objects the armed attack can hit get a 🔨 marker in the same layout (breakTargets)
+    const ot = F.ov && F.ov.objTargets, bt = F.ov && F.ov.breakTargets, opv = F.ov && F.ov.objPreview;
+    if (ot || bt) {
+      for (let i = 0; i < F.objList.length; i++) {
+        const o = F.objList[i], k = o.tile.y * F.gw + o.tile.x;
+        const brk = !(ot && ot[k]) && !!(bt && bt[k]);
+        if (!(ot && ot[k]) && !brk) continue;
+        const z = clamp(F.zoom, 0.65, 1.5);
+        const hov = !!(F.ov.hover && F.ov.hover.x === o.tile.x && F.ov.hover.y === o.tile.y);
+        const r = (hov ? 11.5 : brk ? 8.5 : 9.5) * z * (1 + (brk && !hov ? 0.04 : 0.07) * pulse(6));
+        const p = w2s(F, o.cx, o.cy - o.h - 10);
+        const bar = o.obj.maxHp > 0 && (o.obj.hp < o.obj.maxHp || (opv && opv.x === o.tile.x && opv.y === o.tile.y));
+        const tip = p.y + 5 * z - (bar ? 8 * z : 0);
+        stacks.push({ boom: { r: r, z: z, hov: hov, tx: o.tile.x, ty: o.tile.y, brk: brk }, ax: p.x, ay: tip, alpha: 1, w: 2 * r + 2, h: 2 * r + 5 * z });
+      }
+    }
     // bubbles and preview badges also steer clear of the other units' HP widgets
     const obstacles = boxes.map(function (b) { return { x: b.x0, y: b.y0, w: b.x1 - b.x0, h: b.y1 - b.y0 }; });
     const placed = layoutStacks(stacks, obstacles);
     for (let i = placed.length - 1; i >= 0; i--) {
       const s = placed[i];
+      if (s.boom) continue;
       c.save();
       c.globalAlpha = s.alpha;
       let y = s.y + s.h;
@@ -3503,31 +3820,44 @@
     }
     for (let i = 0; i < F.objList.length; i++) {
       const o = F.objList[i], obj = o.obj;
-      if (!(obj.maxHp > 0) || !(obj.hp > 0) || obj.hp >= obj.maxHp) continue;
+      // rules run: the hovered break (overlay.objPreview { x, y, dmg, breaks }) shows the bar even at full HP, the
+      // HP it would lose pulsing red
+      const pv = opv && opv.x === o.tile.x && opv.y === o.tile.y && obj.maxHp > 0 && obj.hp > 0 ? opv : null;
+      if (!(obj.maxHp > 0) || !(obj.hp > 0) || (obj.hp >= obj.maxHp && !pv)) continue;
       const p = w2s(F, o.cx, o.cy - o.h - 6);
       const z = clamp(F.zoom, 0.65, 1.5), w = Math.round(24 * z), h = Math.max(3, Math.round(4 * z));
       c.beginPath(); roundRect(c, p.x - w / 2 - 1.5, p.y - 1.5, w + 3, h + 3, 2); c.fillStyle = 'rgba(12,6,8,0.85)'; c.fill();
       c.fillStyle = '#3b2023'; c.fillRect(p.x - w / 2, p.y, w, h);
-      c.fillStyle = '#e0a23a'; c.fillRect(p.x - w / 2, p.y, w * clamp(obj.hp / obj.maxHp, 0, 1), h);
-    }
-    // v2 (UI requests): explosive objects the armed attack can set off get a pulsing 💥 target marker above them
-    const ot = F.ov && F.ov.objTargets;
-    if (ot) {
-      for (let i = 0; i < F.objList.length; i++) {
-        const o = F.objList[i];
-        if (!ot[o.tile.y * F.gw + o.tile.x]) continue;
-        const z = clamp(F.zoom, 0.65, 1.5);
-        const hov = F.ov.hover && F.ov.hover.x === o.tile.x && F.ov.hover.y === o.tile.y;
-        const r = (hov ? 11.5 : 9.5) * z * (1 + 0.07 * pulse(6));
-        const p = w2s(F, o.cx, o.cy - o.h - 10);
-        const y = p.y - r - (o.obj.maxHp > 0 && o.obj.hp < o.obj.maxHp ? 8 * z : 0);
-        c.beginPath(); c.moveTo(p.x - 3.5 * z, y + r - 1); c.lineTo(p.x, y + r + 5 * z); c.lineTo(p.x + 3.5 * z, y + r - 1); c.closePath();
-        c.fillStyle = 'rgba(255,196,96,0.95)'; c.fill();
-        c.beginPath(); c.arc(p.x, y, r, 0, Math.PI * 2);
-        c.fillStyle = 'rgba(48,16,8,0.9)'; c.fill();
-        c.lineWidth = hov ? 2.4 : 1.8; c.strokeStyle = 'rgba(255,200,96,' + (0.65 + 0.35 * pulse(5)) + ')'; c.stroke();
-        drawGlyph(c, '💥', p.x, y + 0.5, r * 1.25);
+      const f = clamp(obj.hp / obj.maxHp, 0, 1);
+      c.fillStyle = '#e0a23a'; c.fillRect(p.x - w / 2, p.y, w * f, h);
+      if (pv) {
+        const lost = pv.breaks ? obj.hp : clamp(+pv.dmg || 0, 0, obj.hp);
+        const f2 = clamp((obj.hp - lost) / obj.maxHp, 0, 1);
+        c.fillStyle = 'rgba(255,72,56,' + (0.65 + 0.35 * pulse(5)) + ')';
+        c.fillRect(p.x - w / 2 + w * f2, p.y, w * (f - f2), h);
       }
+    }
+    // the 💥 / 🔨 markers last (over the object HP bars), where the layout put them
+    F.booms = [];
+    for (let i = placed.length - 1; i >= 0; i--) {
+      const s = placed[i], b = s.boom;
+      if (!b) continue;
+      const r = b.r, z = b.z, x = s.ax, y = s.y + r, tipY = s.y + s.h;
+      F.booms.push({ x: b.tx, y: b.ty, x0: x - r, y0: s.y, x1: x + r, y1: tipY, lifted: s.ay - tipY > 2, kind: b.brk ? 'break' : 'boom' });
+      // 💥 amber on ember red; 🔨 steel blue on slate, so "it explodes" and "it just breaks" never read alike
+      const rim = b.brk ? '176,212,236' : '255,200,96', tipCol = b.brk ? 'rgba(176,212,236,0.95)' : 'rgba(255,196,96,0.95)';
+      if (s.ay - tipY > 2) {
+        // lifted over a neighbour's widget: a thin leader from the pointer down to the object
+        c.beginPath(); c.moveTo(x, tipY); c.lineTo(x, s.ay);
+        c.lineWidth = 3; c.strokeStyle = 'rgba(12,6,8,0.55)'; c.stroke();
+        c.lineWidth = 1.2; c.strokeStyle = b.brk ? 'rgba(176,212,236,0.9)' : 'rgba(255,196,96,0.9)'; c.stroke();
+      }
+      c.beginPath(); c.moveTo(x - 3.5 * z, y + r - 1); c.lineTo(x, y + r + 5 * z); c.lineTo(x + 3.5 * z, y + r - 1); c.closePath();
+      c.fillStyle = tipCol; c.fill();
+      c.beginPath(); c.arc(x, y, r, 0, Math.PI * 2);
+      c.fillStyle = b.brk ? 'rgba(18,26,38,0.9)' : 'rgba(48,16,8,0.9)'; c.fill();
+      c.lineWidth = b.hov ? 2.4 : 1.8; c.strokeStyle = 'rgba(' + rim + ',' + (b.brk && !b.hov ? 0.75 : 0.65 + 0.35 * pulse(5)) + ')'; c.stroke();
+      drawGlyph(c, b.brk ? '🔨' : '💥', x, y + 0.5, r * (b.brk ? 1.15 : 1.25));
     }
   }
 
@@ -3542,6 +3872,8 @@
       turnUnitId: null, threat: null, reach: null,
       // v2 (UI requests): [{x, y}] explosive objects the armed attack can set off · [unitId] downed allies a heal gets up
       objTargets: [], reviveTargets: [],
+      // rules run (moving through allies, breaking objects); empty = nothing drawn
+      passTiles: [], swapTiles: [], swap: null, ghosts: null, breakTargets: [], objPreview: null,
     };
   }
 
@@ -3581,8 +3913,24 @@
     const o = R.overlay || {};
     const th = threatArrays(F, o.threat);
     const reach = o.reach && Array.isArray(o.reach.tiles) && o.reach.tiles.length ? tileSet(F, o.reach.tiles) : null;
+    // rules run: allies a move walks through (pass) and adjacent allies it can swap with join the move region, so its
+    // outline runs round them instead of cutting a hole under every ally
+    const move = tileSet(F, o.moveTiles);
+    const pass = Array.isArray(o.passTiles) && o.passTiles.length ? tileSet(F, o.passTiles) : null;
+    const swapSet = Array.isArray(o.swapTiles) && o.swapTiles.length ? tileSet(F, o.swapTiles) : null;
+    let moveAll = move;
+    if (pass || swapSet) {
+      moveAll = move.slice();
+      for (let i = 0; i < moveAll.length; i++) if ((pass && pass[i]) || (swapSet && swapSet[i])) moveAll[i] = 1;
+    }
+    const sw = o.swap && o.swap.from && o.swap.to ? o.swap : null;
     F.ov = {
-      move: tileSet(F, o.moveTiles), target: tileSet(F, o.targetTiles), area: tileSet(F, o.areaTiles),
+      move: move, moveAll: moveAll, pass: pass, swapSet: swapSet,
+      swap: sw ? { from: { x: sw.from.x | 0, y: sw.from.y | 0 }, to: { x: sw.to.x | 0, y: sw.to.y | 0 }, bad: !!sw.bad, hazard: !!sw.hazard, blocked: !!sw.blocked } : null,
+      ghosts: o.ghosts && typeof o.ghosts === 'object' ? o.ghosts : null,
+      breakTargets: Array.isArray(o.breakTargets) && o.breakTargets.length ? tileSet(F, o.breakTargets) : null,
+      objPreview: o.objPreview && o.objPreview.x !== undefined ? o.objPreview : null,
+      target: tileSet(F, o.targetTiles), area: tileSet(F, o.areaTiles),
       deploy: tileSet(F, o.deployTiles), interact: tileSet(F, o.interactTiles),
       selectedId: o.selectedId === undefined ? null : o.selectedId, hover: o.hover || null,
       path: Array.isArray(o.path) ? o.path : [], pathHazard: !!o.pathHazard,
@@ -3667,7 +4015,9 @@
           icon: (desc && desc.icon) || it.icon || (skill && skill.icon) || '⚔️',
           dmg: typeof dmg === 'number' && isFinite(dmg) ? Math.round(dmg) : 0,
           label: (desc && desc.label) || it.label || (skill && skill.name) || '',
-          unknown: !!(desc && desc.uncertain) || hasStatus(u, 'dazzled') || hasStatus(u, 'confused') ||
+          // [playtest bosses-objectives-2] a Dazzled / Confused boss's skew is rolled when the status lands and the tiles
+          // show it (DD.AI.describe says when it is still unknown): no '?' for a landing the board already marks
+          unknown: (desc ? !!desc.uncertain : hasStatus(u, 'dazzled') || hasStatus(u, 'confused')) ||
             !!(skill && Array.isArray(skill.tags) && skill.tags.indexOf('random') >= 0),
         });
       }
@@ -3874,8 +4224,58 @@
     });
   }
 
+  /**
+   * Rules run: the hovered swap (overlay.swap { from, to, bad, hazard, blocked }) — two arrows arcing past each other
+   * between the mover's tile and the ally's, red when it provokes or lands someone in a hazard (⚠ over the mover's new
+   * tile); [playtest combat-controls-1] blocked: a free hit calls the swap off (or, review finish, the swap is refused),
+   * a ✖ sits between the arrows.
+   */
+  function drawSwap(F, c) {
+    const sw = F.ov.swap;
+    if (!sw) return;
+    const ta = gridTile(F, sw.from.x, sw.from.y), tb = gridTile(F, sw.to.x, sw.to.y);
+    if (!ta || !tb) return;
+    const a = Iso.toWorld(sw.from.x, sw.from.y, topLevel(F, ta)), b = Iso.toWorld(sw.to.x, sw.to.y, topLevel(F, tb));
+    const col = sw.bad ? '#ff5a4a' : '#a6d6ff';
+    const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy) || 1;
+    const nx = -dy / len, ny = dx / len, bow = 9, cut = 7 / len;
+    c.save();
+    c.lineCap = 'round'; c.lineJoin = 'round';
+    for (let k = 0; k < 2; k++) {
+      const p0 = k ? b : a, p2 = k ? a : b, sg = k ? -1 : 1;
+      const p1 = { x: (a.x + b.x) / 2 + nx * bow * sg, y: (a.y + b.y) / 2 + ny * bow * sg - 4 };
+      const q = function (t) { const u = 1 - t; return { x: u * u * p0.x + 2 * u * t * p1.x + t * t * p2.x, y: u * u * p0.y + 2 * u * t * p1.y + t * t * p2.y }; };
+      const s0 = q(cut), s1 = q(1 - cut);
+      c.beginPath(); c.moveTo(s0.x, s0.y);
+      for (let i = 1; i <= 12; i++) { const p = q(cut + (1 - 2 * cut) * i / 12); c.lineTo(p.x, p.y); }
+      c.lineWidth = 4.4; c.strokeStyle = 'rgba(10,15,30,0.85)'; c.stroke();
+      c.lineWidth = 2.4; c.strokeStyle = col; c.stroke();
+      const pb = q(1 - cut - 0.08), ang = Math.atan2(s1.y - pb.y, s1.x - pb.x);
+      c.save();
+      c.translate(s1.x, s1.y); c.rotate(ang);
+      c.beginPath(); c.moveTo(3, 0); c.lineTo(-7, -5.5); c.lineTo(-4.5, 0); c.lineTo(-7, 5.5); c.closePath();
+      c.fillStyle = col; c.fill();
+      c.lineWidth = 1.3; c.strokeStyle = 'rgba(10,15,30,0.9)'; c.stroke();
+      c.restore();
+    }
+    c.restore();
+    if (sw.hazard) {
+      setScreenTransform(F);
+      const p = w2s(F, b.x, b.y - 26);
+      drawGlyph(c, '⚠️', p.x, p.y, 16 * clamp(F.zoom, 0.7, 1.4));
+      setWorldTransform(F);
+    }
+    if (sw.blocked) {
+      setScreenTransform(F);
+      const m = w2s(F, (a.x + b.x) / 2, (a.y + b.y) / 2 - 4);
+      drawGlyph(c, '✖️', m.x, m.y, 15 * clamp(F.zoom, 0.7, 1.4));
+      setWorldTransform(F);
+    }
+  }
+
   function drawPath(F, c) {
     const ov = F.ov;
+    drawSwap(F, c);
     if (!ov.path || !ov.path.length) return;
     const pts = [];
     const sel = ov.selectedId !== null ? unitDrawById(F, ov.selectedId) : null;
@@ -4092,10 +4492,15 @@
   const TITLE_TMAP = { g: 'grass', d: 'dirt', m: 'moss', s: 'cobble', w: 'water' };
   const TITLE_OBJ = {
     '3,3': 'title_campfire', '0,0': 'tree', '6,0': 'tree', '2,0': 'rock', '5,0': 'chest', '6,3': 'title_tent',
-    '0,3': 'title_sign', '0,6': 'bush', '6,6': 'mushroom', '5,5': 'barrel', '1,0': 'bush',
+    '0,3': 'title_sign', '0,6': 'bush', '6,6': 'mushroom', '6,5': 'barrel', '1,0': 'bush',
   };
-  const TITLE_SLOTS = [[2, 5], [4, 5], [1, 4], [5, 4], [1, 2], [5, 2], [2, 1], [4, 1]];
-  const HERO_ORDER = ['zarathor', 'syllamin', 'marbles', 'professor_marbles', 'marwyn', 'ellaria', 'josiah', 'sparrow', 'corelos'];
+  // the whole table sits at the fire: the ring of tiles two steps out (the classic eight seats first, then the rest,
+  // alternating sides), so every hero gets a spot and nobody sits in the flames
+  const TITLE_SLOTS = [[2, 5], [4, 5], [1, 4], [5, 4], [1, 2], [5, 2], [2, 1], [4, 1],
+    [1, 3], [5, 3], [3, 5], [3, 1], [1, 5], [5, 1], [1, 1], [5, 5]];
+  // fallback when DD.UI is not loaded (same order as DD.UI.HERO_ORDER: the original ten, then the newer six)
+  const HERO_ORDER = ['zarathor', 'syllamin', 'marbles', 'marwyn', 'ellaria', 'josiah', 'buga', 'sparrow', 'slate', 'corelos',
+    'kiri', 'betty', 'basanos', 'valdris', 'hjalmar', 'pebbles'];
   let titleState = null, titleHeroKey = '';
   const titleBark = { at: 4, unitId: null, text: '', until: 0 };
   let stars = null;
@@ -4160,8 +4565,9 @@
 
   function titleHeroes() {
     const all = Object.keys((DD.defs && DD.defs.heroes) || {});
+    const order = DD.UI && Array.isArray(DD.UI.HERO_ORDER) && DD.UI.HERO_ORDER.length ? DD.UI.HERO_ORDER : HERO_ORDER;
     all.sort(function (a, b) {
-      const ia = HERO_ORDER.indexOf(a), ib = HERO_ORDER.indexOf(b);
+      const ia = order.indexOf(a), ib = order.indexOf(b);
       return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
     });
     const unlocked = all.filter(function (id) {
@@ -4186,9 +4592,11 @@
     }
     const units = heroes.map(function (id, i) {
       const s = TITLE_SLOTS[i], h = +TITLE_HGT[s[1]][s[0]];
+      // everyone faces the fire (the two seats in line with it on screen look at each other's side of it)
+      const sx = s[0] - s[1];
       return {
         id: 'title_' + id, defId: id, kind: 'hero', side: 'hero', name: id, x: s[0], y: s[1], hp: 1, maxHp: 1,
-        statuses: [], flags: {}, facing: (s[0] - s[1]) < 0 ? 1 : -1, dead: false, downed: false, _idle: i * 0.41,
+        statuses: [], flags: {}, facing: sx < 0 || (sx === 0 && s[1] < 3) ? 1 : -1, dead: false, downed: false, _idle: i * 0.41,
         vis: { x: s[0], y: s[1], h: h, hp: 1, block: 0, alpha: 1, hidden: false, dead: false, downed: false, flash: 0, offX: 0, offY: 0, scale: 1 },
       };
     });
@@ -4521,19 +4929,22 @@
     return boundsMemo.b;
   }
   /**
-   * Screen area the HUD covers on each side (CSS px). DD.Render.hudMargins = { left, right, top, bottom } (or a
+   * Screen area the HUD covers on each side (CSS px). DD.Render.hudMargins = { left, right, top, bottom, avoid } (or a
    * function (w, h) returning one) set by the HUD wins; missing sides fall back to the defaults. Margins never eat
-   * more than 70% of a dimension, so the board always keeps a usable area.
+   * more than 70% of a dimension, so the board always keeps a usable area. avoid: [{ x0, y0, x1, y1, soft }] boxes of
+   * HUD panels (CSS px) the fit keeps the board out of (a soft one, a panel that fades when something is under it,
+   * only keeps units clear).
    */
   function defaultMargins(w, h) {
     if (w >= 900 && h >= 620) return HUD_MARGIN;
     return { left: Math.min(HUD_MARGIN.left, w * 0.16), right: 10, top: Math.min(HUD_MARGIN.top, h * 0.08), bottom: Math.min(HUD_MARGIN.bottom, h * 0.3) };
   }
-  function hudMargins(w, h) {
+  function hudLayout(w, h) {
     const def = defaultMargins(w, h);
     let o = R.hudMargins;
-    if (typeof o === 'function') { try { o = o(w, h); } catch (e) { renderError('DD.Render.hudMargins()', e); o = null; } }
-    if (!o || typeof o !== 'object') return def;
+    // info.live: false while renderTo draws an offscreen frame (the HUD's panels belong to the live canvas only)
+    if (typeof o === 'function') { try { o = o(w, h, { live: !offscreen }); } catch (e) { renderError('DD.Render.hudMargins()', e); o = null; } }
+    if (!o || typeof o !== 'object') return { m: def, avoid: [] };
     const side = function (k) { const v = +o[k]; return isFinite(v) && v >= 0 ? v : def[k]; };
     const m = { left: side('left'), right: side('right'), top: side('top'), bottom: side('bottom') };
     const fit = function (a, b, total) {
@@ -4542,24 +4953,153 @@
     };
     fit('left', 'right', w);
     fit('top', 'bottom', h);
-    return m;
+    const avoid = [];
+    (Array.isArray(o.avoid) ? o.avoid : []).forEach(function (r) {
+      if (!r || typeof r !== 'object') return;
+      const x0 = +r.x0, y0 = +r.y0, x1 = +r.x1, y1 = +r.y1;
+      if (isFinite(x0) && isFinite(y0) && isFinite(x1) && isFinite(y1) && x1 - x0 >= 2 && y1 - y0 >= 2) avoid.push({ x0: x0, y0: y0, x1: x1, y1: y1, soft: !!r.soft });
+    });
+    return { m: m, avoid: avoid };
   }
+  function hudMargins(w, h) { return hudLayout(w, h).m; }
   let marginSig = '';
-  /** Refit (smoothly) when the HUD changes its margins, unless the player has moved the camera. */
+  /**
+   * Refit (smoothly) when the HUD changes its margins or panels, unless the player has moved the camera, and only when
+   * the change puts something under a panel at the current view. Panels grow and shrink all fight long (a party card's
+   * status line, a portrait leaving the tracker, the next hero's skill bar), and refitting on each change made the board
+   * zoom in and out on its own mid-fight (review, balance run: 7 refits in one 8-round fight). So the framing only
+   * ever moves to clear a panel, never to grow back; once deployment is over only board tiles under a hard panel count
+   * (units walk under the objective all fight: it fades for them).
+   */
   function watchMargins() {
-    const m = hudMargins(W, H);
-    const sig = Math.round(m.left) + ',' + Math.round(m.right) + ',' + Math.round(m.top) + ',' + Math.round(m.bottom) + '@' + W + 'x' + H;
+    const L = hudLayout(W, H), m = L.m;
+    const q = function (v) { return Math.round(v / 16); };
+    const sig = Math.round(m.left) + ',' + Math.round(m.right) + ',' + Math.round(m.top) + ',' + Math.round(m.bottom) + '@' + W + 'x' + H +
+      L.avoid.map(function (r) { return '|' + q(r.x0) + ',' + q(r.y0) + ',' + q(r.x1) + ',' + q(r.y1) + (r.soft ? 's' : ''); }).join('');
     if (sig === marginSig) return;
     const first = !marginSig;
     marginSig = sig;
-    if (!first && scene === 'combat' && !userMoved && currentState()) R.fitMap();
+    const st = currentState();
+    if (first || scene !== 'combat' || userMoved || !st) return;
+    const deploying = !!(st.deploy && st.deploy.active) && !st.result;
+    if (coveredAt(st, L.avoid, deploying)) R.fitMap();
   }
+  /**
+   * Is anything the fit keeps clear under a panel at the camera's target (no padding: a near miss is not a reason to
+   * move)? Board tiles under hard panels; with `units`, also unit points under any panel.
+   */
+  function coveredAt(st, avoid, units) {
+    if (!avoid.length) return false;
+    const P = fitPoints(st), k = camTarget.zoom, zc = clamp(k, 0.65, 1.5);
+    for (let i = 0; i < P.length; i += FIT_STRIDE) {
+      const isUnit = !!P[i + 3];
+      if (isUnit && !units) continue;
+      const ex = P[i + 4] ? P[i + 4] * zc + 9 : 0, up = P[i + 5] ? Math.max(0, 18 * zc + 8 - 12 * k) : 0;
+      const x = (P[i] - camTarget.x) * k + W / 2, y = (P[i + 1] - camTarget.y) * k + H / 2;
+      for (let r = 0; r < avoid.length; r++) {
+        const A = avoid[r];
+        if (A.soft && !isUnit) continue;
+        if (x > A.x0 - ex && x < A.x1 + ex && y > A.y0 && y < A.y1 + up) return true;
+      }
+    }
+    return false;
+  }
+  /** Stride of fitPoints: x, y, weight, unit (0 / 1), HP pill half-width per clamped zoom (+9 px), has a status row (0 / 1). */
+  const FIT_STRIDE = 6;
+  /**
+   * What the fit keeps clear of the HUD's panels, in world px at the current view: each tile top (centre weight 3,
+   * points half-way to its corners, weight 1, so an edge may tuck under a panel) and each unit (its HP bar over the head,
+   * shoulders, middle: unit points, which soft panels count too). The HP point carries the HP pill's screen size (the
+   * pill and its status row are drawn at a clamped zoom), so a pill's end is kept clear too, not only its centre.
+   */
+  function fitPoints(st) {
+    const F = pickFrame(st), out = [];
+    const IN = [[-0.25, -0.25], [0.25, -0.25], [0.25, 0.25], [-0.25, 0.25]];
+    for (let i = 0; i < F.tiles.length; i++) {
+      const t = F.tiles[i];
+      if (!t) continue;
+      const x = i % F.gw, y = (i - x) / F.gw, top = topLevel(F, t);
+      const c = Iso.toWorld(x, y, top);
+      out.push(c.x, c.y, 3, 0, 0, 0);
+      for (let k = 0; k < 4; k++) {
+        const p = Iso.toWorld(x + IN[k][0], y + IN[k][1], top);
+        out.push(p.x, p.y, 1, 0, 0, 0);
+      }
+    }
+    const units = (st && st.units) || [];
+    for (let i = 0; i < units.length; i++) {
+      const u = units[i];
+      if (!u || u.dead || !isFinite(u.x) || !isFinite(u.y)) continue;
+      const w = Iso.toWorld(u.x, u.y, groundH(F, u.x, u.y));
+      const m = unitMetrics(u), hgt = (u.downed ? 0.5 : 1) * m.height, half = Math.max(8, m.width * 0.4);
+      // the HP pill: a 36 px bar (60 for a boss) with the HP number on its left (measureWidget), status icons above it
+      const pill = u.downed ? 27 : u.tier === 'boss' ? 48 : 30, sts = (u.statuses || []).some(function (s) { return s && s.id; }) ? 1 : 0;
+      out.push(w.x, w.y - hgt - 16, 20, 1, pill, sts, w.x - half, w.y - hgt * 0.72, 8, 1, 0, 0, w.x + half, w.y - hgt * 0.72, 8, 1, 0, 0, w.x, w.y - hgt * 0.4, 8, 1, 0, 0);
+    }
+    return out;
+  }
+  /**
+   * The fit: the board's box as large as the HUD margins allow, centred in the area they leave. When the HUD reports
+   * panels inside that area (the combat log, the objective) and the fitted board would put a tile or a unit under one
+   * (the diagonal views fill the area's corners; a boss's head at the back), it slides the board within the area's
+   * slack and, if that is not enough, shrinks it a little (down to 70%), keeping it as large and as centred as it
+   * can. If nothing clears every panel it at least clears the units; else the plain fit stands. With nothing under a
+   * panel (the usual classic view) it is exactly the plain fit.
+   */
   function computeFit(st, w, h) {
-    const b = mapBounds(st), m = hudMargins(w, h);
+    const L = hudLayout(w, h), m = L.m;
+    const b = mapBounds(st);
     const aw = Math.max(120, w - m.left - m.right), ah = Math.max(120, h - m.top - m.bottom);
     const zoom = clamp(Math.min(aw / (b.maxX - b.minX), ah / (b.maxY - b.minY)), MIN_ZOOM, 2);
     const acx = m.left + aw / 2, acy = m.top + ah / 2;
-    return { x: (b.minX + b.maxX) / 2 - (acx - w / 2) / zoom, y: (b.minY + b.maxY) / 2 - (acy - h / 2) / zoom, zoom: zoom };
+    const base = { x: (b.minX + b.maxX) / 2 - (acx - w / 2) / zoom, y: (b.minY + b.maxY) / 2 - (acy - h / 2) / zoom, zoom: zoom };
+    if (!L.avoid.length) return base;
+    const P = fitPoints(st), bcx = (b.minX + b.maxX) / 2, bcy = (b.minY + b.maxY) / 2, PAD = 4;
+    // with the board's box centred at screen (sx, sy) at zoom k, is anything that counts under a panel? (soft panels
+    // and the units-only pass count unit points only)
+    const hidden = function (k, sx, sy, unitsOnly) {
+      const zc = clamp(k, 0.65, 1.5);
+      for (let r = 0; r < L.avoid.length; r++) {
+        const A = L.avoid[r], onlyUnits = unitsOnly || A.soft;
+        const x0 = (A.x0 - PAD - sx) / k + bcx, x1 = (A.x1 + PAD - sx) / k + bcx;
+        const y0 = (A.y0 - PAD - sy) / k + bcy, y1 = (A.y1 + PAD - sy) / k + bcy;
+        for (let i = 0; i < P.length; i += FIT_STRIDE) {
+          if (onlyUnits && !P[i + 3]) continue;
+          // an HP pill's half-width and its status row are screen px (at the clamped zoom the widgets use)
+          const ex = P[i + 4] ? (P[i + 4] * zc + 9) / k : 0, up = P[i + 5] ? Math.max(0, 18 * zc + 8 - 12 * k) / k : 0;
+          const px = P[i], py = P[i + 1];
+          if (px > x0 - ex && px < x1 + ex && py > y0 && py < y1 + up) return true;
+        }
+      }
+      return false;
+    };
+    if (!hidden(zoom, acx, acy, false)) return base;
+    const search = function (unitsOnly) {
+      for (let s = 0; s <= 12; s++) {
+        const k = Math.max(MIN_ZOOM, zoom * Math.pow(0.97, s));
+        const sw = (b.maxX - b.minX) * k, sh = (b.maxY - b.minY) * k;
+        let xlo = m.left + sw / 2, xhi = w - m.right - sw / 2, ylo = m.top + sh / 2, yhi = h - m.bottom - sh / 2;
+        if (xlo > xhi) xlo = xhi = acx;
+        if (ylo > yhi) ylo = yhi = acy;
+        const cands = [], N = 12;
+        for (let i = 0; i <= N; i++) {
+          for (let j = 0; j <= N; j++) {
+            const sx = xlo + (xhi - xlo) * i / N, sy = ylo + (yhi - ylo) * j / N;
+            cands.push({ sx: sx, sy: sy, d: (sx - acx) * (sx - acx) + (sy - acy) * (sy - acy) });
+            if (ylo === yhi) break;
+          }
+          if (xlo === xhi) break;
+        }
+        cands.sort(function (a, c) { return a.d - c.d; });
+        for (let i = 0; i < cands.length; i++) {
+          const q = cands[i];
+          if (!hidden(k, q.sx, q.sy, unitsOnly)) return { x: bcx - (q.sx - w / 2) / k, y: bcy - (q.sy - h / 2) / k, zoom: k };
+        }
+        if (k <= MIN_ZOOM) break;
+      }
+      return null;
+    };
+    return search(false) || search(true) || base;
   }
   function clampTarget() {
     const st = currentState();
@@ -5184,6 +5724,7 @@
         // offscreen renders draw at full detail and bake every texture they need at once; opts.live (tests, perf
         // pages) draws like a live frame instead: the moving-view LOD and the per-frame bake budget
         lodOff = !opts.live;
+        offscreen++;
         DPR = opts.dpr || 1;
         W = opts.width || Math.round(cv.width / DPR);
         H = opts.height || Math.round(cv.height / DPR);
@@ -5207,15 +5748,20 @@
           units: F.unitDraws.length, objects: F.objList.length, lights: F.lights.length, telegraphs: F.teleRaw.length,
           // v2: drawn wind-ups (ids), their ⏳ badges, threat-shaded tiles, the inspected enemy's reach tiles
           windups: F.teleRaw.reduce(function (a, e) { return a.concat(e.list.map(function (it) { return it.id; })); }, []),
-          badges: (F.teleBadges || []).map(function (b) { return { label: b.label, dmg: b.dmg, delay: b.delay }; }),
+          badges: (F.teleBadges || []).map(function (b) { return { label: b.label, dmg: b.dmg, delay: b.delay, unknown: !!b.unknown }; }),
           threatTiles: F.ov ? F.ov.threatN : 0,
           reachTiles: F.ov && F.ov.reach ? F.ov.reach.reduce(function (a, v) { return a + v; }, 0) : 0,
           widgets: (F.widgetBoxes || []).map(function (b) { return Object.assign({}, b); }),
           silhouettes: (F.silhouettes || []).map(function (s) { return { id: s.id, geometry: s.geometry, units: s.units.slice() }; }),
           silScale: F.silScale === undefined ? 1 : F.silScale,
+          // the 💥 markers as laid out (screen boxes, the object tile, lifted over a neighbour's widget)
+          booms: (F.booms || []).map(function (b) { return Object.assign({}, b); }),
+          // rules run: ⇄ rings drawn under swappable allies, allies faded by overlay.ghosts
+          swapRings: F.swapRings || 0, ghosted: F.ghosted || 0,
         } : null;
       } finally {
         W = saved.W; H = saved.H; DPR = saved.DPR; texBudget = saved.budget; frameBakeMs = saved.baked; lodOff = saved.lod;
+        offscreen = Math.max(0, offscreen - 1);
       }
     },
     /**
@@ -5262,7 +5808,7 @@
     /** Drop cached textures/styles/faces/orders (e.g. after registering terrain at runtime). */
     invalidate: function () {
       styleCache.clear(); texCache.clear(); texYaws.clear(); faceCache.clear(); glyphs.clear(); orderMemo.clear();
-      silPool.clear(); silPoolBytes = 0;
+      silPool.clear(); silPoolBytes = 0; silKept.clear(); bodyKept.clear();
       teleCache.st = null; boundsMemo.st = null; titleState = null;
       stateVersion++;
     },
@@ -5366,7 +5912,7 @@
       reset: function () { Object.keys(ROT).forEach(function (k) { ROT[k] = 0; }); },
       caches: function () {
         return { tex: texCache.size, texBytes: texCache.bytes, faces: faceCache.size, faceBytes: faceCache.bytes, orders: orderMemo.size,
-          sil: silPool.size, silBytes: silPoolBytes };
+          sil: silPool.size, silBytes: silPoolBytes, silKept: silKept.size, bodies: bodyKept.size };
       },
       order: function (gw, gh) { return depthOrder(gw, gh); },
       /** Where the next turn starts from (the live yaw unless an animation runs). */
@@ -5396,6 +5942,10 @@
         if (!simLoop && viewSettlePending && !isViewMoving()) settleView();
       },
       step: function (ms) { time += (+ms || 0) / 1000; applySceneView(); updateYaw(); },
+      /** Tests: the per-frame check that refits when the HUD's margins or panels change (as the live loop runs it). */
+      watchMargins: function () { watchMargins(); },
+      /** Tests: the camera's target (where the camera eases to). */
+      camTarget: function () { return { x: camTarget.x, y: camTarget.y, zoom: camTarget.zoom }; },
       /** Tests: time texture bakes with fn() (ms) instead of performance.now; null restores it. */
       clock: function (fn) { bakeClock = typeof fn === 'function' ? fn : function () { return performance.now(); }; },
     },

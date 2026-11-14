@@ -5,8 +5,9 @@
  * hja_glove; data.owner = Hjalmar's unit id). The first foe of his to enter one (walking, pushed, pulled, swapped,
  * teleported; flyers float over) springs it: one verb per trap. Foes never see them (no AI hazard), so traps punish the
  * paths enemies walk on their own turns and every push, pull and swap the party makes.
- * Passive "Monkey Business": every trap a foe springs gives the party 5 Hype (the crowd loves a pratfall).
- * Registers: hero hjalmar, 11 skills (hja_*), status hja_slipped, 6 trap objects, 3 hero items.
+ * Passive "Monkey Business": every trap a foe springs gives the party 5 Hype (the crowd loves a pratfall). Hero item
+ * Canned Laughter (D9 sustain): while he wears it, he heals 4 HP per trap a foe springs (also in spring()).
+ * Registers: hero hjalmar, 11 skills (hja_*), status hja_slipped, 6 trap objects, 4 hero items, a loading tip.
  * Public helpers for tests / other content: DD.Hjalmar (setTrap, spring, traps, canTrapAt, gloveTiles, KINDS...).
  */
 (function () {
@@ -17,7 +18,8 @@
   const HERO = 'hjalmar';
   const SLIPPED = 'hja_slipped';
   const TRAP_HYPE = 5;                      // Monkey Business: party Hype per trap a foe springs
-  const COCONUT = 'hja_coconut', POMADE = 'hja_pomade', SACK = 'hja_prop_sack';
+  const CANNED_HEAL = 4;                    // Canned Laughter: HP he heals per trap a foe springs (D9)
+  const COCONUT = 'hja_coconut', POMADE = 'hja_pomade', SACK = 'hja_prop_sack', CANNED = 'hja_canned_laughter';
   const BANANA = '#ffd84a', BANANA_DARK = '#c99a1c', FUR = '#8b5a2b', FUR_DARK = '#5e3a1e', FACE = '#ecc9a0';
   const FEZ = '#c62f2f', PINK = '#ff7aa8', PAINTS = ['#ff4d6d', '#3fa7ff', '#7be05a', '#ffd84a'];
 
@@ -52,6 +54,12 @@
   }
   /** "through its next turn" / "through its next 2 turns". */
   function nextTurns(n) { return n > 1 ? 'through its next ' + n + ' turns' : 'through its next turn'; }
+  /** A skill's target reach for this unit: the base plus its range items / Dazzle (DD.Targeting.reach; playtest heroes-v1). */
+  function reach(user, id, L, base) {
+    const d = DD.getSkill(id);
+    if (!user || !d || !DD.Targeting || typeof DD.Targeting.reach !== 'function') return base;
+    return DD.Targeting.reach(d, L, user, base);
+  }
 
   // ---- traps ----------------------------------------------------------------------------------------
   function isTrap(o) { return !!o && !!TRAP_OBJ[o.id]; }
@@ -180,7 +188,14 @@
     }
     if (owner && owner.defId === HERO) {
       A().gainHype(TRAP_HYPE, 'Monkey Business');
-      if (active(owner)) A().maybeBark(owner, 'trap', 0.35);
+      // a downed Hjalmar is not active: his traps still bite and cheer, but the laughter never revives him
+      if (active(owner)) {
+        A().maybeBark(owner, 'trap', 0.35);
+        if (hasItem(owner, CANNED)) {
+          FX().text(owner, '🥫 HA-HA-HA!', { color: BANANA, size: 16 });
+          if (A().heal(owner, owner, CANNED_HEAL) > 0) A().log(owner.name + ' laughs so hard at the pratfall that it heals him.', 'hero');
+        }
+      }
     }
     return true;
   }
@@ -459,7 +474,8 @@
   }
   /**
    * AutoPlay's worth of setting a trap on ctx.target now: the best foe likely to walk into it (+ a little for the next
-   * best), less when another trap of his is already right there. 0 when no foe is coming its way.
+   * best), plus Canned Laughter's heal when he wears it and is hurt, less when another trap of his is already right
+   * there. 0 when no foe is coming its way.
    */
   function trapValue(ctx, kind) {
     const me = ctx && ctx.user, p = ctx && ctx.target, s = S();
@@ -480,6 +496,12 @@
     vals.sort(function (a, b) { return b - a; });
     // the firecracker hurts whoever is around when anybody sets it off: worth the chance that someone does
     let v = kind === 'boom' ? (1 - miss) * effectValue(kind, me, null, p, L, dir) : vals[0] + 0.3 * (vals[1] || 0);
+    // [review sustain] Canned Laughter: the trap mostly springs on a foe's turn, where no dry run sees his heal, so the
+    // chance that anyone springs it is worth the heal, priced the way AutoPlay prices heals (more below half HP)
+    if (hasItem(me, CANNED) && active(me)) {
+      const hurt = me.maxHp - me.hp;
+      if (hurt > 0) v += (1 - miss) * Math.min(CANNED_HEAL, hurt) * (hurt > me.maxHp / 2 ? 1.5 : 0.8);
+    }
     traps(me).forEach(function (t) { if (dist(t, p) <= 1) v *= 0.6; });
     return Math.min(v, 14);
   }
@@ -667,7 +689,11 @@
     ap: 1, cooldown: 0,
     levels: [{ dmg: 4 }],
     target: { type: 'unit', range: [1, 4], los: true, filter: 'enemy' },
-    desc: function (L) { return 'Deal ' + L.dmg + ' damage to a foe within 4.'; },
+    // [playtest heroes-2 / desc-sweep-7] the Coconut of Unusual Size's knockback is part of the text when he holds it
+    desc: function (L, user) {
+      return 'Deal ' + L.dmg + ' damage to a foe within ' + reach(user, 'hja_basic', L, 4) +
+        (hasItem(user, COCONUT) ? ' and knock it 1 tile back (Coconut of Unusual Size).' : '.');
+    },
     flavor: 'Thrown with love. Mostly with spin.',
     execute: function (ctx) {
       const u = ctx.user, t = ctx.targetUnit;
@@ -685,7 +711,7 @@
     cooldown: function (L) { return L.cd; },
     levels: [{ range: 3, cd: 3 }, { range: 4, cd: 3 }, { range: 4, cd: 2 }],
     range: function (L) { return [1, L.range]; },
-    desc: function (L) { return 'Set a banana peel within ' + L.range + ': the first foe to step on it slips and can\'t act until the end of its turn.'; },
+    desc: function (L, user) { return 'Set a banana peel within ' + reach(user, 'hja_peel', L, L.range) + ': the first foe to step on it slips and can\'t act until the end of its turn.'; },
     flavor: 'The oldest trick in the book. The book is also a banana peel.',
     data: function () { return {}; },
   });
@@ -695,7 +721,7 @@
     kind: 'bear', tags: ['root', 'damage'],
     cooldown: 1,
     levels: [{ snap: 5 }, { snap: 7 }, { snap: 9 }],
-    desc: function (L) { return 'Set a bear trap within 3: the first foe to step on it takes ' + L.snap + ' damage and is Rooted through its next turn.'; },
+    desc: function (L, user) { return 'Set a bear trap within ' + reach(user, 'hja_bear_trap', L, 3) + ': the first foe to step on it takes ' + L.snap + ' damage and is Rooted through its next turn.'; },
     flavor: 'Technically a monkey trap. He has never caught a bear. He has never caught a monkey either.',
     data: function (ctx) { return { snap: ctx.L.snap }; },
   });
@@ -705,7 +731,7 @@
     kind: 'cushion', tags: ['taunt'],
     cooldown: function (L) { return L.cd; },
     levels: [{ turns: 1, cd: 2 }, { turns: 1, cd: 1 }, { turns: 2, cd: 1 }],
-    desc: function (L) { return 'Set a whoopee cushion within 3: the first foe to step on it is Taunted by Hjalmar ' + nextTurns(L.turns) + '.'; },
+    desc: function (L, user) { return 'Set a whoopee cushion within ' + reach(user, 'hja_cushion', L, 3) + ': the first foe to step on it is Taunted by Hjalmar ' + nextTurns(L.turns) + '.'; },
     flavor: 'Everyone heard it. Everyone looked. And there is the monkey, pointing and crying with laughter.',
     data: function (ctx) { return { turns: ctx.L.turns }; },
   });
@@ -715,7 +741,7 @@
     kind: 'paint', tags: ['dazzle'],
     cooldown: function (L) { return L.cd; },
     levels: [{ turns: 1, cd: 2 }, { turns: 2, cd: 2 }, { turns: 2, cd: 1 }],
-    desc: function (L) { return 'Set a paint bucket within 3: the first foe to step on it is Dazzled ' + nextTurns(L.turns) + '.'; },
+    desc: function (L, user) { return 'Set a paint bucket within ' + reach(user, 'hja_paint', L, 3) + ': the first foe to step on it is Dazzled ' + nextTurns(L.turns) + '.'; },
     flavor: 'All four colours at once. It is called art. It is called "my eyes!"',
     data: function (ctx) { return { turns: ctx.L.turns }; },
   });
@@ -726,7 +752,7 @@
     ap: 2, cooldown: 2,
     levels: [{ boom: 6 }, { boom: 7 }, { boom: 9 }],
     area: { shape: 'circle', size: 1 },
-    desc: function (L) { return 'Set a firecracker bundle within 3: when a foe steps on it, every foe within 1 takes ' + L.boom + ' fire damage.'; },
+    desc: function (L, user) { return 'Set a firecracker bundle within ' + reach(user, 'hja_firecracker', L, 3) + ': when a foe steps on it, every foe within 1 takes ' + L.boom + ' fire damage.'; },
     flavor: 'Bought from a man behind the tavern. The man had no eyebrows. That was the guarantee.',
     data: function (ctx) { return { boom: ctx.L.boom }; },
   });
@@ -737,18 +763,18 @@
     cooldown: function (L) { return L.cd; },
     levels: [{ push: 2, cd: 2 }, { push: 3, cd: 2 }, { push: 3, cd: 1 }],
     area: { shape: 'custom', fn: gloveTiles },
-    desc: function (L) { return 'Set a spring glove within 3, aimed away from Hjalmar: the first foe to step on it is knocked ' + L.push + ' tiles that way.'; },
+    desc: function (L, user) { return 'Set a spring glove within ' + reach(user, 'hja_glove', L, 3) + ', aimed away from Hjalmar: the first foe to step on it is knocked ' + L.push + ' tiles that way.'; },
     flavor: 'Boxing glove, spring, box, tripwire. Patent pending. Patent office pending.',
     data: function (ctx) { return { push: ctx.L.push, dir: gloveDir(ctx) || { x: 1, y: 0 } }; },
   });
 
-  // Pickpocket — steal gold, the mark is Weak
+  // Pickpocket — steal gold, the mark is Weakened
   skill({
     id: 'hja_pickpocket', name: 'Pickpocket', icon: '🤏', kind: 'utility', tags: ['melee', 'gold', 'weak'],
     ap: 1, cooldown: 2,
     levels: [{ gold: 3, turns: 1 }, { gold: 4, turns: 1 }, { gold: 5, turns: 2 }],
     target: { type: 'unit', range: [1, 1], filter: 'enemy' },
-    desc: function (L) { return 'Steal ' + L.gold + ' gold from an adjacent foe; it is Weak ' + nextTurns(L.turns) + '.'; },
+    desc: function (L) { return 'Steal ' + L.gold + ' gold from an adjacent foe; it is Weakened ' + nextTurns(L.turns) + '.'; },
     flavor: 'He took its lunch money, its keys and its sense of security. He will return none of them.',
     // the gold is run value the dry run can't see (like Buga's fines: one point per gold)
     autoplayValue: function (ctx) { return ctx && ctx.L ? ctx.L.gold : 0; },
@@ -770,7 +796,7 @@
     ap: 1, cooldown: function (L) { return L.cd; },
     levels: [{ range: 3, cd: 2 }, { range: 4, cd: 1 }, { range: 5, cd: 1 }],
     target: { type: 'tile', range: function (L) { return [1, L.range]; }, los: true, filter: 'empty' },
-    desc: function (L) { return 'Leap to an empty tile within ' + L.range + ' that Hjalmar can see.'; },
+    desc: function (L, user) { return 'Leap to an empty tile within ' + reach(user, 'hja_swing', L, L.range) + ' that Hjalmar can see.'; },
     flavor: 'There is always a chandelier. If there is no chandelier, there is someone\'s head.',
     execute: function (ctx) {
       const u = ctx.user, p = ctx.target;
@@ -806,7 +832,7 @@
         return true;
       },
     },
-    desc: function (L) { return 'Swap places with a foe within ' + L.range + '.'; },
+    desc: function (L, user) { return 'Swap places with a foe within ' + reach(user, 'hja_switch', L, L.range) + '.'; },
     flavor: 'Now you see him. Now he is you. Now you are standing on a banana peel.',
     autoplayValue: switchHint,
     execute: function (ctx) {
@@ -824,7 +850,7 @@
     levels: [{ dmg: 8 }],
     target: { type: 'tile', range: [0, 5], los: false, filter: 'any' },
     area: { shape: 'circle', size: 2 },
-    desc: function (L) { return 'Every foe within 2 of a tile within 5 takes ' + L.dmg + ' damage and slips: it can\'t act until the end of its turn.'; },
+    desc: function (L, user) { return 'Every foe within 2 of a tile within ' + reach(user, 'hja_signature', L, 5) + ' takes ' + L.dmg + ' damage and slips: it can\'t act until the end of its turn.'; },
     flavor: 'He has been planning this since the tavern. Possibly since birth.',
     execute: function (ctx) {
       const u = ctx.user, p = ctx.target;
@@ -874,6 +900,14 @@
       },
     },
   });
+  // D9 (Nov 12): sustain from his own verb. The rule lives in spring(), like Monkey Business: one heal per trap sprung.
+  DD.registerItem({
+    id: CANNED, name: 'Canned Laughter', slot: 'trinket', rarity: 'rare', icon: '🥫', hero: HERO,
+    stats: {},
+    desc: 'Whenever a foe springs one of Hjalmar\'s traps, he heals ' + CANNED_HEAL + ' HP.',
+    flavor: 'A tin can of recorded laughter. Laughter is the best medicine, says Hjalmar. Josiah declined to comment.',
+    hooks: {},
+  });
 
   // ---- the hero -----------------------------------------------------------------------------------------
   DD.registerHero({
@@ -903,6 +937,7 @@
         'One monkey. Many bananas. Zero regrets.', 'Point me at something wearing a hat.'],
       start: ['Ooh! A fresh floor! It needs more banana.', 'Nobody move. Especially you. Hee hee.', 'Roll for initiative! I rolled a banana.',
         'This dungeon is far too tidy. Let\'s fix that.', 'Places, everyone! Act natural!'],
+      swap: ['Ta-da! Now {ally} is here and I am there!', 'Swap! {ally}, you have been bamboozled.'],
       move: ['Swing! Swiiing!', 'Scamper scamper scamper.', 'Don\'t mind me. Just rigging the place.', 'Is the floor lava? No. Banana. Wait for it.',
         'Hee hee. That tile is mine now.'],
       kill: ['Hee hee hee! Gotcha!', 'And THAT is why you watch your step!', 'Ooh ooh! Did you see that? Again!',
@@ -926,9 +961,14 @@
     },
   });
 
+  // ---- loading-screen tips -------------------------------------------------------------------------------
+  DD.registerNarration('tips', [
+    'Wearing Canned Laughter, Hjalmar heals every time a foe springs one of his traps. Laughter is the best medicine.',
+  ]);
+
   /** Small public surface for tests and other content. */
   DD.Hjalmar = {
-    KINDS: KINDS, TRAP_HYPE: TRAP_HYPE, SLIPPED: SLIPPED,
+    KINDS: KINDS, TRAP_HYPE: TRAP_HYPE, SLIPPED: SLIPPED, CANNED: CANNED, CANNED_HEAL: CANNED_HEAL,
     isTrap: isTrap, traps: traps, canTrapAt: canTrapAt, setTrap: setTrap, spring: spring, springOn: springOn,
     gloveTiles: gloveTiles, trapValue: trapValue, crossChance: crossChance,
   };

@@ -78,10 +78,12 @@
   /** Cosmetic: the unit's current sprite (unit.sprite override, §7.3) plus three party balloons tied to its hand.
    *  drawUnit already hovers units with unit.flags.flying. Content that swaps the sprite (Ellaria's Wild Shape sets
    *  or deletes unit.sprite) loses the balloons, so the item calls this again after skills and at turn boundaries;
-   *  the itemBalloons mark (a plain key: previews copy it) keeps it from wrapping twice. */
+   *  the itemBalloons mark (a plain key: previews copy it) keeps it from wrapping twice. It wraps the LOGICAL look
+   *  (unit.sprite, else the def's), never the on-screen pin (unit.vis.sprite): Basanos' Transform pins the old look until
+   *  FX playback catches up, and wrapping that pin left the new look bare once the pin was dropped. */
   function balloonSprite(unit) {
     if (!unit || unit.dead || !DD.Sprites || typeof DD.Sprites.specFor !== 'function' || typeof DD.Sprites.metrics !== 'function') return;
-    const base = DD.Sprites.specFor(unit);
+    const base = DD.Sprites.specFor({ id: unit.id, defId: unit.defId, kind: unit.kind, sprite: unit.sprite });
     if (!base || typeof base !== 'object' || base.itemBalloons) return;
     const m = DD.Sprites.metrics(base) || {};
     const top = -((m.height || 40) / (base.scale || 1));
@@ -95,6 +97,9 @@
       itemBalloons: true,
       overlay: function (g, t, o) {
         if (prev) prev.call(this, g, t, o);
+        // on the board only: portraits (the HUD draws the look a unit shows, but with no unit) crop the balloons off and
+        // left three white strings across the hero's face
+        if (!o || !o.unit) return;
         const hy = top * 0.45;
         BALLOONS.forEach(function (b, i) {
           const sway = Math.sin((t || 0) * 2 + i * 1.7) * 1.2 * k;
@@ -571,6 +576,25 @@
       },
     },
   });
+  // Balance pass 1 put it in every starting kit; the user took it out again (D9, Nov 12: no generic heal for every
+  // party). An ordinary common trinket: loot and shops prefer items the party doesn't own yet.
+  const FANNY_HEAL = 3;
+  item({
+    id: 'first_aid_fanny_pack', name: 'First-Aid Fanny Pack', slot: 'trinket', rarity: 'common', icon: '👝',
+    desc: 'At the start of your turn, the most hurt of you and the allies next to you (not a downed one) heals ' + FANNY_HEAL + ' HP.',
+    flavor: 'Band-aids, a lollipop and a pamphlet titled "So You\'ve Been Stabbed". Worn unironically.',
+    hooks: {
+      onTurnStart: function (unit) {
+        if (!active(unit)) return;
+        let best = null;
+        S().units.forEach(function (o) {
+          if (!active(o) || o.hp >= o.maxHp || (o !== unit && (dist(o, unit) !== 1 || hostile(unit, o)))) return;
+          if (!best || o.maxHp - o.hp > best.maxHp - best.hp) best = o;
+        });
+        if (best) A().heal(unit, best, FANNY_HEAL);
+      },
+    },
+  });
   item({
     id: 'hang_in_there_poster', name: '"Hang In There" Poster', slot: 'trinket', rarity: 'common', icon: '🐈',
     desc: 'While you\'re below half HP, you deal 25% more damage.',
@@ -670,7 +694,8 @@
     id: 'party_balloons', name: 'Bundle of Party Balloons', slot: 'trinket', rarity: 'rare', icon: '🎈',
     stats: { mov: 1 },
     // v2 request: flyers ignore everything on the floor (terrain, surfaces, traps, plates); clouds and blasts still reach them
-    desc: '+1 Move. You fly: you float over height, pits, liquids and everything on the floor (fire, puddles, traps) and ignore terrain costs.',
+    // [playtest text-tone-v1] loot is no floor effect (the user's flyer rule): a flyer still pockets gold piles and Hoard Piles
+    desc: '+1 Move. You fly over height, pits, liquids and everything on the floor (fire, puddles, traps), ignoring terrain costs. You still swoop down for gold.',
     flavor: 'You float. Everyone else floats some follow-up questions.',
     hooks: {
       onCombatStart: function (unit, it) {

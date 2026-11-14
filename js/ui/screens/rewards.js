@@ -151,7 +151,7 @@
       case 'consumable': {
         const d = DD.getConsumable(rw.id);
         v.typeLabel = 'Consumable';
-        if (d) { v.icon = d.icon || '🧪'; v.name = d.name; v.rarity = d.rarity || 'common'; v.desc = d.desc || ''; v.tip = function () { return UI.consumableTooltipHtml(rw.id); }; }
+        if (d) { v.icon = d.icon || '🧪'; v.name = d.name; v.rarity = d.rarity || 'common'; v.desc = UI.consumableDesc(d); v.tip = function () { return UI.consumableTooltipHtml(rw.id); }; }
         break;
       }
       case 'gold':
@@ -301,8 +301,13 @@
         // the winner's chip only gives the result away once the die lands (landLevel swaps in data-after)
         el('span.rwl-hlvl', { dataset: won ? { after: 'Lv ' + num(lu.from) + ' → ' + num(lu.to) } : {} },
           won ? 'Lv ' + num(lu.from) : 'Lv ' + (num(rh.level) || 1) + (k < 0 ? ' · ahead' : '')));
-      UI.tooltip(chip, '<div class="tt"><div class="tt-desc">' + UI.esc(won ? UI.heroName(rh) + ' got this level-up.' :
-        k >= 0 ? 'In the running (the lowest level), but the dice said no. Next time, maybe.' : 'Already a level ahead: the others catch up first.') + '</div></div>', { pos: 'top' });
+      // [playtest first-hour-4] a candidate's tooltip waits for the die too
+      const tip = '<div class="tt"><div class="tt-desc">' + UI.esc(won ? UI.heroName(rh) + ' got this level-up.' :
+        k >= 0 ? 'In the running (the lowest level), but the dice said no. Next time, maybe.' : 'Already a level ahead: the others catch up first.') + '</div></div>';
+      UI.tooltip(chip, function () {
+        const row = chip.closest ? chip.closest('.rwl-row') : null;
+        return k >= 0 && row && !row.classList.contains('landed') ? '<div class="tt"><div class="tt-desc">In the running: the dice are still rolling.</div></div>' : tip;
+      }, { pos: 'top' });
       return chip;
     }));
   }

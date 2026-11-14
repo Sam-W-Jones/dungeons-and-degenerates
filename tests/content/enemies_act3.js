@@ -229,7 +229,7 @@
     t.ok(['3,4', '4,3', '4,4', '4,5'].every(function (k) { const p = k.split(','); const tl = DD.Grid.tile(+p[0], +p[1]); return tl.surface && tl.surface.id === 'fire'; }), 'the cone burns');
     hp = m2.hp;
     act(hound, 'a3_hound_bite', { x: 3, y: 4 });
-    t.eq(hp - m2.hp, L('a3_hound_bite').dmg, 'Chew Toy bites for ' + L('a3_hound_bite').dmg);
+    t.eq(hp - m2.hp, L('a3_hound_bite').dmg, 'Ankle Biter bites for ' + L('a3_hound_bite').dmg);
     // "the floor there burns until the end of next round" (surfaces count rounds)
     quiet({ heroes: [H('test_mage', 8, 8)], enemies: [E('a3_hell_hound', 2, 4)] });
     const s0 = DD.Combat.state;
@@ -238,11 +238,11 @@
     t.ok(s0.round === 2 && DD.Grid.tile(4, 4).surface && DD.Grid.tile(4, 4).surface.id === 'fire', 'next round: the cone is still burning');
     DD.Combat.endRound();
     t.ok(s0.round === 3 && !DD.Grid.tile(4, 4).surface, '...and it is out the round after');
-    // Pounce: leaps next to a target up to 4 away; not beyond, not while Rooted
+    // Lap Dog: leaps next to a target up to 4 away; not beyond, not while Rooted
     quiet({ heroes: [H('test_mage', 6, 4)], enemies: [E('a3_hell_hound', 2, 4)] });
     const hp1 = one('a3_hell_hound'), mp = DD.Combat.heroes()[0];
     hp = mp.hp;
-    t.ok(act(hp1, 'a3_hound_pounce', mp) && hp - mp.hp === L('a3_hound_pounce').dmg && DD.Grid.dist(hp1, mp) === 1, 'Pounce: leaps 4 tiles next to it and bites');
+    t.ok(act(hp1, 'a3_hound_pounce', mp) && hp - mp.hp === L('a3_hound_pounce').dmg && DD.Grid.dist(hp1, mp) === 1, 'Lap Dog: leaps 4 tiles next to it and bites');
     A().teleport(mp, 8, 8);
     hp = mp.hp;
     const at = { x: hp1.x, y: hp1.y };
@@ -301,14 +301,14 @@
     t.ok(has(eye, 'stun') && DD.AI.reachOf(eye).tiles.size === 0, 'then it passes out: Stunned (no reach on its next turn)');
     t.ok(DD.AI.act(eye) === false, 'it loses that turn');
 
-    // Rules Lawyer: OBJECTION! strips buffs (even Invulnerable) + Silence, no damage; Motion pushes 2 (into pits)
+    // Rules Lawyer: OVERRULED! strips buffs (even Invulnerable) + Silence, no damage; Motion pushes 2 (into pits)
     quiet({ w: 11, heroes: [H('test_mage', 4, 4)], enemies: [E('a3_rules_lawyer', 1, 4)] });
     const law = one('a3_rules_lawyer');
     const m5 = DD.Combat.heroes()[0];
     ['inspired', 'invulnerable', 'haste', 'weak'].forEach(function (id) { A().addStatus(m5, id, { turns: 2 }); });
     hp = m5.hp;
     act(law, 'a3_lawyer_objection', m5);
-    t.ok(!has(m5, 'inspired') && !has(m5, 'invulnerable') && !has(m5, 'haste'), 'OBJECTION! strips every buff');
+    t.ok(!has(m5, 'inspired') && !has(m5, 'invulnerable') && !has(m5, 'haste'), 'OVERRULED! strips every buff');
     t.ok(has(m5, 'weak'), '...but not debuffs');
     t.eq(m5.hp, hp, 'and deals no damage (desc: no damage number)');
     t.ok(has(m5, 'silenced') && st(m5, 'silenced').turns === 1, 'and Silences for 1 turn');
@@ -1421,20 +1421,22 @@
   // v2 user requests (Nov 3): flyers ignore everything on the floor; heroes can aim attacks at explosive barrels
   T.suite('enemies_act3: v2 requests (Nov 3) — hoards, webs under imps, lava that can\'t hurt, the volatile exhibits', function (t) {
     const n0 = DD.problems.length;
-    // a hoard pile is pocketed by walking over it; a flyer floats over the gold (and the AutoPlay hint knows it)
+    // a hoard pile is loot (the user's flyer rule, Nov 5; playtest text-tone-1 / robustness-2): walkers AND flyers pocket
+    // it, are branded a Thief, and the AutoPlay hint values it for both
+    t.ok(DD.Grid.isLoot({ id: 'a3_hoard_pile' }), 'the hoard pile is flagged loot');
     [true, false].forEach(function (flying) {
       const who = flying ? 'a flyer' : 'a walker';
       quiet({ heroes: [H('test_mage', 3, 4)], enemies: [E('a3_kobold_shield', 8, 8)], objects: [{ x: 4, y: 4, id: 'a3_hoard_pile', data: { gold: 6 } }] });
       const h = DD.Combat.heroes()[0], tl = DD.Grid.tile(4, 4);
       h.flags.flying = flying;
       const gold = A().gold();
-      t.eq(DD.getObject('a3_hoard_pile').autoplay(h, tl.obj, tl) > 0, !flying, who + ': the AutoPlay hint ' + (flying ? 'is 0' : 'says grab it'));
+      t.ok(DD.getObject('a3_hoard_pile').autoplay(h, tl.obj, tl) > 0, who + ': the AutoPlay hint says grab it');
       t.ok(DD.Combat.move(h, 5, 4) && h.x === 5, who + ' crosses the pile');
-      t.eq(!!(tl.obj && tl.obj.id === 'a3_hoard_pile'), flying, who + (flying ? ': the pile is still there' : ': the pile is pocketed'));
-      t.eq(A().gold() - gold, flying ? 0 : 6, who + ': gold +' + (A().gold() - gold));
-      t.eq(has(h, 'a3_thief'), !flying, who + (flying ? ': no Thief' : ': branded a Thief'));
+      t.ok(!(tl.obj && tl.obj.id === 'a3_hoard_pile'), who + ': the pile is pocketed');
+      t.eq(A().gold() - gold, 6, who + ': gold +' + (A().gold() - gold));
+      t.ok(has(h, 'a3_thief'), who + ': branded a Thief');
     });
-    t.ok(/Flyers can't reach down that far/.test(DD.getObject('a3_hoard_pile').desc), 'the pile says flyers can\'t reach it');
+    t.ok(!/can't reach/.test(DD.getObject('a3_hoard_pile').desc) && /fly/.test(DD.getObject('a3_hoard_pile').desc), 'the pile says flyers grab it too');
     // the imp flies over webs: with webs on every tile it still blinks into position (and is not Rooted)
     const webs = [];
     for (let y = 0; y < 11; y++) for (let x = 0; x < 11; x++) if (!(x === 9 && y === 5) && !(x === 1 && y === 5)) webs.push({ x: x, y: y, id: 'web', turns: 4 });
@@ -1460,5 +1462,62 @@
       t.ok(props.length > 0 && props.every(function (o) { return DD.Act.isVolatile(typeof o === 'string' ? { id: o } : o); }), id + ': its explosive prop is volatile');
     });
     t.eq(warningsSince(n0).filter(function (p) { return /^Error in /.test(p); }).length, 0, 'no swallowed errors');
+  });
+
+  // ---- rules run (user: "objects should be targetable to break them") ------------------------------------------------
+  T.suite('enemies_act3: rules run — Pep Rally totems are attack targets; the DM\'s Snack Bowl never is; the intros say so', function (t) {
+    const n0 = DD.problems.length, Tg = DD.Targeting;
+    quiet({ heroes: [H('test_mage', 1, 4)], enemies: [E('a3_hell_hound', 8, 8)], objects: [{ x: 4, y: 4, id: 'totem' }, { x: 4, y: 6, id: 'a3_snack_bowl' }] });
+    const m = one('test_mage');
+    const vt = Tg.validTargets(m, m.basic);
+    t.ok(vt.some(function (q) { return q.obj === 'totem' && q.dmg === 4; }), 'a totem is a target (the bolt hits it for 4)');
+    t.ok(!vt.some(function (q) { return q.obj === 'a3_snack_bowl'; }) && DD.getObject('a3_snack_bowl').targetable === false, 'the Snack Bowl is not (targetable: false)');
+    t.ok(/would never aim an attack at the snacks/.test(DD.getObject('a3_snack_bowl').desc), 'and its desc says so');
+    t.ok(/any attack will do/.test(DD.getEncounter('a3_kobold_pep_rally').intro), 'the Pep Rally intro says any attack breaks the totems');
+    t.eq(warningsSince(n0).filter(function (p) { return /^Error in /.test(p); }).length, 0, 'no swallowed errors');
+  });
+
+  // ---- playtest fixes (Nov 12) ------------------------------------------------------------------------------------------
+  T.suite('enemies_act3: playtest fixes (Nov 12) — wind-ups are not instant reach, pronouns, the golem\'s articles', function (t) {
+    const n0 = DD.problems.length;
+    // robustness-3: the three elite wind-ups are windupOnly, so threat shading / AutoPlay never read them as an instant hit
+    Object.keys(SIGNATURE).forEach(function (id) { t.ok(DD.AI.windupOnly(DD.getSkill(SIGNATURE[id])), SIGNATURE[id] + ' is windupOnly'); });
+    quiet({ w: 14, h: 12, heroes: [H('test_knight', 1, 5)], enemies: [E('a3_red_dragon', 9, 6)] });
+    const far = DD.Combat.heroes()[0], dragon = one('a3_red_dragon');
+    const reach = DD.AI.reachOf(dragon);
+    t.ok(!reach.units.has(far.id), 'a hero 9 tiles from the dragon is out of its reach (Hoard Breath winds up first)');
+    t.ok(!(reach.tiles.get(far.x + ',' + far.y) >= L('a3_dragon_breath').dmg), 'no breath number on that hero\'s tile');
+    // (the planners still wind them up: "the three wind-ups" suites above)
+    // text-tone-3: the tenacity line uses each elite's own pronoun
+    t.ok(/no other can for its next 2 turns/.test(DD.getEnemy('a3_red_dragon').passive.desc()), 'dragon: "its next 2 turns"');
+    t.ok(/no other can for his next 2 turns/.test(DD.getEnemy('a3_death_knight').passive.desc), 'Death Knight: "his next 2 turns"');
+    t.ok(/no other can for his next 2 turns/.test(DD.getEnemy('a3_pit_fiend').passive.desc), 'Pit Fiend: "his next 2 turns"');
+    // text-tone-11: "rolls an 8 / an 11 / an 18", "rolls a 9"
+    [[8, 'an 8'], [11, 'an 11'], [18, 'an 18'], [9, 'a 9']].forEach(function (c) {
+      quiet({ heroes: [H('test_mage', 3, 4)], enemies: [E('a3_nat1_golem', 2, 4)] });
+      const g = one('a3_nat1_golem');
+      t.ok(rig(function (r) { return r.int(1, 20) === c[0]; }), 'rigged a ' + c[0]);
+      const at = DD.Combat.state.log.length;
+      act(g, 'a3_golem_roll', { x: 3, y: 4 });
+      t.ok(DD.Combat.state.log.slice(at).some(function (l) { return l.text.indexOf('rolls ' + c[1] + '.') >= 0; }), 'the log says "rolls ' + c[1] + '"');
+    });
+    t.eq(warningsSince(n0).filter(function (p) { return /^Error in /.test(p); }).length, 0, 'no swallowed errors');
+  });
+
+  // ---- finish (Nov 14): playtest desc-sweep-4 --------------------------------------------------------------------------
+  T.suite('enemies_act3: finish — the Rules Lawyer\'s and the Natural 1 Golem\'s rule lines give this fight\'s hits (casual / brutal)', function (t) {
+    const n0 = DD.problems.length;
+    ['casual', 'normal', 'brutal'].forEach(function (diff) {
+      DD.Combat.sandbox({ w: 9, h: 9, seed: 3, enemyAi: false, difficulty: diff, heroes: [{ id: 'test_knight', x: 1, y: 1 }],
+        enemies: [{ id: 'a3_rules_lawyer', x: 6, y: 2 }, { id: 'a3_nat1_golem', x: 6, y: 5 }],
+        objective: { type: 'custom', text: 'ea3' }, encounter: { id: 'ea3_finish', checkObjective: function () { return null; } } });
+      const f = DD.Combat.state.difficulty.dmg, by = function (id) { return DD.Combat.state.units.filter(function (x) { return x.defId === id; })[0]; };
+      const Lm = DD.skillLevel(DD.getSkill('a3_lawyer_motion'), 1), Lr = DD.skillLevel(DD.getSkill('a3_golem_roll'), 1);
+      const law = DD.getEnemy('a3_rules_lawyer').passive.desc(by('a3_rules_lawyer'));
+      const gol = DD.getEnemy('a3_nat1_golem').passive.desc(by('a3_nat1_golem'));
+      t.ok(law.indexOf('(' + Math.round(Lm.dmg * f) + ' damage, pushed ' + Lm.push) >= 0, diff + ' lawyer: ' + Math.round(Lm.dmg * f) + ' — ' + law);
+      t.ok(gol.indexOf('(' + Math.round(Lr.dmg * f) + ' to each foe; a 20 deals ' + Math.round(Lr.crit * f)) >= 0, diff + ' golem: ' + Math.round(Lr.dmg * f) + ' / ' + Math.round(Lr.crit * f) + ' — ' + gol);
+    });
+    t.eq(DD.problems.slice(n0).filter(function (p) { return /^Error in /.test(p); }).length, 0, 'no swallowed errors');
   });
 })();

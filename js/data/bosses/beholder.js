@@ -25,8 +25,10 @@
   // ---- numbers (DESIGN §5 act 2 boss; v2 level band: a party of about level 3-4) -----------------------------------
   const N = {
     hp: 220, beam: 12, reflect: 20, exam: 12, cone: 9, coneLen: 4, disintegrate: 26, disRange: 12, focus: 3,
-    floaterCap: 3, floaterHp: 12, floaterDmg: 5, gaze: 6, gaze2: 7, gazeRange: 99, closing: 14, mirrorTurns: 2,
+    floaterCap: 3, floaterHp: 12, floaterDmg: 5, gaze: 6, gaze2: 7, gazeRange: 99, closing: 10, mirrorTurns: 2,
   };
+  // [finish FF-4] closing time 14 -> 10 with her HP row 1.2 -> 1.1 (DD.Balance.encounters): her fights were dodge-slogs
+  // (13-14 rounds in 500 paired fights, 63% past 12); now 11 rounds (40% past 12) at the same win rate (63% -> 65%)
   const IRIS = 'dr_iris';
   const DIRS = { N: { x: 0, y: -1 }, E: { x: 1, y: 0 }, S: { x: 0, y: 1 }, W: { x: -1, y: 0 } };
   const ORDER = ['N', 'E', 'S', 'W'];
@@ -891,7 +893,7 @@
 
   // ---- enemies ---------------------------------------------------------------------------------------------------------------
   DD.registerEnemy({
-    id: IRIS, name: 'Dr. Iris', act: 2, tier: 'boss', hp: N.hp, mov: 0, armor: 0,
+    id: IRIS, name: 'Dr. Iris', act: 2, tier: 'boss', hp: N.hp, mov: 0, armor: 0, init: 2,
     tags: ['aberration', 'boss', 'beholder'], flags: { flying: true, large: true, immovable: true, immune: ['sleep'] }, resist: { poison: 0.5 },
     sprite: {
       base: 'custom', scale: 2.0, height: 58, width: 40, headY: -24, hover: 8,
@@ -933,7 +935,7 @@
   });
 
   DD.registerEnemy({
-    id: 'iris_floater', name: 'Eye Floater', act: 2, tier: 'minion', hp: N.floaterHp, mov: 4, armor: 0,
+    id: 'iris_floater', name: 'Eye Floater', act: 2, tier: 'minion', hp: N.floaterHp, mov: 4, armor: 0, init: 1,
     tags: ['aberration'], flags: { flying: true },
     sprite: { base: 'custom', scale: 0.9, height: 34, width: 16, headY: -28, hover: 4, palette: { skin: '#e8eeff', accent: '#9fb4ff', outline: '#3a4060' }, draw: drawFloater },
     skills: ['iris_floater_blur'], ai: { style: 'ranged', keepDistance: 2 }, xp: 2, gold: [0, 1],

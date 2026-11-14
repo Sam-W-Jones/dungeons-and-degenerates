@@ -2,11 +2,12 @@
  * Hero: Marwyn the Magnificent (human barbarian) — tank / bruiser / taunts. Owner: hero-marwyn. v2 kit (DESIGN §6
  * "Simplicity"): one verb per skill, the power is in the combinations (Taunt, throws, pulls, Stun, Root, Wet).
  * Passive MAGNIFICENCE (status mrw_magnificence, 0-5): each of his skills that reaches a foe (a foe in its area) adds 1;
- * at 5 his NEXT skill unleashes a MAGNIFICENT SURGE (a random good DD.WildMagic effect, +10 party Hype) and the meter
- * resets. Gains are paid out in onSkillUsed after the surge check, so the surge always belongs to the skill after the
- * one that filled the meter. His melee basic is also his attack of opportunity (DESIGN §4.2): it counts like any other
- * use (+1, and it surges at 5), while his leap, throws, pulls and knockbacks never provoke anyone.
- * Registers: hero marwyn, 11 skills (mrw_*), statuses mrw_magnificence + mrw_rage, 3 items.
+ * at 5 his NEXT skill unleashes a MAGNIFICENT SURGE (a random good DD.WildMagic effect, +10 party Hype, and he heals
+ * 8 HP: D9, sustain from his own verbs) and the meter resets. Gains are paid out in onSkillUsed after the surge check,
+ * so the surge always belongs to the skill after the one that filled the meter. His melee basic is also his attack of
+ * opportunity (DESIGN §4.2): it counts like any other use (+1, and it surges at 5), while his leap, throws, pulls and
+ * knockbacks never provoke anyone.
+ * Registers: hero marwyn, 11 skills (mrw_*), statuses mrw_magnificence + mrw_rage, 3 items, a loading tip.
  */
 (function () {
   'use strict';
@@ -14,6 +15,7 @@
 
   const MAX = 5;               // MAGNIFICENCE that fills the meter
   const SURGE_HYPE = 10;       // party Hype per MAGNIFICENT SURGE (DESIGN §4.5: Marwyn's passive adds Hype)
+  const SURGE_HEAL = 8;        // MAGNIFICENT SURGE: he heals this much, once per surge (D9: the crowd's applause)
   const GAUNTLET_TILES = 2;    // extra YEET distance with the gauntlets
   const GAUNTLETS = 'mrw_yeet_gauntlets';
   const MIRROR = 'mrw_hand_mirror';
@@ -35,6 +37,12 @@
     if (Array.isArray(items)) return items.indexOf(id) >= 0;
     if (items && typeof items === 'object') { for (const k in items) if (items[k] === id) return true; }
     return !!(user.runHero && user.runHero !== user && hasItem(user.runHero, id));
+  }
+  /** A skill's target reach for this unit: the base plus its range items / Dazzle (DD.Targeting.reach; playtest heroes-v1). */
+  function reach(user, id, L, base) {
+    const d = DD.getSkill(id);
+    if (!user || !d || !DD.Targeting || typeof DD.Targeting.reach !== 'function') return base;
+    return DD.Targeting.reach(d, L, user, base);
   }
   /** The skill currently resolving belongs to u (gains are banked until it finishes). */
   function ownSkill(u) { const sk = DD.Act.currentSkill(); return !!sk && sk.user === u; }
@@ -121,8 +129,13 @@
     DD.FX.sound('magic');
     DD.FX.particles(u, { kind: 'glitter', color: '#c9a8ff', count: 24 });
     DD.Act.bark(u, 'surge');
-    DD.Act.log('MAGNIFICENT SURGE! The crowd goes wild.', 'hero');
+    DD.Act.log('MAGNIFICENT SURGE! The crowd goes wild, and ' + u.name + ' basks in it.', 'hero');
     DD.Act.gainHype(SURGE_HYPE, 'MAGNIFICENT SURGE');
+    // once per surge (the Hand Mirror's second effect doesn't heal again); he is the one surging, so it never revives
+    if (active(u)) {
+      DD.FX.text(u, 'THE CROWD LOVES ME!', { color: ORANGE, size: 16 });
+      DD.Act.heal(u, u, SURGE_HEAL);
+    }
     const s = DD.Combat.state, done = [];
     picks.forEach(function (pick) {
       if (!active(u) || (s && s.result)) return;
@@ -147,7 +160,7 @@
     desc: function (st) {
       const n = Math.max(0, Math.min(MAX, (st && st.stacks) || 0));
       return 'MAGNIFICENCE ' + n + '/' + MAX + '. ' + (n >= MAX ?
-        'MAXED: his next skill unleashes a MAGNIFICENT SURGE (random good wild magic, +' + SURGE_HYPE + ' party Hype).' :
+        'MAXED: his next skill unleashes a MAGNIFICENT SURGE (random good wild magic, +' + SURGE_HYPE + ' party Hype, he heals ' + SURGE_HEAL + ' HP).' :
         'At ' + MAX + ', his next skill unleashes a MAGNIFICENT SURGE.');
     },
   });
@@ -164,7 +177,7 @@
   const PASSIVE = {
     name: 'MAGNIFICENCE',
     desc: 'Each of his skills that reaches a foe adds 1 MAGNIFICENCE. At ' + MAX + ', his next skill also unleashes a ' +
-      'MAGNIFICENT SURGE (random good wild magic, +' + SURGE_HYPE + ' party Hype) and resets the meter.',
+      'MAGNIFICENT SURGE (random good wild magic, +' + SURGE_HYPE + ' party Hype, and he heals ' + SURGE_HEAL + ' HP) and resets the meter.',
     hooks: {
       onSkillUsed: function (ctx) {
         const u = ctx && ctx.user;
@@ -418,7 +431,7 @@
     },
     area: { shape: 'circle', size: 1 },
     canUse: function (ctx) { return ctx.user && DD.Act.cantMove(ctx.user) ? 'Rooted: no leaping without legs.' : true; },
-    desc: function (L) { return 'Leap up to ' + L.leap + ' tiles, then Taunt every foe next to him.'; },
+    desc: function (L, user) { return 'Leap up to ' + reach(user, 'mrw_hero_landing', L, L.leap) + ' tiles, then Taunt every foe next to him.'; },
     flavor: 'Superhero landings are terrible for the knees. His knees filed a complaint. Marwyn denied it.',
     autoplayValue: landingHint,
     execute: function (ctx) {
@@ -643,6 +656,7 @@
         'Zarathor, stop polishing your rings. We fight!',
         'Kiri, shoot whatever Marwyn is not already hitting.',
       ],
+      swap: ['Make room, {ally}! MAGNIFICENCE needs the front row!', '{ally}, you may stand where Marwyn stood. Treasure it.'],
       move: [
         'MARWYN APPROACHES.',
         'Make way for MAGNIFICENCE!',
@@ -688,7 +702,8 @@
         'You will PAY for that! In MAGNIFICENT installments!',
         'Get up! Marwyn needs an audience!',
         'That one was Marwyn\'s friend! Probably!',
-        'Basanos, get up! Marwyn still owes you an arm-wrestle!',
+        '{downed}, get up! Marwyn still owes you an arm-wrestle!',
+        'Basanos! Bite whoever did that! Marwyn will hold your coat!',
       ],
       levelup: [
         'MARWYN GREW EVEN MORE MAGNIFICENT. Impossible, yet here we are.',
@@ -763,9 +778,14 @@
     },
   });
 
+  // ---- loading-screen tips -------------------------------------------------------------------------------
+  DD.registerNarration('tips', [
+    'Every MAGNIFICENT SURGE heals Marwyn ' + SURGE_HEAL + ' HP. Applause is a medical treatment. Ask him.',
+  ]);
+
   /** Small public surface for tests and other content (e.g. events that want to pump Marwyn up). */
   DD.Marwyn = {
-    MAX: MAX, SURGE_HYPE: SURGE_HYPE, GAUNTLET_TILES: GAUNTLET_TILES, stacksOf: stacksOf, addStacks: addStacks, gain: gain,
+    MAX: MAX, SURGE_HYPE: SURGE_HYPE, SURGE_HEAL: SURGE_HEAL, GAUNTLET_TILES: GAUNTLET_TILES, stacksOf: stacksOf, addStacks: addStacks, gain: gain,
     surge: surge, flightPath: flightPath, hasItem: hasItem,
   };
 })();

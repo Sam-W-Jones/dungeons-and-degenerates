@@ -1,6 +1,6 @@
 # HERO — Basanos, the Mostly Housebroken (notes)
 
-Files: `js/data/heroes/basanos.js`, `tests/content/hero_basanos.js` (20 suites `hero_basanos: …`), this file.
+Files: `js/data/heroes/basanos.js`, `tests/content/hero_basanos.js` (23 suites `hero_basanos: …`), this file.
 Run: `bash tools/test.sh "suite=hero_basanos&isolate=heroes/basanos,hero_basanos"` and
 `bash tools/test.sh "suite=content:&isolate=heroes/basanos,hero_basanos"` (the Party Balloons check in the "form follows
 bas_wolf" suite needs `js/data/items.js`: run that suite without `isolate` once).
@@ -17,7 +17,8 @@ DESIGN §6 "Basanos" + "Simplicity". An apologetic, scruffy monster hunter who I
 v2-native (initiative, one turn per unit, no telegraphs, no Guard, no combat-start Block, own-turn durations, attacks of
 opportunity). Complexity 2, `unlock: null`, 28 HP (+4/level), 3 AP, move 4, **initiative +2**, armor 0, colour `#7b93c4`.
 
-**One transformation.** `Transform` (1 AP, no cooldown, a socketed skill, works in both forms) swaps human ⇄ werewolf.
+**One transformation.** `Transform` (1 AP, no cooldown, a socketed skill, works in both forms) swaps human ⇄ werewolf;
+his first switch each turn, either way, heals him 2 / 3 / 4 (the mend, D9 — see "Sustain (Nov 12)"; 3 / 4 / 5 until the balance refit).
 The form is the status `bas_wolf` "Werewolf" (🐺 buff, no duration) — the source of truth — plus bookkeeping in
 `unit.data.bas` kept in step by `syncForm` / `settle` (on combat start, round start, his turn start / end, any status
 applied to him, any damage or healing he takes, after his skills, after an attack of opportunity he makes or provokes,
@@ -45,7 +46,7 @@ at the latest his own turn start). He can Transform back while low; the next hit
 |---|---|---|---|---|
 | Silvered Sword (basic) | human | 1 AP | 5 damage to an adjacent foe | his attack of opportunity as a man |
 | Claw (basic) | wolf | 1 AP | 4 / 5 / 5 damage + 1 / 1 / 2 Bleed (by Transform's level) | his attack of opportunity as a wolf: the Bleed bites when the fleeing foe's walk ends |
-| Transform ⭐ | both | 1 AP, cd 0 | switch forms (werewolf: +2 move, Claw) | — |
+| Transform ⭐ | both | 1 AP, cd 0 | switch forms (werewolf: +2 move, Claw); the first Transform each turn heals 2 / 3 / 4 (balance refit; was 3 / 4 / 5) | Hold the Line / Step In after a wolf rush (the Coat's Block) |
 | Shoulder Check ⭐ | human | 1 AP, cd 1 | 5 / 6 / 7 damage + push 1 / 1 / 2 | pits (YEET), lava, water (Wet → lightning), allies' traps and runes, bleeding foes |
 | Silver Slash | human | 2 AP, cd 1 | 8 / 10 / 12 damage + Vulnerable for 1 / 1 / 2 turns | every ally's big hit |
 | Hold the Line | human | 1 AP, cd 2 | Taunt every foe within 2 / 2 / 3 for 1 turn + 4 / 5 / 6 Block | taunted foes can't make attacks of opportunity on his friends; protects squishies |
@@ -68,7 +69,8 @@ mid-walk). Hold the Line's taunt also stops the taunted foes from striking anyon
 
 **Items** (all `hero: 'basanos'`, no `stats.block`): `bas_flea_collar` Flea Collar (rare trinket: his first Transform each
 turn costs 0 AP — `modifyCost` / `onCostPaid`, keyed by `state.turn`), `bas_wolfsbane_coat` Wolfsbane-Lined Coat (rare
-armor: +4 max HP; heal 6 when Hair Trigger fires — not on a chosen Transform), `bas_moonfang` Moonfang (legendary weapon:
+armor: +4 max HP; 5 Block when Transform turns him back into a man — D9, it no longer heals on Hair Trigger),
+`bas_moonfang` Moonfang (legendary weapon:
 +10% damage; the Bleed his skills apply is doubled — descs show the doubled number for him).
 
 **Sprites**: human — humanoid, navy coat over mail lapels, long dark scruffy hair with a grey streak (the wolf showing),
@@ -86,7 +88,8 @@ she/her anywhere in his texts (tested). Idle lines poke Marwyn, Ellaria, Marbles
 definition (stats, init +2, pool, form tags, desc length + form prefix, barks, pronouns, items, sprites + portraits) ·
 Transform (move, basic swap, sprite override, form gates with reasons, no duration, swaps per AP, Claw by Transform level,
 dispel) · Hair Trigger (exactly half vs below, Block-soaked hits, again after changing back, lethal → downed man, downed
-wolf, on an enemy's turn, Coat heal) · basics at every level · Silver Slash / Shoulder Check I-III (Vulnerable exactly its
+wolf, on an enemy's turn, the Coat's Block, Blood Moon never heals) · Transform mends (D9; see "Sustain (Nov 12)") ·
+basics at every level · Silver Slash / Shoulder Check I-III (Vulnerable exactly its
 next 1 / 2 turns, pits + env Hype, lava, water, wall / edge / unit bumps, Bleed on the push) · Hold the Line / Step In I-III
 (radius, Block until his next turn, the taunted grunt stabs him not the 4-HP mage, swaps an immovable ally) · Rend /
 Savage Bite / Frenzy I-III · Pounce / Howl I-III (landing next to the foe on safe ground — never pits / lava, no room →
@@ -109,9 +112,9 @@ suites, and so does each review fix (see Review (v2)).
 
 ## Public API (tests / debug)
 
-`DD.Basanos = { WOLF, WOLF_MOV, CLAW_LV, COAT_HEAL, HUMAN_SPRITE, WOLF_SPRITE, DIRE_SPRITE, isWolf(u), becomeWolf(u, why),
-becomeHuman(u), syncForm(u), transformLevel(u), formOf(def), formValue(u, wolf, ap), transformScore(ctx), landingTile(u,
-foe), baseMov(u) }`.
+`DD.Basanos = { WOLF, WOLF_MOV, CLAW_LV, MEND, COAT_BLOCK, HUMAN_SPRITE, WOLF_SPRITE, DIRE_SPRITE, isWolf(u),
+becomeWolf(u, why), becomeHuman(u), syncForm(u), transformLevel(u), formOf(def), formValue(u, wolf, ap),
+transformScore(ctx), mendSpent(u), landingTile(u, foe), baseMov(u) }` (`COAT_HEAL` removed Nov 12, D9).
 
 ## Deviations
 
@@ -126,6 +129,10 @@ foe), baseMov(u) }`.
 - v2 review: Shoulder Check 4 / 5 / 6 → 5 / 6 / 7 (it was weaker than his 5-damage sword; now on par with other 1-AP
   shoves), Hold the Line radius 1 / 1 / 2 → 2 / 2 / 3 and Block 4 / 6 / 6 → 4 / 5 / 6 (other taunts reach 2; less Block
   than the dedicated tanks).
+- Sustain (Nov 12), from the spec: no mechanical departures. Code shape only: the spec's inline "spent this turn" check
+  (`S() && peek(u) && peek(u).mend === S().turn`) is one pure helper `mendSpent(u)`, shared by the desc and
+  `transformScore` and exported for the tests. A Transform whose switch does not happen (the wolf status refused)
+  neither heals nor spends the mend, as in the spec's execute.
 
 ## Requests
 
@@ -218,7 +225,7 @@ a melee-hero comparison, provoked walks, a roster dump), `old.html` (the earlier
 2. **Hair Trigger missed refused downs.** Plot Armor (a rare Blessing any hero can roll: "stay up at 1 HP") refuses the
    down after `onTakeDamage` has run at 0 HP, so a Basanos saved at 1 HP stayed a man. Fix: a 0-HP hit marks a pending
    trigger that `settle()` resolves at the next hook on him (every sync point, now also `onHealed` and
-   `onOpportunityAttack` on both sides): still standing below half → the wolf (free, Coat heal); `onDowned` clears it.
+   `onOpportunityAttack` on both sides): still standing below half → the wolf (free; then also the Coat heal, removed Nov 12 by D9); `onDowned` clears it.
    Tested with the real Plot Armor (a stand-in rule when isolated): on the grunt's turn (his turn starts as a werewolf
    with 3 AP, one trigger) and mid-walk (a lethal stab refused → a 1-HP wolf at the end of the walk); a real down leaves
    nothing pending.
@@ -257,3 +264,184 @@ content loaded (the real Plot Armor, the Party Balloons check), no swallowed "Er
 - **Tests**: `hero_basanos: v2 requests — …`: Pounce lists no barrel; Silvered Sword and Claw at a barrel (preview =
   reality, no Bleed).
 - **Requests**: none.
+
+## Sustain (Nov 12) — Transform mends; the Coat gives Block (D9, spec `.tmp/wf13/sustain-spec.md` §1.2 / 2.2 / 5 / 7)
+
+The user (D9): healing "linked to the characters themselves ... Basanos gets to heal on trasnform (not by HP threshold)",
+"without overloading each character with a self-heal". Lead D10: Blood Moon does not heal; the Flea Collar fallbacks
+(mend 2 / 3 / 4, then wolf-only) are the balance pass's to apply on measurement.
+
+**Transform** (`bas_transform`, 1 AP, cd 0, self, tags `['shapeshift']` — no `heal` tag, so he is not a `REQ.healer`):
+- `MEND = [3, 4, 5]`; levels `{ claw, bleed, mend }` (key `mend`, not `heal`: AutoPlay's `quickScore` reads `L.heal` on
+  self-target skills and would credit it even once spent).
+- His **first switch each turn, either direction**, heals `mend`. It is spent by that first switch even at full HP
+  (`unit.data.bas.mend = state.turn`, the Flea Collar's per-turn marker pattern); a second switch that turn heals 0;
+  the next turn's first switch heals again. Pop-up `Good as new-ish!`; log `The change knits Basanos back together. His
+  trousers are not so lucky.` (only when he actually healed).
+- **Never heals**: Hair Trigger (the HP-threshold path the user ruled out), Blood Moon (signature, D10), `syncForm`
+  (a dispel, a down). None of them spends the mend either: after Hair Trigger or Blood Moon, his first chosen switch that
+  turn still heals.
+- Desc (`desc(L, user)`, 24 words, 27 with the live clause; cap 28): `Switch between human and werewolf. Your first switch
+  each turn heals you 3 HP. Werewolf: +2 move; basic attack Claw (4 damage, 1 Bleed).` (II: 4 HP, Claw 5 / 1; III: 5 HP,
+  Claw 5 / 2; the Bleed keeps `bleedN`, so Moonfang shows 2 / 2 / 4). Live: once his mend is spent this turn, `3 HP`
+  reads `3 HP (used this turn)` (pure: `mendSpent(u)` uses `peek`, `S()` may be null).
+- Flea Collar: the free first switch still heals, once (tested).
+
+**Wolfsbane-Lined Coat** (`bas_wolfsbane_coat`, rare armor, `{ hp: 4 }` unchanged): the Hair-Trigger heal (`COAT_HEAL` 6,
+in `becomeWolf`) is deleted. New: `COAT_BLOCK = 5` Block when **Transform** turns him back into a man (not a dispel, not
+a down; not gated: each switch costs AP and Block resets at his turn start). Pop-up `Coat on.`; log `Basanos buttons the
+wolfsbane coat back up. It itches. It works.` Desc: `+4 max HP. When Transform turns you back into a human, gain 5 Block.`
+Flavor unchanged. It now rewards switching on purpose (wolf to rush in, man to hold the line), not dropping below half.
+
+**AutoPlay** (`transformScore`): `base = max(0, then − now − 2)` (form value, friction unchanged); in the **quick pass
+only** (no `ctx.autoplay`) and while the mend is unspent this turn, `+ min(mend, missing) × (1.5 below half HP, else 0.8)`
+— outside the `max(0, …)`, so form friction can't swallow it. The exact pass's dry run already sees the real heal.
+
+**Exports**: `DD.Basanos.MEND`, `COAT_BLOCK`, `mendSpent(u)`; `COAT_HEAL` dropped (nothing else in the repo used it).
+**Loading tip** (registered from basanos.js): `Basanos's first Transform each turn knits him back together. Hair Trigger
+doesn't count: he has to mean it.`
+
+**Tests** (`tests/content/hero_basanos.js`):
+- new suite `Transform mends …`: MEND / COAT_BLOCK exports, no `COAT_HEAL`; no `heal` tag / key; per level I-III: the
+  desc names 3 / 4 / 5 HP, man → wolf heals exactly MEND, one log line, the live desc gains `(used this turn)` (≤ 28
+  words) and the user-less desc never does, the second switch heals 0, the next turn's first switch heals again, wolf →
+  man as the first switch heals too; full HP spends it (no log line; a later switch that turn heals 0); Flea Collar (free
+  and healing once, twice over two turns); Hair Trigger then a chosen switch the same turn heals; a dispel neither heals
+  nor spends it; the preview shows exactly +3 and spends nothing, preview == reality, then no heal in the next preview;
+  the tip.
+- Hair Trigger suite, Coat part rewritten: the desc; +4 HP; into the wolf: mend, no Block; back: 5 Block, no heal; the
+  Block expires at his next turn; the next turn's first switch heals; wolf → man first switch: mend + Block; a dispel
+  gives no Block; Hair Trigger with the Coat: exactly 15 HP, no Block; Blood Moon from human form, with and without the
+  Coat: no heal, no Block, mend unspent. The Hair Trigger HP asserts above it are unchanged (no heal).
+- new suite `Transform aiScore prices the unspent mend …`: exact (ctx.autoplay) = the old form value; quick adds
+  min(mend, missing) × 0.8 / 1.5 at I / II / III (missing 0 / 2 / 10 / 16); spent this turn → quick == exact; next turn
+  unspent again; far from every foe and below half → 3 × 1.5 (the friction can't swallow it).
+- Unchanged and green: the item suite (+4 HP), the AutoPlay battles, `tests/content/shared.js` Party Balloons (run
+  without `isolate`).
+
+**Numbers** (the fixture AutoPlay battles, verbose, `['basanos', test_knight, test_cleric, test_mage]`, 10 fights at
+L1 / 3 / 5): 10 / 10 wins, Transform 9 uses (0.9 a fight). These are short (2-7 rounds) with a cleric in the party, so he
+is rarely hurt when he decides: the spec's 1.5-3 a fight is for the balance pass's real-run sims (spec §9), along with
+the Flea Collar watch (fallbacks: mend 2 / 3 / 4, then wolf-only; D10 lets the balance pass apply them).
+
+**Status**: the build:basanos run restarted at ~18:50 found the code, tests and these notes already landed by the first
+attempt; it re-checked them line by line against the spec (all match), ran the isolated suites (23 / 23, 2089 ok), the
+Party Balloons suites without `isolate` (27 / 27, 2135 ok), and the full `tools/test.sh`. Full run (19:08-19:10): 967
+suites, 11 failures in 7 sections, none in a Basanos suite or caused by basanos.js: mapgen difficulty info (brutal
+knobs), two HUD playtest suites (first-hour), balance pass 2's late-boss rows (not landed), hero_marwyn acts 2-3 battles
+("many different skills"), two narrative tip checks (the "Flyers" tip in narrator.js). An earlier full run (19:05) had
+also caught a playtest fixer's half-written `AI.rollSkew` in js/engine/ai.js (the boss fixture's wind-ups threw in the
+Basanos battle suites too); the rerun against the finished file is clean.
+
+**Deviations** from the spec: see the Deviations list (Nov 12 entries).
+**Requests**: none (no file outside mine needs a change; DESIGN §6 / v2-digest texts are the DOCS phase's, spec §6).
+
+## Review (sustain, Nov 12) — adversarial review: the user's intent and the rules text (ADVERSARIAL REVIEWER role)
+
+**Verified by running code** (suites; a scratch harness `.tmp/rev13/rt.js` that plays real encounters through
+`DD.Encounter.build` + `DD.AutoPlay.runBattle` with real heroes; `tools/sim.sh`):
+- The user's words, "heal on transform (not by HP threshold)": the only new heal is in Transform's execute, either
+  direction, once per turn (`d.mend = s.turn`). Hair Trigger (`becomeWolf(u, 'trigger')`), Blood Moon
+  (`'signature'`) and `syncForm` (a dispel or a down) never heal and never spend the mend. The Coat's Hair-Trigger heal
+  (`COAT_HEAL` 6, the threshold heal the user rejected) is gone; the Coat now gives 5 Block when Transform turns him back
+  into a human. Grep: the only `heal(` calls left in basanos.js are the mend and Savage Bite's kill heal (a kill, not
+  a threshold).
+- Real fights (harness, allies Zarathor / Kiri / Buga or Ellaria / Kiri / Zarathor, act 1 / 2 / 3 encounters at hero
+  level 2 / 4 / 6 with Transform I / II / III; 18 / 14 / 14 fights): Transform 1.5 / 2.4 / 4.4 a fight, the mend
+  1.4 / 5.8 / 15.8 HP a fight; Hair Trigger fired 2 / 8 / 16 times and never healed. **With the Flea Collar**: 2.5 /
+  4.5 / 6.6 Transforms and 3.6 / 11.9 / 21.9 HP a fight. `tools/sim.sh "seeds=8&from=7000&stop=1&party=slate,basanos,sparrow,marwyn&dump=1"`
+  (act 1, 33 fights, no capped fight): Transform 4.2 a fight.
+- Previews, tooltips and the log agree (the mend suite's preview / live-desc checks pass; log "The change knits Basanos
+  back together. His trousers are not so lucky." only when he healed). Pronouns: he / him everywhere.
+
+**Fixed**
+1. Transform's desc said "Your first **switch** each turn heals you N HP", but a Hair Trigger switch on his own turn
+   (an attack of opportunity while he walks, lava, thorns) is a switch that neither heals nor spends the mend, and the
+   Transform after it does heal (the mend suite's own case). The desc now says "Your first **Transform** each turn heals
+   you N HP" — exact, the Flea Collar's own wording ("Your first Transform each turn costs 0 AP"), and the user's
+   words ("heal on transform"). Same word count (24, 27 live). Regression: the mend suite asserts the new wording at
+   I-III and that no desc says "first switch" (right after the Hair-Trigger-then-Transform case). Header / constant
+   comments and the suite title follow.
+
+**Not changed (for the balance pass; D10 lets it apply the pre-agreed fallbacks)**
+- Transform runs above the spec's 1.5-3 a fight once he is hurt (4.2 in the act 1 sim, 4.4 at III in the harness) and
+  the mend above its guard rails (about 8 a normal fight / 15 a boss; the Collar subset about 10): 15.8 HP a fight at
+  III, 21.9 with the Collar. AutoPlay flips forms almost every turn for the 1-AP (Collar: 0-AP) heal — so would a
+  human. Fallbacks in order (spec §1.2, D10): mend 2 / 3 / 4, then mend only on switches into the wolf.
+
+**Requests**
+- **DOCS (lead)**: `docs/notes/v2-digest.md` (the Transform line, ~:336) and DESIGN §6's Basanos brief (~:525) say "first
+  switch each turn"; the code now says "Your first Transform each turn heals you 3/4/5 HP" (DESIGN can read "his first
+  Transform each turn heals him 3–5 HP, by level — Hair Trigger and Blood Moon never heal").
+
+**Test runs**: isolated `suite=hero_basanos&isolate=basanos`: 23 suites, 2,092 assertions ok, 0 failures. Full run: see
+the end of `docs/notes/hero-slate.md` "Review (sustain)".
+
+## Review (sustain, Nov 12) — engine, AutoPlay and tests (ADVERSARIAL REVIEWER role)
+
+Probes: `.tmp/rev-engine/probe.js` (scratch page, one Chrome slot; real act 1 encounters through `DD.Encounter.build` +
+`DD.AutoPlay.runBattle`, Basanos with the Flea Collar or the Coat, levels 1 and 3, 20 fights) and AutoPlay traces
+(`DD.AutoPlay.trace = 'all'`) of hand-built spots; in-memory mutants (`&mut=`, no file on disk changed).
+
+**Verified (by running code)**
+- Previews and dry runs never heal or spend the mend: every real "knits ... back together" line (75 in 20 fights)
+  matched a real, non-simulated mend heal, one for one; the mend marker lives in `unit.data.bas`, which
+  `Targeting.simulate` deep-copies; `unit.data` is fresh per fight (`combat.js` unit construction), so a turn number from
+  the last fight can never block this one's mend.
+- `s.turn` counts every unit's turn, so "first Transform each turn" is per Basanos turn; no content lets him Transform
+  on someone else's turn (Delegate gives basic swings only).
+- The tests catch it: a mutant that heals on every switch fails 14 assertions (the mend suite, Hair Trigger, the quick-
+  pass aiScore suite).
+
+**Observed, not changed (for the balance pass)**: why AutoPlay Transforms so often (5.8 a fight in these probe fights,
+4.2 in the other reviewer's sim). In 17 of his turns he switched twice or more, and 12 of those ended in the form they
+began: 2 AP (1 with the Collar) for the mend, back where he started. The mechanism: `transformScore` returns
+`max(0, then − now − 2)`, so the first switch into the *worse* form costs nothing in the score while the dry run pays its
+heal; the switch back then scores `then − now − 2 > 0`. The traces show it happens with AP he has no other use for (no
+foe in reach); next to a foe he claws or switches once into the better form. So it is not a wasted attack, and a human
+would do the same, but "Transform uses a fight" now counts flaps: **measure the mend (heals a fight) instead**. If the
+balance pass wants fewer flaps without touching MEND, the AutoPlay-side lever is to drop the clamp while the mend is
+unspent (`base = then − now − 2`, negative allowed), so the heal has to pay for the form it lands in; the D10 fallbacks
+(mend 2 / 3 / 4, then into the wolf only) stay the rules-side levers.
+
+## Balance refit (Nov 12) — MEND 3/4/5 → 2/3/4 (BALANCE REFIT 1, spec §9 / D10 pre-agreed fallback; docs/notes/balance.md "Sustain refit - act 1")
+
+- **Why**: the spec's guard rails are mend ≤ ~8 a regular fight, ≤ ~15 a boss fight and **the Flea Collar subset ≤ ~10**.
+  Whole campaigns (400 runs, seeds 11000+ / 13000+): Transform 3.0 casts a regular fight / 3.6 a boss fight; he healed
+  himself 6.8 / 8.6 HP a fight without the Collar (inside the caps) but **13.3 / 15.4 with it** (63 / 25 fights: a free
+  Transform every turn is a personal 3-5 HP aura). His run-win share was 1.01× the median (act 1 alone 0.87×).
+- **Change**: `MEND = [2, 3, 4]` (the spec's first fallback; the second, "mend only into the wolf", is held back). The
+  Transform desc reads `L.mend`, so it stays exact ("…heals you 2 HP."); the header comment says 2 / 3 / 4.
+- **Tests**: `hero_basanos` reads `Bz().MEND` everywhere it used the literal 3 (the Collar cases, the Coat cases, the
+  dispel / Hair Trigger cases, the preview, the quick-pass `transformScore` cases; the first case now misses 1 HP so
+  `min(mend, missing)` is still tested at mend 2). Isolated run: 23 suites, 2092 assertions, 0 failures.
+- **Docs** (request to DOCS): the DESIGN §6 Basanos brief and the v2-digest §2 Transform line ("3/4/5") should say
+  2 / 3 / 4 (this file's summary lines above are updated).
+
+## Finish (Nov 14) — the playtest findings held for the sustain build (FIX: CONTENT)
+
+- **heroes-1 / review-open-1 (fixed)**: Transform can still be forgotten at a level-up (a player choice, recorded under
+  Deviations), but now the forget picker warns: `bas_transform.forgetWarning` ("Both his forms hang on this. Without
+  Transform the wolf only gets out by Hair Trigger or Blood Moon, and then stays out (human skills locked) until the
+  fight ends. Vet bills not included."; `DD.UI.chooseSkillSlot` shows it on the card). `gate()` names the way out he
+  really has: with Transform socketed the locks still say "(Transform first)"; without it, "Werewolf form only (no
+  Transform socketed: Hair Trigger or Blood Moon lets the wolf out)." / "Human form only (no Transform socketed: he is
+  human again next fight)." Suite `hero_basanos: finish — a forgotten Transform …`.
+- **heroes-4 / review-open-2 (fixed)**: Step In has Human Shield's `canTarget` (lead decision D2): no immovable ally
+  ("Won't budge."), no pit / non-walkable tile under a flying ally ("Basanos can't stand there."), and no hazard
+  (lava, fire: "Basanos would rather not stand in THAT."). `force: true` is gone, so the engine refuses an immovable
+  ally even on a forced resolve (no Block then). The old review test "an immovable ally still swaps" now asserts the
+  refusal. Suite `hero_basanos: finish — Step In follows the swap rules …`.
+- **heroes-v1 / desc-sweep-5 (fixed)**: Step In and Pounce print `DD.Targeting.reach` (a local `reach(user, id, L,
+  base)`): a +range item reads "within 4 tiles" where the card says Range 4.
+- **desc-sweep-7 (fixed)**: with the Wolfsbane-Lined Coat, Transform's text adds "Turning back into a human gives you 5
+  Block (Wolfsbane-Lined Coat)."
+- D1 opt-out kept: Pounce (`target.objects: false`): the leap lands next to a foe; Claw / the Sword hit an adjacent crate.
+- D7: two swap barks (`barks.swap`, `{ally}` filled by the engine).
+- Numbers: none changed.
+
+## Review (finish, Nov 14) — REVIEWER
+
+- heroes-4 re-played with the real kit: Step In lists no Slate (immovable), and its `A().swap` without `force` refuses only
+  what `canTarget` already refuses, so no AP is ever spent on a "Won't budge!". heroes-1: the locks name the way out he
+  has. D1: Pounce stays an opt-out; his other single-target damage skills hit a crate for exactly their 🔨 number.

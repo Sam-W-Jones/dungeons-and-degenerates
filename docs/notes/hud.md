@@ -155,3 +155,8 @@ stays inside its own file.
   Grimble's Levy). Test: `integration: the combat HUD shows the party gold …`.
 - End-of-fight ribbon: a defeat with heroes standing reads "Objective Failed" (not "TPK"); the run layer then shows the
   "Objective Failed" rewards step instead of game over.
+
+## Review (finish) — REVIEWER (Nov 14)
+
+Nothing in this area changed in the finish run or its review (sprites, FX, audio and these screens were re-shot at
+1280x720 and 1920x1080 and are fine). The review's findings, fixes and requests: docs/notes/hud-v2.md "Review (finish)".

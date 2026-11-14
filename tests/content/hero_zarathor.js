@@ -659,6 +659,15 @@
       terrain: function (tl) { if (tl.x === 1 && tl.y === 6) tl.h = 2; } });
     let z = zar();
     t.ok(valid(z, 'zar_strut', 2, 4) && !valid(z, 'zar_strut', 4, 4), 'cannot strut through a foe');
+    // playtest combat-controls-5: like any walk he struts THROUGH an ally (never ending on one); no fire under the ally
+    fight({ heroes: [Z(1, 4, [sk('zar_strut', 1)]), H('test_knight', 2, 4)], enemies: [E(8, 8)], gold: 0 });
+    z = zar();
+    t.ok(!valid(z, 'zar_strut', 2, 4) && valid(z, 'zar_strut', 4, 4), 'not onto the ally, but past him');
+    t.ok(use(z, 'zar_strut', 4, 4) && z.x === 4 && hero('test_knight').x === 2, 'strutted through the knight to 4,4');
+    t.ok(surf(1, 4) === 'fire' && surf(2, 4) !== 'fire' && surf(3, 4) === 'fire', 'fire behind him, none under the knight');
+    fight({ heroes: [Z(1, 4, [sk('zar_strut', 1)])], enemies: [E(3, 4), E(8, 8)], gold: 0, objects: [{ x: 1, y: 2, id: 'crate' }],
+      terrain: function (tl) { if (tl.x === 1 && tl.y === 6) tl.h = 2; } });
+    z = zar();
     t.ok(valid(z, 'zar_strut', 1, 3) && !valid(z, 'zar_strut', 1, 1), 'cannot strut through a crate');
     t.ok(valid(z, 'zar_strut', 1, 5) && !valid(z, 'zar_strut', 1, 7), 'cannot strut up a 2-level cliff');
     DD.Act.addStatus(z, 'root', { turns: 1 });

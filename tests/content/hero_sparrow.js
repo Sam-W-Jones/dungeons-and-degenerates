@@ -492,7 +492,8 @@
   T.suite('hero_sparrow: Juice Box', function (t) {
     [1, 2, 3].forEach(function (lv) {
       const Lv = L('spa_juicebox', lv);
-      const a = arena({ skills: [['spa_juicebox', lv]], enemies: [E(4, 4, 'test_grunt', 4)] });
+      // level 3 (28 max HP): room for the whole drink (III with 3 Bleed drains 20), so no cap hides the heal
+      const a = arena({ level: 3, skills: [['spa_juicebox', lv]], enemies: [E(4, 4, 'test_grunt', 4)] });
       const f = at(4, 4);
       DD.Act.addStatus(f, 'bleed', { stacks: 3 }, a.spa);
       a.spa.hp = 6;
@@ -500,33 +501,71 @@
       previewThenUse(t, a.spa, a.slot('spa_juicebox'), 4, 4, 'juice box L' + lv);
       const dealt = f0 - f.hp;
       t.eq(dealt, Lv.dmg + Lv.per * 3, 'L' + lv + ' damage = ' + Lv.dmg + ' + ' + Lv.per + ' × 3 Bleed');
-      t.eq(a.spa.hp, 6 + Math.ceil(dealt / 2), 'L' + lv + ' heals half the damage dealt, rounded up');
+      t.ok(6 + dealt < a.spa.maxHp, 'L' + lv + ' (the drink fits under her max HP: ' + (6 + dealt) + ' < ' + a.spa.maxHp + ')');
+      t.eq(a.spa.hp, 6 + dealt, 'L' + lv + ' heals the damage dealt');
       t.eq(stacks(f, 'bleed'), 3, 'L' + lv + ' the Bleed stays on it (a donor and the next payoff)');
       t.ok(!has(f, 'stun'), 'L' + lv + ' no faint any more (v2-simple)');
       t.eq(a.spa.ap, 1, 'L' + lv + ' costs 2 AP');
       t.eq(a.slot('spa_juicebox').cd, 2, 'L' + lv + ' cooldown 2');
       t.eq(DD.Combat.costOf(a.spa, sk('spa_juicebox'), lv).hp, 0, 'L' + lv + ' costs no HP');
     });
-    // no Bleed: base damage only; range 2
-    const b = arena({ skills: [['spa_juicebox', 1]], enemies: [E(2, 6, 'test_grunt', 4), E(5, 4)] });
-    const g = at(2, 6), g0 = g.hp;
+    // no Bleed: base damage only; range 3 (sustain refit: the spec's fallback raised it from 2)
+    const b = arena({ skills: [['spa_juicebox', 1]], enemies: [E(2, 7, 'test_grunt', 4), E(6, 4)] });
+    const g = at(2, 7), g0 = g.hp;
     b.spa.hp = 10;
-    use(t, b.spa, b.slot('spa_juicebox'), 2, 6, 'juice no bleed');
+    use(t, b.spa, b.slot('spa_juicebox'), 2, 7, 'juice no bleed, 3 tiles away');
     t.eq(g0 - g.hp, L('spa_juicebox', 1).dmg, 'no Bleed: base damage');
-    t.eq(b.spa.hp, 10 + Math.ceil(L('spa_juicebox', 1).dmg / 2), 'heals half of it');
-    const c = arena({ skills: [['spa_juicebox', 1]], enemies: [E(5, 4)] });
-    t.ok(DD.Combat.targets(c.spa, c.slot('spa_juicebox')).every(function (p) { return Math.abs(p.x - 2) + Math.abs(p.y - 4) <= 2; }), 'range 2');
-    t.eq(DD.Combat.canUse(c.spa, c.slot('spa_juicebox')), 'No valid targets.', 'a foe 3 tiles away is out of reach');
+    t.eq(b.spa.hp, 10 + L('spa_juicebox', 1).dmg, 'heals all of it');
+    t.ok(/within 3:/.test(DD.skillDesc(sk('spa_juicebox'), 1)), 'the desc says within 3');
+    const c = arena({ skills: [['spa_juicebox', 1]], enemies: [E(6, 4)] });
+    t.ok(DD.Combat.targets(c.spa, c.slot('spa_juicebox')).every(function (p) { return Math.abs(p.x - 2) + Math.abs(p.y - 4) <= 3; }), 'range 3');
+    t.eq(DD.Combat.canUse(c.spa, c.slot('spa_juicebox')), 'No valid targets.', 'a foe 4 tiles away is out of reach');
     // killing the target: heals from the HP actually drained
     const d = arena({ skills: [['spa_juicebox', 1]], enemies: [E(3, 4)] });
     at(3, 4).hp = 3;
     d.spa.hp = 10;
     use(t, d.spa, d.slot('spa_juicebox'), 3, 4, 'juice kill');
-    t.eq(d.spa.hp, 10 + 2, 'heal = half of the 3 HP actually drained (rounded up)');
+    t.eq(d.spa.hp, 10 + 3, 'heal = the 3 HP actually drained (no overkill)');
+    // Block soaks part of the hit: she drinks only the HP the foe really lost
+    const bl = arena({ skills: [['spa_juicebox', 1]], enemies: [E(3, 4, 'test_grunt', 3)] });
+    DD.Act.addBlock(at(3, 4), 2);
+    bl.spa.hp = 10;
+    const bl0 = at(3, 4).hp;
+    use(t, bl.spa, bl.slot('spa_juicebox'), 3, 4, 'juice through Block');
+    t.ok(bl0 - at(3, 4).hp === L('spa_juicebox', 1).dmg - 2 && bl.spa.hp === 10 + bl0 - at(3, 4).hp, 'Block soaked 2: she heals the ' + (bl0 - at(3, 4).hp) + ' HP that got through (' + bl.spa.hp + ')');
     // full HP: nothing to heal, no overheal
     const e = arena({ skills: [['spa_juicebox', 3]], enemies: [E(3, 4, 'test_grunt', 3)] });
     use(t, e.spa, e.slot('spa_juicebox'), 3, 4, 'juice at full HP');
     t.eq(e.spa.hp, e.spa.maxHp, 'no overheal at full HP');
+    // the pop-up: Slurrrp! over Sparrow
+    const pf = arena({ skills: [['spa_juicebox', 1]], enemies: [E(3, 4, 'test_grunt', 3)] });
+    pf.spa.hp = 10;
+    const texts = [], push0 = DD.FX.text;
+    DD.FX.text = function (at0, txt) { texts.push({ at: at0, txt: txt }); return push0.apply(this, arguments); };
+    try { use(t, pf.spa, pf.slot('spa_juicebox'), 3, 4, 'juice pop-up'); } finally { DD.FX.text = push0; }
+    t.ok(texts.some(function (x) { return x.txt === 'Slurrrp!' && x.at === pf.spa; }), 'a "Slurrrp!" pop-up over her');
+
+    // AutoPlay: the quick pass can't see a self-heal on a skill aimed at a foe, so aiScore adds it there (only)
+    const q = arena({ skills: [['spa_juicebox', 1]], enemies: [E(3, 4, 'test_grunt', 3)] });
+    DD.Act.addStatus(at(3, 4), 'bleed', { stacks: 1 }, null);
+    const def = sk('spa_juicebox'), qslot = q.slot('spa_juicebox');
+    const ctxOf = function (exact) {
+      const c = DD.Targeting.buildCtx(q.spa, qslot, { x: 3, y: 4 });
+      if (exact) c.autoplay = { preview: true };
+      return c;
+    };
+    const est = DD.AI.estimate(q.spa, at(3, 4), L('spa_juicebox', 1).dmg + L('spa_juicebox', 1).per, null);
+    t.ok(est >= 7 && est <= 14, 'the drain estimate (5 +3 per Bleed against a plain grunt): ' + est);
+    t.eq(def.aiScore(ctxOf(false)), 1, 'full HP: aiScore = the Bleed on it (1)');
+    q.spa.hp = 15;   // 7 missing (not below half): min(estimate, 7) × 0.8
+    const quick = def.aiScore(ctxOf(false)), exact = def.aiScore(ctxOf(true));
+    t.ok(quick > 1 && Math.abs(quick - (1 + Math.min(est, 7) * 0.8)) < 1e-6, 'hurt, quick pass: Bleed + min(drain, missing) × 0.8 (' + quick + ')');
+    t.eq(exact, 1, 'hurt, exact pass (ctx.autoplay): only the Bleed (the dry run prices the heal)');
+    q.spa.hp = 6;    // 16 missing (below half): min(estimate, 16) × 1.5
+    t.ok(Math.abs(def.aiScore(ctxOf(false)) - (1 + Math.min(est, 16) * 1.5)) < 1e-6, 'below half HP: the heal counts × 1.5 (' + def.aiScore(ctxOf(false)) + ')');
+    // the loading tip (D9)
+    const tips = (DD.defs.narration.tips || []).filter(function (l) { return /Juice Box heals Sparrow/.test(l); });
+    t.ok(tips.length === 1 && tips[0].length <= 140 && !/\b(he|him|his|himself)\b/i.test(tips[0]), 'a loading tip: ' + tips[0]);
   });
 
   T.suite('hero_sparrow: Thousand Paper Cuts and Say It, Don\'t Spray It (Dazzle on the enemy\'s turn)', function (t) {
@@ -1332,7 +1371,7 @@
     DD.Act.kill(at(2, 5), null);
     j.spa.hp = 10;
     use(t, j.spa, j.slot('spa_juicebox'), 3, 4, 'juice box next to a downed knight');
-    t.ok(at(2, 5).downed && j.spa.hp === 13, 'Juice Box heals her only: the knight stays down');
+    t.ok(at(2, 5).downed && j.spa.hp === 10 + L('spa_juicebox', 1).dmg, 'Juice Box heals her only: the knight stays down');
 
     // 2. barrels: Shiv Happens sets an adjacent one off (she is in the blast); Vein Glory is never aimed at one
     const b = arena({ skills: [['spa_veinglory', 1]], enemies: [E(4, 5), E(8, 8)], objects: [{ x: 3, y: 4, id: 'barrel_explosive' }, { x: 5, y: 2, id: 'barrel_explosive' }] });
@@ -1352,5 +1391,38 @@
     f.spa.flags.flying = false;
     DD.Act.teleport(f.spa, 3, 4);
     t.eq(f.spa.hp, 13, 'landed (no wings): stepping into the puddle slurps it again');
+  });
+
+  // ---- finish (Nov 14): texts held for the sustain build -------------------------------------------------------------
+  T.suite('hero_sparrow: finish — her last words are her own (no "Tell my blood... I loved it" twin); her ranges follow her items', function (t) {
+    const own = DD.getHero('sparrow').barks.downed;
+    t.ok(own.indexOf('Tell my blood... I loved it...') < 0, 'the "I loved it" twin of the Rat\'s cheese line is gone');
+    // no other unit's death line shares her "Tell X... I Y..." ending (playtest text-tone-8)
+    const ending = function (l) { const m = /^Tell [^.]*\.\.\.\s*(.*)$/.exec(l); return m ? m[1].toLowerCase() : null; };
+    const others = [];
+    Object.keys(DD.defs.heroes).concat(Object.keys(DD.defs.enemies), Object.keys(DD.defs.summons || {})).forEach(function (id) {
+      if (id === 'sparrow') return;
+      const d = DD.getHero(id) || DD.getEnemy(id) || (DD.getSummon && DD.getSummon(id));
+      const b = d && d.barks;
+      if (!b) return;
+      ['downed', 'death'].forEach(function (k) { (b[k] || []).forEach(function (l) { const e = ending(l); if (e) others.push(e); }); });
+    });
+    const twins = own.map(ending).filter(function (e) { return e && others.indexOf(e) >= 0; });
+    t.eq(twins.length, 0, 'none of her "Tell..." lines ends like another unit\'s: ' + twins.join(' | '));
+    // heroes-v1: every "within N" is the reach the card shows
+    DD.Combat.sandbox({ w: 9, h: 9, seed: 3, enemyAi: false, heroes: [{ id: 'sparrow', x: 1, y: 4 }], enemies: [{ id: 'test_grunt', x: 8, y: 8 }],
+      objective: { type: 'custom', text: 'spa' }, encounter: { id: 'spa_finish', checkObjective: function () { return null; } } });
+    const s = DD.Combat.heroes()[0];
+    ['spa_hemoglob', 'spa_juicebox', 'spa_papercuts', 'spa_goblinmode', 'spa_twin', 'spa_blooddrive', 'spa_veinglory'].forEach(function (id) {
+      [0, 1].forEach(function (bonus) {
+        s.rangeBonus = bonus;
+        [1, 2, 3].forEach(function (lv) {
+          const n = DD.Targeting.range(s, DD.getSkill(id), lv)[1];
+          const d = DD.skillDesc(DD.getSkill(id), lv, s);
+          t.ok(new RegExp('within ' + n + '(?![0-9])').test(d), id + ' L' + lv + ' (+' + bonus + '): within ' + n + ' (' + d + ')');
+        });
+      });
+    });
+    s.rangeBonus = 0;
   });
 })();

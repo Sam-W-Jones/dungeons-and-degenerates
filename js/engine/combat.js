@@ -17,7 +17,7 @@
   const U = DD.util;
 
   // Difficulty factors live in DD.Balance.difficulty (js/data/balance.js); this copy is the fallback without it.
-  const FALLBACK_DIFFICULTY = { casual: { hp: 0.8, dmg: 0.8 }, normal: { hp: 1, dmg: 1 }, brutal: { hp: 1.25, dmg: 1.2 } };
+  const FALLBACK_DIFFICULTY = { casual: { hp: 0.8, dmg: 0.8 }, normal: { hp: 1, dmg: 1 }, brutal: { hp: 1.15, dmg: 1.05 } };
   function diffTable() { return (DD.Balance && DD.Balance.difficulty) || FALLBACK_DIFFICULTY; }
 
   const Combat = (DD.Combat = { state: null });
@@ -529,7 +529,11 @@
       }
       case 'protect': {
         const u = ob.unitId ? vipUnits(s, ob.unitId)[0] : null;
-        return 'Protect ' + (u ? u.name : 'the ' + objName(ob.objId)) + ' and defeat all enemies';
+        if (u) return 'Protect ' + u.name + ' and defeat all enemies';
+        // [finish bosses-objectives-9] the placed object's own label, as the inspect panel names it ("The Last Keg")
+        let label = ob.objLabel;
+        if (!label) for (let i = 0; i < s.grid.tiles.length && !label; i++) { const o = s.grid.tiles[i].obj; if (o && o.id === ob.objId && o.label) label = o.label; }
+        return 'Protect ' + (label ? (/^the /i.test(label) ? '' : 'the ') + label : 'the ' + objName(ob.objId)) + ' and defeat all enemies';
       }
       case 'custom': return ob.label || (s.encounter && s.encounter.objectiveText) || 'Complete the objective';
       default: {
@@ -637,7 +641,9 @@
     s.units.slice().forEach(function (u) { if (!u.dead) DD.Hooks.fire('onCombatEnd', u, u, result); });
     Combat.refreshObjective();
     DD.Act.log(result === 'victory' ? 'Victory!' : 'Defeat...', 'system');
-    DD.Act.narrate(result === 'victory' ? 'victory' : 'defeat', { hero: (Combat.heroes()[0] || {}).name || 'the party' });
+    // [engine requests, narrative] a lost objective while heroes still stand (the run goes on) is no TPK: its own key
+    const standing = result === 'defeat' && s.units.some(function (u) { return u.kind === 'hero' && active(u); });
+    DD.Act.narrate(result === 'victory' ? 'victory' : standing ? 'objective_failed' : 'defeat', { hero: (Combat.heroes()[0] || {}).name || 'the party' });
     if (result === 'victory') {
       const up = Combat.active('hero').filter(function (u) { return u.kind === 'hero'; });
       if (up.length) DD.Act.bark(up[Math.floor(DD.rng.next() * up.length)], 'victory');
@@ -860,7 +866,7 @@
       if (when === 'turnEnd' && st.fresh && def.skipFresh !== false) { st.fresh = false; continue; }
       st.fresh = false;
       st.turns--;
-      if (st.turns <= 0) DD.Act.removeStatus(u, st.id);
+      if (st.turns <= 0) DD.Act.removeStatus(u, st.id, { reason: 'expired' });
     }
   }
   function tickCooldowns(u) {
@@ -1229,14 +1235,24 @@
 
   /**
    * The attacks of opportunity a move of the unit to (x, y) would provoke (the path Combat.reachable / move use):
-   * [{ unitId, name, skillId, skillName, dmg }] (dmg: the estimated hit after armor, before Block). Pure; [] if the
-   * tile is not reachable.
+   * [{ unitId, name, skillId, skillName, dmg, at, bleed, stops, random, min, max, skipped }] — playtest fix
+   * (combat-controls-1): from a dry run of the move itself (see strikeOutcome; dmg = the HP + Block the strike costs, Block,
+   * armor, high ground and riders included); the array carries .outcome (Combat.moveOutcome). Pure; [] if the tile is not
+   * reachable. v2 rules run: on an adjacent ally's tile, those of a swap with it (Combat.swapInfo).
    */
   Combat.provokes = function (unit, x, y) {
     const e = Combat.reachable(unit).get(x + ',' + y);
-    if (!e || !e.provokes || !e.provokes.length) return [];
-    return DD.Targeting.pure(function () {
-      const out = [];
+    if (!e) {
+      // v2 rules run: an adjacent ally's tile is a SWAP (the mover provokes as it leaves its tile)
+      const sw = Combat.swapInfo(unit, x, y);
+      if (!sw || sw.ok !== true) return [];
+      const list = sw.provokes.slice();
+      if (sw.outcome) list.outcome = sw.outcome;
+      return list;
+    }
+    if (!e.provokes || !e.provokes.length) return [];
+    const out = DD.Targeting.pure(function () {
+      const list = [];
       let from = { x: unit.x, y: unit.y };
       const seen = {};
       for (let i = 0; i < e.path.length; i++) {
@@ -1246,13 +1262,145 @@
           const o = DD.Act.opportunityOf(a, unit, from, e.path[i]);
           if (!o) continue;
           seen[a.id] = 1;
-          out.push({ unitId: a.id, name: a.name, skillId: o.skill.id, skillName: o.skill.name, dmg: DD.AI.opportunityDmg(a, unit, from) });
+          list.push({ unitId: a.id, name: a.name, skillId: o.skill.id, skillName: o.skill.name, dmg: DD.AI.opportunityDmg(a, unit, from), at: { x: from.x, y: from.y } });
         }
         from = e.path[i];
       }
-      return out;
+      return list;
     });
+    strikeOutcome(unit, out, 'move', e.path);
+    return out;
   };
+
+  /**
+   * Playtest fix (combat-controls-1): what a move (or swap) and its attacks of opportunity really do, from dry runs of
+   * the move itself (DD.Targeting.simulate: the same Act.moveAlong / Act.swapMove the click runs, with the same dice).
+   * Pure. { strikes: [provokes entries, see strikeOutcome], end: {x,y} (where the mover ends), arrived (it reaches
+   * (x, y); a swap: the swap happens), loss (the HP + Block the whole move costs it: strikes, tile effects, the Bleed
+   * tick), lossMin / lossMax, bleedTick (the Bleed tick's part), lethal (it goes down: in ANY roll when random),
+   * uncertain (dice decide: the strikes' numbers are the most common of other rolls, never the real one) } or null when
+   * the unit can't move / swap there.
+   */
+  Combat.moveOutcome = function (unit, x, y) {
+    if (!unit || !active(unit)) return null;
+    const e = Combat.reachable(unit).get(x + ',' + y);
+    if (e) {
+      const list = Combat.provokes(unit, x, y);
+      return list.outcome || strikeOutcome(unit, list, 'move', e.path).outcome;
+    }
+    const sw = Combat.swapInfo(unit, x, y);
+    if (!sw || sw.ok !== true) return null;
+    return sw.outcome || strikeOutcome(unit, sw.provokes, 'swap', [{ x: x, y: y }]).outcome;
+  };
+
+  /**
+   * Dry-run the move (kind 'move': Act.moveAlong along path; 'swap': Act.swapMove with the unit on path[0]) and fill each
+   * strike entry of list (the provokes shape, matched by unitId): dmg (the HP + Block it costs the mover: armor, high
+   * ground, Block and riders included), bleed (Bleed stacks it adds: they tick when the move ends), stops (null, or what
+   * ends the move there: 'Downed', 'Pushed', 'Stopped' or the status that did it, e.g. 'Engulfed', 'Rooted', 'Stunned':
+   * the move is spent and, on a swap, the swap won't happen), random (the strike rolls dice), min / max (over SAMPLES
+   * other rolls; = dmg when certain). Sets list.outcome (Combat.moveOutcome's shape). Strikes the dry run never reached
+   * keep the estimate, with skipped: true (an earlier strike ended the move).
+   */
+  function strikeOutcome(unit, list, kind, path) {
+    const real = S();
+    const out = { strikes: list, end: { x: unit.x, y: unit.y }, arrived: false, loss: 0, lossMin: 0, lossMax: 0, bleedTick: 0, lethal: false, uncertain: false };
+    list.outcome = out;
+    if (!real || !path || !path.length) return list;
+    const to = path[path.length - 1];
+    function bleedOf(u) { const st = (u.statuses || []).filter(function (q) { return q.id === 'bleed'; })[0]; return st ? st.stacks || 0 : 0; }
+    function run(seed) {
+      return DD.Targeting.simulate(function (sim) {
+        const su = Combat.byId(unit.id);
+        if (!su) return null;
+        const pool = function () { return (su.hp || 0) + (su.block || 0); };
+        const r = { strikes: {}, order: [], lastBleed: bleedOf(su), atMove: null, start: pool() };
+        sim.rules.push({ id: 'dd_dry_move', name: 'dry run', hooks: {
+          onOpportunityAttack: function (o) {
+            if (!o || o.mover !== su || !o.attacker) return;
+            const b = bleedOf(su);
+            const tags = (o.skill && o.skill.tags) || [];
+            r.strikes[o.attacker.id] = { dealt: o.dealt || 0, bleed: Math.max(0, b - r.lastBleed), random: tags.indexOf('random') >= 0,
+              moved: !!o.from && (su.x !== o.from.x || su.y !== o.from.y) };
+            r.order.push(o.attacker.id);
+            r.lastBleed = b;
+          },
+          onMove: function (u) { if (u === su && !r.atMove) r.atMove = { pool: pool(), x: su.x, y: su.y }; },
+        } });
+        let interrupted = false, arrived = false;
+        if (kind === 'swap') {
+          const ally = DD.Grid.unitAt(to.x, to.y);
+          const sr = ally ? DD.Act.swapMove(su, ally, { provoke: true }) : { swapped: false, interrupted: false };
+          interrupted = !!sr.interrupted; arrived = !!sr.swapped;
+        } else {
+          const w = DD.Act.moveAlong(su, path, { provoke: true });
+          interrupted = !!w.interrupted; arrived = su.x === to.x && su.y === to.y;
+        }
+        r.loss = Math.max(0, r.start - (su.dead ? 0 : pool()));
+        r.bleedTick = r.atMove ? Math.max(0, r.atMove.pool - (su.dead ? 0 : pool())) : 0;
+        r.downed = !!(su.dead || su.downed);
+        r.end = { x: su.x, y: su.y };
+        r.arrived = arrived;
+        if ((interrupted || (kind === 'swap' && !arrived)) && r.order.length) {
+          // the last strike ended the move: say what it did (the status that holds the mover, if one does)
+          const by = r.order[r.order.length - 1];
+          const st = (su.statuses || []).map(function (q) { return DD.getStatus(q.id); }).filter(Boolean);
+          const pick = function (fn) { const d = st.filter(fn)[0]; return d ? d.name : null; };
+          r.stopBy = by;
+          r.stopWhy = r.downed ? 'Downed'
+            : DD.Act.isStunned(su) ? pick(function (d) { return DD.Act.isStunLike(d.id); }) || 'Stunned'
+            : DD.Act.cantMove(su) ? pick(function (d) { return d.noMove || d.id === 'root' || d.id === 'held'; }) || 'Rooted'
+            : r.strikes[by].moved ? 'Pushed'
+            : 'Stopped';
+        }
+        return r;
+      }, { seed: seed, record: true });
+    }
+    const first = run();
+    if (!first || !first.result) return list;
+    let runs = [first.result];
+    const random = list.some(function (p) { return p.random; }) || Object.keys(first.result.strikes).some(function (id) { return first.result.strikes[id].random; });
+    if (first.draws > 0 || random) {
+      // dice decide: show other rolls, never the real one (as skill previews do)
+      out.uncertain = true;
+      const base = real.rng.getState();
+      runs = [];
+      for (let i = 0; i < DD.Targeting.SAMPLES; i++) {
+        const a = run((U.hash(base + ':aoo:' + i) >>> 0) || 1);
+        if (a && a.result) runs.push(a.result);
+      }
+      if (!runs.length) return list;
+    }
+    function mode(vals) {
+      const c = {};
+      let best = vals[0], bn = 0;
+      vals.forEach(function (v) { c[v] = (c[v] || 0) + 1; if (c[v] > bn || (c[v] === bn && v < best)) { bn = c[v]; best = v; } });
+      return best;
+    }
+    list.forEach(function (p) {
+      const got = runs.map(function (r) { return r.strikes[p.unitId]; }).filter(Boolean);
+      if (!got.length) { p.skipped = true; p.stops = null; p.bleed = 0; p.random = false; p.min = p.max = p.dmg; return; }
+      const d = got.map(function (g) { return g.dealt; });
+      p.dmg = mode(d);
+      p.min = Math.min.apply(null, d);
+      p.max = Math.max.apply(null, d);
+      p.bleed = mode(got.map(function (g) { return g.bleed; }));
+      p.random = out.uncertain && p.min !== p.max ? true : got.some(function (g) { return g.random; });
+      const why = runs.map(function (r) { return r.stopBy === p.unitId ? r.stopWhy : null; });
+      p.stops = mode(why.map(function (w) { return w || ''; })) || null;
+      p.skipped = false;
+    });
+    const losses = runs.map(function (r) { return r.loss; });
+    out.loss = mode(losses);
+    out.lossMin = Math.min.apply(null, losses);
+    out.lossMax = Math.max.apply(null, losses);
+    out.bleedTick = mode(runs.map(function (r) { return r.bleedTick; }));
+    out.lethal = runs.some(function (r) { return r.downed; });
+    const r0 = runs[0];
+    out.end = r0.end;
+    out.arrived = mode(runs.map(function (r) { return r.arrived ? 1 : 0; })) === 1;
+    return list;
+  }
 
   Combat.move = function (unit, x, y) {
     const s = S();
@@ -1276,12 +1424,123 @@
     });
   };
 
+  // ---- v2 (user request, rules run): swap places with an adjacent ally -------------------------------------------
+  /**
+   * What a swap of the unit with the ally on (x, y) would be: null when no hero-side ally stands next to the unit there;
+   * else { ok: true | 'reason', x, y, unitId, name, ap, provokes: [{ unitId, name, skillId, skillName, dmg }] (the
+   * mover's attacks of opportunity, as Combat.provokes), hazard (the mover's arrival hazard id | null), allyHazard (the
+   * ally's), edge, allyEdge, snag / allySnag (DD.Grid.snagAt of each landing tile: a web roots), outcome (with
+   * provokes: Combat.moveOutcome's dry run; outcome.arrived false = a strike calls the swap off) }. The rules: a hero
+   * or hero-side summon on its turn swaps with an ADJACENT ally on the heroes' side as its move (Combat.moveApCost AP,
+   * like a one-tile move; the ally pays nothing and keeps its turn). Both must be able to stand on each other's tile
+   * (terrain, height step rule both ways, the mover's move covers the step). Not with a downed ally (Help Up), a stunned / rooted / held or immovable one; never for enemies. Pure.
+   * Lead decision D2: an immovable MOVER (Slate) may start a swap — he steps onto the ally's tile, the ally takes his.
+   */
+  Combat.swapInfo = function (unit, x, y) {
+    const s = S();
+    const G = DD.Grid;
+    if (!s || !unit || unit.dead || !playerSide(unit)) return null;
+    const ally = G.unitAt(x, y);
+    if (!ally || ally === unit || ally.dead || !playerSide(ally) || ally.side !== unit.side || G.hostile(unit, ally) || G.dist(unit, ally) !== 1) return null;
+    const from = { x: unit.x, y: unit.y }, to = { x: x, y: y };
+    const info = { ok: true, x: x, y: y, unitId: ally.id, name: ally.name, ap: Combat.moveApCost(unit), provokes: [],
+      hazard: null, allyHazard: null, edge: false, allyEdge: false };
+    info.ok = swapProblem(s, unit, ally, from, to) || true;
+    if (info.ok !== true) return info;
+    DD.Targeting.pure(function () {
+      info.hazard = G.hazardAt(to.x, to.y, unit) || null;
+      info.allyHazard = G.hazardAt(from.x, from.y, ally) || null;
+      info.edge = G.isEdge(to.x, to.y, unit);
+      info.allyEdge = G.isEdge(from.x, from.y, ally);
+      // playtest fix (combat-controls-2): a landing tile that snags (a web roots whoever lands on it)
+      info.snag = G.snagAt(to.x, to.y, unit) || null;
+      info.allySnag = G.snagAt(from.x, from.y, ally) || null;
+      DD.Act.provokers(unit, [to], from).forEach(function (a) {
+        const o = DD.Act.opportunityOf(a, unit, from, to);
+        if (o) info.provokes.push({ unitId: a.id, name: a.name, skillId: o.skill.id, skillName: o.skill.name, dmg: DD.AI.opportunityDmg(a, unit, from), at: { x: from.x, y: from.y } });
+      });
+    });
+    // playtest fix (combat-controls-1): the strikes' real effects (a stop calls the swap off) from a dry run of the swap
+    if (info.provokes.length) info.outcome = strikeOutcome(unit, info.provokes, 'swap', [to]).outcome;
+    return info;
+  };
+  /** Why the unit can't swap with that ally now (a short reason), or null. */
+  function swapProblem(s, unit, ally, from, to) {
+    const G = DD.Grid;
+    const why = turnProblem(s, unit);
+    if (why) return why;
+    if (stunned(unit)) return 'Stunned!';
+    if (Combat.cantMove(unit)) return 'Can\'t move!';
+    if ((unit.ap || 0) < Combat.moveApCost(unit)) return 'Not enough AP.';
+    if (ally.downed) return ally.name + ' is down: Help Up instead.';
+    if (stunned(ally)) return ally.name + ' is out cold and won\'t budge.';
+    if (Combat.cantMove(ally)) return ally.name + ' is stuck in place.';
+    // [finish D2] immovable units can start a swap (it is their own move) but can't be swapped
+    if (DD.Act.isImmovable(ally)) {
+      const p = DD.Act.pronouns(ally);
+      // [finish review] a unit that never moves (Zarathor's statue: move 0) can't start one either: no promise of it
+      if (!(Number(ally.mov) > 0)) return ally.name + ' is immovable: you can\'t move ' + p.obj + '.';
+      return ally.name + ' is immovable: ' + p.sub + ' can start a swap, you can\'t move ' + p.obj + '.';
+    }
+    if (!G.isWalkable(to.x, to.y, unit) || !G.canStep(unit, from, to)) return unit.name + ' can\'t stand there.';
+    if (!G.isWalkable(from.x, from.y, ally) || !G.canStep(ally, to, from)) return ally.name + ' can\'t stand there.';
+    if (G.stepCost(unit, from, to) > Combat.effectiveMov(unit)) return 'Not enough movement.';
+    return null;
+  }
+  /** The swaps the unit can make now: [swapInfo] of its adjacent allies with ok === true. Pure. */
+  Combat.swapTargets = function (unit) {
+    const out = [];
+    if (!unit || !active(unit)) return out;
+    for (let i = 0; i < 4; i++) {
+      const info = Combat.swapInfo(unit, unit.x + U.DIRS[i].x, unit.y + U.DIRS[i].y);
+      if (info && info.ok === true) out.push(info);
+    }
+    return out;
+  };
+  /** true, or why the unit can't swap with whoever is on (x, y). */
+  Combat.canSwap = function (unit, x, y) {
+    const info = Combat.swapInfo(unit, x, y);
+    return info ? info.ok : 'No ally to swap with there.';
+  };
+  /**
+   * Swap places with the adjacent ally on (x, y) as a move action (DD.Act.swapMove: the mover provokes attacks of
+   * opportunity as it leaves; one that interrupts it cancels the swap, the move is spent). Undo works like a move's.
+   * True once the action happened.
+   */
+  const SWAP_BARK = 0.25;   // chance of the mover's own 'swap' bark (cosmetic)
+  Combat.swap = function (unit, x, y) {
+    const s = S();
+    startIfDeploying(s);
+    const info = Combat.swapInfo(unit, x, y);
+    if (!info || info.ok !== true) return false;
+    const ally = Combat.byId(info.unitId);
+    return action(function () {
+      const from = { x: unit.x, y: unit.y };
+      const ap0 = unit.ap, facing0 = unit.facing, dir0 = unit.lastDir, afacing0 = ally.facing, adir0 = ally.lastDir;
+      const m0 = s.mutations;
+      unit.ap -= Combat.moveApCost(unit);
+      const r = DD.Act.swapMove(unit, ally, { provoke: true });
+      const clean = r.swapped && !r.provoked && s.mutations === m0 && active(unit) && active(ally) &&
+        unit.x === x && unit.y === y && ally.x === from.x && ally.y === from.y;
+      s.undo = clean ? { kind: 'swap', unitId: unit.id, allyId: ally.id, from: from, to: { x: x, y: y }, ap: ap0, facing: facing0, lastDir: dir0,
+        allyFacing: afacing0, allyLastDir: adir0, path: [{ x: x, y: y }], mutations: s.mutations, turn: s.turn } : null;
+      // [finish D7] a hero with 'swap' barks says one now and then ({ally} = who it swapped with), else a move bark
+      const def = DD.Hooks.defOf(unit), own = !!(def && def.barks && def.barks.swap);
+      if (r.swapped) DD.Act.maybeBark(unit, own ? 'swap' : 'move', own ? SWAP_BARK : 0.06, { about: ally });
+      return true;
+    });
+  };
+
   Combat.canUndo = function () {
     const s = S();
     if (!s || s.result || s.phase !== 'player' || !s.undo || s.undo.turn !== s.turn) return false;
     const u = Combat.byId(s.undo.unitId);
-    return !!u && controllable(u) && s.mutations === s.undo.mutations && u.x === s.undo.to.x && u.y === s.undo.to.y &&
-      DD.Grid.isFree(s.undo.from.x, s.undo.from.y, u);
+    if (!u || !controllable(u) || s.mutations !== s.undo.mutations || u.x !== s.undo.to.x || u.y !== s.undo.to.y) return false;
+    if (s.undo.kind === 'swap') {
+      const a = Combat.byId(s.undo.allyId);
+      return !!a && active(a) && a.x === s.undo.from.x && a.y === s.undo.from.y;
+    }
+    return DD.Grid.isFree(s.undo.from.x, s.undo.from.y, u);
   };
 
   Combat.undo = function () {
@@ -1290,6 +1549,18 @@
     const rec = s.undo;
     const u = Combat.byId(rec.unitId);
     return action(function () {
+      if (rec.kind === 'swap') {
+        const a = Combat.byId(rec.allyId);
+        u.x = rec.from.x; u.y = rec.from.y;
+        a.x = rec.to.x; a.y = rec.to.y;
+        u.ap = rec.ap; u.facing = rec.facing; u.lastDir = rec.lastDir;
+        a.facing = rec.allyFacing; a.lastDir = rec.allyLastDir;
+        DD.FX.move(u, [rec.from], { from: rec.to, ms: 60 });
+        DD.FX.move(a, [rec.to], { from: rec.from, ms: 60, parallel: true });
+        s.undo = null;
+        DD.Act.log(u.name + ' and ' + a.name + ' swap back. Nobody saw anything.', 'system');
+        return true;
+      }
       const back = rec.path.slice(0, -1).reverse();
       back.push(rec.from);
       u.x = rec.from.x; u.y = rec.from.y;
@@ -1405,7 +1676,9 @@
    * Resolve a skill/consumable use (shared by heroes, AI actions, wind-ups and previews). opts: pay, consumable,
    * extra (buildCtx extras such as isIntent/intent/tiles/dir), quiet (no name popup).
    * v2: aimed at a volatile object (ctx.targetObj, see DD.Targeting.aimsAtObjects) the use DETONATES it instead of
-   * running execute (DD.Act.detonate: the blast is credited to the user; costs are paid, riders don't happen).
+   * running execute (DD.Act.detonate: the blast is credited to the user; costs are paid, riders don't happen). v2 rules
+   * run: aimed at a breakable object (ctx.objectDmg set) it HITS it for that much (DD.Act.breakObject: at 0 HP it
+   * breaks — onDestroyed, loot, puzzle hooks, the destroy objective — credited to the user; no riders).
    */
   Combat.resolveSkill = function (unit, slotOrDef, target, opts) {
     opts = opts || {};
@@ -1419,12 +1692,19 @@
     if (!opts.quiet) DD.FX.text(unit, (def.icon ? def.icon + ' ' : '') + def.name, { color: unit.side === 'hero' ? '#ffe9a8' : '#ffb0a0', size: 14 });
     DD.Act.beginSkill(unit, def, ctx);
     try {
-      if (ctx.targetObj) DD.Act.detonate(unit, ctx.target.x, ctx.target.y, def);
+      if (ctx.targetObj && ctx.objectDmg !== undefined) DD.Act.breakObject(unit, ctx.target.x, ctx.target.y, ctx.objectDmg, def);
+      else if (ctx.targetObj) DD.Act.detonate(unit, ctx.target.x, ctx.target.y, def);
       else DD.safe('execute of ' + def.id, def.execute, def, [ctx]);
     } finally {
       DD.Act.endSkill();
     }
-    DD.Hooks.fire('onSkillUsed', unit, ctx);
+    // [finish D4] an object hit (a break or a detonation) is the use's damage and nothing else: onSkillUsed still fires
+    // (Hype, cooldowns, use counters count the use), but with ctx.objectHit = { x, y, id } and no target, so nothing
+    // rides on it (the Electric Lute's water shock, Echo Chamber's second hit)
+    const objHit = ctx.targetObj ? { x: ctx.target.x, y: ctx.target.y, id: ctx.targetObj.id } : null;
+    const aimed = ctx.target;
+    if (objHit) { ctx.objectHit = objHit; ctx.target = null; }
+    try { DD.Hooks.fire('onSkillUsed', unit, ctx); } finally { if (objHit) ctx.target = aimed; }
     Combat.refreshObjective();
     Combat.checkEnd();
     return ctx;
@@ -1535,7 +1815,7 @@
       } else if (opt.kind === 'smash') {
         DD.Act.face(unit, { x: x, y: y });
         DD.FX.lunge(unit, { x: x, y: y });
-        DD.Act.log(unit.name + ' smashes the ' + String((DD.getObject(opt.objId) || {}).name || opt.objId).toLowerCase() + '.', 'hero');
+        DD.Act.log(unit.name + ' smashes ' + DD.Act.objName(DD.Grid.tile(x, y).obj || { id: opt.objId }) + '.', 'hero');   // [playtest text-tone-9]
         DD.Act.damageObject(unit, x, y, SMASH_DMG);
       } else {
         DD.Act.interact(unit, x, y);

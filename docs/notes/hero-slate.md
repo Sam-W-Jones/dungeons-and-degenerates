@@ -1,6 +1,7 @@
 # hero-slate — notes (v2: initiative turns, no telegraphs, no Guard, simple kit, attacks of opportunity)
 
-Files: `js/data/heroes/slate.js`, `tests/content/hero_slate.js` (22 suites `hero_slate: …`). Scratch (not shipped):
+Files: `js/data/heroes/slate.js`, `tests/content/hero_slate.js` (26 suites `hero_slate: …` since Nov 12; the D9 sustain
+work is in "Sustain (Nov 12)" at the end). Scratch (not shipped):
 `.tmp/slate/` — `probe.html` + `run.sh` (any probe file through the test harness; takes a Chrome slot like test.sh),
 `sim.js` (AutoPlay on the real encounters: `bash .tmp/slate/run.sh "probe=sim.js&n=1&acts=1,2,3&hero=slate"`),
 screenshots `g.png` (gallery), `c1.png` / `c2.png` (fixture and real act-1 fights). v2 review scratch (all Chrome-slot
@@ -10,7 +11,7 @@ invariants on every real encounter, `pfuzz.js` previews vs reality on random boa
 "debug=1&screen=title&scene=rage|move|close|portraits|select" <abs.png>` (scripted screenshots). The v1 reviewers'
 scratch (`.tmp/hero-slate*/`) is stale (v1 kit, no slot cap): don't run it.
 
-Isolated runs: `bash tools/test.sh "suite=hero_slate&isolate=heroes/slate,hero_slate"` (22 suites) and
+Isolated runs: `bash tools/test.sh "suite=hero_slate&isolate=heroes/slate,hero_slate"` (26 suites) and
 `bash tools/test.sh "suite=content:&isolate=heroes/slate,hero_slate"` (the generic content suites, 8).
 
 User's brief: *"A grumpy golem (pale blue stone + runes) who can rage to flare his runes. He throws things and grapples
@@ -36,7 +37,7 @@ Gasket spends it, the signature maxes it.
 | id | name | AP / cd | what (L1 → L3) |
 |---|---|---|---|
 | `sla_love_tap` (basic) | Love Tap 👊 | 1 | 5 dmg to an adjacent foe (also his attack of opportunity) |
-| `sla_hold_still` ★ | Hold Still 🤼 | 1 / 2 | 4/5/6 dmg + **Grappled** through its next 1/1/2 turns (can't move; dragged along when he walks) |
+| `sla_hold_still` ★ | Hold Still 🤼 | 1 / 2 | 4/5/6 dmg + **Grappled** until the end of HIS next 1/1/2 turns (can't move; dragged along when he walks); D9 retime, see "Sustain (Nov 12)" |
 | `sla_personal_space` ★ combo | Personal Space ✋ | 2 / 1 | **throw** the adjacent foe or object up to 3/3/4 tiles in a line: it and the foe it hits take 7/9/11; objects shatter (barrels explode, kegs flood); pits / deep water YEET, lava burns, water wets |
 | `sla_rocks_fall` | Hard Pass 🪨 | 2 / 2 | lob a boulder up to 5/5/6 tiles, over walls: 7/9/10 to the foe or object there; on empty floor the **Boulder** stays |
 | `sla_air_mail` combo | Air Mail 📦 | 1 / 2·2·1 | throw an adjacent ally up to 3/4/4 tiles onto a safe empty tile; foes next to the landing take 3/4/5 |
@@ -45,10 +46,11 @@ Gasket spends it, the signature maxes it.
 | `sla_rock_bottom` | Rock Bottom 🙃 | 2 / 2 | slam an adjacent foe onto the tile behind him (if there's room): 10/12/12; III adds Stun (its next turn); a pit behind = YEET |
 | `sla_gasket` | Blow a Gasket 💢 | 2 / 3 | spell: spend all Rage, 3/5/5 + 2/2/3 per Rage spent to every foe in the 8 tiles around him (desc shows "N right now") |
 | `sla_get_over_here` combo | Get Over Here ⛓️ | 1 / 2 | spell: rune-chain a foe in a straight line up to 4/5/6 (LOS): 2/3/4 + pull it next to him |
+| `sla_stress_ball` (D9) | Stress Ball ✊ | 1 / 1 | squeeze the foe he is holding: 3/4/5 dmg, and he heals 4/5/6 HP (his own heal: no Rage) |
 | `sla_tantrum` (signature) | Tectonic Tantrum 🤬 | 2 + 100 Hype | 15 dmg to every foe within 2, each knocked 2 tiles away; then his Rage maxes out |
 
-★ = starting skills. Pool (9): hold_still, personal_space, rocks_fall, air_mail, foot_down, lawn, rock_bottom, gasket,
-get_over_here. Every skill is one verb + at most one rider; level II = bigger numbers; level III = bigger numbers, or
+★ = starting skills. Pool (10): hold_still, personal_space, rocks_fall, air_mail, foot_down, lawn, rock_bottom, gasket,
+get_over_here, stress_ball (appended Nov 12). Every skill is one verb + at most one rider; level II = bigger numbers; level III = bigger numbers, or
 one added rider (Rock Bottom's Stun). The signature keeps two riders (knockback + max Rage), like the other heroes'
 set-piece signatures (Zarathor's Dazzle + ignite).
 
@@ -68,15 +70,17 @@ set-piece signatures (Zarathor's Dazzle + ignite).
   Lawn's taunt makes foes hit him (Rage) instead of the backline, and a taunted foe only swings at its taunter, so the
   squishy next to it walks away without an attack of opportunity (tested; a tip says so).
 
-**Grappled** (`sla_grappled`, debuff on the victim, `noMove`, `turnEnd` decay, `turns` = its next N turns, source =
+**Grappled** (`sla_grappled`, debuff on the victim, `noMove`, `decay: 'never'` since Nov 12, `turns` = SLATE's turns
+left, ticked by Short Fuse's `onTurnEnd` (`tickHold`; the grab turn's own end doesn't count: `data.slaFresh`), source =
 Slate): it can't move (pushes still work), and when Slate walks (a move action, `cause 'move'`) it is dragged into the
 tile he just left (a teleport: forced movement, never provokes; a Bleeding foe bleeds like any moved unit). It never
 makes an attack of opportunity on its holder (they move together; `modifyOpportunity` cancel), but still on anyone
-else. It ends when its turns run out, when they are apart (pushed, thrown, teleported, his walk through a friend's
-tile), when he can't hold on (stunned / asleep / frozen / sheep / downed) or when it dies. One hold at a time (a new
-grab drops the old one). Anything liftable can be held, thrown or slammed: not immovable / untargetable units (so not
-the Rat King, Dr. Iris, the DM, brutes), but a pushable boss (Grimble, Lich-tenstein) can be grabbed for its next turn
-and thrown (pits then do their boss rule: 25% max HP).
+else. It ends when he lets go at the end of his Nth turn after the grab, when they are apart (pushed, thrown,
+teleported, his walk through a friend's tile), when he can't hold on (stunned / asleep / frozen / sheep / downed) or
+when it dies. The victim is held for exactly N of its own turns (as before the retime), in both initiative orders. One
+hold at a time (a new grab drops the old one). Anything liftable can be held, thrown or slammed: not immovable /
+untargetable units (so not the Rat King, Dr. Iris, the DM, brutes), but a pushable boss (Grimble, Lich-tenstein) can be
+grabbed for its next turn and thrown (pits then do their boss rule: 25% max HP).
 
 **Throws**: lift the adjacent unit / object and land it up to N tiles away in a straight line, over units and low
 clutter (crates, barrels, bushes); walls, tall objects (pillars, `blocksLos`) and the map edge stop it short ("BONK").
@@ -92,7 +96,8 @@ short). Allies are never hurt by his throws (a thrown foe bounces off them).
 - `sla_ledger` The Grudge Ledger (legendary trinket): +10% damage; Short Fuse gives 2 Rage instead of 1.
 
 Object `sla_boulder` (Boulder: blocks movement, not LOS, 5 HP, `smashable`, `throwable`, custom iso painter). Narration:
-6 `tips` (Rage, healing him, holds, throws, Air Mail and Get Off My Lawn as attack-of-opportunity escapes).
+8 `tips` (Rage, healing him, holds, throws, Air Mail and Get Off My Lawn as attack-of-opportunity escapes, Stress Ball,
+the hold lasting through his next turn).
 
 Sprite: `base: 'custom'` painter (scale 1.15, ~48 px at zoom 1): hunched pale-blue (`#9fb7c9`) stone slab, small head
 with a cliff-ledge brow, glowing slit eyes, frown crack, moss, gorilla arms with huge fists; carved runes dull at Rage
@@ -106,7 +111,9 @@ naming Zarathor, Syllamin, Marbles, Marwyn, Ellaria, Josiah, Buga, Kiri, Betty, 
 - `DD.Slate` (attached at load, runtime use only): `rage(u)`, `flared(u)`, `gainRage(u, n)`, `spendRage(u)` (all of
   it), `heldBy(slate)`, `holderOf(victim)`, `grab(slate, victim, turns)`, `release(victim, text)`,
   `flight(from, dir, n, mover)` (pure: where a thrown thing comes down), `throwUnit(user, unit, dir, n, dmg)`,
-  `throwObject(user, at, dir, n, dmg)`, `objThrowable(obj)`.
+  `throwObject(user, at, dir, n, dmg)`, `objThrowable(obj)`; since Nov 12 `tickHold(holder)` (one of the holder's turn
+  ends: Short Fuse calls it; another caller of `grab` whose holder has no Short Fuse must call it at that holder's turn
+  ends), `HOLD_AI` (1.5) and `holdValue(ctx)` (Hold Still's `autoplayValue`, exported for tests).
 - **Throwable objects**: crate, barrel, barrel_explosive, keg, mushroom, coffin, candles, brazier, sla_boulder, plus any
   object def or instance with `throwable: true` (`throwable: false` opts out). The `protect` objective's object never.
 - Statuses `sla_rage` / `sla_grappled` and the `sla_boulder` object are safe for other content to read.
@@ -125,6 +132,11 @@ naming Zarathor, Syllamin, Marbles, Marwyn, Ellaria, Josiah, Buga, Kiri, Betty, 
   was simplified per DESIGN §6 "Simplicity": Stone Skin + Bedrock (v1 "Rooted in Tradition") dropped, Rune Flare = Blow a
   Gasket, Toss a Friend = Air Mail, Grapple = Hold Still, Hurl = Personal Space, Rock Toss = Hard Pass, Suplex = Rock
   Bottom, Seismic Stomp = Putting My Foot Down; added Get Over Here (rune-chain pull) as the positioning combo tool.
+- **Hold timing (D9, Nov 12; spec `.tmp/wf13/sustain-spec.md` §1.1 A / §6)**: Grappled counts Slate's turns
+  (`decay: 'never'`, ticked by Short Fuse's `onTurnEnd`): the hold ends at the end of his Nth turn after the grab, and
+  the victim is still held for exactly N of its own turns. (Statuses normally count their bearer's turns, ARCHITECTURE's
+  `decay`; this one counts its source's, so that "while grappling" lasts into his next turn for Stress Ball, drags and
+  throws.) Side effect, accepted by the spec: a foe with two turns a round stays held through both.
 
 ## Requests
 
@@ -316,3 +328,277 @@ code; scratch harnesses in `.tmp/slate-rev/` (see the top of this file).
 - **Tests**: `hero_slate: v2 requests — …`: grab / slam don't list barrels, Love Tap does (preview = reality on Slate
   and the grunt, no Rage, 1 AP); a flyer vs a walker thrown onto lava (preview = reality, the walker pays).
 - **Requests**: none.
+
+## Rules run (Nov 6) — breaking objects (CONTENT SWEEP)
+
+User: "objects should be targetable to break them" (engine rule: `docs/notes/rules.md` "Rules run"). The Boulder
+(`sla_boulder`, 5 HP) says `targetable: true`: anyone can clear it from range (desc "5 HP: Smash it, or hit it with any
+single-target attack. Slate can throw it again."). **Hard Pass** (tile-aimed, so outside the engine's object rule) now
+refuses what the party may not aim at — `targetable: false` objects and the protect objective's object ("He has been asked
+not to throw rocks at that."); it still crushes any other object there. Hold Still and Rock Bottom keep `objects: false`
+(he grapples foes; Personal Space throws crates). Swap move (Nov 10 check): Slate is `immovable`, and the engine refuses
+a swap when either unit is immovable ("Slate is immovable."), so he never swaps — allies still walk through him. DESIGN
+§4.2 says so. **Request (lead, design call)**: the user's "tank to the front" swap is exactly Slate's job; if he should
+swap, the engine would need to tell "can't be pushed" (immovable) from "won't swap" (e.g. only refuse
+stunned / rooted / downed for the mover and ally, or a `noSwap` flag). Tests: "hero_slate: Hard Pass…" (refusals), "hero_slate: rules run — the
+Boulder is a breakable target…".
+
+## Sustain (Nov 12) — Stress Ball + the Hold Still retime (D9; spec `.tmp/wf13/sustain-spec.md` §1.1, §5, §7)
+
+Status: DONE (build:slate, Nov 12). slate.js + tests landed; isolated run green (26 suites, 2,058 assertions); full
+run: no Slate failures (see "Test runs" below).
+
+The user (D9): "Slate gets a skill for healing while grappling something" / "without overloading each character with a
+self-heal". Spec §1.1 A-C, built in `slate.js` only (no engine change). The First-Aid Fanny Pack leaves the starting
+kit (KIT-BALANCE's part, not this file).
+
+**A. Hold Still retime** (`sla_grappled`; desc == execute):
+- Status def `decay: 'never'` (was `'turnEnd'`); `noMove`, `stacking: 'refresh'`, `defaultTurns: 1` and its three hooks
+  (victim `onTurnStart` stale-hold release, `onEnterTile`, `modifyOpportunity`) unchanged.
+- `grab()` sets `st.data.slaFresh = DD.Act.isOwnTurn(slate)` after `addStatus` (a refresh keeps the same instance).
+- Short Fuse gains `onTurnEnd: tickHold(u)` (fires before turn-end decay): the grab turn's own end only clears
+  `slaFresh`; each later end of his turns takes 1; at 0 he lets go ("Let go.", log "<foe> is free.").
+- Result: I-II hold until the end of his next turn, III until the end of his next 2; the victim is held for 1 / 1 / 2 of
+  its own turns as before (both initiative orders tested). He can squeeze, drag or throw it on that next turn.
+- Hold Still desc: `Grab an adjacent foe: 4 damage, and it is Grappled until the end of your next turn (can't move;
+  dragged along when you walk).` (II 5 damage; III 6 damage, `next 2 turns`). Levels / AP 1 / cooldown 2 unchanged.
+- Grappled desc names when the hold ends, in his turns: `Held by Slate: can't move, and is dragged along when he walks
+  (no attack of opportunity on him: they move together). Free once they are apart, or when Slate lets go at the end of
+  <when>.` with `<when>` = `this turn` (his turn, 1 left, not the grab turn), `his next turn` / `his next N turns`
+  (otherwise; on his own later turn with n > 1 left: `his next n-1 turn(s)`). The old "(N turns left)" suffix is gone
+  (`left()` removed).
+
+**B. Stress Ball** (`sla_stress_ball`, new pool skill #10, appended; starters unchanged): ✊, `kind 'attack'`, tags
+`['melee', 'grapple']` (no `'heal'` tag: REQ.healer must not count him), AP 1, cooldown 1, levels `{dmg 3, heal 4}`,
+`{4, 5}`, `{5, 6}`; target an adjacent enemy unit, `objects: false`, `canTarget`: only the foe he holds, else
+`Grab it first (Hold Still).`
+- Desc: `Squeeze the foe you're holding: 3 damage, and you heal 4 HP.` (II 4 / 5, III 5 / 6; 60 chars).
+- Flavor: `His therapist said to get a stress ball. He got a goblin. Close enough.`
+- Execute: lunge, `SQUEAK!` over the foe, `DD.Act.damage(u, v, dmg, { tags: ['grapple', 'squeeze'] })` (an ordinary
+  skill hit, so the Rage 3+ flare adds +2), then `DD.Act.heal(u, u, heal)` if he is still up — even when the squeeze
+  killed the foe (the hold ends with it); self, active only (never a revive). His own heal is no one touching him: no
+  Rage. Log (only when it healed): `Slate squeezes <foe> like a stress ball. He feels marginally less furious.` Bark key
+  `squeeze` (35%): `Hmph. Better.` / `Squeeze. Breathe. Squeeze.` / `Stop wriggling. This is for my health.` /
+  `Anger management. Very effective. For me.`
+- Frequency: I-II one squeeze per grab cycle (Hold Still cd 2, Stress Ball cd 1); III up to two per grab (the grab
+  turn and his 2nd turn after it; tested).
+
+**C. AutoPlay** (content side):
+- `stressScore` (Stress Ball `aiScore`, quick pass only: `ctx.autoplay` → 0, the exact pass's dry run prices the heal):
+  `min(heal, missing) × (1.5 below half HP, else 0.8)`.
+- `holdValue` (Hold Still `autoplayValue`, both passes): `HOLD_AI` 1.5 + (Stress Ball socketed and usable now or next
+  turn: cd 0, or cd 1 and not fresh) `min(heal, missing) × (1.5 / 0.8) + 0.5 × dmg`. 0 for a foe he can't lift.
+- Sandbox (tested): Slate at 40% HP with Hold Still + Stress Ball and a grunt next to him: AutoPlay plays Love Tap, Hold
+  Still, Stress Ball on the same turn (L1 and L2). `HOLD_AI` stays 1.5 (the spec's 1.5-2.5 band); the balance pass may
+  raise it to 2.5 if real sims show Hold Still under 1.0 a fight (spec §9 table).
+
+**Tips** (2 new, 8 about Slate): `Slate's Stress Ball squeezes whatever he is holding. It hurts them. It helps him. He
+will deny both.` / `Slate holds on until the end of his next turn: grab a foe, then drag it, throw it or squeeze it
+next turn.` File header: "12 skills"; it also says only Hold Still grabs and how another caller must tick the hold.
+
+**Tests** (`tests/content/hero_slate.js`): POOL + pool order with `sla_stress_ball` (the generic desc / flavor / icon /
+3-level checks cover it); barks key `squeeze`; Short Fuse: Stress Ball's heal gives no Rage, the cleric's still does;
+**Hold Still** suite rewritten (I-II: still Grappled with 1 left on Slate's round-2 turn, next to him, mage safe; free at
+that turn's end; the grunt then walks off on its next turn. III: held through its 2 turns, free at the end of Slate's
+2nd turn after the grab. `enemiesFirst`: held through its round-2 turn, still held on Slate's round-2 turn, free at its
+end, walks off in round 3. Grappled desc timing at I and III: grab turn / the foe's turn / his later turns.);
+new **Stress Ball** suite (desc per level, dmg and heal exact per level, AP 1, cd 1, only the held foe and the reason
+text, no Rage, the flare +2, heals on a kill and the hold is gone, full HP heals 0 with no log line, grab then squeeze
+next turn, III's two squeezes per grab, no `heal` tag, appended to the pool, not a starter); previews == reality now
+include Stress Ball on a held foe (the heal on Slate too); new **AutoPlay** suite (grab-and-squeeze sandbox at L1 / L2,
+`holdValue` = HOLD_AI without Stress Ball, 0 on an immovable brute, exact values with it ready below half HP / missing
+2 / at full HP, counted at cd 1 not fresh, not at cd 1 fresh; `stressScore` heal × 1.5 in the quick pass, 0 with
+`ctx.autoplay`); the edge-case AI round comment fixed ("the III hold lasts through Slate's next 2 turns").
+
+**Deviations from the spec (small; the contract deviation itself, the hold timing, is under "Deviations" above)**:
+- `holdValue` tests `!(sl.cd > 0)` where the spec says `sl.cd === 0`: the same for real slots, and a slot without a
+  `cd` field counts as ready.
+- `tickHold` also returns for `st.turns < 0` (a permanent hold some future caller might set is never ticked away), and
+  `grab` writes `st.data = st.data || {}` before the flag (the engine always creates `data: {}`; defensive only).
+- `stressScore` and `holdValue` share one `healWorth(u, heal)` helper (the spec's formula, written once).
+- Added `DD.Slate.releasesThisTurn(v)` (pure, exported, tested) for the prediction issue below; nothing calls it yet.
+- The Hold Still suite's title now says "until the end of his next turn(s) (its own turns held as before)".
+
+**Known issue (found while building; the spec doesn't cover it)**: the HUD threat shading (`DD.AI.reachOf`) and
+AutoPlay's danger model (`mov: DD.Combat.cantMove(e) ? 0 : …`) read the hold as a snapshot ("can't move now"). Before the
+retime that snapshot was right for the victim's next turn on every hero turn in between. Now it is wrong in two cases:
+(1) on Slate's own release turn (I-II: his next turn after the grab) the held foe is shaded as reaching only the tiles
+next to it, though he lets go at the end of that turn and it walks on its next turn (the Grappled tooltip does say
+"lets go at the end of this turn"); (2) with a hero acting after the victim's held turn and before Slate's next turn
+(order Slate, foe, ally), that ally sees it held although its next turn will be free. Gameplay is exact; only the
+prediction is off (it makes AutoPlay a little careless once per grab). `DD.Slate.releasesThisTurn(v)` (pure, tested)
+answers case (1).
+
+**Requests**:
+- **ENGINE / AUTOPLAY (AI owner; optional, not blocking)**: make the "can it move on its next turn?" predictions
+  (`AI.reachOf` for the threat shading, AutoPlay's danger `mov`) skip a Grappled hold that ends first. Case (1): skip it
+  when `DD.Slate.releasesThisTurn(v)`. General rule for the plan-aware danger model: the hold ends after
+  `st.turns + (st.data.slaFresh ? 1 : 0)` more ends of its holder's turns (the current one included when he is
+  acting), so it covers the victim's next turn only if fewer of those holder turn ends come before it in the plan. A
+  generic alternative: an optional status-def query (e.g. `endsBeforeTurnOf(st, unit, plan)`) that these predictors
+  honour; Slate would implement it.
+- **DOCS (lead)**: DESIGN §6 Slate brief and `docs/notes/v2-digest.md` texts per spec §6 (Hold Still "until the end of
+  his next turn", Stress Ball in the pool and the combos line).
+
+### Test runs
+
+- Isolated (`bash tools/test.sh "suite=hero_slate&isolate=slate"`): **26 suites, 2,058 assertions, 0 failures** (was 24 /
+  ~1,908 before; the Hold Still suite had 5 expected failures from the retime before its rewrite). `suite=content:` with
+  `isolate=heroes/slate,hero_slate`: Slate's skills all pass; Stress Ball, like Air Mail, logs "no valid target in the
+  arena" (it needs a held foe; its previews are compared in `hero_slate: previews match reality`, with the heal).
+- Full run (`bash tools/test.sh`, Nov 12 ~21:40, other owners mid-flight): 955 suites, 122,515 assertions ok, 21
+  failures in 10 sections, **none of them Slate's**: engine attacks-of-opportunity ×3 (fixtures, engine files being
+  edited), mapgen difficulty info (balance.js), hud boss wind-ups, balance pass-2 levers, hero_marwyn AutoPlay acts 2-3,
+  bosses_act1 rat king Injunction, narrative tips ×2 (a flyers tip). All 26 `hero_slate` suites pass there (with the
+  cast loaded: 2,083+ assertions; the cast combos 31), no swallowed `Error in …` warnings, no Slate mention among the
+  failures. (An earlier full run at ~21:20 had 4 failing sections, the same non-Slate kinds.)
+- AutoPlay sandbox (L1 / L2, Slate at 40% HP, a grunt next to him): Love Tap, Hold Still, Stress Ball on the same turn.
+  Fixture battles (acts 1-3, 27 fights): all won; Hold Still 4 uses in 18 normal / elite fights (the elite is an
+  immovable brute) and 9 in 9 boss fights.
+
+## Review (sustain, Nov 12) — adversarial review: the user's intent and the rules text (ADVERSARIAL REVIEWER role)
+
+**Verified by running code** (suites; scratch harness `.tmp/rev13/rt.js`: real encounters through `DD.Encounter.build` +
+`DD.AutoPlay.runBattle`, real allies Zarathor / Kiri / Buga or Ellaria / Kiri / Zarathor, Slate with Hold Still +
+Stress Ball at the same level I / II / III at hero level 2 / 4 / 6 against act 1 / 2 / 3 encounters; `tools/sim.sh`):
+- The user's words, "a skill for healing while grappling something": Stress Ball is a skill, it only targets the foe
+  Slate holds, desc == execute at I-III (3/4/5 damage, 4/5/6 heal, capped at max HP, heals on a kill, never revives,
+  no Rage, the flare's +2 on the squeeze). It is not a turn-start check, so the audit's "Grappled lasts 1 turn at I-II"
+  trap doesn't apply, and the retime gives him the hold through his next turn.
+- **It fires in real fights at every level** (harness, 27 / 21 / 21 fights): Stress Ball 0.1 / 0.3 / 0.7 a fight
+  (squeezes on the grab turn and on a later turn both happen at II and III; the later-turn squeeze at all three),
+  0.4 / 1.7 / 3.9 HP a fight; Hold Still 0.5 / 1.0 / 1.1 a fight; his turns that start with a hold: 3 / 6 / 15. In the
+  act 1 sim (`seeds=8&from=7000&stop=1&party=slate,basanos,sparrow,marwyn&dump=1`, 33 fights, no capped fight): Hold
+  Still 1.1 a fight, Stress Ball 0.7 a fight when socketed (it was drafted for 3 fights). Why I is rare: in act 1 he is
+  barely hurt (2.7 HP missing at his turn start on average), so AutoPlay prefers Love Tap's 5 damage — the decision the
+  spec wants — and 9 of 13 grabbed act 1 foes die before his next turn. Tuning `HOLD_AI` is the balance pass's (spec §9).
+- The retime, in real fights: victims stay held into his next turn (3 / 6 / 10 of 13 / 22 / 23 grabs; the rest died
+  first), and on those turns AutoPlay squeezed, threw or dragged. Turn timing at I-III in both initiative orders: the
+  Hold Still suite.
+- Pronouns and tone: he / him in every new text; the barks, log, flavor and tips are in his voice.
+
+**Fixed**
+1. The retime tip said "Slate holds on until the end of his next turn", true only at Hold Still I-II (III holds through
+   his next 2). Now: "Slate holds on at least until the end of his next turn: grab a foe, then drag it, throw it or
+   squeeze it next turn." Regression (Stress Ball suite): the tip's wording, and at I and III a grabbed foe is still held
+   on his next turn, where he throws it (Personal Space: lands, hold over) or drags it along (walks two tiles).
+
+**Confirmed, not fixable here (engine; the Known issue / Request above stands, and it is common, not rare)**: the HUD
+threat shading (`DD.AI.reachOf`) reads the hold as "can't move" for the victim's NEXT turn. Sandbox (order Slate, grunt,
+mage): on the mage's turn — after the grunt's held turn, before Slate's next turn — the held grunt is shaded as reaching
+only the tiles next to it, though the hold ends at the end of Slate's next turn, before the grunt acts again. This
+happens on every grab where a hero acts between the victim and Slate. Gameplay and the Grappled tooltip ("lets go at the
+end of his next turn") are exact; the shading and AutoPlay's danger term are not. A noMove-as-function workaround in
+slate.js was rejected: it would change real movement (a two-turn foe) and the desc.
+
+**Not changed (on purpose)**
+- Grappled's tooltip header is the generic "N turns left" (ui.js), now counting Slate's turns; the desc right under it
+  says exactly when he lets go.
+- Stress Ball has no `canUse` reason: with nobody held the HUD's "No valid targets" hint already names the nearest foe's
+  `canTarget` refusal ("Grab it first (Hold Still).", combat_hud.js `invalidReason`).
+
+**Requests**
+- **DOCS (lead)**: `docs/notes/v2-digest.md` D1 list of `target.objects: false` opt-outs (~:695) lacks Stress Ball
+  (he squeezes the foe he holds, not a crate).
+- ENGINE / AUTOPLAY: the reachOf / danger request above (case 2 is the common one).
+
+**Test runs (review, Nov 12 ~20:45)**: isolated `hero_slate` (Stress Ball + definition suites after the fix: 2 suites,
+554 ok) and `hero_basanos` (23 suites, 2,092 ok) green. Full `bash tools/test.sh`: **995 suites, 122,842 assertions ok,
+4 failures in 2 sections, neither from the sustain run**: `balance: acts 2-3 levers (pass 2)` (3, waiting for phase 2's
+late-boss rows) and `hero_marwyn: AutoPlay battles, acts 2-3` (1, "many different skills"; see hero-marwyn.md "Review
+(sustain)"). No swallowed `Error in …` warnings. All hero_slate / hero_basanos / hero_sparrow / hero_hjalmar suites, the
+kit suite and the Fanny Pack suite pass.
+
+## Review (sustain, Nov 12) — engine, AutoPlay and tests (ADVERSARIAL REVIEWER role)
+
+Probes in a scratch page (`.tmp/rev-engine/probe.html` + `probe.js`, run one at a time by `.tmp/rev-engine/run.sh`,
+which takes a Chrome slot like `tools/test.sh`): real act 1 encounters (goblin ambush, rats, union meeting, Last Call,
+Grimble, the Rat King) through `DD.Encounter.build` + `DD.AutoPlay.runBattle`, parties Slate (Hold Still + Personal
+Space + Stress Ball) / Basanos / Sparrow / Marwyn or Hjalmar, levels 1 and 3; in-memory mutants (`&mut=`, no file on
+disk changed); one `tools/sim.sh "seeds=6&from=7000&stop=1&party=slate,basanos,sparrow,hjalmar&dump=1"`.
+
+**Verified (by running code)**
+- The tick fires once per Slate turn and only there: `decay: 'never'` keeps the engine's turn-end decay off the status;
+  Short Fuse's `onTurnEnd` runs from `finishTurn` before decay, also on a lost turn (a stun releases the hold first
+  anyway). Hero passive hooks fire only for `kind: 'hero'` units, and nothing else uses `sla_grappled` or
+  `DD.Slate.grab` (grep; `sprites.js` only reads the id), so no copy of Slate can hold without ticking.
+- Previews and AutoPlay dry runs never heal, tick or log: over 20 AutoPlay fights every "like a stress ball" log line
+  matched a real (non-simulated) `DD.Act.heal` from Stress Ball, one for one; dry runs heal only cloned units
+  (`Targeting.simulate` deep-copies the state, and the hold lives on the victim's status, `st.data.slaFresh` included).
+- AutoPlay grapples and holds: Hold Still 1.3 a fight and Stress Ball 0.55 a fight (always socketed) in the 20 probe
+  fights; in the sim (23 fights, no capped fight) Hold Still 1.5 a fight and Stress Ball 1.0 when socketed. He squeezes
+  when hurt (the squeeze log appears only with a real heal) and prefers Love Tap at full HP, as the spec wants.
+- The tests catch the bugs that matter (in-memory mutants, each run once): the hold never ticking fails 20 assertions
+  (Hold Still, Stress Ball, edge cases); ticking on the grab turn fails 35 (Hold Still, Stress Ball); a squeeze heal
+  sourced to the victim (so Short Fuse gains Rage) fails 6 (Short Fuse, Stress Ball).
+
+**Fixed**: nothing in Slate's files.
+
+**Confirmed, not fixable in content (Request to ENGINE / AUTOPLAY stands)**: `DD.AI.reachOf` (HUD threat shading) and
+AutoPlay's threat model (`mov: cantMove(e) || pinned(e) ? 0 : …`) read the hold as "can't walk on its next turn".
+Since the retime that is wrong when Slate lets go before the victim's next turn: on his last hold turn, and for every
+hero acting between the victim's held turn and Slate's next turn. A `noMove` function in slate.js can't fix it without
+changing real rules: Betty's Kick 'Em While They're Down reads `cantMove` at the moment of the hit ("held count too"),
+so a held foe must stay `cantMove` while it is held. The engine fix: in those two predictors, a `sla_grappled` victim
+(or, generically, a status that declares when it ends) counts as able to move on its next turn when the holder's
+remaining turn ends — `st.turns`, plus one if `st.data.slaFresh`, counting the current turn while the holder acts —
+all come before the victim's next turn in `s.order`. `DD.Slate.releasesThisTurn(v)` answers the first case.
+
+**Test runs (this review, Nov 12 ~21:00, one Chrome at a time)**: full `bash tools/test.sh` before the fix: 993 suites,
+122,840 ok, 4 failures in 2 sections; after it: **994 suites, 122,859 assertions ok, 4 failures in 2 sections, neither
+from the sustain run** (`balance: acts 2-3 levers (pass 2)`, 3, waiting for phase 2's late-boss rows;
+`hero_marwyn: AutoPlay battles, acts 2-3`, 1, see hero-marwyn.md). No swallowed `Error in …` warnings. The new suite
+(`hero_hjalmar: review (sustain) — …`) passes.
+
+## Balance refit (Nov 12) — HOLD_AI 1.5 → 2.5 (BALANCE REFIT 1, spec §9 fallback; docs/notes/balance.md "Sustain refit - act 1")
+
+- **Why**: in the real-encounter sims Hold Still was used 0.9 times a regular act 1 fight (elite 1.0, boss 0.6; act 1
+  only, 300 runs, seeds 7000+), under the spec's 1.0 trigger (target 1.2). The pre-agreed fallback is `HOLD_AI` 2.5.
+- **Change**: `HOLD_AI = 2.5` (AutoPlay only; no text changes; the hero suite's 1.5-2.5 bound holds).
+- **Measured** (same seeds): regular fights 0.9 → 0.9, elites 1.0 → 1.1-1.3, bosses 0.6 → 0.6-0.7. His grabs are
+  limited by reach (a liftable foe next to him at his turn), not by AutoPlay's price, so the knob is near its ceiling.
+  Stress Ball is rarely socketed in act 1 (a pool pick: 17 of 247 regular fights) and used 0.2-0.4 times a fight when it
+  is; 0.1 HP a fight overall. Not hot; nothing else changed. His run-win share: see balance.md.
+
+## Finish (Nov 14) — the playtest findings held for the sustain build (FIX: CONTENT)
+
+- **heroes-6 / desc-sweep-6 / review-open-3 (fixed, text)**: Short Fuse now says exactly what counts: "whenever someone
+  else hits him, heals him or gives him a buff status (Block doesn't count)" — passive, Rage status desc and tip#1. The
+  rule is unchanged (an ally's Block fires no hook; making it count needs an engine hook on Act.addBlock: not asked
+  for, and a balance change). DESIGN §6 needs the same words (request below). Suite `hero_slate: finish — Short Fuse
+  says what counts …` (Forge Armor on Slate: Block, no Rage; Forge Weapon: +1).
+- **heroes-v1 / desc-sweep-5 / review-open-7 (fixed)**: Hard Pass and Get Over Here print `DD.Targeting.reach`; the
+  throws (Personal Space, Air Mail) print their throw distance = the reach less the lift tile, so a Yardstick and the
+  Mitts both show ("up to 4" with either). Get Over Here pulls the foe all the way in from however far it reaches
+  (`max(L.range, dist − 1)`), so "pull it next to you" stays true with +2 range. Suite `hero_slate: finish — range
+  texts …`.
+- D1: the Boulder says "5 HP: Smash it, or any single-target damage skill can break it." Opt-outs kept, each with its
+  reason in the code: Hold Still, Rock Bottom, Stress Ball (he grapples / slams / squeezes foes, never crates).
+- **audit-8 (Slate 0.54x)**: see docs/notes/balance.md "Finish (Nov 14)".
+- D7: two swap barks. Slate starts swaps (D2); nobody can swap him.
+
+Requests:
+- DOCS: DESIGN §6 Slate (~line 487): "he gains 1 Rage (max 5) whenever someone else hits him, heals him or gives him a
+  buff status (Block doesn't count)".
+- **audit-8 (fixed): move 3 → 4.** The audit's two levers measured on the same 200 seeds with Slate in every party
+  (`.tmp/wf14/content/sim/sim.sh … with=slate`, the current files): baseline 23.5% of runs won; Love Tap 5 → 6 23.5% (no
+  change, rejected); move 4 28.5% (act 1 cleared 57% → 64%, 33 → 38 damage a fight). Landed: tempo was the limiter (the
+  audit: "move 3, init −2, melee"). Init −2, his HP, armor and kit are unchanged; he is still the slowest to act. The
+  normal campaign with it: docs/notes/balance.md "Finish (Nov 14)". Suite `hero_slate: finish — move 4 …`.
+- DOCS request: DESIGN §6 Slate's stat line "move 3" → "move 4" (wherever his move is given).
+
+## Review (finish, Nov 14) — REVIEWER
+
+- **audit-7, the content half (fix:engine's request): Grappled answers `heldThrough(st, v)`.** The engine's
+  `DD.Act.cantMoveNext` (threat shading, AutoPlay's danger model) asks a noMove status whether it still holds when the
+  victim's next turn starts. Grappled counts SLATE's turn ends (decay 'never'), so it answers: still held when the turn ends
+  of his that come first (the one under way, if he is acting, + `DD.AI.turnsBefore(slate, victim)`) are fewer than
+  `turns` (+1 on the grab turn, `slaFresh`); a stale hold (`holdOk` false) is free. Hold Still I: the grab turn predicts
+  the victim's next turn held, his next turn predicts it free, and both come true; III: still held. Suite `hero_slate:
+  finish review — Grappled tells predictions …` (fails without the hook).
+- D2 re-played with the real Slate: he starts a swap with Kiri; Kiri is refused "Slate is immovable: he can start a swap,
+  you can't move him."; Human Shield and Step In list no Slate. A swap while he holds a foe lets it go ("Test Grunt is
+  free.": the tile it would be dragged into is the ally's now) — consistent with "free once they are apart"; the swap
+  preview doesn't warn about it (HUD, polish).
+- Campaign check (review batch, 200 normal runs, seeds 53000+): Slate's parties won 29% against a 29% median (1.0×; the
+  content batch: 0.78×; the audit: 0.54×). n = 52 runs, so ±0.2×.

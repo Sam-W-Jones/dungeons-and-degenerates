@@ -46,9 +46,11 @@ Owner files: `js/render/iso.js`, `js/render/renderer.js`, `js/render/input.js`, 
   that stay visible behind walls, dashed tracking line + reticle for `anchor: 'unit'`, focus dimming via
   `focusIntentUnitId`. Lights (lava, fire, braziers, candles, chests, totems, holy, electric) are additive glows.
 - **Camera**: `fitMap` fits the board in the area left free by the HUD (left 230, bottom 250, top 60, right 24 px;
-  shrunk on small windows), smooth pan/zoom with clamps, zoom keeps the point under the cursor fixed, auto-fit on a
-  new combat and on resize until the player moves the camera. Picking: `screenToTile` = frontmost tile column (top
-  or side face) under the cursor; `unitAtScreen` = sprite bounds from `DD.Sprites.metrics`.
+  shrunk on small windows) and, at every yaw, keeps every tile top and unit out from under the HUD's panels inside that
+  area (the combat log, the objective, ...: `hudMargins.avoid`, see "Polish (Nov 5)"), smooth pan/zoom with clamps, zoom
+  keeps the point under the cursor fixed, auto-fit on a new combat and on resize until the player moves the camera.
+  Picking: `screenToTile` = frontmost tile column (top or side face) under the cursor; `unitAtScreen` = sprite bounds
+  from `DD.Sprites.metrics`.
 - **`DD.Input`** (`input.js`, §7.5): `input:*` events, right drag (and left drag past 6 px) pans, WASD/arrows
   pan, wheel and two-finger pinch zoom around the cursor, `F` refits, `+`/`-` zoom; map rotation: a middle drag turns
   the map to any angle, a sideways wheel / trackpad swipe or a two-finger twist turns it too, Q / R turn it 90°
@@ -287,6 +289,17 @@ scene, shake, toWorld`; `ctx` is in screen CSS px (DPR transform applied, state 
     to zoom instead of doing what the help rows say. `shiftKey && !ctrlKey && !deltaX` now reads `deltaY` as sideways.
   - **Window blur ends a turn in progress** (no snap): an Alt+Tab mid-drag left the view "moving" (hover frozen, follow
     and `fitMap` deferred) until the mouse came back over the canvas.
+- Polish (Nov 5):
+  - **The default view changes where a unit sat under a HUD panel.** The task asked the fit to respect the panels at
+    every yaw ("the DM's head behind the objective panel is the same problem"), so a yaw-0 fit moves when a unit's HP bar
+    or a tile-top centre / half-corner would sit under a panel (7 of 12 sampled maps at 1280×720: back-row enemies under
+    the objective). With nothing under a panel the fit is the old one bit for bit; `renderTo` / the A/B harness (no HUD)
+    never change.
+  - `DD.Render.hudMargins` as a function is called `(w, h, { live })`; `live` is false inside `renderTo` (additive).
+  - Live frames draw kept silhouettes (≤ ~0.35 s behind the idle bob / breath) and, while the view turns, kept bodies
+    clipped to the occluders; `renderTo` without `live` is the exact paint. "Pixel identity at yaw 0" is the A/B harness's
+    (offscreen) frame, as before.
+  - The title diorama's barrel moved one tile (5,5 → 6,5) to seat the 16th hero.
 
 ## Requests
 
@@ -330,11 +343,9 @@ scene, shake, toWorld`; `ctx` is in screen CSS px (DPR transform applied, state 
 - UI (help rows, `combat_hud.js` controls list and `settings.js` CONTROLS): two more ways to turn the map shipped and
   have no row yet — "Shift + wheel / sideways swipe" = "Rotate the map" and "Two-finger twist" = "Rotate the map
   (touch)". README.md already lists them.
-- HUD (review, Nov 5; low): at the diagonal views (45° + k·90°) a fitted board fills the top-right corner of the board
-  area, under the combat log (2-9 tiles, sometimes a unit's head; `.tmp/rot/rv/fitlog.html`). If that matters, the HUD
-  could report the log's box (e.g. `DD.Render.hudMargins` as a function returning `{ …, avoid: [{ x0, y0, x1, y1 }] }`)
-  and RENDER-WORLD would teach `computeFit` to keep the board's hull out of it (no change at yaw 0, where the diamond
-  leaves that corner empty). Collapsing the log or panning works today.
+- ~~HUD (review, Nov 5; low): at the diagonal views a fitted board fills the top-right corner of the board area, under
+  the combat log~~ — **DONE (polish, Nov 5)**: the HUD reports its panels (`hudMargins(w, h, { live })` → `{ avoid }`)
+  and `computeFit` keeps the board out from under them at every yaw (see "Polish (Nov 5)").
 - CONTENT SWEEP (rotation plan §7; owners of those files; nothing is required for the game to run):
   - **P0 `js/data/heroes/hjalmar.js` `isoStep`** (the spring-glove floor arrow that shows the knock-back direction) is
     drawn in yaw-0 axes, so it points the wrong way at any other angle:
@@ -365,13 +376,17 @@ scene, shake, toWorld`; `ctx` is in screen CSS px (DPR transform applied, state 
   interact/previews/focus) is covered by tests and scratch renders, but not yet exercised by the real HUD.
 - With `fitMap`'s HUD margins a 13×13 board is fitted at ~0.8 zoom on a 1280×720 window (units ~32 px tall);
   1080p gives ~1.3. Players can zoom with the wheel / `+`.
-- The title diorama shows the first 8 unlocked heroes (all heroes if `DD.Meta` is missing); with no heroes
-  registered it shows the empty campfire scene.
+- The title diorama seats up to 16 unlocked heroes in `DD.UI.HERO_ORDER` (all heroes if `DD.Meta` is missing) on the
+  ring of tiles two steps from the fire; with no heroes registered it shows the empty campfire scene. A 17th hero
+  (content beyond the 16) would not get a seat.
 - Map rotation: a middle drag that starts outside combat (title, menus) does nothing (it no longer pans anywhere).
   Retargeting a turn restarts the ease (it slows into the new target rather than keeping its speed).
-- Map rotation perf: every silhouette costs ≈ 1.2-1.5 ms on a quiet machine at any yaw (sprite raster into CPU scratch
-  canvases); views that hide more units cost that much more (boss_dm at 135°: 5 silhouettes, frame median 12.6-14.2 ms
-  vs 9.1-10.1 at yaw 0). See Deviations (C6 + C7) for the gate.
+- ~~Map rotation perf: every silhouette costs ≈ 1.2-1.5 ms~~ — fixed (polish, Nov 5): live frames keep silhouettes
+  (and turning views keep bodies), the gate passes on both maps (see "Polish (Nov 5)"). A silhouette whose unit or a
+  front unit is in an FX pose (walk, lunge, hit flash, fade) still costs the full paint every frame; a kept one lags the
+  idle bob / breath by at most ~0.25-0.35 s (the faint fill and outline over the occluder only).
+- The fit's panel test is per point (tile-top centres and points half-way to the corners, unit HP bar / shoulders /
+  middle), not the board's full hull: a tile's outer quarter or a tall prop's top may still tuck under a panel.
 - Content billboards: box-shaped content objects without `yawAware` (desks, shelves, the DM's panels) look turned
   against the grid at odd angles; the DM-screen panels lie across the wrong axis at 90° and Hjalmar's glove arrow points
   in yaw-0 axes (content sweep, under Requests).
@@ -668,6 +683,92 @@ Shift, sideways wheels, the HUD buttons) mid-move, mid wind-up (9) and mid tray.
     top HUD as the one back-corner unit does at yaw 0 (the fit pads 30 world px above the topmost tile edge; at 45° that
     edge is a whole row). The objective panel peeks through as designed.
 
+### Polish (Nov 5, render / HUD polish pass) — fit vs the HUD's panels, kept silhouettes, threat shading, status flight, the 16-seat campfire
+
+Scratch: `.tmp/wf10/` (`scene.html` + `scene.js` + `shot.sh`: the real game with a scene driver, `scene=fit|fitsweep|why|
+threat|form|inspect`; idles without `scene=`), `.tmp/rot/perf/raf_ab_v.html` (the gate page with the graft, so HEAD's
+renderer runs the `g.faces` content), `.tmp/rot/ident.js` gained `nothreat=1`.
+
+- **The fit keeps out from under the HUD's panels (every yaw).** `DD.Render.hudMargins` may now return `avoid: [{ x0, y0,
+  x1, y1, soft }]` and a function form gets a third argument `{ live }` (false inside `renderTo`). `computeFit` checks
+  points it must keep clear (each tile top's centre + 4 points half-way to its corners; each unit's HP bar (feet −
+  sprite height − 16 world px), shoulders and middle) against the boxes; soft boxes only count units. Nothing under a
+  box → the plain fit, bit for bit. Else it searches zooms from the plain one down by 3% steps to 70% and, per zoom, a
+  13 × 13 grid of board-centre positions inside the margin area, nearest the area centre first; the first clear
+  candidate wins; failing that the same search for units only; failing that the plain fit. `watchMargins` refits when
+  the boxes change (quantised to 16 px), like a margin change (not after the player moved the camera). The HUD side is in
+  `combat_hud.js` (`hud-v2.md`, "Polish"). **Changed in the balance-run review (below)**: a box change refits only when
+  it puts something under a panel; the HP point carries the whole pill.
+  - Sweep (`scene=fitsweep`, 12 maps × 10 yaws, real HUD layout): **things under a panel after `fitMap`: plain fit 49 /
+    120 views at 1280×720 (47 at 1920×1080) → 0.** Zoom cost: none at most views, 3-17% at the diagonal ones, 22-24%
+    where the deployment zone sits on the back edge (heroes' heads under the tracker / objective at 135° / 225° on
+    boss_dm, intern orientation, pep rally).
+  - **Yaw 0**: unchanged unless a unit actually sits under a panel at the start — 7 of 12 sampled maps at 1280×720 (5 at
+    1080p), every one a back-row enemy's HP bar under the objective (Mama Owlbear 34 px under it): the board shifts down
+    or shrinks 3-6%. boss_dm at yaw 0 is unchanged (the DM's HP bar clears it); a back-row boss under it is moved clear.
+  - Tests: `render: the fit keeps the board out of the HUD's panels at every yaw (hudMargins avoid)` (8 yaws: nothing
+    under a hard box, no head under the soft one, plain fit kept exactly when nothing was hidden, at most 30% smaller,
+    inside the margins, soft boxes ignore tiles, garbage / off-area boxes ignored, an unclearable box keeps the plain
+    fit) and the HUD suite `hud: polish — the HUD reports its panels …`.
+- **Perf gate (plan §11) — PASS on both maps.** Live frames keep silhouettes (`drawSilhouettes`, `silKept`): a resting
+  unit keeps its own masked fill + ring canvases while its key holds (look id, shown mirror, statuses, screen spot,
+  zoom, resolution, camera, a hash of its occluder polygons, and the same for every unit in front); a kept one is
+  repainted after `SIL_TTL_S` 0.25 s + a per-unit jitter (≤ 1 stale repaint a frame) for the idle motion; a unit or front
+  in an FX pose / hit flash / fade is painted fresh. While the view turns every key misses, so a unit keeps a **body**
+  (`bodyKept`: its unmasked half-resolution fill + ring, feet at a fixed spot) that the board clips to the occluder
+  polygons (`clip`), and units in front mask with their own bodies (no vector sprite painting a frame). `renderTo` (full
+  detail) never uses either: the A/B harness and every suite see the exact paint. Occluder tests were measured at
+  0.03-0.07 ms a frame (not worth caching).
+  `.tmp/rot/perf/run3.sh raf_ab_v.html "run=1&debug=1&enc=<id>&frames=600&blk=20&spin=3" gpu` (GPU headless 1904×985,
+  a loaded machine: other agents' Chrome; HEAD's yaw-0 frame 12-16 ms there vs 7-9 on a quiet one):
+
+  | JS ms / frame (median) | H (HEAD, yaw 0) | A (yaw 0) | R30 | R135 | S spin 3°/frame (p90) | silhouettes A / R30 / R135 |
+  |---|---|---|---|---|---|---|
+  | boss_dm before | 15.6 | 14.9 | 14.1 | 25.6 | 16.3 (21.5) | 2 / 2 / 5 |
+  | boss_dm after | 15.8 | 7.8 | 8.9 | 7.5 | 8.8 (11.1) | 2 / 2 / 5 |
+  | boss_lichtenstein after | 12.3 | 8.0 | 9.0 | 7.0 | 9.0 (11.8) | 3 / 5 / 1 |
+
+  Gate after: boss_dm rest 30 +1.1, rest 135 −0.3, spin +1.0 (p90 11.1), yaw 0 vs HEAD −8.0; lich rest 30 +1.0, rest 135
+  −1.0, spin +1.0 (p90 11.8); bakes ≤ 1.7 ms, memory 1.2-1.7 MB. Silhouette phase at rest 135 on boss_dm: 16.9 → 1.3 ms
+  (5 silhouettes); spinning 7.6 → 0.7 ms. (The first try kept only the masked silhouettes: rest passed but spinning fell
+  to "S − A +3.3" because A had become 7 ms cheaper; the bodies fixed that.)
+  - Tests: `render: live frames keep a resting unit's silhouette, repaint it when it changes, and turning views reuse its
+    body` (painted once, kept, kept frame = exact `renderTo` at the same clock; repainted on a step, a camera move, a
+    status, every frame in an FX pose, after 0.6 s of idle; a turning view paints the body once and reuses it; full-detail
+    renders never keep; `invalidate()` forgets). `_rot.stats` gained `silPaints`, `silKept`, `bodyPaints`; `caches()`
+    `silKept`, `bodies`.
+- **Yaw-0 identity** (`.tmp/rot/run.sh ident_v.html`): with `nothreat=1` every boss frame (4 bosses × grid / plain /
+  intents / zoom@dpr2 / tiny + leak 0 → 90 → 30 → 0) is **0 px**; the busy frames differ only where the threat shading is
+  drawn (by design, below) and the title differs (16 heroes, by design).
+- **Threat shading reads on warm floors.** `threatFill`: an orange wash `rgba(255,90,30, 0.22 + 0.32k)`, a still texture
+  of cream dots ringed in umber over every threatened tile (`threatPattern`, a 10-px staggered grid at alpha 0.55 + 0.3k:
+  dots line up with no plank, tile edge or wind-up tape at any yaw — a diagonal hatch vanished into wood planks), and the
+  region outline stroked dark (3.6 px) under the orange (1.7 px). Lethal tiles keep their red moving hatch. Measured
+  (new suite `render: threat shading reads on warm floors (wood, carpet, gold) at any view`): a threatened tile moves
+  18-22 per channel on wood / carpet / gold at 0° and 45° (the old wash alone moved wood ~12), a safe tile 0.
+- **A status that grants flight hovers** (`isFlying` here and `unitFlies` in sprites.js: def flags, unit flags, or
+  `DD.Grid.isFlying` when the unit has statuses): the sprite hovers, `metrics` counts it (HP bars, picking), the shadow
+  shrinks. Suite `render: a status that grants flight hovers the sprite like a natural flyer`.
+- **The title campfire seats all 16 heroes**: `DD.UI.HERO_ORDER` (fallback: the same 16), `TITLE_SLOTS` = the classic 8
+  seats then the rest of the ring two tiles out (the barrel moved from (5,5) to (6,5) to free the front seat), faces
+  toward the fire. Suite `render: title diorama and empty scenes` asserts every unlocked hero up to 16.
+- **The 💥 marker joins the badge layout**: each marker is a stack in `layoutStacks` with the preview badges / wind-up
+  bubbles (it rises over a neighbour's HP widget with a leader line); drawn after the object HP bars as before.
+  `renderTo` reports `booms: [{ x, y, x0, y0, x1, y1, lifted }]`. Suite `render: the 💥 marker joins the badge layout`.
+  The UP! badge already was a stack (checked in the shots).
+- **QA** (`.tmp/wf10/shots/`, every PNG read; `debug=1` throughout): boss_dm 0 / 45 / 135 (1280×720), the fit probes
+  at 45 / 135 (intern orientation, last call), tenure review 0 (back-row enemies moved out from under the objective),
+  lich 200 (1920×1080), Rat King 45 (1024×640: the board between the party cards and the log), Grimble threat shading
+  (zoomed crop: the dot texture on wood), the barrel marker lifted over the HP pills (yaw 0), the UP! badge at 200, Basanos'
+  werewolf on the card / tracker / inspect, the title with 16 heroes, a real middle drag on boss_dm (`drag.html`, rest and
+  mid-drag at 135, zoom 2.4).
+- **Tests**: render / sprites / hud / ui suites all green (5 + 1 + 4 + 1 new suites). Full `bash tools/test.sh`: 900
+  suites, 120,110 assertions, 1 failure — `hero_marwyn: AutoPlay battles, act 1` ("Marwyn takes turns in every fight":
+  the `test_a1_totems` fixture fight now ends in round 1 before his turn), in the engine / content agents' files being
+  edited during this pass (tests/content/hero_marwyn.js, js/engine/autoplay.js, targeting.js); nothing renders there.
+  No swallowed `Error in` warnings; the `warnings:` lines are the deliberate ones plus two new content advisories from
+  the content side.
+
 ### Content authors: blocks that turn with the board
 
 A content object whose painter draws a block with `g.box` is a billboard: it keeps its yaw-0 look while the board turns
@@ -733,3 +834,88 @@ DD.registerObject({
 - Tests that need animated turns: `r._rot.sim(true)` + `r._rot.step(ms)` (and `sim(false)` in `finally`, which lands a
   running animation). Live-frame LOD without the loop: `renderTo(cv, { …, live: true })`; the harness clock is virtual,
   so budget tests swap in `r._rot.clock(fn)` (and restore it with `clock(null)`).
+
+## Review (balance run) — render / HUD polish
+
+Adversarial review of the Nov 5 polish, by running the real game (scratch `.tmp/wf10/rev2/`: `game.html` + `probe.js`,
+`shot.sh`, `sweep.sh`; probe scenes `shot` (independent overlap report: 5×5 samples of every tile top, 5×7 of every
+sprite box with its HP pill, against the DOM boxes of every HUD panel; `roll=1`, `threat=1`, `arm=<slot>&near=1`) and
+`jitter` (an AutoPlay fight, every `fitMap` with the board-centre shift and the panel boxes that changed)).
+
+- **Verified.** 40 views (boss_dm, a3_intern_orientation, boss_rat_king, a1_last_call × yaw 0 / 45 / 135 / 200 / 315 ×
+  1280×720 and 1920×1080; every PNG read): no tile under a hard panel, no unit under any panel, the objective solid in
+  all 40 (after the fixes). Threat shading reads on cellar wood at 0° and 45°; 💥 markers beside the HP pills; the title
+  campfire seats all 16. Yaw-0 A/B (`.tmp/rot/run.sh ident_v.html "nothreat=1"`): 33/33 boss frames 0 px, only the
+  title differs (intended). Perf gate re-run (`run3.sh … gpu 1920x1080 120`): boss_dm rest 30 +0.8, rest 135 0.0, spin
+  +1.5 (p90 15.3), yaw 0 vs HEAD −8.5; Lich-tenstein +1.1 / −1.4 / +1.0, p90 11.0: all PASS (machine loaded: rAF 50-85 ms).
+- **Fixed — the board re-framed itself mid-fight.** `watchMargins` refitted on every box change with the units where
+  they stood. An 8-round AutoPlay fight on a3_intern_orientation (1280×720, yaw 0) refitted 7 times: zoom 0.73 → 0.66 →
+  0.68 → 0.70 → 0.73, one jump of 291 px (party cards gaining a threat / status line, portraits leaving the tracker, the
+  next hero's bar). Now `coveredAt(st, avoid, units)` tests the camera's target: a box change refits only when it puts
+  something under a panel (deploying: tiles under hard boxes or unit points under any; under way: tiles under hard
+  boxes only), and never to zoom back in. Same fights: 0 refits (boss_dm at 45° too). Test hooks `_rot.watchMargins()`,
+  `_rot.camTarget()`.
+- **Fixed — the fit kept only the HP pill's centre clear.** At yaw 0 an eyeball intern's pill end sat under the
+  objective, which faded at fight start. `fitPoints` is now stride 6 (`FIT_STRIDE`): the HP point carries the pill's
+  half-width per clamped zoom (30, a boss 48, downed 27; × clamp(zoom, 0.65, 1.5) + 9 px, as `measureWidget` draws it)
+  and a status-row flag (the icons reach max(0, 18·zc + 8 − 12·zoom) px above the point). Yaw-0 cost: boss_dm −9% (was
+  −6%), a3_intern_orientation −11%, a1_rats_in_the_cellar −11% at 1280×720; 0-6% at 1920×1080; Rat King, Grimble,
+  last call 0%.
+- Suite `render: a panel change mid-fight refits only to clear a panel, never back and forth; HP pills clear whole`
+  (mutation-checked: always refitting fails 2 asserts). The fit suite's head check now counts the pill too.
+- **Still open / not verified**: live frames at yaw 0 differ frame by frame from the exact paint (kept silhouettes trail
+  the idle bob ≤ 0.35 s; the A/B harness renders exactly); the 250 px bottom margin, not the panels, is why a board
+  shrinks instead of sliding down (much empty space under the board at 1280×720); the fit still tests points, so a tall
+  prop's top can tuck under the tracker (seen at intern orientation 315°).
+
+## Rules run (Nov 6-10) — moving through allies, swaps, breaking objects (HUD / RENDER role)
+
+The HUD side and the play-through are in `docs/notes/hud-v2.md` "Rules run"; contract: ARCHITECTURE §7.2 / §7.5.
+
+- **Input**: `pick(sx, sy)` → a sprite hit also carries `under` (the frontmost tile behind the sprite there:
+  `screenToTile`); `input:tileHover` / `input:tileClick` carry it, and the hover key includes it (moving across a sprite
+  re-emits when the tile behind changes). Nothing else changed: `unitAtScreen` still wins the pick.
+- **Overlay** (`defaultOverlay` / `resetOverlay`; empty = nothing drawn): `passTiles` (part of the move region —
+  `moveAll` = move ∪ pass ∪ swap, so the region's outline runs round an ally instead of leaving a hole — lighter fill and
+  a dashed inner diamond), `swapTiles` (move-region tiles + `swapRing` under the ally's feet: two chasing arcs with arrow
+  heads, brighter and turning while that swap is hovered), `swap` (`drawSwap`, before the path: two quadratic arrows
+  bowed past each other between the tile tops, red when `bad`, ⚠️ over `to` on `hazard`), `ghosts` (`{ id: alpha }`,
+  clamped 0.15..1, multiplied into the unit's alpha after the selection ring), `breakTargets` (🔨 in the 💥 marker
+  layout: steel blue on slate, a little smaller and calmer than 💥 until hovered) and `objPreview` (the object HP bar
+  shows at full HP, the lost HP pulsing red). renderTo stats: `swapRings`, `ghosted`, `booms[].kind`.
+- **Yaw 0 identity**: `.tmp/rot/run.sh ident_v.html "nothreat=1"` — 28/28 boss frames 0 px, leak checks 0 px (the title
+  differs, as since the polish pass). Suite `render: rules run — …` (yaw 0 / 30 / 200; empty fields = the same picture).
+- **Seen**: real game page crops at zoom 1.7 / 2.2 / 2.6 (cellar, sandbox corridor / doorway / crates / ledge, the break
+  scene) at 0 / 30 / 200 — the ⇄ rings read under every adjacent ally, the swap arrows sit between the two feet (busy over
+  a horned helmet but legible), faded allies show the path through them, 🔨 markers never sit on an HP pill.
+- **Not done**: tiles hidden behind tall terrain stay unpickable at that angle (no x-ray pick or outline through walls);
+  turning the map is the answer for now.
+
+## Playtest fixes (Nov 12) — fix:ui (input.js, renderer.js)
+
+- input.js (first-hour-2): input:tileHover carries `shift` (I.mouse.shift from pointer events and Shift keydown / keyup;
+  the hover is re-sent when Shift changes), so the HUD previews a Shift+click (no click-through while Shift is held).
+- renderer.js: overlay.swap.blocked draws a ✖ between the swap arrows (combat-controls-1: a free hit calls the swap off);
+  the wind-up badge's "?" follows DD.AI.describe's `uncertain` instead of the bare Dazzled / Confused status
+  (bosses-objectives-2: the engine rolls the skew when the status lands and the marked tiles already show it).
+- Tests (added after the restart): `render: rules run …` checks the ✖ sits between the swap arrows at yaw 0 / 30 / 200;
+  `render: playtest bosses-objectives-2` stubs DD.AI.describe (renderTo's `badges[]` now carry `unknown`).
+- Details and the full table: docs/notes/hud-v2.md "Playtest fixes (Nov 12)".
+
+## Finish (Nov 14) — fix:ui
+
+- renderer.js: only a comment changed (wind-ups come from bosses and a few elites, text-tone-17). D6 (an outline over
+  sprites for hidden reachable tiles) skipped: a new over-sprite overlay pass with occlusion tests is not cheap and would
+  risk the yaw-0 pixel identity before release. Details: docs/notes/hud-v2.md "Finish (Nov 14)".
+
+## Review (finish) — REVIEWER (Nov 14)
+
+- renderer.js: comment only (`drawSwap`: `blocked` also marks a refused swap; the HUD sets it, see hud-v2.md "Review
+  (finish)"). No drawing code changed: the yaw-0 view is pixel-identical (`render: rotated frames keep yaw 0 intact`
+  passes; nothing new is drawn unless a refused swap is hovered in move mode).
+- ARCHITECTURE §7.5 gives the `input:*` payloads as built (`input:tileHover {x, y, unitId, under?, shift}`, re-emitted
+  when Shift changes over the same tile); §7.2 `overlay.swap.blocked`.
+- Shots: 42 screens / fights at 1280x720 and 1920x1080, yaw 0 / 45 / 200 — nothing broken. Known: the deployment Roll
+  button can cover the board's bottom row at 1920x1080 yaw 45 (the fit ignores transient panels by design).
+- D6 (skipped by fix:ui) re-judged: holds (optional per the lead; an over-sprite outline pass is not worth the yaw-0
+  risk before release).

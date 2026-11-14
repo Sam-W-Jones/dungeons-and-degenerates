@@ -803,4 +803,65 @@
     if (DD.UI && DD.UI.screens) t.ok(!!DD.UI.screens.gallery, 'registered as UI screen "gallery"');
     t.eq(errorsSince(p0).length, 0, 'no swallowed errors');
   });
+
+  // ---- render / HUD polish (wf10): hand positions for overlays, claws, add-on overlays that survive any look -----
+  T.suite('sprites: overlays get g.hands (claws, rings, held props) and unit.overlays survive any look', function (t) {
+    const S = DD.Sprites;
+    const p0 = DD.problems.length;
+    let hands = null, poses = {};
+    const spec = variant({ overlay: function (g) { hands = g.hands; poses[g.pose] = g.hands && g.hands.front ? g.hands.front.x : null; } });
+    const c = canvas(160, 160), k = c.getContext('2d');
+    S.draw(k, spec, 80, 140, 2, { t: 0.5, facing: 1 });
+    t.ok(hands && hands.front && hands.back, 'humanoid overlays see g.hands { front, back }');
+    t.ok(hands && ['x', 'y', 'angle', 'r'].every(function (q) { return isFinite(hands.front[q]) && isFinite(hands.back[q]); }), '...with finite x, y, angle and size');
+    t.ok(hands && hands.front.x > hands.back.x, 'the front hand is ahead of the back one (local units, before the facing flip)');
+    t.ok(hands && hands.front.y < 0 && hands.front.y > -40, 'hands sit between the feet and the head');
+    S.draw(k, spec, 80, 140, 2, { t: 0.5, facing: 1, pose: 'attack', poseT: 0.5 });
+    t.ok(poses.attack !== undefined && poses.attack !== poses.idle, 'an attack pose moves the hands (' + poses.idle + ' → ' + poses.attack + ')');
+    // a hunched body (the werewolf) reports its hands where they are drawn, in unsheared units
+    let hh = null;
+    S.draw(k, variant({ hunch: 0.45, overlay: function (g) { hh = g.hands; } }), 80, 140, 2, { t: 0.5 });
+    t.ok(hh && isFinite(hh.front.x), 'hunched bodies have hands too');
+    // other bases have none (nothing to hold)
+    let qh = 'unset';
+    S.draw(k, { base: 'quadruped', overlay: function (g) { qh = g.hands; } }, 80, 140, 2, { t: 0.5 });
+    t.ok(qh === undefined || qh === null, 'quadrupeds have no g.hands');
+    // g.claws paints three claws at a hand
+    const blank = canvas(160, 160), bk = blank.getContext('2d');
+    S.draw(bk, spec, 80, 140, 2, { t: 0.5, still: true, blink: false });
+    const clawed = canvas(160, 160), ck = clawed.getContext('2d');
+    S.draw(ck, variant({ overlay: function (g) { g.claws(g.hands.front); g.claws(g.hands.back, '#ff0000', 1.4); } }), 80, 140, 2, { t: 0.5, still: true, blink: false });
+    t.ok(ink(clawed) > ink(blank), 'g.claws paints claws (' + ink(blank) + ' → ' + ink(clawed) + ' px)');
+    const g0 = S.painter(canvas(20, 20).getContext('2d'));
+    t.ok(g0.claws(null) === g0 && g0.claws({ x: NaN, y: 0 }) === g0, 'g.claws ignores a missing or broken hand');
+    // the werewolf brief: the claws sample in the spec sheets
+    t.ok((S.samples || []).some(function (s) { return /claws/.test(s.label || ''); }), 'the spec sheets show a claws sample');
+    // unit.overlays: drawn over the unit's look, whatever it is (its def, unit.sprite, the pinned vis.sprite)
+    let calls = 0;
+    const hero = Object.keys(DD.defs.heroes)[0];
+    const u = fakeUnit('ov_u', hero, 'hero');
+    u.overlays = [{ id: 'test_party_hat', draw: function (g, tt, o) { calls++; t.ok(!!o && o.unit === u, 'an add-on overlay gets the unit'); g.circle(0, -60, 6, '#ff00ff'); } }];
+    const out = canvas(200, 200), ok = out.getContext('2d');
+    S.drawUnit(ok, u, 100, 170, 2, 0.5);
+    t.eq(calls, 1, 'drawn over the def look');
+    u.sprite = variant({ head: { hair: 'wild' } });
+    S.drawUnit(ok, u, 100, 170, 2, 0.5);
+    t.eq(calls, 2, 'still drawn after a form change (unit.sprite)');
+    u.vis.sprite = variant({ head: { hair: 'mohawk' } });
+    S.drawUnit(ok, u, 100, 170, 2, 0.5);
+    t.eq(calls, 3, '...and over a pinned on-screen look (vis.sprite)');
+    // plain functions work too; a throwing one warns once and is skipped after that
+    const bad = function () { throw new Error('balloon popped'); };
+    u.overlays = [bad, function (g) { calls++; }];
+    S.drawUnit(ok, u, 100, 170, 2, 0.5);
+    S.drawUnit(ok, u, 100, 170, 2, 0.5);
+    t.eq(calls, 5, 'a broken add-on does not stop the next one');
+    t.eq(DD.problems.slice(p0).filter(function (p) { return /balloon popped/.test(p); }).length, 1, 'a broken add-on warns once');
+    // portraits are the look alone (no add-ons)
+    let inPortrait = 0;
+    u.overlays = [function () { inPortrait++; }];
+    S.portrait(u, 64, { bg: false, t: 0.77 });
+    t.eq(inPortrait, 0, 'portraits never draw add-on overlays');
+    dropProblems(p0);
+  });
 })();

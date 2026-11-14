@@ -5,10 +5,10 @@
  * def.passive (the inspect panel) what it does on its turn and how it picks its target, and its codex desc sums it up:
  *   Imp Influencer (init +3, the act's diver) — blinks up to 5 tiles instead of walking and livestreams the weakest
  *     hero it can reach; Go Live! Marks them (+3 on the next hit).
- *   Hell Hound (+2) — fire-immune; runs, then bites or Pounces up to 4 tiles; Hot Dog Breath leaves the floor burning.
+ *   Hell Hound (+2) — fire-immune; runs, then bites (Ankle Biter) or leaps on a hero up to 4 tiles away (Lap Dog); Hot Dog Breath leaves the floor burning.
  *   Mind Flayer Life Coach (+1) — keeps its distance; Unsolicited Life Advice charms, Hustle Culture cone confuses.
  *   Floating Eyeball Intern (+2) — keeps its distance; beams pierce coworkers too; the overtime beam, then a nap.
- *   Rules Lawyer (Devil, Esq.) (0) — OBJECTION! strips buffs + silences; Motion to Dismiss shoves (into pits).
+ *   Rules Lawyer (Devil, Esq.) (0) — OVERRULED! strips buffs + silences; Motion to Dismiss shoves (into pits).
  *   Natural 1 Golem (−2) — every swing is a d20 roll (1 hits itself, 20 doubles); lobs dice that double on doubles.
  *   Kobold Dragonshield (+1) — Shield Wall: Block for itself and adjacent allies until their next turns.
  *   Succubus Dating Coach (0) — keeps her distance; Terrible Pickup Line charms; You Deserve Better! Inspires allies.
@@ -57,6 +57,13 @@
   function eskill(def) { def.owner = 'enemy'; def.ap = 0; return DD.registerSkill(def); }
   /** Level-1 numbers of an act-3 skill (passive descs read them, so the inspect panel never drifts from the skills). */
   function lvl(id) { const s = DD.getSkill(id); return (s && DD.skillLevel(s, 1)) || {}; }
+  /** [playtest desc-sweep-4] a skill's numbers as THIS fight deals them for a live unit (DD.AI.fightLevel: × the fight's
+   *  damage row, e.g. casual ×0.8), the raw level without one (a codex card). */
+  function liveLvl(id, u) {
+    const s = DD.getSkill(id);
+    if (!s) return {};
+    return u && u.side && DD.AI && DD.AI.fightLevel ? DD.AI.fightLevel(s, 1, u) : DD.skillLevel(s, 1);
+  }
   function lunge(ctx) { if (ctx.target) DD.FX.lunge(ctx.user, ctx.target); }
   function shoot(ctx, kind, color, extra) {
     if (ctx.target) DD.FX.projectile(ctx.user, ctx.target, Object.assign({ kind: kind, color: color }, extra || {}));
@@ -100,7 +107,7 @@
     (u.statuses || []).forEach(function (st) { const d = DD.getStatus(st.id); if (d && d.type === 'buff') n++; });
     return n;
   }
-  /** A unit with a spell it could cast next turn (what OBJECTION!'s Silence takes away). */
+  /** A unit with a spell it could cast next turn (what OVERRULED!'s Silence takes away). */
   function hasSpell(u) {
     return DD.Combat.slotsOf(u).some(function (sl) { const d = DD.getSkill(sl.id); return !!d && d.kind === 'spell' && !(sl.cd > 1); });
   }
@@ -328,7 +335,8 @@
     }
     return out;
   }
-  const UNSHAKEABLE_LINE = 'Unshakeable: after a stun, sleep or freeze lands, no other can for its next 2 turns.';
+  /** The elites' tenacity line, with the elite's own pronoun (the dragon is an it; the Death Knight and the Pit Fiend are he). */
+  function unshakeableLine(poss) { return 'Unshakeable: after a stun, sleep or freeze lands, no other can for ' + poss + ' next 2 turns.'; }
 
   DD.registerStatus({
     id: 'a3_debt', name: 'Infernal Debt', icon: '🧾', color: '#ff8a3a', type: 'debuff', stacking: 'stack', maxStacks: DEBT_MAX,
@@ -387,11 +395,12 @@
   }
 
   DD.registerObject({
-    id: 'a3_hoard_pile', name: 'Hoard Pile', blocksMove: false, blocksLos: false, hp: 0, height: 0.45, color: '#f4c430',
+    id: 'a3_hoard_pile', name: 'Hoard Pile', blocksMove: false, blocksLos: false, hp: 0, height: 0.45, color: '#f4c430', loot: true,
     desc: 'A dragon\'s hoard. At the end of each of its turns a Young Red Dragon gains ' + HOARD_BLOCK + ' Block per pile within ' + HOARD_RANGE +
-      ' tiles of it (max ' + HOARD_MAX + '). Walk over it to pocket the gold (and be branded a Thief). Flyers can\'t reach down that far.',
-    // pocketing is a floor effect (v2: flyers float over the gold); AutoPlay checks it too, the hint says it anyway
-    autoplay: function (unit, obj, tile) { return unit && !G().feelsFloor(unit) ? 0 : tile && guarded(tile) ? 10 : 3; },
+      ' tiles of it (max ' + HOARD_MAX + '). Walk or fly a hero over it to pocket the gold (and be branded a Thief). ' +
+      'Flyers swoop down for it too: gold is not a floor effect, it is a lifestyle.',
+    // loot (the user's flyer rule, Nov 5): flyers pocket it too, so AutoPlay values it for every hero
+    autoplay: function (unit, obj, tile) { return tile && guarded(tile) ? 10 : 3; },
     onEnter: function (unit, o, tile) { pocketHoard(unit, o, tile); },
     draw: function (g, obj, t) {
       const tw = Math.sin(t * 2.6 + ((obj.data && obj.data.gold) || 0));
@@ -411,8 +420,9 @@
   });
 
   DD.registerObject({
-    id: 'a3_snack_bowl', name: "DM's Snack Bowl", blocksMove: true, blocksLos: false, hp: 48, height: 0.7, color: '#ff8c1a',
-    desc: 'Cheese puffs of destiny (48 HP). Hell hounds want it badly. If it is eaten, the session is over.',
+    // rules run: the party guards it, so its attacks are never aimed at it (blasts still reach it)
+    id: 'a3_snack_bowl', name: "DM's Snack Bowl", blocksMove: true, blocksLos: false, hp: 48, height: 0.7, color: '#ff8c1a', targetable: false,
+    desc: 'Cheese puffs of destiny (48 HP). Hell hounds want it badly. If it is eaten, the session is over. Your heroes would never aim an attack at the snacks.',
     draw: function (g, obj, t) {
       const c = g.ctx;
       g.ellipse(0, 3, 16, 6.5, 'rgba(0,0,0,0.3)', false);
@@ -590,7 +600,7 @@
   }
 
   eskill({
-    id: 'a3_hound_pounce', name: 'Pounce', icon: '🐾', kind: 'attack', tags: ['melee', 'leap'], anchor: 'unit', cooldown: 1,
+    id: 'a3_hound_pounce', name: 'Lap Dog', icon: '🐾', kind: 'attack', tags: ['melee', 'leap'], anchor: 'unit', cooldown: 1,
     levels: [{ dmg: 11, r: 4 }], target: { type: 'unit', range: function (L) { return [1, L.r]; }, filter: 'enemy', los: true },
     desc: function (L) { return 'Leap next to a target up to ' + L.r + ' tiles away (not while Rooted) and bite it for ' + L.dmg + ' damage.'; },
     flavor: 'Fetch! (The stick is your leg.)',
@@ -604,7 +614,7 @@
   });
 
   eskill({
-    id: 'a3_hound_bite', name: 'Chew Toy', icon: '🦴', kind: 'attack', tags: ['melee', 'objects'], anchor: 'self',
+    id: 'a3_hound_bite', name: 'Ankle Biter', icon: '🦴', kind: 'attack', tags: ['melee', 'objects'], anchor: 'self',
     levels: [{ dmg: 9 }], target: { type: 'dir' },
     desc: function (L) { return 'Bite the adjacent tile: ' + L.dmg + ' damage to the foe (or the object) there.'; },
     flavor: 'Who\'s a good boy? Not him. Never him.',
@@ -635,11 +645,11 @@
       palette: { skin: '#76291f', cloth2: '#ff9a3a', belly: '#ff9a3a', hair: '#3d1513', eye: '#ffd23f', accent: '#ff4d1a', collar: '#2a2a33', horn: '#2a1416' },
       head: { size: 1.15, ears: 'pointy', horns: 'demon', eyes: 'glow', mouth: 'fangs' }, tail: 'devil', extras: ['collar'],
       aura: { kind: 'flames', color: '#ff6a1a' }, overlay: houndOverlay },
-    // a brute: it sticks to the hero next to it; Chew Toy is its attack of opportunity (the breath and the pounce are not)
+    // a brute: it sticks to the hero next to it; Ankle Biter is its attack of opportunity (the breath and the pounce are not)
     skills: ['a3_hound_breath', 'a3_hound_pounce', 'a3_hound_bite'], ai: MELEE, xp: 5, gold: [3, 6],
     passive: { name: 'Off the Leash', icon: '🐾', desc: function () {
-      return 'On its turn it runs up to 4 tiles, then bites the hero next to it (it sticks to that one), Pounces on a hero up to ' + lvl('a3_hound_pounce').r +
-        ' tiles away or breathes fire in a short cone that leaves the floor burning. Walk away from it and it bites (attack of opportunity).';
+      return 'On its turn it runs up to 4 tiles, then bites the hero next to it (Ankle Biter; it sticks to that one), leaps on a hero up to ' + lvl('a3_hound_pounce').r +
+        ' tiles away (Lap Dog) or breathes fire in a short cone that leaves the floor burning. Walk away from it and it bites (attack of opportunity).';
     } },
     barks: {
       spawn: ['*sizzling woof*', 'BORK. (Ominously.)', '*sniffs you, smokes slightly*'],
@@ -814,7 +824,7 @@
       spawn: ['Hi! I\'m new! Where\'s the coffee?', 'Is this the beam meeting?'],
       attack: ['Sorry! I\'ll aim better next time!', 'Is this a ray? Am I doing rays?', 'My manager said to stare harder.'],
       hurt: ['This isn\'t in my job description!', 'Ow! HR! HR!'],
-      death: ['Finally... a day off...', 'Tell my manager... I quit...'],
+      death: ['Put this... in my... performance review...', 'I only ever had... one eye... on the job...'],
       overtime: ['*passes out on the keyboard*', 'Five... more... minutes...'],
     },
     desc: 'Keeps its distance; its beams pierce everyone in the line, its coworkers too: never line up in front of it. When it can line up two heroes ' +
@@ -822,15 +832,15 @@
   });
 
   // =============================================================================================================
-  // Rules Lawyer (Devil, Esq.) — OBJECTION! (dispel + silence), Motion to Dismiss (shove)
+  // Rules Lawyer (Devil, Esq.) — OVERRULED! (dispel + silence), Motion to Dismiss (shove)
   // =============================================================================================================
   eskill({
-    id: 'a3_lawyer_objection', name: 'OBJECTION!', icon: '☝️', kind: 'spell', tags: ['ranged', 'silence', 'dispel'], anchor: 'unit', cooldown: 2,
+    id: 'a3_lawyer_objection', name: 'OVERRULED!', icon: '☝️', kind: 'spell', tags: ['ranged', 'silence', 'dispel'], anchor: 'unit', cooldown: 2,
     levels: [{ r: 6 }], target: { type: 'unit', range: function (L) { return [1, L.r]; }, filter: 'enemy', los: false },
     desc: function (L) { return 'Overrule a target up to ' + L.r + ' tiles away (no line of sight needed): it loses every buff (even Invulnerable) and is Silenced for its next turn (no spells).'; },
     flavor: 'Page 312, paragraph 4: your fun is not rules-as-written.',
     execute: function (ctx) {
-      DD.FX.text(ctx.user, 'OBJECTION!', { color: '#ffe14a', size: 22 });
+      DD.FX.text(ctx.user, 'OVERRULED!', { color: '#ffe14a', size: 22 });
       shoot(ctx, 'bolt', '#ffe14a');
       ctx.foes.forEach(function (f) {
         if (!active(f)) return;
@@ -870,22 +880,22 @@
       palette: { skin: '#c23a2e', cloth: '#16141c', cloth2: '#efe9d8', hair: '#f2efe6', eye: '#ffe14a', accent: '#c0102a', metal: '#d4af37', book: '#6b2a1a' },
       head: { horns: 'demon', hair: 'long', face: 'monocle', mouth: 'grin' }, tail: 'devil', mainhand: 'book', offhand: 'scroll',
       extras: ['collar'], overlay: lawyerOverlay },
-    // a brute: he sticks to the hero next to him; the Motion is his attack of opportunity (OBJECTION! deals no damage)
+    // a brute: he sticks to the hero next to him; the Motion is his attack of opportunity (OVERRULED! deals no damage)
     skills: ['a3_lawyer_objection', 'a3_lawyer_motion'], ai: MELEE, xp: 5, gold: [4, 7],
-    passive: { name: 'Rules As Written', icon: '⚖️', desc: function () {
-      const Lm = lvl('a3_lawyer_motion');
+    passive: { name: 'Rules As Written', icon: '⚖️', desc: function (u) {
+      const Lm = liveLvl('a3_lawyer_motion', u);
       return 'On his turn he walks up and files a Motion to Dismiss on the hero next to him (' + Lm.dmg + ' damage, pushed ' + Lm.push + ' tiles: into pits and lava ' +
-        'given the chance; he sticks to that one), or OBJECTS to a hero up to ' + lvl('a3_lawyer_objection').r + ' tiles away: every buff gone and no spells ' +
+        'given the chance; he sticks to that one), or OVERRULES a hero up to ' + lvl('a3_lawyer_objection').r + ' tiles away: every buff gone and no spells ' +
         'next turn. Walk away from him and he files the Motion (attack of opportunity).';
     } },
     barks: {
       spawn: ['Per page 312, this encounter is perfectly legal.', 'I\'d like to see the DM\'s notes.'],
-      attack: ['OBJECTION!', 'Actually, RAW says...', 'Sustained. By me.', 'Counterpoint: no.'],
+      attack: ['OVERRULED!', 'Actually, RAW says...', 'Sustained. By me.', 'Counterpoint: no.'],
       hurt: ['That\'s not how flanking works!', 'I\'ll see you in court!'],
       death: ['I demand... a retcon...', 'The errata... was on my side...'],
     },
-    desc: 'Shoves the hero next to him 2 tiles (into pits and lava, given the chance), also when they try to walk away, or objects from up to 6 ' +
-      'tiles away: every buff gone and no spells next turn. Silence him first: the Objection is a spell. Bills in six-minute increments of your suffering.',
+    desc: 'Shoves the hero next to him 2 tiles (into pits and lava, given the chance), also when they try to walk away, or overrules a hero up to 6 ' +
+      'tiles away: every buff gone and no spells next turn. Silence him first: OVERRULED! is a spell. Bills in six-minute increments of your suffering.',
   });
 
   // =============================================================================================================
@@ -904,7 +914,7 @@
       const u = ctx.user, L = ctx.L;
       const roll = ctx.rng.int(1, 20);
       DD.FX.text(u, '🎲 ' + roll + (roll === 1 ? ' NAT 1!' : roll === 20 ? ' NAT 20!' : ''), { color: roll === 1 ? '#ff8a8a' : roll === 20 ? '#fff36b' : '#ffffff', size: roll === 1 || roll === 20 ? 22 : 18 });
-      A().log(u.name + ' rolls a ' + roll + '.', 'enemy');
+      A().log(u.name + ' rolls ' + (roll === 8 || roll === 11 || roll === 18 ? 'an ' : 'a ') + roll + '.', 'enemy');
       if (roll === 1) {
         A().bark(u, 'fumble');
         A().damage(null, u, L.oops, { cause: 'other', ignoreArmor: true, tags: ['fumble'] });
@@ -997,8 +1007,8 @@
       portrait: { x: 0, y: -30, r: 22 } },
     // a brute: it sticks to the hero next to it; Roll to Hit is its attack of opportunity (a natural 1 still backfires)
     skills: ['a3_golem_roll', 'a3_golem_toss'], ai: golemPlan, aiStyle: MELEE, xp: 5, gold: [3, 7],
-    passive: { name: 'Rolls for Everything', icon: '🎲', desc: function () {
-      const Lr = lvl('a3_golem_roll');
+    passive: { name: 'Rolls for Everything', icon: '🎲', desc: function (u) {
+      const Lr = liveLvl('a3_golem_roll', u);
       return 'On its turn it lumbers up and rolls a d20 at the 3 tiles in front (' + Lr.dmg + ' to each foe; a 20 deals ' + Lr.crit + ', a 1 hits itself and Stuns it), ' +
         'sticking to the hero next to it; with nobody in reach it lobs dice instead. Walk away from it and it rolls at you (attack of opportunity).';
     } },
@@ -1085,7 +1095,7 @@
       spawn: ['For the Big Red!', 'Shields up, scales out!'],
       attack: ['Poke poke poke!', 'Kobold tactics!', 'Stay back from the Boss!'],
       hurt: ['Yip! Shield too heavy!', 'Union break! Union break!'],
-      death: ['Tell the dragon... I tried...', 'Was... a good shield...'],
+      death: ['The dragon... is going to... hear about this...', 'Was... a good shield...'],
     },
     desc: 'Huddles next to its biggest ally and raises Shield Wall: 6 Block for itself and every adjacent ally until their next turns. ' +
       'Kill it first or hit around it. Sworn to protect the dragon. Mostly from accountability.',
@@ -1228,7 +1238,7 @@
   }
 
   eskill({
-    id: 'a3_dragon_breath', name: 'Hoard Breath', icon: '🔥', kind: 'attack', tags: ['fire', 'aoe', 'objects'], anchor: 'ground', cooldown: 2,
+    id: 'a3_dragon_breath', name: 'Hoard Breath', icon: '🔥', kind: 'attack', tags: ['fire', 'aoe', 'objects'], anchor: 'ground', cooldown: 2, windupOnly: true,
     levels: [{ dmg: 16 }], target: { type: 'dir' }, area: { shape: 'cone', size: 3 },
     desc: function (L) {
       return 'Wind-up: it inhales, marking the 3-deep cone in front of it (9 tiles). At the start of its next turn: ' + L.dmg +
@@ -1391,7 +1401,7 @@
         return 'At the end of each of its turns: +' + HOARD_BLOCK + ' Block per hoard pile within ' + HOARD_RANGE + ' tiles of it (max ' + HOARD_MAX + ')' +
           (n === null ? '' : '; ' + n + ' in range now') + '. While piles remain it guards them: it stays within ' + HOARD_RANGE + ' tiles of one, swoops out to bite ' +
           '(it sticks to the hero next to it) and settles back on the gold. Whoever pockets a pile is a Thief: +' + THIEF_BONUS + ' damage from it, and it ' +
-          'leaves its hoard to hunt them. Flying, it makes no attacks of opportunity. ' + UNSHAKEABLE_LINE;
+          'leaves its hoard to hunt them. Flying, it makes no attacks of opportunity. ' + unshakeableLine('its');
       },
     },
     hooks: withTenacity({
@@ -1405,7 +1415,7 @@
       spawn: ['MINE. All of it. Even the lint.', 'You wiped your feet on my GOLD?'],
       attack: ['MINE!', 'You owe me rent!', 'Feel the burn of compound interest!'],
       hurt: ['You scratched my scales! Those are collectible!', 'That\'s coming out of your deposit!'],
-      death: ['My hoard... count it... for me...', 'Tell my mom... I was rich...'],
+      death: ['My hoard... count it... for me...', 'Nobody... touch... my stuff...'],
       thief: ['THIEF! THIEF! I SAW THAT!', 'PUT. IT. BACK.', 'That was my FAVORITE coin!'],
       breath: ['*deep, expensive inhale*', 'HOARD BREATH!'],
     },
@@ -1468,7 +1478,7 @@
   });
 
   eskill({
-    id: 'a3_dk_monologue', name: 'Villain Monologue', icon: '🎭', kind: 'spell', tags: ['aoe'], anchor: 'self', cooldown: 3,
+    id: 'a3_dk_monologue', name: 'Villain Monologue', icon: '🎭', kind: 'spell', tags: ['aoe'], anchor: 'self', cooldown: 3, windupOnly: true,
     levels: [{ dmg: 16, r: 2, brk: MONO_BREAK, hype: MONO_HYPE }], target: { type: 'self' }, area: { shape: 'circle', size: function (L) { return L.r; } },
     desc: function (L) {
       return 'Wind-up: he starts monologuing. At the start of his next turn: ' + L.dmg + ' damage to every foe within ' + L.r + ' tiles of him (push him and it ' +
@@ -1596,7 +1606,7 @@
       desc: 'On his turn he swings at the 3 tiles in front of him, sticking to the hero next to him; walk away from him and he swings (attack of ' +
         'opportunity). Nobody in reach: he chains a hero 2-6 tiles away and swings if they land next to him. With 2+ heroes within 2 tiles of a spot ' +
         'he can reach, he stops there and winds up his monologue. The first time his turn starts at half HP or less he calls an INTERMISSION: two ' +
-        'Skeletal Backup Dancers join the fight. ' + UNSHAKEABLE_LINE,
+        'Skeletal Backup Dancers join the fight. ' + unshakeableLine('his'),
     },
     hooks: withTenacity({
       // a stun-like interrupts the speech at once (the engine), so does a silence (his monologue is a spell)
@@ -1645,7 +1655,7 @@
   });
 
   eskill({
-    id: 'a3_fiend_audit', name: 'Hostile Audit', icon: '📊', kind: 'spell', tags: ['aoe'], anchor: 'ground', cooldown: 3,
+    id: 'a3_fiend_audit', name: 'Hostile Audit', icon: '📊', kind: 'spell', tags: ['aoe'], anchor: 'ground', cooldown: 3, windupOnly: true,
     levels: [{ dmg: 16, debt: 1 }], target: { type: 'tile', range: [1, 12], filter: 'any', los: false }, area: { shape: 'row', size: 12 },
     desc: function (L) {
       return 'Wind-up: he marks a whole line across the arena through a target. At the start of his next turn: ' + L.dmg + ' damage and ' + L.debt +
@@ -1726,7 +1736,7 @@
       desc: 'His hits add Infernal Debt: at the start of each of its turns an indebted hero loses its Debt in HP, then the Debt grows by 1 (max ' + DEBT_MAX +
         '). Every skill hit on him pays off ' + DEBT_PAYOFF + '. Forgiven when he dies. On his turn he marks an audit line when it is ready, then smacks the hero ' +
         'next to him (he sticks to that one) or invoices a hero up to 8 tiles away. Walk away from him and he smacks you (attack of opportunity). ' +
-        UNSHAKEABLE_LINE,
+        unshakeableLine('his'),
     },
     hooks: withTenacity({
       onDeath: function (unit) {
@@ -1841,7 +1851,7 @@
 
   enc({
     id: 'a3_kobold_pep_rally', act: 3, kind: 'normal', name: 'Kobold Pep Rally', weight: 0.8, minDepth: 1,
-    intro: 'Kobolds are holding a pep rally for their dragon. The totems power their Spirit Fingers. Smash the totems before the pep squad arrives.',
+    intro: 'Kobolds are holding a pep rally for their dragon. The totems power their Spirit Fingers. Break the totems (any attack will do) before the pep squad arrives.',
     map: { theme: 'hoard', w: 11, h: 11, features: ['pits', 'chest'], density: 1 },
     enemies: [{ id: 'a3_kobold_shield', n: 2 }, { id: 'a3_hell_hound', n: 2 }, { id: 'a3_imp_influencer', n: 1 }],
     objective: { type: 'destroy', objId: 'totem', count: 3 },

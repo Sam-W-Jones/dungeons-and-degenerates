@@ -1,6 +1,6 @@
 /* Dungeons and Degenerates — js/ui/combat_hud.js
  * The combat HUD (ARCHITECTURE §8.3): screen id 'combat', DOM panels over the battlefield canvas. v2 (DESIGN §4.1):
- * rolled initiative, one unit at a time, no telegraphs (only boss wind-ups), no Guard.
+ * rolled initiative, one unit at a time, no telegraphs (only boss and elite wind-ups), no Guard.
  *  - top bar: round + whose turn it is, the INITIATIVE TRACKER (portraits in turn order from the acting unit on,
  *    a divider where the next round starts, units joining next round, downed / stunned marks; hover = highlight on
  *    the board, click = inspect), objective (+ MAPGEN's joke subtitle), active rules, incoming reinforcements,
@@ -43,6 +43,7 @@
   const LOG_MAX = 160;       // log lines kept in the DOM
   const IDLE_MS = 30000;     // the DM gets bored (idle_dm narration) after this long without input in the player phase
   const MINI_AT = 3;         // a hero's summons collapse into one row of mini cards from this many (corgis, ducks)
+  const BOXED_IN = 3;        // a move range this small with allies next door: the hint says how to swap out
   const HEADLESS_UA = /HeadlessChrome/.test((window.navigator && navigator.userAgent) || '');
   const IDLE_FALLBACK = ['The DM drums his fingers on the table. Loudly.', 'The DM checks his phone. Then checks it again.'];
   const INPUT_EVENTS = ['mousemove', 'mousedown', 'keydown', 'wheel'];
@@ -66,7 +67,7 @@
   const INIT_LINES = [
     'Roll for initiative! The DM rolls behind the screen. It is a 20. It is always a 20.',
     'Everybody roll a d20. No, the d20. The pointy one. The OTHER pointy one.',
-    'Initiative! The DM writes the order on a napkin. The napkin is load-bearing.',
+    'Initiative! The DM writes the order on a napkin. Nobody sneeze.',
     'Dice clatter everywhere. One rolls off the table. The DM rules it a 1.',
   ];
   const ORDINAL = ['1st', '2nd', '3rd'];
@@ -92,6 +93,19 @@
   function inList(list, p) { return !!p && (list || []).some(function (t) { return t.x === p.x && t.y === p.y; }); }
   function sound(name) { if (DD.UI && DD.UI.sound) DD.UI.sound(name); }
   function defOf(u) { return u ? DD.getHero(u.defId) || DD.getSummon(u.defId) || DD.getEnemy(u.defId) : null; }
+  // Portraits follow forms (Basanos' werewolf, Ellaria's Wild Shape, cameos): a small id per look (sprite spec object)
+  // the unit shows now, so cards / chips / the inspect panel redraw their portrait when it changes
+  const lookIds = new WeakMap();
+  let lookSeq = 0;
+  function lookKey(u) {
+    const Sp = DD.Sprites;
+    const spec = u && Sp && typeof Sp.specFor === 'function' ? DD.safe('HUD look', Sp.specFor, Sp, [u]) : null;
+    if (!spec || typeof spec !== 'object') return 0;
+    let k = lookIds.get(spec);
+    if (!k) { k = ++lookSeq; lookIds.set(spec, k); }
+    return k;
+  }
+  function portraitOf(u, size, opts) { return DD.UI.portrait(u.defId, size, Object.assign({ unit: u }, opts || {})); }
   function overlay() { return DD.Render && DD.Render.overlay ? DD.Render.overlay : null; }
   function autoplayOn() { return !!(DD.Main && DD.Main.autoplay); }
   function settings() { return DD.UI && DD.UI.settings ? DD.UI.settings() : {}; }
@@ -329,7 +343,7 @@
     return (C().slotsOf(u) || []).slice(0, 6).map(function (sl) { return { slot: sl, role: 'skill' }; });
   }
 
-  // ---- v2 dangers: boss wind-ups (the only telegraphs) and enemy reach -----------------------------------------------
+  // ---- v2 dangers: boss and elite wind-ups (the only telegraphs) and enemy reach -----------------------------
   /** Every pending wind-up on the board: [{ unit, intent, tiles, d (DD.AI.describe) }]. */
   function windupList() {
     return memo('windups', function () {
@@ -343,9 +357,14 @@
   function windupsAt(x, y, unit) {
     return windupList().filter(function (w) { return inList(w.tiles, { x: x, y: y }) || (!!unit && w.intent.anchor === 'unit' && w.intent.unitId === unit.id); });
   }
-  function windupWhen(d) { const left = num(d.turnsLeft || d.delay, 1); return left > 1 ? 'in ' + left + ' of its turns' : 'at the start of its next turn'; }
+  // [playtest text-tone-3] the boss by name (Grimble, Lich-tenstein: he; Dr. Iris: she), never 'its'
+  function windupWhen(d, unit) {
+    const left = num(d.turnsLeft || d.delay, 1);
+    const who = unit && unit.name ? unit.name + '\'s' : 'the caster\'s';
+    return left > 1 ? 'in ' + left + ' of ' + who + ' turns' : 'at the start of ' + who + ' next turn';
+  }
   function windupText(w) {
-    return w.unit.name + ' — ⏳ ' + (w.d.label || '?') + (w.d.dmg ? ' (' + w.d.dmg + (w.d.uncertain ? '?' : '') + ')' : '') + ', ' + windupWhen(w.d);
+    return w.unit.name + ' — ⏳ ' + (w.d.label || '?') + (w.d.dmg ? ' (' + w.d.dmg + (w.d.uncertain ? '?' : '') + ')' : '') + ', ' + windupWhen(w.d, w.unit);
   }
   /** One AI unit's reach on its next turn (DD.AI.reachOf: move + damaging skills ready by then): { tiles: Map, best, only }. */
   function reachInfo(u) {
@@ -353,24 +372,30 @@
       return (DD.AI && typeof DD.AI.reachOf === 'function' ? DD.safe('HUD reachOf', DD.AI.reachOf, DD.AI, [u]) : null) || { tiles: new Map(), best: 0, only: null };
     });
   }
-  /** Every AI unit hostile to the party: Map 'x,y' → { dmg (sum), max, from: [unitIds] } before this hero's next turn. */
-  function threatMap() {
-    return memo('threatMap', function () {
-      return (DD.AI && typeof DD.AI.threatMap === 'function' ? DD.safe('HUD threatMap', DD.AI.threatMap, DD.AI, ['hero']) : null) || new Map();
+  /**
+   * Every AI unit hostile to the party: Map 'x,y' → { dmg (sum), max, from: [unitIds], turns } before `hero`'s next turn.
+   * [playtest bosses-objectives-3] with a hero, DD.AI.threatMap counts each foe once per turn it gets before that hero's
+   * next one (a two-turn boss twice); without one (no hero to ask about), once.
+   */
+  function threatMap(hero) {
+    return memo('threatMap:' + (hero ? hero.id : ''), function () {
+      const args = hero ? ['hero', { hero: hero }] : ['hero'];
+      return (DD.AI && typeof DD.AI.threatMap === 'function' ? DD.safe('HUD threatMap', DD.AI.threatMap, DD.AI, args) : null) || new Map();
     });
   }
-  /** Who could hit tile (x, y) before the hero's next turn: [{ unit, dmg }], biggest first (an estimate). */
-  function reachersAt(x, y) {
-    const e = threatMap().get(key(x, y));
+  /** Who could hit tile (x, y) before `hero`'s next turn: [{ unit, dmg, turns }], biggest first (an estimate). */
+  function reachersAt(x, y, hero) {
+    const e = threatMap(hero).get(key(x, y));
     if (!e) return [];
     return (e.from || []).map(function (id) {
       const u = byId(id);
-      return u ? { unit: u, dmg: num(reachInfo(u).tiles.get(key(x, y))) } : null;
+      const n = Math.max(1, num(e.turns && e.turns[id], 1));
+      return u ? { unit: u, dmg: num(reachInfo(u).tiles.get(key(x, y))) * n, turns: n } : null;
     }).filter(Boolean).sort(function (a, b) { return b.dmg - a.dmg; });
   }
   function reachText(list) {
-    // "(+1 more)", never "Kid 5 +1" (that reads like damage)
-    return list.slice(0, 3).map(function (r) { return r.unit.name + ' ' + r.dmg; }).join(', ') + (list.length > 3 ? ' (+' + (list.length - 3) + ' more)' : '');
+    // "(+1 more)", never "Kid 5 +1" (that reads like damage); a foe with two turns first: "The Rat King 28 (2 turns)"
+    return list.slice(0, 3).map(function (r) { return r.unit.name + ' ' + r.dmg + (r.turns > 1 ? ' (' + r.turns + ' turns)' : ''); }).join(', ') + (list.length > 3 ? ' (+' + (list.length - 3) + ' more)' : '');
   }
   /** The hero the threat shading is computed for: the selected hero-side unit, else the acting one. */
   function threatHero() {
@@ -396,7 +421,7 @@
         if (!byKey[k]) { byKey[k] = { x: x, y: y, dmg: 0, reach: 0, aura: 0, lethal: false }; tiles.push(byKey[k]); }
         return byKey[k];
       };
-      threatMap().forEach(function (v, k) {
+      threatMap(hero).forEach(function (v, k) {
         const p = k.split(',');
         const t = get(+p[0], +p[1]);
         t.reach = Math.round(num(v.dmg));
@@ -434,24 +459,74 @@
    */
   function provokeInfo(u, x, y) {
     return memo('aoo:' + u.id + ':' + key(x, y), function () {
-      const out = { list: [], total: 0, lethal: false };
+      const out = { list: [], total: 0, max: 0, lethal: false, outcome: null, stop: null };
       const e = reachOf(u).get(key(x, y));
       if (!e || !e.provokes || !e.provokes.length) return out;
       const raw = call('HUD provokes', C(), 'provokes', [u, x, y]) || [];
       raw.forEach(function (p) {
         const a = p && byId(p.unitId);
-        if (a) out.list.push({ unit: a, name: a.name, skillName: p.skillName || '', dmg: Math.max(0, Math.round(num(p.dmg))) });
+        if (a) out.list.push(strikeRow(a, p));
       });
       // an engine without the detail query: every attacker the path names, with its estimate from here
       e.provokes.forEach(function (id) {
         if (out.list.some(function (r) { return r.unit.id === id; })) return;
         const a = byId(id);
-        if (a) out.list.push({ unit: a, name: a.name, skillName: oppSkillName(oppSlot(a)), dmg: oppEst(a, u) });
+        if (a) out.list.push(strikeRow(a, { skillName: oppSkillName(oppSlot(a)), dmg: oppEst(a, u) }));
       });
-      out.total = out.list.reduce(function (t, r) { return t + r.dmg; }, 0);
-      out.lethal = out.total > 0 && out.total >= num(u.hp) + num(u.block);
-      return out;
+      return sumStrikes(u, out, raw.outcome);
     });
+  }
+  /**
+   * [playtest combat-controls-1] A provokes entry as the HUD shows it. The engine's dry run of the move (Combat.provokes /
+   * swapInfo) adds bleed (stacks the strike adds: they tick when the move ends), stops ('Engulfed', 'Rooted', 'Pushed',
+   * 'Downed'…: the move ends there), random + min / max (dice), skipped (an earlier strike ended the move first).
+   */
+  function strikeRow(a, p) {
+    const dmg = Math.max(0, Math.round(num(p.dmg)));
+    const has = function (k) { return p[k] !== undefined && p[k] !== null; };
+    return { unit: a, name: a.name, skillName: p.skillName || '', dmg: dmg, bleed: Math.max(0, Math.round(num(p.bleed))), stops: p.skipped ? null : p.stops || null,
+      random: !!p.random, min: has('min') ? Math.max(0, Math.round(num(p.min))) : dmg, max: has('max') ? Math.max(0, Math.round(num(p.max))) : dmg, skipped: !!p.skipped };
+  }
+  /** Totals of a strike list: total (most likely), max (worst roll), lethal (the engine's outcome when it sent one), stop. */
+  function sumStrikes(u, out, outcome) {
+    out.outcome = outcome || null;
+    out.total = out.list.reduce(function (t, r) { return t + r.dmg; }, 0);
+    out.max = out.list.reduce(function (t, r) { return t + r.max; }, 0);
+    out.lethal = outcome && outcome.lethal !== undefined ? !!outcome.lethal : out.max > 0 && out.max >= num(u.hp) + num(u.block);
+    out.stop = out.list.filter(function (r) { return !!r.stops; })[0] || null;
+    return out;
+  }
+  /** "⛔ Engulf stops Professor Marbles (Engulfed): the move is spent and the swap won't happen." ('' without a stop) */
+  function stopLine(u, pv, swap) {
+    const r = pv && pv.stop;
+    if (!r) return '';
+    const what = '<b>' + esc(r.skillName || r.name) + '</b>';
+    const did = r.stops === 'Downed' ? ' drops ' + esc(u.name) + ' on the way' : r.stops === 'Pushed' ? ' shoves ' + esc(u.name) + ' off the path'
+      : ' stops ' + esc(u.name) + ' (' + esc(r.stops) + ')';
+    return '⛔ ' + what + did + ': the move is spent' + (swap ? ' and the swap won\'t happen' : '') + '.';
+  }
+  /** The Bleed tick at the end of this move: the engine's dry run (riders included) when it ran, else u's stacks. */
+  function bleedTickOf(u, pv) { return pv && pv.outcome && pv.outcome.bleedTick !== undefined ? Math.max(0, Math.round(num(pv.outcome.bleedTick))) : bleedOf(u); }
+  /**
+   * [playtest combat-controls-2] A floor feature that snags a walker (DD.Grid.snagAt / a reachable entry's stop / hinder:
+   * a web roots, Cheeto Dust slows): "Web: Rooted". `snag` { id, name, stops? }.
+   */
+  function snagWhat(snag, stops) {
+    const d = DD.getSurface(snag.id) || DD.getTerrain(snag.id) || DD.getObject(snag.id) || {};
+    const sid = d.snagStatus || (stops ? 'root' : 'slow');
+    const sd = DD.getStatus ? DD.getStatus(sid) : null;
+    return { name: String(snag.name || d.name || snag.id), status: (sd && sd.name) || U.capitalize(String(sid)) };
+  }
+  function snagLines(u, e, to) {
+    const out = [];
+    if (e && e.stop) {
+      const w = snagWhat(e.stop, true);
+      const end = e.stop.x === to.x && e.stop.y === to.y;
+      out.push(end ? '🕸 Ends on <b>' + esc(w.name) + '</b>: ' + esc(u.name) + ' is ' + esc(w.status) + ' there.'
+        : '⚠ The path crosses <b>' + esc(w.name) + '</b>: ' + esc(u.name) + ' is ' + esc(w.status) + ' there and the walk stops short.');
+    }
+    if (e && e.hinder) { const w = snagWhat(e.hinder, false); out.push('⚠ The path crosses <b>' + esc(w.name) + '</b>: ' + esc(w.status) + '.'); }
+    return out;
   }
   /** Foes next to u that would strike if it walked away now: [{ unit, skillName, dmg }], hardest first. */
   function engagedBy(u) {
@@ -471,7 +546,18 @@
       return active(a) && a !== u && DD.Grid.dist(a, u) === 1 && DD.Grid.hostile(a, u) && oppSpent(a) && !isStunnedU(a) && !!oppSlot(a);
     });
   }
-  function aooList(list) { return list.map(function (r) { return r.name + ' ' + r.dmg; }).join(' · '); }
+  /** The drawn path up to (and with) tile `at`; [] when the walker ends where it stands (at is not on the path). */
+  function cutPath(path, at) {
+    const i = (path || []).findIndex(function (p) { return p.x === at.x && p.y === at.y; });
+    return i >= 0 ? path.slice(0, i + 1) : [];
+  }
+  /** "Gelatinous Cube 7 · Natural 1 Golem 0–18 · Dire-ish Rat 2 +🩸1" (a dice strike shows its range). */
+  function aooList(list) {
+    return list.map(function (r) {
+      const n = r.random && r.min !== r.max ? r.min + '–' + r.max : r.dmg + (r.random ? '?' : '');
+      return r.name + ' ' + n + (r.bleed > 0 ? ' +🩸' + r.bleed : '');
+    }).join(' · ');
+  }
 
   /**
    * Aura threats (shared definition): damage `unit` would take standing on (x, y) from enemies' NON-telegraphed
@@ -595,10 +681,12 @@
         return def ? DD.safe('HUD preview', DD.Targeting.preview, DD.Targeting, [u, def, { x: t.x, y: t.y }]) : null;
       };
       const e = armedEntry(u, t);
-      if (!e || !e.obj) return run();
-      // aimed at an explosive object: also note what each blast is ("8 fire damage within 1 tile")
+      if ((!e || !e.obj) && !volatileObj(t.x, t.y)) return run();
+      // aimed at an explosive object: also note what each blast is ("8 fire damage within 1 tile"); a broken object's
+      // loot (the gold its onDestroyed hands out in the dry run)
       const w = watchBlasts(run);
       if (w.value && !w.value.explosions) w.value.hudBlasts = w.blasts;
+      if (w.value && w.gold > 0 && !w.value.uncertain) w.value.hudGold = w.gold;
       return w.value;
     });
   }
@@ -621,9 +709,35 @@
     });
     return out;
   }
+  /**
+   * [playtest heroes-3] A tile-aimed hit on a breakable object (Family Hammer, Hard Pass) gets no `breaks` from the engine
+   * yet: the same { dmg, destroyed, text } read from the dry run's p.objects on the aimed tile (null when the engine
+   * sent one, or nothing there is hit; a volatile object is the 💥 line's).
+   */
+  function previewBreaks(p, at) {
+    if (!p || !at) return null;
+    if (p.breaks) return p.breaks;
+    if (p.detonates || volatileObj(at.x, at.y)) return null;
+    const tl = DD.Grid.tile(at.x, at.y);
+    const o = tl && tl.obj;
+    const e = (p.objects || []).filter(function (x) { return x.x === at.x && x.y === at.y; })[0];
+    if (!o || !e || !(num(e.dmg) > 0 || e.destroyed)) return null;
+    const hp = num(o.hp);
+    const lost = e.destroyed ? Math.max(num(e.dmg), hp) : num(e.dmg);
+    const left = e.destroyed ? 0 : Math.max(0, hp - lost);
+    return { x: at.x, y: at.y, id: o.id, dmg: lost, destroyed: !!e.destroyed, left: left,
+      text: (p.uncertain ? '? ' : '') + 'Break: ' + objName(o) + ' − ' + lost + ' damage' + (e.destroyed ? ' — breaks!' : ', ' + left + ' HP left') };
+  }
+  /** [playtest heroes-3] A tile-aimed hit that sets off the explosive object on the aimed tile (no engine `detonates`). */
+  function tileDetonates(p, at) {
+    if (!p || !at || p.detonates || !volatileObj(at.x, at.y)) return false;
+    return (p.objects || []).some(function (o) { return o.x === at.x && o.y === at.y && o.destroyed; }) ||
+      (p.explosions || p.hudBlasts || []).some(function (b) { return b.x === at.x && b.y === at.y; });
+  }
   /** One-line summary of a preview for the hint bar (foes hit, KOs, friendly fire, revives, Hype, objects, blasts). */
   function previewSummary(u, p, at) {
     if (!p) return '';
+    const brk = previewBreaks(p, at);
     const per = p.perUnit || {};
     let foes = 0, kos = 0, heals = 0, total = 0;
     const allies = [], ups = [];
@@ -639,21 +753,43 @@
     });
     const parts = [];
     // aimed at an explosive object: what goes off first, then who the blast catches
-    if (p.detonates && at) parts.push('💥 ' + blastLine(p, at));
+    const det = p.detonates || tileDetonates(p, at);
+    if (det && at) parts.push('💥 ' + blastLine(p, at));
+    // rules run: aimed at a breakable object — "Break: Crate − 5 damage, 1 HP left" / "… — breaks!", then what it does
+    if (brk) {
+      parts.push('🔨 ' + brk.text);
+      const bo = at && DD.Grid.tile(at.x, at.y) ? DD.Grid.tile(at.x, at.y).obj : null;
+      if (brk.destroyed && bo) {
+        const on = objectiveNote(bo), pz = puzzleNote(u, bo, at);
+        if (on) parts.push(on);
+        if (pz) parts.push(pz);
+        if (p.hudGold > 0) parts.push('💰 +' + p.hudGold + ' gold');
+      }
+    }
     ups.forEach(function (x) { parts.push(x); });
     if (foes) parts.push('Hits ' + plural(foes, 'foe') + ' for ' + total + (p.uncertain ? '?' : ''));
     if (kos) parts.push('💀 ' + kos + ' KO');
     if (heals) parts.push('💚 heals ' + plural(heals, 'ally', 'allies'));
     if (allies.length) parts.push('⚠ hits ' + (allies.length <= 2 ? allies.join(' and ') : allies.length + ' allies') + '!');
     if (p.hype > 0) parts.push('+' + p.hype + ' Hype');
-    (p.objects || []).filter(function (o) { return !(p.detonates && at && o.x === at.x && o.y === at.y); }).slice(0, 2).forEach(function (o) {
+    (p.objects || []).filter(function (o) { return !((det || brk) && at && o.x === at.x && o.y === at.y); }).slice(0, 2).forEach(function (o) {
       const d = DD.getObject(o.id);
       if (o.destroyed) parts.push('💥 ' + (d ? d.name : o.id));
     });
     (p.spawned || []).slice(0, 2).forEach(function (sp) { parts.push('✨ ' + sp.name); });
     const self = per[u.id];
-    if (self && self.dmg > 0) parts.push(p.detonates ? '⚠ ' + u.name + ' is in the blast: −' + self.dmg + (self.lethal ? ' 💀' : '') : 'costs you ' + self.dmg + ' HP');
+    if (self && self.dmg > 0) parts.push(det ? '⚠ ' + u.name + ' is in the blast: −' + self.dmg + (self.lethal ? ' 💀' : '') : 'costs you ' + self.dmg + ' HP');
     return parts.join(' · ');
+  }
+  /**
+   * [finish D1] Why the armed skill can't be aimed at this object, in the rule's words ("any single-target damage skill
+   * can"); a skill that opts out (target.objects false) says so. verb: 'break' / 'set off'; smash: 'Smash it …' or ''.
+   */
+  function optsOut(def) { return !!def && (def.target || {}).objects === false; }
+  function objRefusal(def, verb, o, smash) {
+    const or = smash ? ', or ' + smash : '';
+    if (optsOut(def)) return def.name + ' is for foes only, not the ' + objName(o) + ': another single-target damage skill can ' + (verb === 'set off' ? 'set it off' : verb + ' it') + or + '.';
+    return def.name + ' can\'t ' + verb + ' the ' + objName(o) + ': any single-target damage skill can' + or + '.';
   }
   function invalidReason(u, p) {
     const def = armedDef();
@@ -666,7 +802,16 @@
     const there = DD.Grid.unitAt(p.x, p.y);
     const boom = !there && volatileObj(p.x, p.y);
     if (boom && (tg.type || 'unit') === 'unit' && !aimsAtObjects(u, ref)) {
-      return def.name + ' can\'t set off the ' + objName(boom) + ': aim a single-target attack at it' + (C().smashable && C().smashable(boom) ? ', or Smash it from next to it' : '') + '.';
+      return objRefusal(def, 'set off', boom, C().smashable && C().smashable(boom) ? 'Smash it from next to it' : '');
+    }
+    // rules run: a breakable object this skill can't hit (or that nobody may aim at)
+    const brk = !there && !boom && (tg.type || 'unit') === 'unit' ? breakableObj(p.x, p.y) : null;
+    if (brk) {
+      const smash = C().smashable && C().smashable(brk) ? 'Smash it from next to it' : '';
+      if (protectedObj(brk)) return 'You\'re supposed to protect the ' + objName(brk) + ', not hit it.';
+      if (!objTargetable(brk)) return 'The ' + objName(brk) + ' can\'t be targeted' + (smash ? ': ' + smash + ' or catch it in an area attack.' : ': only an area attack or a blast reaches it.');
+      if (!aimsAtObjects(u, ref)) return objRefusal(def, 'break', brk, smash);
+      if (objDamage(u, ref) <= 0) return def.name + ' deals no damage to objects. The ' + objName(brk) + ' is unimpressed.';
     }
     const friendly = tg.filter === 'ally' || tg.filter === 'allyOrSelf' || tg.filter === 'any' || tg.filter === 'notSelf';
     if (there && there.downed && !there.dead && !DD.Grid.hostile(u, there) && friendly && !revivesWith(u, ref)) {
@@ -677,7 +822,27 @@
     if (d < r[0] || d > r[1]) return 'Out of range (' + (r[0] === r[1] ? r[1] : r[0] + '–' + r[1]) + ' tiles).';
     if (tg.straight && p.x !== u.x && p.y !== u.y) return 'Straight lines only.';
     if (tg.los !== false && d > 0 && !DD.Grid.los(u, p)) return 'No line of sight. Something is in the way.';
+    // the right kind of target in range and sight: the skill's own refusal says why (Summon Corgi on lava, Fetch! with
+    // no corgi); canTarget is a query, asked without touching the combat dice
+    const refusal = canTargetSays(u, def, p, there);
+    if (refusal) return refusal;
     return 'Needs ' + (FILTER_TEXT[tg.filter] || FILTER_TEXT[tg.type === 'unit' ? 'enemy' : 'any']) + '.';
+  }
+  /** A skill's own canTarget refusal at p (a string), when p is otherwise the right kind of target; else ''. */
+  function canTargetSays(u, def, p, there) {
+    const T = DD.Targeting, tg = def.target || {};
+    if (typeof tg.canTarget !== 'function' || !T || typeof T.buildCtx !== 'function' || typeof T.pure !== 'function') return '';
+    const type = tg.type || 'unit';
+    let kind = false;
+    if (type === 'unit') kind = !!there && typeof T.unitMatches === 'function' && !!T.unitMatches(u, there, tg.filter || 'enemy', true);
+    else if (type === 'tile') kind = typeof T.tileMatches !== 'function' || !!T.tileMatches(u, p.x, p.y, tg.filter);
+    if (!kind) return '';
+    const ref = armedRef() || def;
+    const res = T.pure(function () {
+      const ctx = T.buildCtx(u, ref, { x: p.x, y: p.y });
+      return DD.safe('canTarget of ' + def.id, tg.canTarget, def, [ctx]);
+    });
+    return typeof res === 'string' && res.trim() ? res.trim() : '';
   }
   function targetInstruction(def, u) {
     const tg = def.target || {};
@@ -689,9 +854,15 @@
     // v2 (user requests): the extra targets on offer right now — explosive objects, downed allies
     if (tg.type !== 'tile') {
       const list = armedTargets(u);
-      const objs = list.filter(function (p) { return p.obj; });
+      const objs = list.filter(function (p) { return p.obj && p.detonates; });
+      const brks = list.filter(function (p) { return p.obj && !p.detonates; });
       const downs = list.filter(function (p) { return p.revive; });
       if (objs.length) what += ' or 💥 ' + (objs.length === 1 ? 'the ' + objName(volatileObj(objs[0].x, objs[0].y)) : objs.length + ' things that go boom');
+      // rules run: breakable objects in range (crates, totems…)
+      if (brks.length) {
+        const b0 = DD.Grid.tile(brks[0].x, brks[0].y);
+        what += ' or 🔨 ' + (brks.length === 1 && b0 && b0.obj ? 'the ' + objName(b0.obj) : brks.length + ' breakables');
+      }
       if (downs.length) {
         const d0 = DD.Grid.unitAt(downs[0].x, downs[0].y);
         what += ' or 🆘 ' + (downs.length === 1 && d0 ? 'downed ' + d0.name + ' (back UP)' : downs.length + ' downed allies (back UP)');
@@ -721,19 +892,21 @@
   /** "🪽 Flying: ignores floor effects — … Clouds and gases still reach Syllamin." (DD.UI.flyLine; heroes by name) */
   function flyLine(u) {
     const who = u.kind === 'hero' ? u.name : 'it';
-    return typeof DD.UI.flyLine === 'function' ? DD.UI.flyLine(who) : '🪽 Flying: ignores floor effects. Clouds and gases still reach ' + who + '.';
+    return typeof DD.UI.flyLine === 'function' ? DD.UI.flyLine(who, u.side === 'hero') : '🪽 Flying: ignores floor effects. Clouds and gases still reach ' + who + '.';
   }
 
   /**
    * Run fn (a preview) while watching DD.Act.explode: the explosions its dry run sets off, first one per tile, as
-   * { x, y, radius, dmg, element } (explode's options with its defaults: radius 1, 8, fire). Every call goes through
-   * unchanged and the watch is gone before this returns. (Request ENGINE: carry these on the preview itself.)
+   * { x, y, radius, dmg, element } (explode's options with its defaults: radius 1, 8, fire), and the gold it hands out
+   * (DD.Act.gainGold: a broken Strike Fund's loot). Every call goes through unchanged and the watch is gone before this
+   * returns. (Request ENGINE: carry these on the preview itself.)
    */
   function watchBlasts(fn) {
     const A = DD.Act;
-    const orig = A && A.explode;
+    const orig = A && A.explode, origGold = A && A.gainGold;
     const seen = {}, list = [];
-    if (typeof orig !== 'function') return { value: fn(), blasts: list };
+    const out = { value: null, blasts: list, gold: 0 };
+    if (typeof orig !== 'function') { out.value = fn(); return out; }
     A.explode = function (src, x, y, o) {
       if (!seen[key(x, y)]) {
         seen[key(x, y)] = 1;
@@ -742,7 +915,14 @@
       }
       return orig.apply(this, arguments);
     };
-    try { return { value: fn(), blasts: list }; } finally { A.explode = orig; }
+    if (typeof origGold === 'function') {
+      A.gainGold = function () {
+        const n = origGold.apply(this, arguments);
+        out.gold += Math.max(0, num(n));
+        return n;
+      };
+    }
+    try { out.value = fn(); return out; } finally { A.explode = orig; if (typeof origGold === 'function') A.gainGold = origGold; }
   }
   /** "Detonate: Explosive Barrel — 8 fire damage within 1 tile" (+ chain explosions) for a preview aimed at an object. */
   function blastLine(p, t) {
@@ -805,13 +985,238 @@
     if (o.length) return 'Press ' + o[0].key + ' (' + o[0].name + ')' + (o.length > 1 ? ' or ' + o.slice(1, 3).map(function (x) { return x.key + ' (' + x.name + ')'; }).join(' or ') : '') + ', then click ' + ally.name + ': back UP with the healed HP. Or Help Up (2 AP) from an adjacent tile.';
     return 'Aim a single-target heal at ' + ally.name + ' (back up with the healed HP), or Help Up (2 AP, 25% HP) from an adjacent tile.';
   }
-  /** The floor of this tile does something (terrain effect, a non-cloud surface, a ground object): flyers skip all of it. */
+  /** Loot on the floor (DD.Grid.isLoot: gold piles, hoards): picked up by whoever enters, flyers included. */
+  function lootObj(t) { return t && t.obj && DD.Grid.isLoot && DD.Grid.isLoot(t.obj) ? t.obj : null; }
+  /**
+   * The floor of this tile does something (terrain effect, a non-cloud surface, a ground object): flyers skip all of it.
+   * Loot is not a floor effect ([playtest text-tone-v1]: flyers still swoop down for it).
+   */
   function floorEffects(t) {
     if (!t) return false;
     const td = DD.getTerrain(t.t) || {};
     const sd = t.surface ? DD.getSurface(t.surface.id) : null;
-    const ground = t.obj && !(DD.Grid.objBlocksMove && DD.Grid.objBlocksMove(t.obj));
+    const ground = t.obj && !lootObj(t) && !(DD.Grid.objBlocksMove && DD.Grid.objBlocksMove(t.obj));
     return !!((sd && !sd.airborne) || td.hazard || td.liquid || td.pit || td.slide || num(td.cost, 1) > 1 || td.onEnter || td.onTurnEnd || ground);
+  }
+
+  // ---- rules run: moving through allies (click-through, pass-through tiles, swaps) and breaking objects --------------
+  /**
+   * A hero-side sprite covers the tiles just behind it (up-screen), and in tight terrain those are often the tiles a
+   * player wants. When DD.Input's pick hit a hero-side sprite but the ground tile under the cursor behind it (`under`)
+   * is what the current mode wants — a tile the selected unit can move to or interact with, a free deployment tile, the
+   * armed skill's target where the ally is none — the HUD acts on that tile instead; `pierced` names the ally (it fades
+   * on the board while hovered). Enemy sprites are never clicked through (clicking one inspects it).
+   */
+  function pierce(p) {
+    if (!M || !p || !p.unitId || !p.under || (p.under.x === p.x && p.under.y === p.y)) return p;
+    const s = S(), hit = byId(p.unitId);
+    if (!s || s.result || !hit || hit.dead || hit.side !== 'hero') return p;
+    const lock = lockReason();
+    const u = selectedUnit();
+    if (!u || (lock && lock !== 'modal')) return p;
+    const other = DD.Grid.unitAt(p.under.x, p.under.y);
+    const q = { x: p.under.x, y: p.under.y, unitId: other ? other.id : null, pierced: hit.id };
+    if (deploying(s)) return !other && deployable(u) && inList(s.deploy.tiles, q) ? q : p;
+    if (!controllable(u)) return p;
+    if (M.mode.kind === 'move') {
+      // [review] the selected unit's own sprite in front of an adjacent ally's tile: a click there means that ally (a
+      // swap, Help Up, or selecting a unit of this turn) — before, it hit the unit itself and did nothing
+      if (other) return hit === u && other !== u && !other.dead && DD.Grid.dist(u, other) === 1 && !DD.Grid.hostile(u, other) && (other.downed || swapInfoAt(u, q.x, q.y)) ? q : p;
+      // [playtest first-hour-2 / first-hour-v1] anywhere on an ADJACENT ally's sprite a click means that ally (the swap
+      // the tips promise, Help Up for a downed one), never the tile behind it: that tile still has its own visible
+      // ground, and turning the map shows more of it
+      if (hit !== u && adjacentAllyClick(u, hit)) return p;
+      if (reachOf(u).get(key(q.x, q.y))) return q;
+      return interactionsOf(u).some(function (i) { return i.x === q.x && i.y === q.y && i.kind !== 'helpUp'; }) ? q : p;
+    }
+    return !aimTarget(u, p) && aimTarget(u, q) ? q : p;
+  }
+  /**
+   * The allies' tiles a move of u walks through (it can't end there): the engine's search with occupied tiles kept
+   * (DD.Grid.reachable includeOccupied: the walker passes friends, never foes), minus the adjacent allies u can swap
+   * with (those are ends: ⇄).
+   */
+  function passTilesOf(u) {
+    return memo('pass:' + u.id, function () {
+      const out = [];
+      if (!reachOf(u).size || !DD.Grid || typeof DD.Grid.reachable !== 'function') return out;
+      const all = DD.safe('HUD reachable through allies', DD.Grid.reachable, DD.Grid, [u, effMov(u), { aoo: true, includeOccupied: true }]) || new Map();
+      all.forEach(function (e) {
+        const o = DD.Grid.unitAt(e.x, e.y);
+        if (o && o !== u && !o.dead && !DD.Grid.hostile(u, o)) out.push({ x: e.x, y: e.y, unitId: o.id });
+      });
+      return out;
+    });
+  }
+  /** The swap with the ally on (x, y): Combat.swapInfo (null when nobody u could swap with stands there). */
+  function swapInfoAt(u, x, y) {
+    if (!u || !C() || typeof C().swapInfo !== 'function') return null;
+    return memo('swap:' + u.id + ':' + key(x, y), function () { return DD.safe('HUD swapInfo', C().swapInfo, C(), [u, x, y]) || null; });
+  }
+  /** The adjacent allies u can swap with right now (Combat.swapTargets): [swapInfo]. */
+  function swapsOf(u) {
+    if (!u || !C() || typeof C().swapTargets !== 'function') return [];
+    return memo('swaps:' + u.id, function () { return DD.safe('HUD swapTargets', C().swapTargets, C(), [u]) || []; });
+  }
+  /** A click on ally a (next to u) does something to a itself: a swap u can make now, or Help Up when a is down. */
+  function adjacentAllyClick(u, a) {
+    if (!u || !a || a === u || a.dead || a.side !== 'hero' || DD.Grid.dist(u, a) !== 1 || DD.Grid.hostile(u, a)) return false;
+    if (a.downed) return downedHelp(u, a) !== null;
+    const si = swapInfoAt(u, a.x, a.y);
+    return !!si && si.ok === true && !selectsInstead(a, false);
+  }
+  /** u's Help Up interaction on downed ally a (adjacent; it may still cost more AP than u has), or null. */
+  function downedHelp(u, a) {
+    if (!u || !a || !a.downed || a.dead) return null;
+    return interactionsOf(u).filter(function (i) { return i.kind === 'helpUp' && i.unitId === a.id; })[0] || null;
+  }
+  /** The HP Help Up gets a downed ally back with (Act.revive at 25%). */
+  function helpUpHp(a) { return Math.max(1, Math.min(num(a.maxHp), Math.round(num(a.maxHp) * 0.25))); }
+  /**
+   * [playtest first-hour-v1 / combat-controls-3] Hovering a downed ally in move mode says what a click does: Help Up
+   * from next to it (or why not), the ways to get it up from farther away.
+   */
+  function downedHint(u, a) {
+    const ia = DD.Grid.dist(u, a) === 1 ? downedHelp(u, a) : null;
+    if (!ia) return { text: '🆘 ' + esc(a.name) + ' is down. ' + esc(reviveHow(a)), cls: 'warn' };
+    const ap = num(ia.ap, 2);
+    if (num(u.ap) < ap) return { text: '🆘 ' + esc(a.name) + ' is down: <b>Help Up</b> needs ' + ap + ' AP (' + esc(u.name) + ' has ' + num(u.ap) + '). ' + esc(reviveHow(a).replace(/ Or Help Up \(2 AP\) from an adjacent tile\.$/, '')), cls: 'warn' };
+    return { text: '🆘 <b>Click: Help Up ' + esc(a.name) + '</b>: ' + ap + ' AP, back up with ' + helpUpHp(a) + ' HP (25%). ' + esc(a.name) + ' ' + esc(upWhen(a)) + '. Can\'t be undone.', cls: 'good' };
+  }
+  /** [playtest combat-controls-3] An interaction on the hovered tile (a chest, a lever, Smash): its label and AP. */
+  function interactHint(u, h) {
+    const all = interactionsOf(u);
+    const ia = all.filter(function (i) { return i.x === h.x && i.y === h.y && i.kind !== 'helpUp'; })[0];
+    if (!ia) return null;
+    const t = DD.Grid.tile(h.x, h.y);
+    const what = t && t.obj ? objName(t.obj) : '';
+    const ap = num(ia.ap, 1);
+    const short = num(u.ap) < ap ? ' Not enough AP (' + esc(u.name) + ' has ' + num(u.ap) + ').' : '';
+    return { text: '🖐 ' + (what ? esc(what) + ' — ' : '') + '<b>Click</b>' + (all[0] === ia ? ' or <b>E</b>' : '') + ': ' + esc(String(ia.label || 'Use')) + ' (' + ap + ' AP' + (ia.kind === 'smash' ? ', ' + num(ia.dmg, 5) + ' damage' : '') + ').' + short, cls: short ? 'warn' : '' };
+  }
+  /** A click on this ally selects it instead of swapping (a unit of this turn with AP left; Shift+click swaps). */
+  function selectsInstead(ally, shift) { return !shift && selectable(ally) && num(ally.ap) > 0 && !stunned(ally); }
+  /** u itself can make a move action now (the swap is one): AP for a move, not rooted / held / stunned. */
+  function canMoveNow(u) {
+    return !!u && controllable(u) && num(u.ap) >= moveCost(u) && !stunned(u) && !(C().cantMove && C().cantMove(u));
+  }
+  /** The hovered swap (hover on an adjacent ally's own tile, or through u's own sprite onto it): its swapInfo, or null. */
+  function hoveredSwap(u, h) {
+    if (!u || !h || (h.pierced && h.pierced !== u.id) || M.cardHover || M.trackHover) return null;
+    const a = DD.Grid.unitAt(h.x, h.y);
+    if (!a || a === u || a.dead || a.downed || a.side !== 'hero' || DD.Grid.dist(u, a) !== 1) return null;
+    return swapInfoAt(u, h.x, h.y);
+  }
+  /** The attacks of opportunity of a swap, in the provokeInfo shape (the engine's dry run in si.outcome when it ran one). */
+  function swapProvokes(u, si) {
+    const out = { list: [], total: 0, max: 0, lethal: false, outcome: null, stop: null };
+    (si && si.ok === true ? si.provokes || [] : []).forEach(function (p) {
+      const a = byId(p.unitId);
+      if (a) out.list.push(strikeRow(a, p));
+    });
+    return sumStrikes(u, out, si && si.ok === true ? si.outcome : null);
+  }
+  /** u's Bleed stacks: every move action (a walk or a swap) costs that much HP when it ends (DD.Act.bleedTick). */
+  function bleedOf(u) {
+    const bl = ((u && u.statuses) || []).filter(function (x) { return x && x.id === 'bleed'; })[0];
+    return bl ? Math.max(0, Math.round(num(bl.stacks))) : 0;
+  }
+  function bleedLine(u, bleed, before, lethal) {
+    const dead = lethal !== undefined ? !!lethal : num(before) + bleed >= num(u.hp) + num(u.block);
+    return '🩸 <b>Bleeding ' + bleed + '</b>: this move costs ' + bleed + ' HP when it ends' + (dead ? ' 💀' : '') + '.';
+  }
+  /**
+   * [finish D2] A refused swap with ally a (plain text): the engine's reason as it stands when it names the ally first
+   * ("⇄ Slate is immovable: he can start a swap, you can't move him."), else "⇄ Can't swap with Wizzy: Not enough AP."
+   */
+  function immovableTip(u) {
+    const n = u.name || 'This unit';
+    if (!playerSide(u)) return n + ' can\'t be pushed or pulled.';
+    // [review finish] a unit that never moves (Zarathor's Tasteful Statue: move 0) starts no swap either
+    return n + ' can\'t be pushed, pulled or swapped' + (num(u.mov) > 0 ? ', but can start a swap as the move.' : '.');
+  }
+  function swapRefusal(a, why) {
+    const w = String(why || 'Not now.');
+    return '⇄ ' + (w.indexOf(a.name + ' ') === 0 ? w : 'Can\'t swap with ' + a.name + ': ' + w);
+  }
+  /** The hint for hovering an adjacent ally: what a click does (swap, or select it), the swap's costs and dangers. */
+  function swapHint(u, si, shift) {
+    const a = byId(si.unitId);
+    if (!a) return null;
+    const sel = selectsInstead(a, !!shift);
+    const cost = '1 move, ' + num(si.ap, moveCost(u)) + ' AP';
+    if (si.ok !== true) {
+      return { text: (sel ? '<b>Click</b> selects ' + esc(a.name) + '. ' : '') + '<span class="hh-dim">' + esc(swapRefusal(a, si.ok)) + '</span>', cls: '' };
+    }
+    const parts = [];
+    const pv = swapProvokes(u, si);
+    if (pv.list.length) {
+      const one = pv.list.length === 1;
+      parts.push('⚔ <b>Provokes ' + pv.list.length + '</b> attack' + (one ? '' : 's') + ' of opportunity: <b>' + esc(aooList(pv.list)) + '</b>' +
+        (pv.lethal ? ' — 💀 enough to drop ' + esc(u.name) : '') + '. Can\'t be undone.');
+    }
+    // [playtest combat-controls-1] a free hit that ends the move calls the swap off
+    const stop = stopLine(u, pv, true);
+    if (stop) parts.push(stop);
+    // [playtest combat-controls-4] a swap is a move action: Bleed ticks when it ends, as on a walk (riders included)
+    const bleed = bleedTickOf(u, pv);
+    if (bleed > 0) parts.push(bleedLine(u, bleed, pv.total, pv.outcome ? pv.lethal : undefined));
+    // [playtest combat-controls-2] a landing tile that snags (a web roots)
+    if (si.snag) { const w = snagWhat(si.snag, si.snag.stops); parts.push('🕸 ' + esc(u.name) + ' lands on <b>' + esc(w.name) + '</b>: ' + esc(w.status) + '.'); }
+    if (si.allySnag) { const w = snagWhat(si.allySnag, si.allySnag.stops); parts.push('🕸 ' + esc(a.name) + ' lands on <b>' + esc(w.name) + '</b>: ' + esc(w.status) + '.'); }
+    if (si.hazard) parts.push('⚠ ' + esc(u.name) + ' lands in <b>' + esc(hazardName(si.hazard)) + '</b>.');
+    if (si.allyHazard) parts.push('⚠ ' + esc(a.name) + ' lands in <b>' + esc(hazardName(si.allyHazard)) + '</b>.');
+    const edges = [si.edge ? u.name : null, si.allyEdge ? a.name : null].filter(Boolean);
+    if (edges.length) parts.push(esc(DD.UI.andList(edges)) + ' would stand next to a drop.');
+    const head = sel
+      ? '<b>Click</b> selects ' + esc(a.name) + ' · <b>Shift+click</b>: ⇄ swap places (' + cost + ')'
+      : '⇄ <b>Swap with ' + esc(a.name) + '</b>: ' + cost + '; it costs ' + esc(a.name) + ' nothing (no AP, no turn).';
+    return { text: head + (parts.length ? ' ' + parts.join(' ') : ''), cls: parts.length ? 'warn' : sel ? '' : 'good' };
+  }
+  /** Allies a hovered walk passes through (names, in path order), for the move hint. */
+  function walkedThrough(u, e) {
+    const out = [];
+    (e && e.path ? e.path : []).forEach(function (p) {
+      const o = DD.Grid.unitAt(p.x, p.y);
+      if (o && o !== u && !o.dead && !DD.Grid.hostile(u, o) && out.indexOf(o) < 0) out.push(o);
+    });
+    return out;
+  }
+  function doSwap(u, x, y) {
+    M.provokedTurn = -1; // set again by 'opportunity:attack' if the swap provokes
+    const ok = DD.safe('HUD swap', C().swap, C(), [u, x, y]);
+    if (!ok) { hint('Can\'t swap there.', 'bad'); return false; }
+    afterAction(u);
+    return true;
+  }
+
+  /** The breakable (non-volatile) object on (x, y) — it has HP left — or null. */
+  function breakableObj(x, y) {
+    const t = DD.Grid.tile(x, y);
+    const o = t && t.obj;
+    if (!o || volatileObj(x, y)) return null;
+    return DD.Targeting && typeof DD.Targeting.breakable === 'function' ? (DD.Targeting.breakable(o) ? o : null) : (o.maxHp > 0 && o.hp > 0 ? o : null);
+  }
+  function objTargetable(o) { return !!o && (!DD.Targeting || typeof DD.Targeting.objectTargetable !== 'function' || !!DD.Targeting.objectTargetable(o)); }
+  /** The object the party must protect (a protect objective): never a target. */
+  function protectedObj(o) { const ob = S() && S().objective; return !!o && !!ob && ob.type === 'protect' && ob.objId === o.id; }
+  function objDamage(u, ref) { return u && ref && DD.Targeting && typeof DD.Targeting.objectDamage === 'function' ? Math.round(num(DD.Targeting.objectDamage(u, ref))) : 0; }
+  /** "🎯 Objective 2/3" ("3/3: that wins the fight!") when breaking this object counts toward a destroy objective; else ''. */
+  function objectiveNote(o) {
+    const ob = S() && S().objective;
+    if (!o || !ob || ob.type !== 'destroy' || (ob.objId && ob.objId !== o.id)) return '';
+    const total = num(ob.count || ob.total, 1), done = Math.min(total, num(ob.destroyed) + 1);
+    return '🎯 Objective ' + done + '/' + total + (done >= total ? ': that wins the fight!' : '');
+  }
+  /**
+   * "🧩 Puzzle step" when breaking this object in a boss fight is one (the engine's test: DD.Act.puzzleHint > 0, read
+   * before the blow, the hint AutoPlay weighs too); else ''.
+   */
+  function puzzleNote(u, o, at) {
+    const s = S();
+    if (!s || s.kind !== 'boss' || !o || !u || u.side !== 'hero' || !DD.Act || typeof DD.Act.puzzleHint !== 'function') return '';
+    const h = num(DD.safe('HUD puzzle hint', DD.Act.puzzleHint, DD.Act, [o, u, DD.Grid.tile(at.x, at.y)]));
+    return h > 0 ? '🧩 Puzzle step' : '';
   }
 
   // ---- css --------------------------------------------------------------------------------------------------------------
@@ -1015,6 +1420,7 @@
 .hi-line.warn { color: #ffc4b8; }
 .hi-line.good { color: #b8f0b2; }
 .hi-line.boom { color: #ffd59a; }
+.hi-line.brk { color: #cfe4f2; }
 .hi-line.revive { color: #c6f7cf; }
 .hi-line.fly { color: #d6e9ff; }
 .hi-flavor { font-size: .76rem; font-style: italic; color: var(--text-3); line-height: 1.35; border-top: 1px solid rgba(198,156,75,.2); padding-top: .35rem; }
@@ -1184,6 +1590,8 @@
 .rt-card.math .rt-mod, .rt-card.math .rt-total { opacity: 1; }
 .rt-card .rt-nat { position: absolute; top: -.62rem; right: -.2rem; padding: 0 .35em; border-radius: 4px; font-size: .52rem; font-weight: 900; letter-spacing: .05em; color: #2a180a; background: #ffe27a; box-shadow: 0 1px 3px rgba(0,0,0,.6); }
 .rt-card .rt-nat.one { color: #fff; background: #8f2421; }
+.rt-card .rt-xd { position: absolute; bottom: -.66rem; left: 50%; transform: translateX(-50%); padding: 0 .4em; border-radius: 4px; font-size: .54rem; font-weight: 700; white-space: nowrap; color: #f3e6c8; background: rgba(20,12,6,.95); border: 1px solid rgba(255,226,122,.55); box-shadow: 0 1px 3px rgba(0,0,0,.6); }
+.rt-card .rt-xd b { color: #ffe27a; font-weight: 900; }
 .rt-card .rt-rank { position: absolute; top: -.6rem; left: 50%; transform: translateX(-50%); padding: 0 .45em; border-radius: 999px; font-size: .56rem; font-weight: 900; letter-spacing: .04em; color: #2a180a; background: linear-gradient(180deg,#ffe7a3,#d7a94e); border: 1px solid #fff0bd; opacity: 0; transition: opacity .2s ease; white-space: nowrap; }
 .rt-card.ranked .rt-rank { opacity: 1; }
 .rt-card.first { border-color: #fff0bd; box-shadow: 0 0 0 1px #fff0bd, 0 0 18px rgba(255,226,122,.55), 0 4px 10px rgba(0,0,0,.5); }
@@ -1199,6 +1607,7 @@
 .hi-abil .ha-top b { color: var(--gold-4); }
 .hi-abil .ha-meta { margin-left: auto; font-size: .64rem; font-weight: 700; color: var(--text-3); white-space: nowrap; }
 .hi-abil .ha-cd { font-size: .62rem; font-weight: 800; padding: 0 .3em; border-radius: 4px; color: #e9ddff; background: rgba(90,60,160,.55); border: 1px solid rgba(190,160,255,.5); }
+.hi-abil .ha-mult { font-size: .62rem; font-weight: 800; padding: 0 .3em; border-radius: 4px; color: #ffd9cf; background: rgba(150,45,30,.55); border: 1px solid rgba(255,140,110,.5); cursor: help; }
 .hi-abil .ha-desc { font-size: .72rem; line-height: 1.32; color: var(--text-2); }
 .hi-abil.off { opacity: .62; }
 .hi-intent.windup { background: rgba(140,16,12,.32); border-color: rgba(255,110,90,.7); box-shadow: inset 0 0 12px rgba(255,60,40,.18); }
@@ -1347,7 +1756,7 @@
       h += '<div class="tt-foot">Downed: ' + esc(u.name) + '\'s turns are skipped. A single-target heal aimed at ' + esc(u.name) + ' gets ' + esc(u.name) + ' back up with the healed HP; an adjacent ally can also Help Up (2 AP) at 25% HP.' +
         (o.length ? '<br>💚 Ready now: ' + esc(o.map(function (x) { return x.name + ' (' + x.key + ')'; }).join(', ')) + '.' : '') + '</div>';
     }
-    else if (u.side === 'hero') h += '<div class="tt-foot">' + (selectable(u) ? 'Click to select · Tab cycles this turn\'s units' : 'Click to inspect · it acts on its own initiative turn') + '</div>';
+    else if (u.side === 'hero') h += '<div class="tt-foot">' + (selectable(u) ? 'Click to select · Tab cycles this turn\'s units' : 'Click to inspect · ' + esc(u.name) + ' acts in initiative order') + '</div>';
     h += '</div>';
     return h;
   }
@@ -1482,7 +1891,7 @@
     DD.UI.tooltip(E.hype, function () {
       const s = S();
       const v = s ? num(s.hype) : 0;
-      return '<div class="tt"><div class="tt-title" style="color:var(--hype)">Hype ' + v + ' / 100</div><div class="tt-desc">+8 per kill, +20 per environmental kill (pits, lava, explosions), +4 when one skill hits 2+ foes. At 100 a hero can unleash their Signature (key 6).</div><div class="tt-flavor">The crowd goes mild.</div></div>';
+      return '<div class="tt"><div class="tt-title" style="color:var(--hype)">Hype ' + v + ' / 100</div><div class="tt-desc">' + esc(hypeRules()) + ' At 100 any hero can unleash a Signature (key 6).</div><div class="tt-flavor">The crowd goes mild.</div></div>';
     }, { pos: 'top' });
     E.undo = DD.UI.button('Undo', doUndo, { cls: 'ghost hud-undo', icon: '↶', tooltip: function () { return undoTip(); } });
     E.undo.appendChild(el('span.kbd', null, 'Z'));
@@ -1596,7 +2005,7 @@
     E.round.appendChild(el('div.hr-right', null, el('span.hud-phase.' + ph.cls, null, ph.text), who));
     DD.UI.tooltip(E.round, function () {
       return '<div class="tt"><div class="tt-title">' + (round > 0 ? 'Round ' + round : 'Deployment') + (enc.name ? ' — ' + esc(enc.name) : '') + '</div>' +
-        '<div class="tt-desc">Everyone acts once per round in initiative order (the strip at the top). Enemies act on their own turns without warning: hold <b>Alt</b> to see where they can reach. Only bosses wind up their biggest attacks (⏳ red tiles).</div>' +
+        '<div class="tt-desc">Everyone acts once per round in initiative order (the strip at the top). Enemies act on their own turns without warning: hold <b>Alt</b> to see where they can reach. Only bosses and a few elites wind up their biggest attacks (⏳ red tiles).</div>' +
         '<div class="tt-foot">' + esc(kindTxt + ' fight' + (s.difficultyName ? ' · ' + U.capitalize(s.difficultyName) + ' difficulty' : '')) + '</div></div>';
     }, { pos: 'bottom' });
     E.obj.innerHTML = '';
@@ -1626,8 +2035,9 @@
     if (it.cur) when = 'Acting now.';
     else if (it.joiner) when = 'Arrived mid-round: joins the order next round.';
     else if (e) when = it.dist === 1 ? 'Acts next.' : 'Acts in ' + it.dist + ' turns' + (it.nextRound ? ' (next round).' : '.');
-    if (u.downed) when += ' Downed: its turn is skipped until someone helps it up.';
-    else if (isStunnedU(u)) when += ' Incapacitated: it loses its next turn.';
+    // [playtest text-tone-3] no 'it' for a named hero or boss: the line names nobody
+    if (u.downed) when += ' Downed: the turn is skipped until a Help Up or a heal.';
+    else if (isStunnedU(u)) when += ' Incapacitated: loses the next turn.';
     if (when) h += '<div class="tt-target">' + esc(when.trim()) + '</div>';
     if ((u.intents || []).length) h += '<div class="tt-aura">⏳ Winding up ' + esc(u.intents.map(function (i) { return i.label || '?'; }).join(', ')) + '</div>';
     return h + '<div class="tt-foot">Click to inspect</div></div>';
@@ -1645,7 +2055,7 @@
     const sig = [m.deploy, m.round].concat(items.map(function (it) {
       if (it.divider) return '|' + it.round;
       const u = it.unit;
-      return u.id + ':' + (it.entry ? it.entry.total + '.' + it.entry.k : '?') + ':' + (it.cur ? 'c' : '') + (it.joiner ? 'j' : '') + chipMark(u) + ':' + it.dist;
+      return u.id + ':' + (it.entry ? it.entry.total + '.' + it.entry.k : '?') + ':' + (it.cur ? 'c' : '') + (it.joiner ? 'j' : '') + chipMark(u) + ':' + it.dist + ':' + lookKey(u);
     })).join(',');
     if (sig === M.trackSig) return;
     M.trackSig = sig;
@@ -1675,7 +2085,7 @@
       if (it.joiner) cls.push('joiner');
       const chip = el('div', { class: cls, style: { '--tc': foe ? (u.tier === 'boss' || u.isBoss ? '#ff7a4a' : '#e2483c') : (d.color || '#c9a24f') } });
       chip.dataset.unit = u.id;
-      chip.appendChild(DD.UI.portrait(u.defId, 40, { fallback: foe ? '👹' : '🐾' }));
+      chip.appendChild(portraitOf(u, 40, { fallback: foe ? '👹' : '🐾' }));
       chip.appendChild(el('span.tk-tot', null, it.unrolled ? '?' : String(it.entry ? it.entry.total : '?')));
       const mark = it.joiner ? '🆕' : chipMark(u);
       if (mark) chip.appendChild(el('span.tk-mark', null, mark));
@@ -1752,8 +2162,8 @@
   function makeCard(u) {
     const d = defOf(u) || {};
     const color = d.color || (u.kind === 'summon' ? '#46cdb4' : '#c9a24f');
-    const c = { id: u.id, statusSig: null, apSig: null };
-    c.portrait = DD.UI.portrait(u.defId, u.kind === 'summon' ? 30 : 40, { fallback: u.kind === 'summon' ? '🐾' : null });
+    const c = { id: u.id, statusSig: null, apSig: null, look: lookKey(u) };
+    c.portrait = portraitOf(u, u.kind === 'summon' ? 30 : 40, { fallback: u.kind === 'summon' ? '🐾' : null });
     c.name = el('span.hc-n', null, u.name);
     c.lvl = el('span.hc-lvl');
     c.hp = hpBar(u.kind === 'summon' ? 'summon' : '');
@@ -1832,18 +2242,19 @@
     M.pinned = v.id;
     renderInspect();
     if (deploying(s)) { hint('Only heroes standing in the green zone can be redeployed.', 'warn'); return; }
-    hint(v.name + ' ' + (ii ? turnWhen(ii) : 'waits for its initiative turn') + (cur && cur !== v ? ' — it\'s ' + cur.name + '\'s turn now.' : '.'), 'warn');
+    hint(v.name + ' ' + (ii ? turnWhen(ii) : 'waits for a turn in the initiative order') + (cur && cur !== v ? ' — it\'s ' + cur.name + '\'s turn now.' : '.'), 'warn');
   }
 
   /** Mini card for a summon in a compact row: portrait, HP sliver, AP count, a stun / downed marker. */
   function makeMini(u) {
     const d = defOf(u) || {};
-    const c = { id: u.id, mini: true, sig: null };
+    const c = { id: u.id, mini: true, sig: null, look: lookKey(u) };
     c.fill = el('i');
     c.hpBox = el('span.hm-hp', null, c.fill);
     c.ap = el('span.hm-ap');
     c.warn = el('span.hm-warn');
-    c.el = el('div.hud-mini', { style: { '--hc': d.color || '#46cdb4' } }, DD.UI.portrait(u.defId, 26, { fallback: '🐾', frame: false }), c.hpBox, c.ap, c.warn);
+    c.portrait = portraitOf(u, 26, { fallback: '🐾', frame: false });
+    c.el = el('div.hud-mini', { style: { '--hc': d.color || '#46cdb4' } }, c.portrait, c.hpBox, c.ap, c.warn);
     c.hp = {
       update: function (v) {
         const max = Math.max(1, num(v.maxHp, 1));
@@ -1859,6 +2270,13 @@
 
   function updateMini(c, u, s) {
     const myTurn = controllable(u) && !M.enemyPlayback;
+    const look = lookKey(u);
+    if (look !== c.look) {
+      c.look = look;
+      const p = portraitOf(u, 26, { fallback: '🐾', frame: false });
+      if (c.portrait.parentNode) c.portrait.parentNode.replaceChild(p, c.portrait);
+      c.portrait = p;
+    }
     c.el.classList.toggle('sel', M.sel === u.id);
     c.el.classList.toggle('downed', !!u.downed);
     c.el.classList.toggle('stun', !u.downed && (stunned(u) || hasSt(u, 'sheep')));
@@ -1878,6 +2296,14 @@
     c.el.classList.toggle('cur', cur && !u.downed);
     c.el.classList.toggle('wait', !cur && !deploying(s) && !!s.order && !s.result);
     c.el.classList.toggle('spent', myTurn && active(u) && num(u.ap) <= 0);
+    const look = lookKey(u);
+    if (look !== c.look) {
+      // a new form (werewolf, Wild Shape...): the card's portrait follows it
+      c.look = look;
+      const p = portraitOf(u, u.kind === 'summon' ? 30 : 40, { fallback: u.kind === 'summon' ? '🐾' : null });
+      if (c.portrait.parentNode) c.portrait.parentNode.replaceChild(p, c.portrait);
+      c.portrait = p;
+    }
     if (c.name.textContent !== u.name) c.name.textContent = u.name;
     c.lvl.textContent = u.kind === 'hero' ? 'Lv ' + num(u.level, 1) : (u.title && u.title !== u.name ? u.title : '');
     c.hp.update(u);
@@ -1913,7 +2339,7 @@
     let line = auraLine(auras, u);
     let lethal = !!line && auraLethal(auras, u);
     if (threatOn() && active(u) && !s.result) {
-      const rs = reachersAt(u.x, u.y);
+      const rs = reachersAt(u.x, u.y, u);
       if (rs.length) {
         const tot = rs.reduce(function (a, r) { return a + r.dmg; }, 0) + auraTotal(auras);
         line = '⚠ ' + plural(rs.length, 'foe') + ' can reach: up to ' + tot;
@@ -2084,7 +2510,7 @@
     return b;
   }
 
-  function buildConsButton(x) {
+  function buildConsButton(u, x) {
     if (!x.def) {
       const b = el('button.hud-cons.empty', { type: 'button' }, el('span.kbd', null, x.key), '');
       DD.UI.tooltip(b, '<div class="tt"><div class="tt-title">Empty pocket</div><div class="tt-desc">Consumables are party-wide and single-use. Buy them in shops or loot them after fights.</div><div class="tt-flavor">Contains: lint, one (1) d4.</div></div>');
@@ -2096,7 +2522,7 @@
     if (x.ok !== true) cls.push('is-disabled');
     const b = el('button', { type: 'button', class: cls }, el('span.kbd', null, x.key), x.def.icon || '🧪');
     DD.UI.tooltip(b, function () {
-      return (x.ok !== true ? '<div class="tt"><div class="tt-why">⛔ ' + esc(x.ok) + '</div></div>' : '<div class="tt"><div class="tt-ok">✓ Press ' + esc(x.key) + ' or click, then pick a target</div></div>') + DD.UI.consumableTooltipHtml(x.id);
+      return (x.ok !== true ? '<div class="tt"><div class="tt-why">⛔ ' + esc(x.ok) + '</div></div>' : '<div class="tt"><div class="tt-ok">✓ Press ' + esc(x.key) + ' or click, then pick a target</div></div>') + DD.UI.consumableTooltipHtml(x.id, { user: u });
     }, { pos: 'top' });
     b.addEventListener('click', function () { b.blur(); pressConsumable(x.index); });
     return b;
@@ -2162,7 +2588,7 @@
     if (m.cons.length) {
       E.barGroups.appendChild(el('div.hud-sep'));
       const col = el('div.hud-cons-col.n' + m.cons.length);
-      m.cons.forEach(function (x) { col.appendChild(buildConsButton(x)); });
+      m.cons.forEach(function (x) { col.appendChild(buildConsButton(u, x)); });
       E.barGroups.appendChild(col);
     }
     if (m.acts.length) {
@@ -2202,7 +2628,7 @@
     return '<div class="tt"><div class="tt-title">🎲 Roll for Initiative! (Space)</div><div class="tt-desc">Ends deployment. Everyone — heroes and monsters — rolls d20 + initiative; the order stays fixed for the whole fight.</div><div class="tt-flavor">The DM has been "pre-rolling" for twenty minutes.</div></div>';
   }
   function threatTip() {
-    return '<div class="tt"><div class="tt-title">👁 Threat shading (hold Alt · T toggles)</div><div class="tt-desc">Tints every tile enemies could hit before this hero\'s next turn (where they can walk + reach with an attack that is ready), plus aura damage. Darker = more damage; hatched = enough to drop the selected hero.</div><div class="tt-foot">An estimate: walls are not counted past their walk. Boss wind-ups are always shown (⏳ red tiles).</div></div>';
+    return '<div class="tt"><div class="tt-title">👁 Threat shading (hold Alt · T toggles)</div><div class="tt-desc">Tints every tile enemies could hit before this hero\'s next turn (where they can walk + reach with an attack that is ready), plus aura damage. Darker = more damage; hatched = enough to drop the selected hero.</div><div class="tt-foot">An estimate: walls are not counted past their walk. Wind-ups (bosses and a few elites) are always shown (⏳ red tiles).</div></div>';
   }
   /** Why Undo is refused right now. */
   function undoWhy() {
@@ -2259,7 +2685,7 @@
     if (!t) return false;
     const td = DD.getTerrain(t.t) || {};
     const plain = td.walkable !== false && !td.liquid && !td.pit && num(td.cost, 1) <= 1 && !td.hazard && !td.slide && !(td.tall > 0);
-    return !!(t.surface || t.obj || !plain || windupsAt(t.x, t.y, null).length || (threatOn() && reachersAt(t.x, t.y).length));
+    return !!(t.surface || t.obj || !plain || windupsAt(t.x, t.y, null).length || (threatOn() && reachersAt(t.x, t.y, threatHero()).length));
   }
 
   function inspectTarget() {
@@ -2282,19 +2708,37 @@
     return null;
   }
 
-  /** A boss wind-up in the inspect panel: ⏳ label, damage, when it lands and how to stop it (DD.AI.describe). */
+  /** A wind-up (bosses, a few elites) in the inspect panel: ⏳ label, damage, when it lands and how to stop it (DD.AI.describe). */
   function windupRow(u, it) {
     const d = DD.safe('HUD describe wind-up', DD.AI.describe, DD.AI, [u, it]) || { label: '?', icon: '❔', dmg: 0, text: '' };
     const left = num(d.turnsLeft || d.delay, 1);
     const pills = [];
     if (d.dmg) pills.push(el('span.pill', { style: { color: '#fff', background: 'rgba(170,40,30,.75)', borderColor: '#ff9d90' } }, d.dmg + (d.uncertain ? '?' : '') + ' dmg'));
-    pills.push(el('span.pill', { style: { color: '#2a180a', background: '#ffcf7a', borderColor: '#ffe7b0' }, title: left > 1 ? 'Lands in ' + left + ' of its turns' : 'Lands at the start of its next turn' }, '⏳ ' + (left > 1 ? left + ' turns' : 'next turn')));
+    pills.push(el('span.pill', { style: { color: '#2a180a', background: '#ffcf7a', borderColor: '#ffe7b0' }, title: left > 1 ? 'Lands in ' + left + ' of ' + u.name + '\'s turns' : 'Lands at the start of ' + u.name + '\'s next turn' }, '⏳ ' + (left > 1 ? left + ' turns' : 'next turn')));
     return el('div.hi-intent.windup', null,
       el('div.hii-top', null, el('span', null, d.icon || '⚔️'), el('span', null, d.label || '?'), pills),
       d.text ? el('div.hii-text', null, d.text) : null);
   }
 
   /** An ability in the inspect panel: icon, name, range / area, cooldown, the exact desc for this unit. */
+  function fmtMult(m) { return String(Math.round(num(m, 1) * 100) / 100); }
+  /**
+   * [playtest text-tone-18] What earns Hype, read from DD.Balance.hype (the numbers the engine pays), every knob that
+   * is on: "+8 per kill, +20 per environmental kill (pits, lava, explosions), +4 when one skill hits 2+ foes."
+   */
+  function hypeRules() {
+    const h = (DD.Balance && DD.Balance.hype) || { kill: 8, envKill: 20, multiHit: 4 };
+    const parts = [];
+    if (num(h.kill) > 0) parts.push('+' + num(h.kill) + ' per kill');
+    if (num(h.envKill) > 0) parts.push('+' + num(h.envKill) + ' per environmental kill (pits, lava, explosions)');
+    if (num(h.multiHit) > 0) parts.push('+' + num(h.multiHit) + ' when one skill hits 2+ foes');
+    if (num(h.eliteKill) > 0) parts.push('+' + num(h.eliteKill) + ' more for an elite');
+    if (num(h.bossQuarter) > 0) parts.push('+' + num(h.bossQuarter) + ' for each quarter of a boss\'s HP knocked off');
+    if (num(h.puzzle) > 0) parts.push('+' + num(h.puzzle) + ' per puzzle step');
+    if (num(h.dealtPer) > 0) parts.push('+1 per ' + num(h.dealtPer) + ' damage dealt');
+    if (num(h.takenPer) > 0) parts.push('+1 per ' + num(h.takenPer) + ' HP the heroes lose');
+    return parts.length ? U.capitalize(parts.join(', ')) + '.' : 'Hype comes from gear and Blessings.';
+  }
   function abilityRow(u, slot) {
     const r = DD.Targeting.resolve(slot);
     if (!r) return null;
@@ -2304,9 +2748,12 @@
     const cd = num(slot.cd);
     const charges = num(r.def.charges);
     const out = charges > 0 && num(slot.uses) >= charges;
+    // [playtest first-hour-1] the damage in the text is this fight's (act row × difficulty): say so
+    const fm = info && info.fightMult && info.fightMult !== 1 ? info.fightMult : 0;
+    const multPill = fm ? el('span.ha-mult', { title: 'This fight\'s monsters hit ×' + fmtMult(fm) + ' (act and difficulty). The damage in the text already includes it.' }, '×' + fmtMult(fm)) : null;
     return el('div.hi-abil' + (cd > 0 || out ? '.off' : ''), null,
-      el('div.ha-top', null, el('span', null, r.def.icon || '✦'), el('b', null, name), cd > 0 ? el('span.ha-cd', { title: 'Cooldown: ready again in ' + cd + ' of its turns' }, '⟳' + cd) : null,
-        out ? el('span.ha-cd', null, 'used up') : null, meta ? el('span.ha-meta', null, meta) : null),
+      el('div.ha-top', null, el('span', null, r.def.icon || '✦'), el('b', null, name), cd > 0 ? el('span.ha-cd', { title: 'Cooldown: ready again in ' + cd + ' of ' + u.name + '\'s turns' }, '⟳' + cd) : null,
+        out ? el('span.ha-cd', null, 'used up') : null, multPill, meta ? el('span.ha-meta', null, meta) : null),
       el('div.ha-desc', null, (info && info.desc) || DD.skillDesc(r.def, r.level, u) || ''));
   }
 
@@ -2316,19 +2763,19 @@
     const foe = !playerSide(u);
     const sl = oppSlot(u);
     if ((u.flags || {}).noOpportunity) return el('div.hi-line', null, '· Never makes attacks of opportunity.');
-    if (!sl) return el('div.hi-line', null, foe ? '· No melee attack ready: walking away from it is free.' : '· No melee basic attack: foes can walk away from ' + u.name + ' freely.');
+    if (!sl) return el('div.hi-line', null, foe ? '· No melee attack ready: walking away is free.' : '· No melee basic attack: foes can walk away from ' + u.name + ' freely.');
     if (isStunnedU(u) || hasSt(u, 'sheep')) return el('div.hi-line', null, '· No attacks of opportunity while incapacitated.');
     const name = oppSkillName(sl);
     const spent = oppSpent(u);
     if (foe) {
       // the engine's rule (DD.Act.opportunityOf): a Dazzled / Confused AI unit never strikes, a taunted one only its taunter
       const dz = hasSt(u, 'dazzled') ? 'Dazzled' : hasSt(u, 'confused') ? 'Confused' : '';
-      if (dz) return el('div.hi-line', null, '· No attacks of opportunity while ' + dz + ': walking away from it is free.');
+      if (dz) return el('div.hi-line', null, '· No attacks of opportunity while ' + dz + ': walking away is free.');
       const tn = DD.AI && typeof DD.AI.taunter === 'function' ? DD.safe('HUD taunter', DD.AI.taunter, DD.AI, [u]) : null;
       const h = threatHero();
       const est = h && (!tn || tn === h) ? oppEst(u, h) : 0;
-      const only = tn ? ' (taunted: only ' + tn.name + ' provokes it)' : '';
-      return el('div.hi-line.aoo' + (spent ? '.spent' : ''), null, '⚔ Holds the line: walking away from it provokes ' + name + (est ? ' (≈' + est + ' to ' + h.name + ')' : '') + only + (spent ? ' — already used this round.' : ', once per round.'));
+      const only = tn ? ' (taunted: only ' + tn.name + ' gets the free hit)' : '';
+      return el('div.hi-line.aoo' + (spent ? '.spent' : ''), null, '⚔ Holds the line: walking away provokes ' + name + (est ? ' (≈' + est + ' to ' + h.name + ')' : '') + only + (spent ? ' — already used this round.' : ', once per round.'));
     }
     // v2 integrator: "takes a free hit (The Family Hammer)" — skill names don't read as a noun after "a free"
     return el('div.hi-line.aoo.own' + (spent ? '.spent' : ''), null, '🛡 Holds the line: a foe walking away from ' + u.name + ' takes a free hit (' + name + ')' + (spent ? ' — already used this round.' : ', once per round.'));
@@ -2338,8 +2785,10 @@
     const ii = initInfo(u);
     if (!ii) return null;
     const foe = !playerSide(u);
+    const ld = !ii.fixed && ii.roll > 0 ? loadedDice(u, { roll: ii.roll }) : null;
+    const roll = ii.fixed || !(ii.roll > 0) ? '' : ld ? ' (d20s ' + ld.dice.join(' / ') + ', kept ' + ii.roll + ' ' + signed(ii.init) + ')' : ' (d20 ' + ii.roll + ' ' + signed(ii.init) + ')';
     const tip = ii.joining ? 'Rolled ' + ii.total + ' on arrival: joins the order next round.'
-      : 'Initiative ' + ii.total + (ii.fixed || !(ii.roll > 0) ? '' : ' (d20 ' + ii.roll + ' ' + signed(ii.init) + ')') + ' — #' + ii.pos + ' of ' + ii.of + ', ' + turnWhen(ii) + '.';
+      : 'Initiative ' + ii.total + roll + ' — #' + ii.pos + ' of ' + ii.of + ', ' + turnWhen(ii) + '.';
     return el('div.hi-order' + (foe ? '' : '.hero'), { title: tip }, el('small', null, ii.joining ? 'Joins' : 'Init'), el('b', null, ii.joining ? 'R+1' : '#' + ii.pos));
   }
 
@@ -2349,7 +2798,7 @@
     const boss = foe && (u.isBoss || u.tier === 'boss');
     const box = [];
     const pcolor = foe ? (boss ? '#ff7a4a' : '#e2483c') : (d.color || '#c9a24f');
-    const port = DD.UI.portrait(u.defId, 46, { fallback: foe ? '👹' : '🐾' });
+    const port = portraitOf(u, 46, { fallback: foe ? '👹' : '🐾' });
     port.style.setProperty('--pc2', pcolor);
     let sub;
     if (u.kind === 'hero') sub = [d.race, d.cls].filter(Boolean).join(' ') + ' · Lv ' + num(u.level, 1);
@@ -2372,12 +2821,24 @@
     const fl = u.flags || {};
     const flies = flying(u);
     if (flies) stats.push(el('span.pill', { title: flyLine(u).replace(/^🪽 /, '') }, '🪽 Flying'));
-    if (fl.immovable) stats.push(el('span.pill', null, '🗿 Immovable'));
+    // [finish D2] immovable units can start a swap but can't be swapped
+    if (fl.immovable) stats.push(el('span.pill', { title: immovableTip(u) }, '🗿 Immovable'));
     if (fl.stunImmune) stats.push(el('span.pill', null, '💫 Stun-immune'));
+    // attacks of opportunity: a walker that never provokes, a unit that never strikes walkers
+    if (fl.noProvoke) stats.push(el('span.pill', { title: 'Walking away from a melee foe never provokes an attack of opportunity.' }, '👻 Can\'t be pinned'));
+    if (fl.noOpportunity) stats.push(el('span.pill', { title: 'Never makes attacks of opportunity: walking away is free.' }, '🕊 No free hits'));
+    // resistances (damage elements) and status immunities, heroes included (Pebbles is fireproof)
     Object.keys(u.resist || {}).forEach(function (k) {
       const v = num(u.resist[k], 1);
       if (v === 1) return;
-      stats.push(el('span.pill', { style: { color: v > 1 ? '#ffd2c8' : '#cfe3ff' } }, v === 0 ? 'Immune: ' + k : v < 1 ? 'Resists ' + k : 'Weak to ' + k));
+      const what = v === 0 ? 'Immune: ' + k : v < 1 ? 'Resists ' + k : 'Weak to ' + k;
+      const tip = v === 0 ? 'Takes no ' + k + ' damage.' : v < 1 ? 'Takes ' + Math.round(v * 100) + '% ' + k + ' damage.' : 'Takes ' + Math.round(v * 100) + '% ' + k + ' damage.';
+      stats.push(el('span.pill', { style: { color: v > 1 ? '#ffd2c8' : '#cfe3ff' }, title: tip }, what));
+    });
+    (Array.isArray(fl.immune) ? fl.immune : []).forEach(function (id) {
+      const sd = DD.getStatus ? DD.getStatus(id) : null;
+      const nm = (sd && sd.name) || U.capitalize(String(id));
+      stats.push(el('span.pill', { style: { color: '#cfe3ff' }, title: nm + ' can\'t be applied to ' + u.name + '.' }, (sd && sd.icon ? sd.icon + ' ' : '') + 'Immune: ' + nm));
     });
     box.push(el('div.hi-stats', null, stats));
     const chips = statusChips(u);
@@ -2409,7 +2870,7 @@
         hits.forEach(function (x) { (byLabel[x.t.label] = byLabel[x.t.label] || []).push(x.h.name + ' ' + x.t.dmg); });
         Object.keys(byLabel).forEach(function (lab) { box.push(el('div.hi-line.aura', null, '⚠ ' + lab + ' (aura) → ' + byLabel[lab].join(', '))); });
       }
-      // boss wind-ups: the only telegraphs
+      // wind-ups (bosses and a few elites): the only telegraphs
       const its = (u.intents || []).filter(Boolean);
       if (its.length) {
         box.push(el('div.hi-sec', null, '⏳ Winding up'));
@@ -2417,46 +2878,49 @@
       }
       // reach: who it could hit on its next turn (move + a ready damaging skill), and when that is
       const ii = initInfo(u);
-      const when = ii ? (ii.cur ? 'This turn' : ii.joining ? 'Next round' : ii.inTurns === 1 ? 'Next turn (it acts next)' : 'On its turn (in ' + ii.inTurns + ' turns' + (ii.acted ? ', next round' : '') + ')') : 'On its next turn';
-      if (isStunnedU(u)) box.push(el('div.hi-line.good', null, '💫 Incapacitated: it loses its next turn' + (its.length ? ' and its wind-up fizzles.' : '.')));
-      else if (hasSt(u, 'sheep')) box.push(el('div.hi-line.good', null, '🐑 A sheep: it can only wander next turn.'));
+      // [playtest text-tone-3] no 'it' / 'its' for a named foe (the Death Knight is he, Dr. Iris she): the name, or nothing
+      const when = ii ? (ii.cur ? 'This turn' : ii.joining ? 'Next round' : ii.inTurns === 1 ? 'Next turn (acts next)' : 'In ' + ii.inTurns + ' turns' + (ii.acted ? ', next round' : '')) : 'Next turn';
+      if (isStunnedU(u)) box.push(el('div.hi-line.good', null, '💫 Incapacitated: ' + u.name + ' loses the next turn' + (its.length ? ', and the wind-up fizzles.' : '.')));
+      else if (hasSt(u, 'sheep')) box.push(el('div.hi-line.good', null, '🐑 A sheep: ' + u.name + ' can only wander next turn.'));
       else {
         const r = reachInfo(u);
         const inReach = partyUnits().filter(function (h) { return active(h) && r.tiles.has(key(h.x, h.y)); })
           .map(function (h) { return h.name + ' ' + num(r.tiles.get(key(h.x, h.y))); });
         const only = r.only ? byId(r.only) : null;
-        if (inReach.length) box.push(el('div.hi-line.reach', null, '⚠ ' + when + ' it can reach: ' + inReach.join(', ') + (only ? ' (taunted: only ' + only.name + ')' : '')));
-        else if (r.tiles.size) box.push(el('div.hi-line.good', null, '✓ ' + when + ': no hero within its reach (move ' + effMov(u) + ' + attack).'));
+        if (inReach.length) box.push(el('div.hi-line.reach', null, '⚠ ' + when + ', ' + u.name + ' can reach: ' + inReach.join(', ') + (only ? ' (taunted: only ' + only.name + ')' : '')));
+        else if (r.tiles.size) box.push(el('div.hi-line.good', null, '✓ ' + when + ': no hero within reach (move ' + effMov(u) + ' + attack).'));
         else box.push(el('div.hi-line', null, when + ': no damaging attack ready.'));
       }
       box.push(holdLine(u));
+      // every ability it has (bosses carry more than four; the panel scrolls when it is long)
       const slots = (C().slotsOf(u) || []).filter(Boolean);
-      if (slots.length) {
-        box.push(el('div.hi-sec', null, 'Abilities'));
-        slots.slice(0, 4).forEach(function (sl) { const row = abilityRow(u, sl); if (row) box.push(row); });
+      const rows = slots.map(function (sl) { return abilityRow(u, sl); }).filter(Boolean);
+      if (rows.length) {
+        box.push(el('div.hi-sec', null, 'Abilities' + (rows.length > 4 ? ' (' + rows.length + ')' : '')));
+        rows.forEach(function (row) { box.push(row); });
       }
     } else {
       const ii = initInfo(u);
       if (ii && !deploying(S())) box.push(el('div.hi-line', null, '🎲 ' + (ii.summonOf ? 'Acts on ' + ii.summonOf.name + '\'s turn — ' : '') + U.capitalize(turnWhen(ii)) + (ii.pos ? ' (#' + ii.pos + ' of ' + ii.of + ').' : '.')));
       const auras = u.downed ? [] : auraThreats(u, u.x, u.y);
-      const reach = u.downed ? [] : reachersAt(u.x, u.y);
+      const reach = u.downed ? [] : reachersAt(u.x, u.y, u.side === 'hero' ? u : null);
       const wus = u.downed ? [] : windupsAt(u.x, u.y, u);
       if (wus.length) {
         box.push(el('div.hi-sec', null, '⏳ A wind-up lands here'));
         wus.slice(0, 3).forEach(function (w) { box.push(el('div.hi-line.warn', null, windupText(w))); });
       }
-      if (reach.length) box.push(el('div.hi-line.reach', null, '⚠ Enemies that can reach this tile before its next turn: ' + reachText(reach)));
-      else if (u.side === 'hero' && !u.downed && !auras.length && !wus.length) box.push(el('div.hi-line.good', null, '✓ No enemy can reach this tile before its next turn.'));
+      if (reach.length) box.push(el('div.hi-line.reach', null, '⚠ Enemies that can reach this tile before ' + u.name + '\'s next turn: ' + reachText(reach)));
+      else if (u.side === 'hero' && !u.downed && !auras.length && !wus.length) box.push(el('div.hi-line.good', null, '✓ No enemy can reach this tile before ' + u.name + '\'s next turn.'));
       // attacks of opportunity: who punishes a move away, whose reaction is spent, and whether it holds the line itself
       if (!u.downed && S().order) {
         const eng = engagedBy(u);
         if (eng.length) box.push(el('div.hi-line.aoo', null, '⚔ Engaged — a move away provokes: ' + eng.map(function (r) { return r.unit.name + ' ' + r.dmg + (r.skillName ? ' (' + r.skillName + ')' : ''); }).join(', ') + '. Skill dashes, pushes and teleports don\'t.'));
         const spent = spentGuards(u);
-        if (spent.length) box.push(el('div.hi-line.good', null, '✓ ' + DD.UI.andList(spent.map(function (a) { return a.name; })) + ' already used ' + (spent.length > 1 ? 'their attacks' : 'its attack') + ' of opportunity this round.'));
+        if (spent.length) box.push(el('div.hi-line.good', null, '✓ ' + DD.UI.andList(spent.map(function (a) { return a.name; })) + ' already used ' + (spent.length > 1 ? 'their attacks' : 'an attack') + ' of opportunity this round.'));
         box.push(holdLine(u));
       }
       if (auras.length) {
-        box.push(el('div.hi-sec', null, '⚠ Auras: ' + auraTotal(auras) + ' before its next turn'));
+        box.push(el('div.hi-sec', null, '⚠ Auras: ' + auraTotal(auras) + ' before ' + u.name + '\'s next turn'));
         auras.slice(0, 4).forEach(function (t) { box.push(el('div.hi-line.aura', null, auraDetail(t))); });
       }
       if (u.kind === 'hero' && d.passive) box.push(el('div.hi-line', { html: '<b>' + esc(d.passive.name || 'Passive') + ':</b> ' + esc(d.passive.desc || '') }));
@@ -2485,18 +2949,43 @@
       const ia = DD.Act && DD.Act.interactionOf ? DD.safe('HUD interactionOf', DD.Act.interactionOf, DD.Act, [t.obj, selectedUnit()]) : null;
       box.push(el('div.hi-line', { html: '<b>' + esc(t.obj.label || od.name) + '</b>' + esc(hp) + (od.desc ? ' — ' + esc(od.desc) : '') }));
       if (ia) box.push(el('div.hi-line.good', null, '🖐️ ' + ia.label + ' (' + ia.ap + ' AP) from an adjacent tile.'));
-      // v2: explosive objects are targets — any single-target attack in range and sight sets one off
+      // v2 / finish D1: explosive objects are targets — any single-target damage skill in range and sight sets one off
       const boom = !DD.Grid.unitAt(t.x, t.y) && volatileObj(t.x, t.y);
       if (boom) {
         const smash = C().smashable && C().smashable(boom);
-        box.push(el('div.hi-line.boom', null, '💥 Volatile: aim a single-target attack at it (in range and line of sight) and it goes off' + (smash ? ' — or Smash it from next to it' : '') + '. Its blast catches everyone around it, friends included.'));
+        box.push(el('div.hi-line.boom', null, '💥 Volatile: any single-target damage skill aimed at it (in range and line of sight) sets it off' + (smash ? ' — or Smash it from next to it' : '') + '. Its blast catches everyone around it, friends included.'));
         const su = selectedUnit();
         const def = M.mode.kind !== 'move' ? armedDef() : null;
         if (def && su && controllable(su)) {
           const e = armedEntry(su, t);
           if (e && e.obj) { const bd = blastDetail(previewAt(su, t), t); box.push(el('div.hi-line.good', null, '🎯 Click: ' + def.name + ' sets it off' + (bd ? ' — ' + bd : '') + '.')); }
-          else if (!aimsAtObjects(su, armedRef())) box.push(el('div.hi-line', null, '· ' + def.name + ' can\'t set it off.'));
+          else if (!aimsAtObjects(su, armedRef())) box.push(el('div.hi-line', null, '· ' + def.name + (optsOut(def) ? ' is for foes only and' : '') + ' can\'t set it off.'));
           else box.push(el('div.hi-line', null, '· ' + def.name + ' can\'t reach it from here.'));
+        }
+      }
+      // rules run / finish D1: anything else with HP breaks — any single-target damage skill (unless it opts out)
+      const brk = !boom && !DD.Grid.unitAt(t.x, t.y) ? breakableObj(t.x, t.y) : null;
+      if (brk) {
+        const smash = C().smashable && C().smashable(brk);
+        if (protectedObj(brk)) box.push(el('div.hi-line', null, '🛡 Protect it: the party never aims at it.'));
+        else if (!objTargetable(brk)) box.push(el('div.hi-line.warn', null, '🚫 Not a target: ' + (smash ? 'Smash it from next to it or catch it in an area attack.' : 'only an area attack or a blast reaches it.')));
+        else {
+          box.push(el('div.hi-line.brk', null, '🔨 Breakable (' + brk.hp + '/' + brk.maxHp + ' HP): any single-target damage skill can break it (in range and line of sight). It takes the skill\'s listed damage and nothing else' + (smash ? ' — or Smash it from next to it' : '') + '. It breaks at 0 HP.'));
+          const su = selectedUnit();
+          const def = M.mode.kind !== 'move' ? armedDef() : null;
+          if (def && su && controllable(su)) {
+            const e = armedEntry(su, t);
+            const pv = e && e.obj ? previewAt(su, t) : null;
+            if (pv && pv.breaks) {
+              const b = pv.breaks;
+              box.push(el('div.hi-line.good', null, '🎯 Click: ' + def.name + ' hits it for ' + (pv.uncertain ? '?' : '') + b.dmg + (b.destroyed ? ': it breaks!' : ' (' + b.left + ' HP left).')));
+            }
+            else if (!aimsAtObjects(su, armedRef())) box.push(el('div.hi-line', null, '· ' + def.name + (optsOut(def) ? ' is for foes only and' : '') + ' can\'t break it.'));
+            else if (objDamage(su, armedRef()) <= 0) box.push(el('div.hi-line', null, '· ' + def.name + ' deals no damage to objects.'));
+            else box.push(el('div.hi-line', null, '· ' + def.name + ' can\'t reach it from here.'));
+          }
+          const ob = S().objective;
+          if (objectiveNote(brk)) box.push(el('div.hi-line', null, '🎯 Objective: break ' + num(ob.count || ob.total, 1) + ' of these (' + num(ob.destroyed) + ' so far).'));
         }
       }
     }
@@ -2505,14 +2994,16 @@
     if (fsel && flying(fsel) && active(fsel)) {
       const sd = t.surface ? DD.getSurface(t.surface.id) : null;
       if (sd && sd.airborne) box.push(el('div.hi-line.warn', null, '☁️ ' + sd.name + ' hangs in the air: it reaches flyers too.'));
-      if (floorEffects(t)) box.push(el('div.hi-line.fly', null, '🪽 ' + fsel.name + ' flies over this floor: none of it applies.'));
+      const loot = lootObj(t);
+      if (floorEffects(t)) box.push(el('div.hi-line.fly', null, '🪽 ' + fsel.name + ' flies over this floor: none of it applies' + (loot ? ', but ' + fsel.name + ' still swoops down for the ' + objName(loot) : '') + '.'));
+      else if (loot) box.push(el('div.hi-line.fly', null, '🪽 ' + fsel.name + ' flies, but still swoops down for the ' + objName(loot) + '.'));
     }
     const wus = windupsAt(t.x, t.y, null);
     if (wus.length) {
       box.push(el('div.hi-sec', null, '⏳ Wind-up lands here'));
       wus.slice(0, 4).forEach(function (x) { box.push(el('div.hi-line.warn', null, windupText(x))); });
     }
-    const reach = reachersAt(t.x, t.y);
+    const reach = reachersAt(t.x, t.y, threatHero());
     if (reach.length) box.push(el('div.hi-line.reach', null, '⚠ In enemy reach: ' + reachText(reach)));
     // auras for the selected hero, were they to end the turn here
     const sel = selectedUnit();
@@ -2537,7 +3028,7 @@
     const u = tgt.unit;
     // the armed skill / consumable is part of it (v2: "🎯 Click: … sets it off" / "… gets Marwyn back up")
     const armed = M.mode.kind + ':' + (M.mode.kind === 'skill' ? M.mode.pos : M.mode.kind === 'cons' ? M.mode.index : '');
-    const sig = (u ? 'u' + u.id + ':' + M.gen + ':' + !!tgt.pinned + ':' + statusSig(u) + ':' + (u.intents || []).length : 't' + tgt.tile.x + ',' + tgt.tile.y + ':' + M.gen + ':' + M.sel) + ':' + armed;
+    const sig = (u ? 'u' + u.id + ':' + M.gen + ':' + !!tgt.pinned + ':' + statusSig(u) + ':' + (u.intents || []).length + ':' + lookKey(u) : 't' + tgt.tile.x + ',' + tgt.tile.y + ':' + M.gen + ':' + M.sel) + ':' + armed;
     if (sig !== M.inspectSig) {
       M.inspectSig = sig;
       E.inspect.innerHTML = '';
@@ -2587,6 +3078,8 @@
     E.inspect.classList.toggle('alt', best.alt);
     E.inspect.style.top = best.top;
     E.inspect.style.maxHeight = best.top ? 'calc(100% - ' + parseInt(best.top, 10) + 'px - 10.5rem)' : '';
+    M.inspectMax = E.inspect.style.maxHeight;
+    fitInspect();
   }
 
   function focusId() {
@@ -2603,7 +3096,10 @@
   // ---- hint bar ---------------------------------------------------------------------------------------------------
   function hint(text, cls) {
     if (!M) return;
-    M.hintMsg = { text: text, cls: cls || '', until: now() + HINT_MS };
+    // [playtest first-hour-7] a message belongs to the unit selected and the turn it was said in: it never covers the
+    // next unit's hints
+    const s = S();
+    M.hintMsg = { text: text, cls: cls || '', until: now() + HINT_MS, sel: M.sel, turn: s ? s.turn : null };
     if (cls === 'bad') sound('error');
     renderHint();
   }
@@ -2611,7 +3107,7 @@
   function hintContent() {
     const s = S();
     if (!s) return { text: '' };
-    if (M.hintMsg && now() < M.hintMsg.until) return { text: esc(M.hintMsg.text), cls: M.hintMsg.cls };
+    if (M.hintMsg && now() < M.hintMsg.until && M.hintMsg.sel === M.sel && M.hintMsg.turn === s.turn) return { text: esc(M.hintMsg.text), cls: M.hintMsg.cls };
     M.hintMsg = null;
     if (s.result) return { text: '' };
     if (M.moment) return { text: '🎲 Rolling for initiative… <b>Click</b> or <b>Space</b> to skip.', cls: 'deploy' };
@@ -2634,6 +3130,12 @@
       const t = aimTarget(u, M.hover);
       let sum = '';
       if (t) sum = previewSummary(u, previewAt(u, t), t);
+      // [playtest combat-controls-6] hovering a unit or an object the skill can't take: why not, before the click
+      else if (M.hover && (def.target || {}).type !== 'self' && (def.target || {}).type !== 'dir') {
+        const ht = DD.Grid.tile(M.hover.x, M.hover.y);
+        const who = DD.Grid.unitAt(M.hover.x, M.hover.y);
+        if ((who && who !== u && !who.dead) || (ht && ht.obj)) sum = '✖ ' + invalidReason(u, M.hover);
+      }
       // Blood Price: who pays the HP cost instead
       if (M.mode.kind === 'skill') {
         const lvl = armedLevel();
@@ -2645,6 +3147,12 @@
     }
     const h = M.hover;
     if (h && !M.cardHover && !M.trackHover) {
+      // [playtest first-hour-v1 / combat-controls-3] what a click on this tile does first: a downed ally (Help Up, or
+      // how to get it up), then an object interaction (a click there interacts before it walks)
+      const down = DD.Grid.unitAt(h.x, h.y);
+      if (down && down !== u && down.downed && !down.dead && down.side === 'hero' && !DD.Grid.hostile(u, down) && (!h.pierced || h.pierced === u.id)) return downedHint(u, down);
+      const ih = interactHint(u, h);
+      if (ih) return ih;
       const e = reachOf(u).get(key(h.x, h.y));
       if (e) {
         const parts = [];
@@ -2653,30 +3161,52 @@
         if (pv.list.length) {
           const one = pv.list.length === 1;
           parts.push('⚔ <b>Provokes ' + pv.list.length + '</b> attack' + (one ? '' : 's') + ' of opportunity: <b>' + esc(aooList(pv.list)) + '</b>' +
-            (one && pv.list[0].skillName ? ' (' + esc(pv.list[0].skillName) + ')' : one ? '' : ' (up to ' + pv.total + ')') +
+            (one && pv.list[0].skillName ? ' (' + esc(pv.list[0].skillName) + ')' : one ? '' : ' (up to ' + pv.max + ')') +
             (pv.lethal ? ' — 💀 enough to drop ' + esc(u.name) : '') + '. Can\'t be undone. <span class="hh-dim">Skill dashes, pushes and teleports never provoke.</span>');
+          // [playtest combat-controls-1] a free hit that ends the walk (Engulf, a root, a push, a down)
+          const stop = stopLine(u, pv, false);
+          if (stop) parts.push(stop);
         }
         if (e.hazard) parts.push('⚠ The path crosses <b>' + esc(hazardName(e.hazard)) + '</b> — it will hurt.');
-        // Bleeding: every move action costs its stacks when the walk ends (DD.Act.bleedTick) — on top of any free hits
-        const bl = (u.statuses || []).filter(function (x) { return x && x.id === 'bleed'; })[0];
-        const bleed = bl ? Math.max(0, Math.round(num(bl.stacks))) : 0;
-        if (bleed > 0) parts.push('🩸 <b>Bleeding ' + bleed + '</b>: this move costs ' + bleed + ' HP when it ends' + (pv.total + bleed >= num(u.hp) + num(u.block) ? ' 💀' : '') + '.');
+        // [playtest combat-controls-2] a web on the way roots the walker: the walk stops there
+        snagLines(u, e, h).forEach(function (l) { parts.push(l); });
+        // Bleeding: every move action costs its stacks when the walk ends (DD.Act.bleedTick) — on top of any free hits;
+        // the engine's dry run adds what the strikes' riders add
+        const bleed = bleedTickOf(u, pv);
+        if (bleed > 0) parts.push(bleedLine(u, bleed, pv.total, pv.outcome ? pv.lethal : undefined));
         const wus = windupsAt(h.x, h.y, null);
-        if (wus.length) parts.push('⏳ <b>' + esc(wus.map(function (w) { return w.d.label + (w.d.dmg ? ' ' + w.d.dmg : ''); }).join(' + ')) + '</b> lands here ' + esc(windupWhen(wus[0].d)) + '.');
+        if (wus.length) parts.push('⏳ <b>' + esc(wus.map(function (w) { return w.d.label + (w.d.dmg ? ' ' + w.d.dmg : ''); }).join(' + ')) + '</b> lands here ' + esc(windupWhen(wus[0].d, wus[0].unit)) + '.');
         // auras (enemy threatAt): what ending the turn on this tile costs, or that it escapes the current one
         const here = auraThreats(u, h.x, h.y);
         const now0 = auraThreats(u, u.x, u.y);
         if (here.length) {
           const lethal = auraLethal(here, u) ? ' 💀' : '';
-          parts.push('⚠ Ending the turn here: <b>' + esc(here.map(function (t) { return t.label + ' ' + t.dmg + (t.pierce ? ' (ignores Block)' : ''); }).join(' + ')) + '</b> before its next turn' + lethal + '.');
+          parts.push('⚠ Ending the turn here: <b>' + esc(here.map(function (t) { return t.label + ' ' + t.dmg + (t.pierce ? ' (ignores Block)' : ''); }).join(' + ')) + '</b> before ' + esc(u.name) + '\'s next turn' + lethal + '.');
         }
         if (e.edge) parts.push('Next to a drop — easy to get shoved in.');
         if (parts.length) return { text: parts.join(' '), cls: 'warn' };
         const escape = now0.length ? ' ✓ Out of ' + esc(now0.map(function (t) { return t.label; }).join(' and ')) + ' here (' + auraTotal(now0) + ' where ' + esc(u.name) + ' stands).' : '';
         // next to foes whose attack of opportunity is spent this round: this walk away is free
         const spent = spentGuards(u);
-        const free = spent.length ? ' ✓ ' + esc(DD.UI.andList(spent.map(function (a) { return a.name; }))) + ' already used ' + (spent.length > 1 ? 'their attacks' : 'its attack') + ' of opportunity this round: no free hit.' : '';
-        return { text: 'Move here: ' + moveCost(u) + ' AP' + (e.cost ? ' (path cost ' + e.cost + ' of ' + effMov(u) + ')' : '') + '.' + escape + free + (escape || free ? '' : ' <span class="hh-dim">· hold <b>Alt</b> for enemy reach</span>'), cls: escape || free ? 'good' : '' };
+        const free = spent.length ? ' ✓ ' + esc(DD.UI.andList(spent.map(function (a) { return a.name; }))) + ' already used ' + (spent.length > 1 ? 'their attacks' : 'an attack') + ' of opportunity this round: no free hit.' : '';
+        // rules run: say so when the walk goes through allies (they never block a friend)
+        const thru = walkedThrough(u, e);
+        const via = thru.length ? ' Walks through ' + esc(DD.UI.andList(thru.map(function (o) { return o.name; }))) + '.' : '';
+        return { text: 'Move here: ' + moveCost(u) + ' AP' + (e.cost ? ' (path cost ' + e.cost + ' of ' + effMov(u) + ')' : '') + '.' + via + escape + free + (escape || free ? '' : ' <span class="hh-dim">· hold <b>Alt</b> for enemy reach</span>'), cls: escape || free ? 'good' : '' };
+      }
+      // rules run: an adjacent ally — swap places (or select it); a farther one — walk through it
+      const si = hoveredSwap(u, h);
+      if (si) { const sh = swapHint(u, si, h.shift); if (sh) return sh; }
+      const ally = DD.Grid.unitAt(h.x, h.y);
+      if (ally && ally !== u && !ally.dead && ally.side === 'hero' && inList(passTilesOf(u), h)) {
+        return { text: '🚶 ' + esc(ally.name) + ' doesn\'t block: ' + esc(u.name) + ' walks through to the blue tiles beyond (no stopping on an ally).' };
+      }
+    }
+    // rules run: boxed in by the party (a few tiles of range, allies next to it) — say how to get out
+    if (!M.cardHover && !M.trackHover && canMoveNow(u) && reachOf(u).size <= BOXED_IN) {
+      const sw = swapsOf(u).filter(function (si) { const a = si && byId(si.unitId); return !!a && si.ok === true && !selectsInstead(a, false); });
+      if (sw.length) {
+        return { text: '⇄ Boxed in? <b>Click</b> an ally next to ' + esc(u.name) + ' to swap places (' + moveCost(u) + ' AP, uses the move). Allies never block a walk either: the blue tiles run on through them.' };
       }
     }
     if (num(u.ap) <= 0) {
@@ -2702,7 +3232,7 @@
 
   /** Threat shading on: what could hit the hovered tile before this hero's next turn. */
   function threatHint(u, h) {
-    const rs = reachersAt(h.x, h.y);
+    const rs = reachersAt(h.x, h.y, u);
     const auras = auraThreats(u, h.x, h.y);
     const wus = windupsAt(h.x, h.y, null);
     // the walk there provokes attacks of opportunity: that comes first (it happens now, the rest later)
@@ -2728,6 +3258,20 @@
     M.hintSig = sig;
     M.els.hint.className = 'hud-hint' + (c.cls ? ' ' + c.cls : '');
     M.els.hint.innerHTML = c.text || '';
+    fitInspect();
+  }
+  /**
+   * [playtest first-hour-10] The inspect panel ends above the hint pill when the two share a column (a two-line hint
+   * at 1280×720 / 1024×768 covered its last lines): its max-height is cut to the pill's top, or reset.
+   */
+  function fitInspect() {
+    const E = M && M.els;
+    if (!E || !E.inspect || !E.hint || DD.headless || E.inspect.classList.contains('hud-hidden')) return;
+    E.inspect.style.maxHeight = M.inspectMax || '';
+    const h = E.hint.getBoundingClientRect(), r = E.inspect.getBoundingClientRect();
+    if (!h.height || !r.height || h.right <= r.left || h.left >= r.right) return;
+    const room = Math.floor(h.top - 8 - r.top);
+    if (r.bottom > h.top - 8 && room > 80) E.inspect.style.maxHeight = room + 'px';
   }
 
   // ---- overlay ----------------------------------------------------------------------------------------------------
@@ -2736,11 +3280,16 @@
     ov.previews = {}; ov.deployTiles = []; ov.interactTiles = [];
     ov.threat = null; ov.reach = null;
     ov.objTargets = []; ov.reviveTargets = [];
+    ov.passTiles = []; ov.swapTiles = []; ov.swap = null; ov.ghosts = null; ov.breakTargets = []; ov.objPreview = null;
   }
-  /** Target tiles → overlay, plus the v2 extras: explosive objects (💥 marker) and downed allies a heal gets up. */
+  /**
+   * Target tiles → overlay, plus the v2 extras: explosive objects (💥 marker), breakable ones (rules run: 🔨 marker)
+   * and downed allies a heal gets up.
+   */
   function setTargets(ov, list) {
     ov.targetTiles = list.slice();
-    ov.objTargets = list.filter(function (p) { return p.obj; }).map(function (p) { return { x: p.x, y: p.y }; });
+    ov.objTargets = list.filter(function (p) { return p.obj && p.detonates; }).map(function (p) { return { x: p.x, y: p.y }; });
+    ov.breakTargets = list.filter(function (p) { return p.obj && !p.detonates; }).map(function (p) { return { x: p.x, y: p.y }; });
     ov.reviveTargets = list.filter(function (p) { return p.revive; }).map(function (p) { const d = DD.Grid.unitAt(p.x, p.y); return d ? d.id : null; }).filter(Boolean);
   }
 
@@ -2787,6 +3336,7 @@
     if (deploying(s)) {
       // deployment: the green zone for any hero standing in it (free swaps)
       if (deployable(u)) s.deploy.tiles.forEach(function (t) { ov.deployTiles.push({ x: t.x, y: t.y }); });
+      if (M.hover && M.hover.pierced) ov.ghosts = { [M.hover.pierced]: 0.35 };
       return;
     }
     if (!controllable(u)) return;
@@ -2800,29 +3350,69 @@
       }
       reach.forEach(function (e, k) { if (!dset[k]) ov.moveTiles.push({ x: e.x, y: e.y }); });
       ov.interactTiles = M.hoverIa ? [M.hoverIa] : interactionsOf(u).map(function (ia) { return { x: ia.x, y: ia.y }; });
+      // rules run: the range runs on through allies (their tiles are pass-through, never ends) and the adjacent allies
+      // u can swap with are ends of their own (⇄)
+      ov.swapTiles = swapsOf(u).map(function (si) { return { x: si.x, y: si.y }; });
+      ov.passTiles = passTilesOf(u).filter(function (p) { return !inList(ov.swapTiles, p); }).map(function (p) { return { x: p.x, y: p.y }; });
       const h = M.hover;
+      const ghosts = {};
+      if (h && h.pierced) ghosts[h.pierced] = 0.35;
       if (h && !dset[key(h.x, h.y)]) {
         const e = reach.get(key(h.x, h.y));
+        const si = e ? null : hoveredSwap(u, h);
+        if (si) {
+          // the swap preview: arrows between the two tiles, the mover's attacks of opportunity as on a walk
+          const a = byId(si.unitId);
+          const pv = swapProvokes(u, si);
+          const bleed = si.ok === true ? bleedTickOf(u, pv) : 0;
+          if (a && !selectsInstead(a, !!h.shift)) {
+            // [playtest combat-controls-1 / -2] a free hit that calls the swap off: ✖ between the arrows; a web: red;
+            // [review finish] a refused swap (Slate is immovable, out of AP…) gets the ✖ too: red arrows alone read as "risky"
+            const blocked = si.ok !== true || (!!pv.outcome && pv.outcome.arrived === false);
+            ov.swap = { from: { x: u.x, y: u.y }, to: { x: si.x, y: si.y }, bad: si.ok !== true || pv.list.length > 0 || bleed > 0 || !!si.hazard || !!si.allyHazard || !!si.snag || !!si.allySnag,
+              hazard: !!si.hazard, blocked: blocked };
+            if (pv.list.length || bleed > 0) {
+              const hurt = pv.outcome && pv.outcome.loss !== undefined ? Math.round(num(pv.outcome.loss)) : pv.total + bleed;
+              ov.previews[u.id] = { dmg: hurt, heal: 0, lethal: pv.outcome ? pv.lethal : hurt >= num(u.hp) + num(u.block), text: pv.list.length ? '⚔' : '🩸' };
+              pv.list.forEach(function (r) { ov.previews[r.unit.id] = { dmg: 0, heal: 0, lethal: false, text: '⚔' }; });
+            }
+          }
+        }
         if (e) {
           ov.path = (e.path || []).map(function (p) { return { x: p.x, y: p.y }; });
-          ov.pathHazard = !!e.hazard;
+          // allies the walk passes through fade a little, so the path reads through them
+          walkedThrough(u, e).forEach(function (o) { if (ghosts[o.id] === undefined) ghosts[o.id] = 0.55; });
+          ov.pathHazard = !!e.hazard || !!e.stop || !!e.hinder;
+          // [playtest combat-controls-2] a web on the way: the drawn path ends where the walk stops
+          if (e.stop) ov.path = cutPath(ov.path, e.stop);
           // a walk that provokes attacks of opportunity is a dangerous one: red path, the hit on the mover ("-6 ⚔")
           // and a ⚔ over every foe that strikes
           const pv = provokeInfo(u, h.x, h.y);
           if (pv.list.length) {
             ov.pathHazard = true;
-            ov.previews[u.id] = { dmg: pv.total, heal: 0, lethal: pv.lethal, text: '⚔' };
+            const hurt = pv.outcome && pv.outcome.loss !== undefined ? Math.round(num(pv.outcome.loss)) : pv.total;
+            ov.previews[u.id] = { dmg: hurt, heal: 0, lethal: pv.lethal, text: '⚔' };
             pv.list.forEach(function (r) { ov.previews[r.unit.id] = { dmg: 0, heal: 0, lethal: false, text: '⚔' }; });
+            // [playtest combat-controls-1] a free hit ends the walk: the path stops where the walker will
+            if (pv.outcome && pv.outcome.arrived === false && pv.outcome.end) ov.path = cutPath(ov.path, pv.outcome.end);
           }
         }
       }
+      if (Object.keys(ghosts).length) ov.ghosts = ghosts;
       return;
     }
     setTargets(ov, armedTargets(u));
+    // aimed through an ally's sprite (at a foe or an object behind it): that ally fades
+    if (M.hover && M.hover.pierced) ov.ghosts = { [M.hover.pierced]: 0.35 };
     const t = aimTarget(u, M.hover);
     if (t) {
       const p = previewAt(u, t);
-      if (p) { ov.areaTiles = (p.tiles || []).slice(); ov.previews = overlayPreviews(p); }
+      if (p) {
+        ov.areaTiles = (tileDetonates(p, t) ? [{ x: t.x, y: t.y }].concat(p.blast || []) : p.tiles || []).slice(); ov.previews = overlayPreviews(p);
+        // rules run: aimed at a breakable object — its HP bar shows the hit (overlay.objPreview)
+        const brk = previewBreaks(p, t);
+        if (brk) ov.objPreview = { x: t.x, y: t.y, dmg: num(brk.dmg), breaks: !!brk.destroyed };
+      }
     }
   }
 
@@ -2896,7 +3486,9 @@
   /** Cosmetic "select" bark through the FX renderer directly (no FX queue entry, so input never locks for it). */
   function selectBark(u) {
     const d = defOf(u);
-    const lines = d && d.barks && d.barks.select;
+    const all = d && d.barks && d.barks.select;
+    // [playtest text-tone-6] a line that names a hero who isn't in this fight is skipped (DD.Act.partyLines)
+    const lines = Array.isArray(all) && DD.Act && typeof DD.Act.partyLines === 'function' ? DD.Act.partyLines(all) : all;
     if (!Array.isArray(lines) || !lines.length || DD.rng.next() > 0.3) return;
     if (DD.FXRender && typeof DD.FXRender.bark === 'function') DD.safe('HUD select bark', DD.FXRender.bark, DD.FXRender, [u, U.pick(lines, DD.rng), 1800]);
   }
@@ -2918,9 +3510,29 @@
     if (pick) select(pick.id, { center: true });
   }
 
-  function arm(u, x) {
-    if (x.ok !== true) { hint(x.def.name + ': ' + x.ok, 'bad'); return; }
+  /**
+   * [playtest combat-controls-6] "No valid targets": why not for the nearest foe (out of range, no line of sight…), the
+   * same refusal a click on it would give.
+   */
+  function nearestRefusal(u, x) {
+    const tg = (x.def && x.def.target) || {};
+    if (!u || !x.slot || (tg.type || 'unit') !== 'unit' || (tg.filter && tg.filter !== 'enemy')) return '';
+    const s = S();
+    const foes = (s ? s.units : []).filter(function (f) { return active(f) && DD.Grid.hostile(u, f); })
+      .sort(function (a, b) { return DD.Grid.dist(u, a) - DD.Grid.dist(u, b); });
+    if (!foes.length) return '';
+    const keep = M.mode;
     M.mode = { kind: 'skill', pos: x.pos, slot: x.slot, unitId: u.id };
+    try { return 'Nearest foe, ' + foes[0].name + ': ' + invalidReason(u, { x: foes[0].x, y: foes[0].y }); } finally { M.mode = keep; }
+  }
+  function arm(u, x) {
+    if (x.ok !== true) {
+      const why = /no valid targets/i.test(String(x.ok)) ? DD.safe('HUD nearest refusal', nearestRefusal, null, [u, x]) : '';
+      hint(x.def.name + ': ' + x.ok + (why ? ' ' + why : ''), 'bad');
+      return;
+    }
+    M.mode = { kind: 'skill', pos: x.pos, slot: x.slot, unitId: u.id };
+    M.hintMsg = null;   // [playtest first-hour-7] an armed skill's aim hint replaces an older refusal
     M.hoverSlot = null;
     sound('click');
     refreshView();
@@ -2967,6 +3579,7 @@
     const ok = DD.safe('HUD canUseConsumable', C().canUseConsumable, C(), [u, index]);
     if (ok !== true) { hint(d.name + ': ' + (ok || 'Can\'t use that now.'), 'bad'); return; }
     M.mode = { kind: 'cons', index: index, id: id, unitId: u.id };
+    M.hintMsg = null;
     sound('click');
     refreshView();
   }
@@ -3101,6 +3714,8 @@
   /** After a player action: refresh now (or when the animation ends) and remember to auto-advance a spent hero. */
   function afterAction(u, quiet) {
     if (!M) return;
+    // [playtest first-hour-7] an action went through: an older refusal no longer applies
+    if (M.hintMsg && M.hintMsg.cls === 'bad') M.hintMsg = null;
     if (u && !quiet && num(u.ap) <= 0) M.autoAdvance = u.id;
     M.dirty = true;
     if (!fxBusy()) refresh();
@@ -3120,7 +3735,9 @@
   // ---- board input ------------------------------------------------------------------------------------------------
   function onHover(p) {
     if (!M) return;
-    M.hover = p && p.x !== undefined && p.x !== null ? { x: p.x, y: p.y, unitId: p.unitId || null } : null;
+    // [playtest first-hour-2] Shift held means the unit under the cursor, as a Shift+click does (no click-through)
+    if (!(p && p.shift)) p = pierce(p);
+    M.hover = p && p.x !== undefined && p.x !== null ? { x: p.x, y: p.y, unitId: p.unitId || null, pierced: p.pierced || null, shift: !!p.shift } : null;
     noteInput();
     computeOverlay();
     renderInspect();
@@ -3139,7 +3756,10 @@
     if (M.endHandled && M.endSkip) { M.endSkip(); return; }
     const lock = lockReason();
     if (lock && lock !== 'modal') { lockedFeedback(lock); return; }
-    M.hover = { x: p.x, y: p.y, unitId: p.unitId || null };
+    // rules run: a click on a friendly sprite reaches the tile it covers when that tile is what the mode wants (a
+    // Shift+click means the ally itself: the deployment swap, a swap with a unit of this turn)
+    if (!p.shift) p = pierce(p);
+    M.hover = { x: p.x, y: p.y, unitId: p.unitId || null, pierced: p.pierced || null, shift: !!p.shift };
     const u = selectedUnit();
     const clicked = p.unitId ? byId(p.unitId) : DD.Grid.unitAt(p.x, p.y);
     if (M.mode.kind !== 'move') { clickArmed(u, p, clicked); return; }
@@ -3160,6 +3780,14 @@
     const k = key(p.x, p.y);
     if (clicked && clicked.side === 'hero' && clicked !== u && !clicked.dead) {
       if (u && p.shift && deployable(u) && deployable(clicked)) { doDeploy(u, clicked.x, clicked.y); return; }
+      // rules run: an adjacent ally swaps places with u as its move (a unit of this turn with AP left is selected
+      // instead; Shift+click swaps with it). Refusals about the ally are shown; when u itself can't move now, a click
+      // on an ally does what it always did (select / inspect).
+      if (u && !clicked.downed && !deploying(s) && controllable(u) && DD.Grid.dist(u, clicked) === 1 && !selectsInstead(clicked, p.shift)) {
+        const si = swapInfoAt(u, clicked.x, clicked.y);
+        if (si && si.ok === true) { doSwap(u, clicked.x, clicked.y); return; }
+        if (si && canMoveNow(u)) { hint(swapRefusal(clicked, si.ok), 'bad'); return; }
+      }
       if (selectable(clicked)) { select(clicked.id, { bark: true }); return; }
       if (clicked.downed && u && controllable(u)) {
         const ia = interactionsOf(u).filter(function (i) { return i.kind === 'helpUp' && i.unitId === clicked.id; })[0];
@@ -3331,15 +3959,28 @@
    */
   function unitBoxes() {
     const s = S();
-    const z = num(DD.Render.camera && DD.Render.camera.zoom, 1) || 1;
+    const z = num(DD.Render.camera && DD.Render.camera.zoom, 1) || 1, zc = Math.max(0.65, Math.min(1.5, z));
+    const Sp = DD.Sprites;
     const out = [];
     (s ? s.units : []).forEach(function (u) {
       if (u.dead) return;
       const q = DD.Render.worldToScreen(u.x, u.y);
       const big = u.tier === 'boss' || u.isBoss;
       const bubble = u.side === 'enemy' && !u.downed && (u.intents || []).length > 0;
-      const h = (big ? 120 : 62) * z + 22 + (bubble ? 30 : 0);
-      const hw = Math.max(bubble ? 46 : 24, (big ? 40 : 22) * z);
+      const m = Sp && typeof Sp.metrics === 'function' ? DD.safe('HUD unit metrics', Sp.metrics, Sp, [u]) : null;
+      if (!m || !(m.height > 0)) {
+        const h0 = (big ? 120 : 62) * z + 22 + (bubble ? 30 : 0), hw0 = Math.max(bubble ? 46 : 24, (big ? 40 : 22) * z);
+        out.push({ x0: q.x - hw0, x1: q.x + hw0, y0: q.y - h0, y1: q.y + 8 * z, w: bubble ? 4 : 1 });
+        return;
+      }
+      // the sprite and its HP pill as the renderer draws them (the same geometry the board fit keeps clear of the
+      // panels: a generous guess here faded the objective over a boss whose head was well clear of it)
+      const sts = (u.statuses || []).some(function (x) { return x && x.id; });
+      const hgt = (u.downed ? 0.5 : 1) * m.height * z;
+      // up to the HP bar (status icons above it), at least the point 16 px over the head the fit uses
+      const h = Math.max(hgt + 16 * z, hgt + 4 * z + (sts ? 18 * zc + 8 : 5 * zc + 4)) + (bubble ? 30 : 0);
+      const pill = (u.downed ? 27 : big ? 48 : 30) * zc + 9;
+      const hw = Math.max(bubble ? 46 : 0, pill, (m.width || 0) * 0.5 * z);
       out.push({ x0: q.x - hw, x1: q.x + hw, y0: q.y - h, y1: q.y + 8 * z, w: bubble ? 4 : 1 });
     });
     return out;
@@ -3387,6 +4028,43 @@
       peek = q.x > r.left && q.x < r.right && q.y > r.top && q.y - 20 < r.bottom;
     }
     if (E.obj.classList.contains('peek') !== peek) E.obj.classList.toggle('peek', peek);
+  }
+
+  // ---- the board fit keeps out of the panels -----------------------------------------------------------------------
+  // DD.Render.hudMargins(w, h) → { avoid: [boxes] }: the fixed panels (round box, party cards, tracker, objective, view
+  // buttons, combat log, skill bar, hype / end panel). The objective is soft (it fades when something is under it):
+  // only units must clear it. Transient things (hint, Roll button, DM caption, inspect, ribbons) are not reported.
+  // Measured at most every AVOID_MS (a layout read), never headless unless a test asks.
+  const AVOID_MS = 250;
+  function measureAvoid() {
+    const E = M.els, out = [];
+    const add = function (n, soft) {
+      if (!n || !n.isConnected || n.classList.contains('hud-hidden')) return;
+      const r = n.getBoundingClientRect();
+      if (r.width < 2 || r.height < 2) return;
+      out.push({ x0: r.left, y0: r.top, x1: r.right, y1: r.bottom, soft: !!soft });
+    };
+    add(E.round); add(E.track); add(E.obj, true); add(E.tr); add(E.log); add(E.bar); add(E.end);
+    Array.prototype.forEach.call(E.party.children, function (n) { add(n); });
+    return out;
+  }
+  function hudAvoid(w, h, info) {
+    if (!M || (DD.headless && !M.forceAvoid)) return [];
+    // the panels sit over the live canvas: offscreen renders (DD.Render.renderTo) get none
+    if (info && info.live === false) return [];
+    // a new window size moves every panel: measure now (the resize refit must not use the old boxes)
+    const t = now(), size = window.innerWidth + 'x' + window.innerHeight;
+    if (!M.avoid || t - M.avoidAt > AVOID_MS || M.avoidSize !== size) { M.avoid = measureAvoid(); M.avoidAt = t; M.avoidSize = size; }
+    return M.avoid;
+  }
+  function installFitAvoid() {
+    if (!DD.Render) return;
+    M.prevMargins = DD.Render.hudMargins;
+    M.marginsFn = function (w, h, info) { return { avoid: hudAvoid(w, h, info) }; };
+    DD.Render.hudMargins = M.marginsFn;
+  }
+  function removeFitAvoid() {
+    if (DD.Render && M.marginsFn && DD.Render.hudMargins === M.marginsFn) DD.Render.hudMargins = M.prevMargins || null;
   }
 
   /** The caption fades while the pointer is on a tile (or a unit's sprite) underneath it. */
@@ -3441,10 +4119,25 @@
     const n = upcoming()[0];
     const ap = num(u.ap);
     const sub = 'Round ' + s.round + ' · ' + ap + ' AP' + (n ? ' · then ' + n.name : '');
-    ribbon(u.name + '\'s Turn', sub, 'turn', 1250, null, DD.UI.portrait(u.defId, 34, { fallback: '🎲' }));
+    ribbon(u.name + '\'s Turn', sub, 'turn', 1250, null, portraitOf(u, 34, { fallback: '🎲' }));
   }
 
   // ---- the initiative dice moment (hosted for fx_render's 'initiative' marker) -------------------------------------
+  /**
+   * A unit that rolled several d20s for initiative (Loaded Dice keeps them in its passive's data.dice, best kept):
+   * { dice, name } when the kept die is this roll's, else null.
+   */
+  function loadedDice(u, r) {
+    const ps = (u && u.passives) || [];
+    for (let i = 0; i < ps.length; i++) {
+      const p = ps[i], dice = p && p.data && p.data.dice;
+      if (!Array.isArray(dice) || dice.length < 2 || !dice.every(function (v) { return typeof v === 'number' && isFinite(v); })) continue;
+      if (r && num(r.roll) !== Math.max.apply(null, dice)) continue;
+      const def = p.def || (DD.getPassive ? DD.getPassive(p.id) : null);
+      return { dice: dice.slice(), name: (def && def.name) || 'Loaded Dice' };
+    }
+    return null;
+  }
   /** fx_render asks: show a moment for this roll? (rolled dice only, and only when someone can see it) */
   function momentWants(evt) {
     return !!M && !M.flushing && (!DD.headless || !!M.forceMoments) && !!evt && Array.isArray(evt.order) && evt.order.some(function (r) { return r && r.roll > 0; });
@@ -3478,13 +4171,17 @@
       const tot = el('span.rt-total', null, String(r.total));
       const rank = el('span.rt-rank', null, ordinal(order.indexOf(r) + 1));
       const nat = r.roll === 20 ? el('span.rt-nat', null, 'NAT 20') : r.roll === 1 ? el('span.rt-nat.one', null, 'NAT 1') : null;
+      // Loaded Dice (and anything else that rolls several d20s): every die it rolled, the kept one in bold
+      const ld = loadedDice(u, r);
+      const xd = ld ? el('span.rt-xd', { title: ld.name + ': rolled ' + DD.UI.andList(ld.dice.map(String)) + ', kept the best (' + r.roll + ').' },
+        '🎲 ', ld.dice.map(function (v, k) { return [k ? ' · ' : '', v === r.roll && ld.dice.indexOf(v) === k ? el('b', null, String(v)) : String(v)]; })) : null;
       const card = el('div.rt-card' + (foe ? '.foe' : ''), { style: { '--tc': foe ? (u.tier === 'boss' || u.isBoss ? '#ff7a4a' : '#e2483c') : (d.color || '#c9a24f') } },
-        rank, DD.UI.portrait(u.defId, 40, { fallback: foe ? '👹' : '🐾' }), el('span.rt-name', null, u.name + (r.k > 0 ? ' (2nd)' : '')),
+        rank, portraitOf(u, 40, { fallback: foe ? '👹' : '🐾' }), el('span.rt-name', null, u.name + (r.k > 0 ? ' (2nd)' : '')),
         el('span.rt-dice', null, die, mod), tot);
       const slot = el('div.rt-slot', null, card);
       slot.style.transform = 'translateX(' + (i * 100) + '%)';
       row.appendChild(slot);
-      return { r: r, from: i, to: order.indexOf(r), slot: slot, card: card, die: die, nat: nat, land: n > 1 ? 0.14 + 0.3 * i / (n - 1) : 0.22, landed: false };
+      return { r: r, from: i, to: order.indexOf(r), slot: slot, card: card, die: die, nat: nat, xd: xd, land: n > 1 ? 0.14 + 0.3 * i / (n - 1) : 0.22, landed: false };
     });
     E.rollTray.appendChild(el('div.rt-title', null, '🎲 Roll for Initiative!'));
     E.rollTray.appendChild(row);
@@ -3530,6 +4227,7 @@
         if (c.r.roll === 20) c.die.classList.add('nat20');
         if (c.r.roll === 1) c.die.classList.add('nat1');
         if (c.nat) c.card.appendChild(c.nat);
+        if (c.xd) c.card.appendChild(c.xd);
       }
       c.card.classList.toggle('math', p >= c.land + 0.05);
       const at = c.from + (c.to - c.from) * ease;
@@ -3688,11 +4386,8 @@
       return t;
     };
     const row = function (label, desc, ctl) { return el('div.hm-row', null, el('div', null, el('div.hm-label', null, label), desc ? el('div.hm-desc', null, desc) : null), ctl); };
-    const controls = [['Left click', 'Select · move · use · confirm'], ['Right click / Esc', 'Cancel targeting · unpin'], ['1 – 6', 'Basic, skills, signature'],
-      ['7 – 0', 'Consumables'], ['E', 'Interact / Help Up'], ['Tab', 'Next unit of this turn (hero + summons)'], ['Space', 'Roll initiative · end turn · skip animations'],
-      ['Z', 'Undo last move'], ['Hold Alt / T', 'Threat shading: where enemies can reach'],
-      ['WASD / drag', 'Pan the camera'], ['Wheel', 'Zoom'], ['Middle drag', 'Rotate the map to any angle'], ['Q / R', 'Turn the map 90°'],
-      ['Shift + wheel', 'Rotate the map (or swipe · twist)'], ['Home', 'Reset the view'], ['F', 'Recenter the board']];
+    // [playtest first-hour-8] the shared list (DD.UI.CONTROLS), its short wording
+    const controls = (DD.UI.CONTROLS || []).filter(function (c) { return c.menu !== false; }).map(function (c) { return [c.key, c.short || c.desc]; });
     const body = el('div.hud-menu', null,
       row('Animation speed', 'Applies immediately.', seg),
       row('Sound effects', null, toggle(st.sfx !== false, function (on) { st.sfx = on; })),
@@ -3997,6 +4692,7 @@
       flushing: false, realInput: false, objCheckAt: 0,
     };
     buildLayout(root);
+    installFitAvoid();
     updateCompass();
     subscribe();
     bindThreatKeys();
@@ -4025,6 +4721,7 @@
     clearTimeout(M.endTimer); clearTimeout(M.ribbonTimer); clearTimeout(M.dmTimer);
     if (DD.UI && DD.UI.hideTooltip) DD.UI.hideTooltip();
     if (DD.Render && typeof DD.Render.resetOverlay === 'function') DD.Render.resetOverlay();
+    removeFitAvoid();
     M = null;
   }
 
@@ -4051,7 +4748,7 @@
     cycle: function (dir) { cycle(dir || 1); },
     pressSlot: function (pos) { pressSlot(pos); },
     pressConsumable: function (i) { pressConsumable(i); },
-    hover: function (x, y) { onHover(x === null || x === undefined ? null : { x: x, y: y, unitId: (DD.Grid.unitAt(x, y) || {}).id || null }); },
+    hover: function (x, y, opts) { onHover(x === null || x === undefined ? null : { x: x, y: y, unitId: (DD.Grid.unitAt(x, y) || {}).id || null, shift: !!(opts && opts.shift) }); },
     click: function (x, y, opts) { const u = DD.Grid.unitAt(x, y); onTileClick({ x: x, y: y, button: 0, shift: !!(opts && opts.shift), unitId: u ? u.id : null }); },
     rightClick: function () { onRightClick(); },
     key: function (k, opts) { return M ? onKey(Object.assign({ key: k, repeat: false, shiftKey: false, ctrlKey: false, metaKey: false, altKey: false }, opts || {})) : false; },
@@ -4086,6 +4783,15 @@
     edgeName: function (edge, yaw) { return edgeName(edge, yaw); },
     /** Map rotation: the compass needle's CSS rotation in degrees, [0, 360) (45 = up-right in the classic view). */
     compass: function () { return M && M.needleDeg !== undefined ? ((M.needleDeg % 360) + 360) % 360 : null; },
+    /**
+     * The panel boxes the board fit keeps clear of ([{ x0, y0, x1, y1, soft }], CSS px; the objective is soft).
+     * force: measure headless too (tests); false switches that off again.
+     */
+    fitAvoid: function (force) {
+      if (!M) return [];
+      if (force !== undefined) { M.forceAvoid = !!force; M.avoid = null; }
+      return hudAvoid(0, 0, { live: true }).map(function (r) { return Object.assign({}, r); });
+    },
     /** Re-check whether a unit (or the hovered tile) is under the objective panel; true when it is faded through. */
     objPeek: function () { if (!M) return false; updateObjPeek(true); return M.els.obj.classList.contains('peek'); },
     /** The tooltip HTML of a unit's party card / portrait (v2 requests: downed heals, flying). */

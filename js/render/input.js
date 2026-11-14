@@ -10,7 +10,9 @@
  * The canvas only receives events the DOM UI did not capture (#ui is pointer-events:none, panels auto).
  * Keys are ignored while typing in text inputs, textareas, selects, sliders or contenteditable elements.
  *
- * Events:  input:tileHover {x,y,unitId}|null · input:tileClick {x,y,button:0,shift,unitId}
+ * Events:  input:tileHover {x,y,unitId,under?,shift}|null · input:tileClick {x,y,button:0,shift,unitId,under?}
+ *          (under: on a sprite hit, the ground tile the cursor is on behind the sprite; the hover is sent again when
+ *          Shift goes down or up, so the HUD can preview a Shift+click)
  *          input:unitClick {unitId,x,y,button:0,shift} (emitted right before the matching tileClick)
  *          input:rightClick {x,y,sx,sy}|{key:'Escape'} · input:key {key,code,shift,ctrl,alt,meta}
  */
@@ -73,24 +75,40 @@
     return tag === 'textarea' || tag === 'select' || !!el.isContentEditable;
   }
 
-  /** What is under a screen point: a unit's tile (sprite hit first) or the frontmost tile. */
+  /**
+   * What is under a screen point: a unit's tile (sprite hit first) or the frontmost tile. A sprite hit also carries
+   * `under`, the ground tile the cursor is on behind that sprite ({x, y} | null), so the HUD can let a click through
+   * a friendly sprite to the tile it covers (moving through allies, rules run).
+   */
   function pick(sx, sy) {
     const r = R();
     if (!r || !inCombat()) return null;
     const u = typeof r.unitAtScreen === 'function' ? r.unitAtScreen(sx, sy) : null;
-    if (u) return { x: u.x, y: u.y, unitId: u.id };
     const t = typeof r.screenToTile === 'function' ? r.screenToTile(sx, sy) : null;
+    if (u) return { x: u.x, y: u.y, unitId: u.id, under: t ? { x: t.x, y: t.y } : null };
     return t ? { x: t.x, y: t.y, unitId: null } : null;
+  }
+  function evt(p, extra) {
+    const out = Object.assign({ x: p.x, y: p.y }, extra || {}, { unitId: p.unitId || null });
+    if (p.under) out.under = { x: p.under.x, y: p.under.y };
+    return out;
   }
 
   function setHover(p) {
-    const key = p ? p.x + ',' + p.y + ',' + (p.unitId || '') : '';
+    const shift = !!I.mouse.shift;
+    const key = p ? p.x + ',' + p.y + ',' + (p.unitId || '') + (p.under ? ':' + p.under.x + ',' + p.under.y : '') + (shift ? ':shift' : '') : '';
     if (key === hoverKey) return;
     hoverKey = key;
-    I.hover = p ? { x: p.x, y: p.y, unitId: p.unitId || null } : null;
+    I.hover = p ? evt(p, { shift: shift }) : null;
     const r = R();
     if (r && r.overlay) r.overlay.hover = p ? { x: p.x, y: p.y } : null;
-    DD.Events.emit('input:tileHover', p ? { x: p.x, y: p.y, unitId: p.unitId || null } : null);
+    DD.Events.emit('input:tileHover', p ? evt(p, { shift: shift }) : null);
+  }
+  /** Shift went down or up (a key, or seen on a pointer event): the hover is picked again with it. */
+  function setShift(on) {
+    if (!!I.mouse.shift === !!on) return;
+    I.mouse.shift = !!on;
+    if (I.mouse.inside && !pointers.size) updateHover();
   }
   /** Is the battlefield view turning (a drag, a turn animation, or just changed)? */
   function viewMoving() {
@@ -205,6 +223,7 @@
   function onPointerMove(e) {
     const p = local(e);
     I.mouse.x = p.x; I.mouse.y = p.y; I.mouse.inside = true;
+    I.mouse.shift = !!e.shiftKey;
     const pt = pointers.get(e.pointerId);
     if (pt) {
       if (pinch && pointers.size >= 2) { pt.x = p.x; pt.y = p.y; updatePinch(); return; }
@@ -249,7 +268,7 @@
       const hit = pick(p.x, p.y);
       if (!hit) return;
       if (hit.unitId) DD.Events.emit('input:unitClick', { unitId: hit.unitId, x: hit.x, y: hit.y, button: 0, shift: pt.shift || !!e.shiftKey });
-      DD.Events.emit('input:tileClick', { x: hit.x, y: hit.y, button: 0, shift: pt.shift || !!e.shiftKey, unitId: hit.unitId || null });
+      DD.Events.emit('input:tileClick', evt(hit, { button: 0, shift: pt.shift || !!e.shiftKey }));
     } else if (pt.button === 2) {
       const hit = pick(p.x, p.y);
       DD.Events.emit('input:rightClick', { x: hit ? hit.x : null, y: hit ? hit.y : null, sx: p.x, sy: p.y });
@@ -297,6 +316,7 @@
     const k = String(e.key || '').toLowerCase();
     const mod = e.ctrlKey || e.metaKey || e.altKey;
     const combat = inCombat();
+    if (k === 'shift') setShift(true);
     const uiFocus = uiControlFocused();
     if (!mod && PAN_KEYS[k]) held[k] = true;
     // in combat, Space/Tab/arrows belong to the game (no page scroll / focus walk) unless a UI control has focus
@@ -317,6 +337,7 @@
   function onKeyUp(e) {
     const k = String(e.key || '').toLowerCase();
     delete held[k];
+    if (k === 'shift') setShift(false);
   }
   function clearKeys() {
     for (const k in held) delete held[k];
@@ -324,6 +345,7 @@
   /** The window lost focus (Alt+Tab mid-drag): held keys let go, and a turn in progress ends where it is (no snap). */
   function onBlur() {
     clearKeys();
+    setShift(false);
     endWheelRotate();
     pointers.forEach(function (pt, id) {
       if (pt.mode !== 'rotate') return;
@@ -334,7 +356,7 @@
 
   const I = (DD.Input = {
     enabled: true,
-    mouse: { x: 0, y: 0, inside: false },
+    mouse: { x: 0, y: 0, inside: false, shift: false },
     hover: null,
     keys: held,
 
@@ -404,7 +426,7 @@
 
     /** Is the user typing into a form field (keys should not drive the game)? */
     isTyping: function () { return isTyping(null); },
-    /** Hit-test a screen point: { x, y, unitId } | null (null outside combat). */
+    /** Hit-test a screen point: { x, y, unitId, under? } | null (null outside combat; under: the tile behind a sprite hit). */
     pick: pick,
     /** Forget hover state (e.g. when a modal opens over the board). */
     clearHover: function () { I.mouse.inside = false; setHover(null); },

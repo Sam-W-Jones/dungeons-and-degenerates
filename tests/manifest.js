@@ -12,6 +12,8 @@ window.DD_EXTRA_SCRIPTS = [
   'tests/passive_tests.js',   // passives: the random passive table in the run layer and UI (rolls, slots, level-ups)
   'tests/autoplay_tests.js',  // autoplay: AutoPlay fidelity (utility valuation, cover from aura threats, walking approach)
   'tests/balance_tests.js',   // balance: DD.Balance knobs, Hype and economy rules, difficulty targets (smoke-level sims)
+  'tests/sim/sim.js',         // docs + tools: the campaign sim (it only runs on tests/sim/sim.html; here it exposes DD_SIM)
+  'tests/docs_tests.js',      // docs + tools: the docs quote the game (DESIGN / ARCHITECTURE / v2-digest), sim stalls
 
   // content-specific suites (one file per content file owner)
   'tests/content/hero_zarathor.js',

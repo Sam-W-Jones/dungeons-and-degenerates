@@ -57,6 +57,22 @@
   function nearestDist(p, list) { let d = Infinity; list.forEach(function (q) { d = Math.min(d, dist(p, q)); }); return d; }
   function plural(n, w) { return n + ' ' + (n === 1 ? w : w + 's'); }
   function rooted(u) { return DD.Act.hasStatus(u, 'root'); }
+  /** Can't walk off a marked tile on its next turn (Rooted, held, stunned): a wind-up on it could not be dodged. */
+  function pinned(u) { return DD.Act.cantMove(u) || DD.Act.isStunned(u); }
+  /**
+   * The tiles of the King's pending Gnaw / Sewer Surge ('x,y' → 1). Playtest (Nov 12): nothing of his side roots a hero
+   * standing on them, or reels one onto them, before that hero's turn; a wind-up must stay dodgeable (DESIGN §4).
+   */
+  function markedTiles(k) {
+    const res = {};
+    if (!k) return res;
+    (k.intents || []).forEach(function (it) {
+      if (!WINDUPS[it.skillId]) return;
+      DD.AI.intentTiles(k, it).forEach(function (q) { res[q.x + ',' + q.y] = 1; });
+    });
+    return res;
+  }
+  function onMarked(p, marked) { return !!p && !!marked[p.x + ',' + p.y]; }
 
   function tilesWhere(s, fn) {
     const res = [];
@@ -112,6 +128,18 @@
   // the bonus: it grows at the round start, which could raise a pending wind-up after the heroes' last look at it
   const WINDUPS = { rat_gnaw: 1, rat_surge: 1 };
   function swarmNow(u) { const st = u && DD.Act.getStatus(u, 'rat_swarm'); return st ? CFG.swarmDmg * st.stacks : 0; }
+  /**
+   * The Swelling Ranks bonus his NEXT turn will carry (threat shading and reach lines read it between his turns): when
+   * that turn falls in the next round, the round start adds a stack first (playtest bosses-objectives-3: the previews
+   * were 1 low). On his own turn: what he has now.
+   */
+  function swarmAhead(u) {
+    const now = swarmNow(u), s = S();
+    if (!now || !s || !s.order || !s.order.length || DD.Combat.isTurnOf(u)) return now;
+    for (let i = Math.max(0, s.turnIndex + 1); i < s.order.length; i++) if (s.order[i].unitId === u.id) return now;
+    const st = DD.Act.getStatus(u, 'rat_swarm');
+    return now + ((s.round || 0) + 1 >= (CFG.swarmFrom || 2) && st && st.stacks < SWARM_MAX ? CFG.swarmDmg : 0);
+  }
   DD.registerStatus({
     id: 'rat_swarm', name: 'Swelling Ranks', icon: '🐀', color: '#b59a86', type: 'buff', stacking: 'stack', maxStacks: SWARM_MAX,
     decay: 'never', defaultTurns: -1,
@@ -119,7 +147,7 @@
       return 'More sewer rats join the pile every round: +' + CFG.swarmDmg * st.stacks + ' damage on his Rat Pile, Tangled Tails and gavel (no cap; not on his wind-ups). ' +
         'Flushing him down the drain washes them all away.';
     },
-    telegraphFlat: function (st) { return CFG.swarmDmg * st.stacks; },
+    telegraphFlat: function (st, u) { return u ? swarmAhead(u) : CFG.swarmDmg * st.stacks; },
     hooks: {
       modifyOutgoingDamage: function (d, st) {
         if (d.cause === 'skill' && d.source && d.source.defId === 'rat_king' && !(d.skill && WINDUPS[d.skill.id])) d.flat += CFG.swarmDmg * st.stacks;
@@ -346,9 +374,26 @@
     draw: drawValve,
   });
 
-  function relabelValve(o) {
+  function relabelValve(o, s) {
     if (!o || !o.data) return;
     o.label = 'Sluice Valve (channel ' + (o.data.chan || '?') + ')' + (o.data.cd > 0 ? ' — building pressure: ' + plural(o.data.cd, 'round') : ' — ready');
+    updateFlavor(s);
+  }
+  /**
+   * Objective subtitle (playtest bosses-objectives-6): each valve's state and the one thing to do, kept current by
+   * relabelValve (every crank and recharge tick), like the act 2-3 bosses.
+   */
+  function flavorText(s) {
+    const vs = valves(s).filter(function (v) { return v.obj.data && v.obj.data.chan; }).sort(function (a, b) { return a.obj.data.chan < b.obj.data.chan ? -1 : 1; });
+    if (!vs.length) return null;
+    const state = vs.map(function (v) { return 'Valve ' + v.obj.data.chan + (v.obj.data.cd > 0 ? ' in ' + plural(v.obj.data.cd, 'round') : ' ready'); }).join(' · ');
+    return state + '. Crank a ready valve (1 AP) while the King wades in its channel: ' + flushDmg() + ' damage, Stunned for a round, ' +
+      'his Swelling Ranks wash away (anyone else in that channel goes down the drain too).';
+  }
+  function updateFlavor(s) {
+    s = s || S();
+    const f = s && s.objective ? flavorText(s) : null;
+    if (f) s.objective.flavor = f;
   }
 
   // ---- the flood ---------------------------------------------------------------------------------------------
@@ -501,7 +546,7 @@
       res.push(r);
     }
     if (res.length) {
-      A().log('Class action! ' + res.length + ' Plaintiff Rat' + (res.length === 1 ? '' : 's') + ' crawl out of the drains to join the lawsuit.', 'enemy');
+      A().log('Class action! ' + res.length + ' Plaintiff Rat' + (res.length === 1 ? ' crawls' : 's crawl') + ' out of the drains to join the lawsuit.', 'enemy');
       A().maybeBark(res[0], 'spawn', 0.7);
     }
     return res;
@@ -571,7 +616,7 @@
         ' damage to every hero on them, then they collapse into pits (a falling hero loses 25% max HP and climbs out).';
     },
     flavor: 'The building code was more of a suggestion.',
-    telegraphFlat: function (unit) { return -swarmNow(unit); },   // Swelling Ranks don't apply to wind-ups
+    telegraphFlat: function (unit) { return -swarmAhead(unit); },   // Swelling Ranks don't apply to wind-ups
     execute: function (ctx) {
       DD.FX.sound('bump');
       ctx.tiles.forEach(function (p, i) { DD.FX.tile(p.x, p.y, 'crack', { parallel: i > 0 }); DD.FX.particles(p, { kind: 'dust', count: 8, parallel: true }); });
@@ -594,7 +639,7 @@
       return 'Wind-up (lands one round later): the marked channel floods: ' + L.dmg + ' damage to every hero in it, then everyone standing in it but him is washed into the drain (flyers stay dry; a hero loses 25% max HP and climbs out; his own rats drown).';
     },
     flavor: 'High tide in the low places.',
-    telegraphFlat: function (unit) { return -swarmNow(unit); },   // Swelling Ranks don't apply to wind-ups
+    telegraphFlat: function (unit) { return -swarmAhead(unit); },   // Swelling Ranks don't apply to wind-ups
     execute: function (ctx) {
       const chan = (ctx.intent && ctx.intent.data && ctx.intent.data.chan) || chanOf(ctx.tiles[0] ? G().tile(ctx.tiles[0].x, ctx.tiles[0].y) : null);
       A().log('SEWER SURGE! Channel ' + (chan || '?') + ' floods.', 'enemy');
@@ -631,7 +676,7 @@
         DD.FX.beam(ctx.user, f, { color: '#e7a3ab', width: 4 });
         A().damage(ctx.user, f, ctx.L.dmg, { noHighGround: true });
         if (active(f)) A().pull(ctx.user, f, ctx.user, ctx.L.pull);
-        if (active(f)) A().addStatus(f, 'root', { turns: ctx.L.turns }, ctx.user);
+        if (active(f) && A().addStatus(f, 'root', { turns: ctx.L.turns }, ctx.user)) noteHeld(f);
       });
     },
   });
@@ -662,7 +707,7 @@
 
   // lawyers
   eskill({
-    id: 'rat_objection', name: 'OBJECTION!', icon: '☝️', kind: 'attack', tags: ['ranged', 'push'], anchor: 'unit',
+    id: 'rat_objection', name: 'Strike That!', icon: '☝️', kind: 'attack', tags: ['ranged', 'push'], anchor: 'unit',
     levels: [{ dmg: 7, push: 1 }],
     target: { type: 'unit', range: [1, 4], los: true, filter: 'enemy' },
     desc: function (L) { return 'Deal ' + L.dmg + ' damage to a hero up to 4 tiles away (line of sight) and push them ' + L.push + ' tile away.'; },
@@ -670,15 +715,31 @@
     execute: function (ctx) {
       ctx.foes.forEach(function (f) {
         DD.FX.projectile(ctx.user, f, { kind: 'note', color: '#f2efe6' });
-        DD.FX.text(f, 'OBJECTION!', { color: '#ffe066', size: 15 });
+        DD.FX.text(f, 'STRIKE THAT!', { color: '#ffe066', size: 15 });
         A().damage(ctx.user, f, ctx.L.dmg, { noHighGround: true });
         if (active(f)) A().knockback(ctx.user, f, ctx.L.push);
       });
     },
   });
 
+  /**
+   * Playtest bosses-objectives-5 (Nov 12): one lawyer kept the same hero Rooted 8 turns in a row. The Injunction now has a
+   * cooldown (like every other rooting enemy skill), and no lawyer serves one on a hero the court (King or lawyer)
+   * Rooted this round or last round, or on one standing on the King's pending Gnaw / Surge tiles (he could not dodge it).
+   */
+  function heldRecently(f, s) {
+    const rd = s && s.data && s.data.rat;
+    const at = rd && rd.held ? rd.held[f.id] : undefined;
+    return typeof at === 'number' && at >= (s.round || 0) - 1;
+  }
+  function noteHeld(f) {
+    const s = S();
+    if (!s || !s.data) return;
+    const rd = s.data.rat || (s.data.rat = { sluices: 0, flushes: 0, drowned: 0 });
+    (rd.held = rd.held || {})[f.id] = s.round || 0;
+  }
   eskill({
-    id: 'rat_cease', name: 'Cease and Desist', icon: '✋', kind: 'attack', tags: ['ranged', 'root'], anchor: 'unit',
+    id: 'rat_cease', name: 'Temporary Injunction', icon: '✋', kind: 'attack', tags: ['ranged', 'root'], anchor: 'unit', cooldown: 2,
     levels: [{ dmg: 4, turns: 1 }],
     target: { type: 'unit', range: [1, 4], los: true, filter: 'enemy' },
     desc: function (L) { return 'Deal ' + L.dmg + ' damage to a hero up to 4 tiles away (line of sight) and Root them for ' + plural(L.turns, 'turn') + '.'; },
@@ -688,14 +749,15 @@
       const f = ctx.targetUnit;
       if (!f || rooted(f)) return -10;
       const k = king(ctx.state);
+      if (heldRecently(f, ctx.state) || (k && onMarked(f, markedTiles(k)))) return -30;
       return 6 + (k && active(k) && dist(k, f) <= 5 ? 6 : 0);
     },
     execute: function (ctx) {
       ctx.foes.forEach(function (f) {
         DD.FX.projectile(ctx.user, f, { kind: 'note', color: '#ff8a7a' });
-        DD.FX.text(f, 'CEASE & DESIST', { color: '#ff8a7a', size: 14 });
+        DD.FX.text(f, 'INJUNCTION!', { color: '#ff8a7a', size: 14 });
         A().damage(ctx.user, f, ctx.L.dmg, { noHighGround: true });
-        if (active(f)) A().addStatus(f, 'root', { turns: ctx.L.turns }, ctx.user);
+        if (active(f) && A().addStatus(f, 'root', { turns: ctx.L.turns }, ctx.user)) noteHeld(f);
       });
     },
   });
@@ -802,8 +864,9 @@
   function openWindow(unit) { (unit.intents || []).forEach(function (it) { if (it.data && it.data.oneRound) it.window = 0; }); }
 
   /**
-   * Gnaw (wind-up): the rotten tiles under and next to heroes (a rooted one can't step off). A flyer over the rot only
-   * takes the bite: it never falls in (v2), so its tile is worth less.
+   * Gnaw (wind-up): the rotten tiles under and next to heroes. A flyer over the rot only takes the bite: it never falls
+   * in (v2), so its tile is worth less. Never the tile of a pinned hero (Rooted / stunned): his one turn before the
+   * landing could not take him off it (playtest bosses-objectives-v1).
    */
   function planGnaw(unit, api, foes, phase) {
     if (pendingOf(unit, 'rat_gnaw').length) return false;
@@ -813,9 +876,9 @@
       let sc = 0;
       foes.forEach(function (f) {
         const d = dist(f, p);
-        if (d === 0) sc += G().isFlying(f) ? 8 : rooted(f) ? 35 : 20;
-        else if (d === 1) sc += 6;
-        else if (d === 2) sc += 1;
+        if (d === 0) sc += pinned(f) ? -1000 : G().isFlying(f) ? 8 : 20;
+        else if (d === 1 && !pinned(f)) sc += 6;
+        else if (d === 2 && !pinned(f)) sc += 1;
       });
       return { p: p, sc: sc };
     }).filter(function (e) { return e.sc > 0; }).sort(function (a, b) { return b.sc - a.sc || a.p.y - b.p.y || a.p.x - b.p.x; });
@@ -824,15 +887,18 @@
     return !!windUpRound(api, unit, 'rat_gnaw', picks[0], { tiles: picks, label: 'Gnaw' });
   }
 
-  /** Sewer Surge (wind-up): the channel with the most heroes in it (phase 3: both channels). */
+  /**
+   * Sewer Surge (wind-up): the channel with the most heroes in it (phase 3: both channels). Never a channel with a pinned
+   * hero in it (Rooted / stunned: he could not wade out before it floods; playtest bosses-objectives-v1).
+   */
   function planSurge(unit, api, foes, phase) {
     const chans = channels(api.state);
     const pending = {};
     pendingOf(unit, 'rat_surge').forEach(function (it) { if (it.data && it.data.chan) pending[it.data.chan] = 1; });
     const cands = Object.keys(chans).filter(function (c) { return !pending[c]; }).map(function (c) {
       const inIt = foes.filter(function (f) { return inChannel(f, c); });
-      return { chan: c, n: inIt.length + inIt.filter(rooted).length, tiles: chans[c], first: inIt[0] };
-    }).filter(function (e) { return e.n > 0 || phase >= 3; }).sort(function (a, b) { return b.n - a.n || (a.chan < b.chan ? -1 : 1); });
+      return { chan: c, n: inIt.length, trap: inIt.some(pinned), tiles: chans[c], first: inIt[0] };
+    }).filter(function (e) { return !e.trap && (e.n > 0 || phase >= 3); }).sort(function (a, b) { return b.n - a.n || (a.chan < b.chan ? -1 : 1); });
     if (!cands.length || !cands.some(function (e) { return e.n > 0; })) return false;
     const pick = phase >= 3 ? cands : cands.slice(0, 1);
     pick.forEach(function (e, i) {
@@ -856,16 +922,27 @@
     const L = DD.skillLevel(DD.getSkill(skillId), 1);
     const dmg = ((L && L.dmg) || 0) + swarmNow(unit);
     const top = Math.max(1, foes.reduce(function (m, f) { return Math.max(m, dealt(f)); }, 0));
+    // Tangled Tails roots: never a hero on (or reeled onto) his pending Gnaw / Surge tiles (bosses-objectives-v1)
+    const marked = skillId === 'rat_tails' ? markedTiles(unit) : {};
+    const anyMarked = Object.keys(marked).length > 0;
     let best = null, bs = -Infinity;
     foes.forEach(function (f) {
       const d = dist(unit, f);
       if (!inReach(skillId, d) || !api.los(unit, f) || (skipRooted && rooted(f))) return;
+      if (anyMarked && (onMarked(f, marked) || onMarked(landing(unit, skillId, f), marked))) return;
       const left = f.hp + (f.block || 0);
       const est = dmg > 0 ? DD.AI.estimate(unit, f, dmg, null) : 0;
       const sc = Math.min(est, left) + (est >= left && est > 0 ? 10 : 0) + (skillId === 'rat_tails' && d <= 3 ? 12 : 0) + 4 * dealt(f) / top - d * 0.01;
       if (sc > bs) { bs = sc; best = f; }
     });
     return best;
+  }
+  /** Where a hero ends up after skillId hits him (the dry-run preview: Tangled Tails' pull); his own tile if unmoved. */
+  function landing(unit, skillId, f) {
+    const sl = DD.Combat.slotsOf(unit).filter(function (s) { return s.id === skillId; })[0] || skillId;
+    const p = DD.Targeting.preview(unit, sl, { x: f.x, y: f.y });
+    const e = p && p.perUnit ? p.perUnit[f.id] : null;
+    return e && e.moved ? e.moved : { x: f.x, y: f.y };
   }
   function doTails(unit, api, foes) {
     const tgt = rangedTarget(unit, api, foes, 'rat_tails', true);
@@ -952,7 +1029,7 @@
 
   DD.registerEnemy({
     id: 'rat_plaintiff', name: 'Plaintiff Rat', act: 1, tier: 'minion',
-    hp: 7, mov: 4, armor: 0, tags: ['beast', 'rat'],
+    hp: 7, mov: 4, armor: 0, init: 1, tags: ['beast', 'rat'],
     flags: {}, resist: { poison: 0.5 },
     sprite: {
       base: 'quadruped', scale: 0.62,
@@ -973,7 +1050,7 @@
 
   DD.registerEnemy({
     id: 'rat_lawyer', name: 'Rat Lawyer', act: 1, tier: 'normal',
-    hp: 14, mov: 3, armor: 0, tags: ['beast', 'rat', 'lawyer'],
+    hp: 14, mov: 3, armor: 0, init: 0, tags: ['beast', 'rat', 'lawyer'],
     flags: {}, resist: { poison: 0.5 },
     sprite: {
       base: 'humanoid', scale: 0.92, build: 'slim', outfit: 'coat',
@@ -984,14 +1061,14 @@
     },
     skills: ['rat_objection', 'rat_cease', 'rat_billable'],
     ai: { style: 'ranged', keepDistance: 2 }, xp: 4, gold: [2, 5],
-    passive: { name: 'Billable Hours', icon: '⚖️', desc: 'On its turn it keeps its distance and objects (push) or serves a Cease and Desist (Root: it loves rooting a hero near the King). Next to a hero it bites, and so it does when you walk away from it.' },
+    passive: { name: 'Billable Hours', icon: '⚖️', desc: 'On its turn it keeps its distance and pushes a hero away (Strike That!) or serves a Temporary Injunction (Root: it loves rooting a hero near the King). Next to a hero it bites, and so it does when you walk away from it.' },
     barks: {
       spawn: ['Ratticus for the defense!', 'My client pleads the cheese.', 'I passed the bar. I also ate it.'],
-      attack: ['OBJECTION!', 'Leading the witness!', 'That will be billed.'],
+      attack: ['Strike that from the record!', 'Leading the witness!', 'That will be billed.'],
       hurt: ['Hearsay!', 'I demand a recess!', 'Badgering the rodent!'],
       death: ['I rest... my case...', 'Mistrial...', 'Tell the King... I billed him...'],
     },
-    desc: 'Pushes heroes around with OBJECTION! from range. Pushable, unlike his client: shove him into a pit or wash him down the drain.',
+    desc: 'Pushes heroes around with Strike That! from range. Pushable, unlike his client: shove him into a pit or wash him down the drain.',
   });
 
   DD.registerEnemy({
@@ -1113,7 +1190,7 @@
         const t = G().tile(v.x, v.y);
         v.obj.data.chan = t && t.tag === 'rat_valveA' ? 'A' : t && t.tag === 'rat_valveB' ? 'B' : valveChannel(v.obj, t);
         v.obj.data.cd = 0;
-        relabelValve(v.obj);
+        relabelValve(v.obj, s);
       });
       A().narrate('rat_start', {});
     },

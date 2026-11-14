@@ -1,6 +1,7 @@
 /* Dungeons and Degenerates — js/data/narrator.js
  * The DM's voice (ARCHITECTURE §3.10, DESIGN §2 / §11): narration lines for every engine / run / UI key (plus the v2
- * engine key `initiative`, and `objective_failed` for a lost objective while heroes stand) and the loading-screen tips. The DM is snarky, sleep-deprived, secretly proud of the
+ * engine key `initiative`, `objective_failed` for a lost objective while heroes stand, `opportunity` for an attack
+ * of opportunity, which the engine may narrate, and `swap` for a swap move) and the loading-screen tips. The DM is snarky, sleep-deprived, secretly proud of the
  * party, fudges dice, eats Cheetos and threatens "rocks fall". v2: initiative order, one turn per unit, enemies that act
  * without warning, boss wind-ups, attacks of opportunity, no Guard, slow shared leveling. Tokens are used only where
  * every caller fills them (DD.Narrator.TOKENS): DD.narrate leaves an unfilled token in the text, so keys with any
@@ -15,8 +16,8 @@
   const TOKENS = {
     combat_start: [], elite_start: [], boss_start: [], victory: [], defeat: [], objective_failed: [],
     kill: ['hero', 'enemy'], env_kill: ['hero', 'enemy'], overkill: ['hero', 'enemy', 'n'], multi_kill: ['hero', 'n'],
-    hero_downed: ['hero', 'enemy'], hero_revived: ['hero'], hero_death: [], level_up: [], signature: ['hero'],
-    round_start: ['n'], enemy_turn: [], initiative: ['hero'],
+    hero_downed: ['hero', 'enemy'], hero_downed_self: ['hero'], hero_downed_friendly: ['hero', 'enemy'], hero_revived: ['hero'], hero_death: [], level_up: [], signature: ['hero'],
+    round_start: ['n'], enemy_turn: [], initiative: ['hero'], opportunity: [], swap: ['hero', 'ally'],
     shop_greet: [], shop_buy: [], shop_broke: [], shop_leave: [], tavern_greet: [], rest: [], recruit: ['hero', 'name'],
     map_enter: [], act_intro_1: [], act_intro_2: [], act_intro_3: [], act_clear: [], treasure: [], tips: [],
     gameover_title: [], victory_title: [], run_start: [], idle_dm: [],
@@ -132,7 +133,7 @@
     ],
     // {enemy} is 'gravity' when nobody gets the credit (lava, burn ticks…), so it never starts a sentence here
     hero_downed: [
-      '{hero} is down, and {enemy} looks far too proud of itself.',
+      '{hero} is down, and {enemy} is far too pleased about it.',
       '{hero} hits the floor. The DM makes a note: {enemy} will be hearing about this.',
       'Down goes {hero}, courtesy of {enemy}. The DM writes that one down.',
       '{hero} takes an unscheduled nap, sponsored by {enemy}. An adjacent friend can Help Up for 2 AP.',
@@ -140,6 +141,28 @@
       '{hero} is down! Get {hero} up before the fight is won, or there will be a Scar.',
       '{hero} has fallen and can\'t get up. Do not expect any help from {enemy}.',
       'Everyone gasps as {hero} goes down. Over in the corner, {enemy} does a little dance.',
+    ],
+    // [playtest text-tone-5] the credit for the down is the downed hero (a self-own: a barrel shot point blank)
+    hero_downed_self: [
+      'Down goes {hero}, by {hero}\'s own hand. The DM pencils in "self-own" and underlines it twice.',
+      '{hero} is down. The culprit has been identified, and it is {hero}.',
+      '{hero} hits the floor. No monster was involved. The monsters are applauding anyway.',
+      'Friendly fire, minus the friend: {hero} is down. The DM calls it "commitment to the bit."',
+      '{hero} takes a nap of {hero}\'s own making. An adjacent ally can Help Up for 2 AP.',
+      'The DM did not even have to roll. {hero} is down, entirely self-inflicted.',
+      '{hero} goes down. The enemies would like it on record that they did nothing.',
+      'Gravity, physics and {hero}\'s own choices team up. {hero} is down.',
+    ],
+    // [playtest text-tone-5] the credit is another hero-side unit ({enemy} is that ally's name): friendly fire
+    hero_downed_friendly: [
+      '{hero} goes down to friendly fire from {enemy}. The DM writes that one down twice.',
+      '{enemy} drops {hero}. Same team, allegedly. The monsters are taking notes.',
+      'Friendly fire! {hero} is down, and {enemy} would like to speak to a lawyer.',
+      '{hero} hits the floor, courtesy of {enemy}. Team-building exercises have been scheduled.',
+      'The monsters didn\'t even have to try. {enemy} took care of {hero}.',
+      '{hero} is down. Ask {enemy} why. Actually, don\'t: there will be a speech.',
+      'Down goes {hero}! The assist goes to {enemy}, on the wrong team\'s scoresheet.',
+      '{enemy} meant well. {hero} is down anyway. Someone adjacent can Help Up for 2 AP.',
     ],
     hero_revived: [
       '{hero} is back up, a little dizzy and very annoyed.',
@@ -216,6 +239,32 @@
       'Roll for initiative! Anything that beat {hero} to it will not be sending a warning first.',
       'The d20s have spoken. The order is final, and the DM will eat Cheetos through every single turn of it.',
       'Initiative order locked in. Somebody write it on a napkin. The napkin is now canon.',
+    ],
+    // an attack of opportunity (requested from the engine, docs/notes/narrative.md; nothing narrates it yet). Token-free:
+    // either side can swing, and the caller may pass nothing
+    opportunity: [
+      'Attack of opportunity! Walking away from a fight is a choice. A painful one.',
+      'Never turn your back on someone holding something sharp. The DM says this every session. Nobody listens.',
+      'Free swing! The rules call it an attack of opportunity. The victim calls it rude.',
+      'Somebody tried to leave without paying the exit fee. The exit fee is a punch.',
+      'The DM checks the rulebook. Yes, walking away provokes. No, "I was just leaving" is not a defense.',
+      'Opportunity knocks. With a weapon. On the back of a head.',
+      'Pro tip from the DM: shove, leap or teleport out of a melee. Strolling out costs extra.',
+      'A free hit, courtesy of poor life choices and the movement rules.',
+      'The DM loves this rule. It is the only one everybody at the table actually remembers.',
+      'That is what turning your back in a melee gets you. Ask anyone who has done it twice.',
+    ],
+    // [finish D7] a swap move (DD.Act.swapMove, now and then): {hero} = the one who moved, {ally} = the ally it traded
+    // places with. Names come only from the tokens, so no line can name a hero who is not in the fight
+    swap: [
+      '{hero} and {ally} trade places. The DM erases two minis and redraws them. Grudgingly.',
+      '"After you." "No, after YOU." {hero} and {ally} settle it by swapping.',
+      '{hero} swaps with {ally}. Musical chairs, but with more stabbing.',
+      'A tactical swap! {hero} takes the front, {ally} takes the credit.',
+      '{ally} is politely relocated by {hero}. Nobody signed a form.',
+      '{hero} and {ally} do the little sidestep dance. The monsters are briefly confused.',
+      'Seat swap! {hero} wanted the view. {ally} wanted to live.',
+      'The DM checks the rules: {ally} was only moved, so {ally} provokes nothing. {hero} walked, so {hero} might.',
     ],
 
     // ---- run & screens (shopkeeper, barkeep, map, act screens) -------------------------------------------------
@@ -324,7 +373,7 @@
       'Act III. Lava, dragons and the actual table. The DM has stopped pretending to be neutral.',
       'The final act. The DM puts on his serious hat. It is the same hat, worn seriously.',
       'Act III begins. Somewhere ahead, a giant d20 is rolling your way.',
-      'Welcome behind the screen. Mind the Cheeto dust. It is load-bearing.',
+      'Welcome behind the screen. Mind the Cheeto dust. It has seniority.',
       'Act III: hellscapes, a dragon hoard and a man with a lot of dice. This is where it ends.',
       'The last act. The DM has saved his meanest encounters, and his biggest bag of snacks.',
       'Act III. You have come too far to die to something embarrassing. Probably.',
@@ -420,13 +469,18 @@
       'A wind-up that tracks a hero can fizzle: get out of its range, out of its sight or into stealth before it lands.',
       // attacks of opportunity
       'Walking away from a melee foe gives it a free attack of opportunity. Each unit makes at most one per round.',
-      'Pushes, pulls, teleports, swaps, jumps and dashing skills never provoke attacks of opportunity. Only walking does.',
+      'Pushes, pulls, teleports, jumps, dashes and swapping skills never provoke attacks of opportunity. Only walking (or a swap move) does.',
       'Melee heroes hold the line: an enemy next to one would rather keep swinging than walk past and eat a free hit.',
       'It works both ways: an enemy that walks away from your melee heroes eats a free hit too. Pin the archers.',
       'Stunned, sleeping, frozen and sheeped units make no attacks of opportunity, and stealthed units provoke none.',
       'Sneaky enemies dive the weakest hero. Everything else hits what it can reach, starting with whoever is next to it.',
       'Paths dodge attacks of opportunity when they can. Hover a tile first: a red path with ⚔ marks shows who still gets a free hit.',
       'Bad move? Press Z to undo it, as long as nothing else happened since and it provoked no attack of opportunity.',
+      // moving through allies, swapping places (rules run)
+      'Heroes walk straight through each other, and monsters through theirs. Nobody can stop on an occupied tile, though: that is a hug.',
+      'Stuck behind the wizard in a corridor? Click them while moving to swap places. It costs a move. The wizard pretends not to mind.',
+      // [finish D2] the rule text: "Immovable units can start a swap but can't be swapped"
+      'Slate is immovable: he can start a swap with an ally next to him, but nobody can swap with him. Walk around the golem.',
       'Space rolls initiative and ends turns, 1-6 pick skills, 7-0 use consumables, E interacts and Tab cycles summons.',
       'Can\'t see a tile? Hold the mouse wheel and drag to turn the map. Q and R turn it 90 degrees, Home puts it back.',
       // battlefield
@@ -440,13 +494,15 @@
       'Frost freezes water into ice, and pushed units slide one extra tile on ice.',
       'Fire ignites oil, and the flames race along the entire slick.',
       'Explosive barrels blow up when destroyed or set alight: 8 fire damage to everything next to them.',
-      'Shoot the barrel: aim any single-target attack at an explosive barrel in range and it goes off. Blast kills are environmental: +20 Hype.',
+      'Shoot the barrel: aim any single-target damage skill at an explosive barrel and it goes off. Blast kills are environmental: +20 Hype.',
       'Webs root whoever walks into them. Fire burns them away.',
       'Skills used from higher ground deal 25% more damage.',
       'Climbing costs 1 extra move per level, and most heroes step up only 1 level at a time. Flyers ignore height, pits, liquids and mud.',
       'Professor Marbles, Betty and Hjalmar hop up 2 levels in a single step. Rabbits, goats and monkeys: born climbers.',
-      'Flyers ignore everything on the floor, good and bad: fire, puddles, traps, plates, holy ground. Clouds and explosions still get them.',
-      'Adjacent heroes can Smash objective objects like totems: 1 AP for 5 damage.',
+      'Flyers ignore the floor, good and bad: fire, puddles, traps, plates, holy ground. Clouds and blasts still hit them. They still pocket gold.',
+      'Adjacent heroes can Smash objective objects like totems: 1 AP for 5 damage. Any single-target damage skill can break one too.',
+      'Most things with HP are fair game: hit the crate, the totem, the Spore Pod next to three goblins. Property damage is still damage.',
+      'No attack can be aimed at the DM\'s laminated screen (Smash it up close, or blast it) or at what you swore to protect. Even the snacks.',
       'Fountains heal 10 HP for 1 AP. One sip per fight: it is a small fountain.',
       // damage & Hype
       'Kills give +8 Hype. Environmental kills (pits, hazards, bumps, explosions) give +20 instead.',
@@ -466,12 +522,12 @@
       'Leveling is slow: one hero per won fight, so in a party of four each hero levels about once every four fights.',
       'Recruits join at the lowest level among the heroes who stay, and the level-up roll treats them like everyone else.',
       'Each level-up rolls on the Table of Questionable Blessings, then you pick 1 of 3: new skills, upgrades or perks.',
-      'Heroes socket 4 skills. Learning a fifth means forgetting one forever, or skipping the new one.',
+      'Heroes socket 4 skills. Learning a fifth means forgetting one (it goes back in the pile), or skipping the new one.',
       'Heroes hold up to 4 Blessings. Rolling one you already own upgrades it instead.',
       'At a tavern, pick one: rest (35% heal for everyone and one scar treated), train (upgrade a skill) or recruit.',
       'The party shares 3 consumable pockets, and Josiah adds a fourth. Only heroes can drink potions: corgis lack thumbs.',
       'Summoned allies vanish when the fight ends. Do not get attached to the corgis. (You will.)',
-      'Brutal: enemies get 25% more HP and 20% more damage, and normal fights bring an extra enemy.',
+      'Brutal: enemies get 15% more HP and 5% more damage, and normal fights bring an extra enemy.',
       'Clearing an act heals every hero for 50% of their max HP.',
     ],
   };

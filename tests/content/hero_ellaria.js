@@ -1337,3 +1337,32 @@
     t.ok(A().teleport(at(8, 8), 5, 4) && at(5, 4).hp === 11 && has(at(5, 4), 'root'), 'a walker entering is still pricked and Rooted');
   });
 })();
+
+// ---- playtest fixes (Nov 12) ----------------------------------------------------------------------------------------
+(function () {
+  'use strict';
+  const T = window.DD_TEST, DD = window.DD;
+  if (!T || !DD || !DD.getHero('ellaria')) return;
+  T.suite('hero_ellaria: playtest fixes (Nov 12) — the Good Stick in the corgi texts, Healing Spring\'s wording, no named corgi in barks', function (t) {
+    DD.Combat.sandbox({ w: 7, h: 7, seed: 3, enemyAi: false, heroes: [{ id: 'ellaria', x: 1, y: 3, level: 1 }], enemies: [{ id: 'test_grunt', x: 5, y: 5 }],
+      objective: { type: 'custom', text: 'Testing' }, encounter: { id: 'ell_pt', checkObjective: function () { return null; } } });
+    const e = DD.Combat.state.units.filter(function (u) { return u.defId === 'ellaria'; })[0];
+    const corgi = DD.Combat.state.units.filter(function (u) { return u.defId === 'ell_corgi' && u.ownerId === e.id; })[0];
+    const d = function (id, lv, u) { return DD.skillDesc(DD.getSkill(id), lv, u); };
+    const L = function (id, lv) { return DD.skillLevel(DD.getSkill(id), lv || 1); };
+    t.ok(d('ell_fetch', 1, e).indexOf('bites it for ' + L('ell_fetch').dmg + ' damage') >= 0, 'Fetch! without the Stick: ' + L('ell_fetch').dmg);
+    e.items = (e.items || []).concat(['ell_good_stick']);
+    t.ok(d('ell_fetch', 1, e).indexOf('bites it for ' + (L('ell_fetch').dmg + 2) + ' damage') >= 0, 'Fetch! with the Stick: +2');
+    t.ok(d('ell_zoomies', 1, e).indexOf('takes ' + (L('ell_zoomies').dmg + 2) + ' damage') >= 0, 'Zoomies with the Stick: +2');
+    t.ok(d('ell_release', 1, e).indexOf('bites it for ' + (L('ell_release').dmg + 2) + ' damage') >= 0, 'Release the Corgis with the Stick: +2');
+    if (corgi) t.eq(d('ell_corgi_bite', 1, corgi), 'Deal ' + (L('ell_corgi_bite').dmg + 2) + ' damage to an adjacent foe.', 'her corgi\'s Bite: +2');
+    else t.ok(true, 'no starting corgi in this sandbox');
+    // heroes-7: the Spring heals her only when she stands in it, and says so
+    t.ok(/yourself too if inside/.test(d('ell_spring', 1, null)), 'Healing Spring: "yourself too if inside"');
+    // text-tone-7: corgis get random names, so the barks name none
+    const barks = DD.getHero('ellaria').barks;
+    const named = [];
+    Object.keys(barks).forEach(function (k) { (barks[k] || []).forEach(function (l) { if (/\b(Biscuit|Waffles|Captain Loaf|Nugget|Pancake)\b/.test(l)) named.push(k + ': ' + l); }); });
+    t.eq(named.length, 0, 'no bark names a particular corgi: ' + named.join(' | '));
+  });
+})();

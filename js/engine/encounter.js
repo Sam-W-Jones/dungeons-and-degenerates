@@ -13,7 +13,7 @@
   const DIFFICULTY = {
     casual: { id: 'casual', hp: 0.8, dmg: 0.8 },
     normal: { id: 'normal', hp: 1, dmg: 1 },
-    brutal: { id: 'brutal', hp: 1.25, dmg: 1.2 },
+    brutal: { id: 'brutal', hp: 1.15, dmg: 1.05 },   // fallback copy of DD.Balance.difficulty (used only without it)
   };
   const TIER_RANK = { boss: 0, elite: 1, normal: 2, minion: 3 };
   const EDGE_NAMES = { N: 'the north', E: 'the east', S: 'the south', W: 'the west', zone: 'the enemy lines' };
@@ -236,6 +236,8 @@
       case 'survive': return 'Survive ' + o.rounds + ' rounds.';
       case 'destroy': return 'Destroy ' + o.count + ' ' + objName(o.objId, o.count) + '.';
       case 'protect': {
+        // [playtest bosses-objectives-9] the placed object's own label when the map names it ("Protect The Last Keg")
+        if (o.objId && o.objLabel) return 'Protect ' + (/^the /i.test(o.objLabel) ? '' : 'the ') + o.objLabel + ' and defeat all enemies.';
         if (o.objId) return 'Protect the ' + objName(o.objId, 1) + ' and defeat all enemies.';
         const d = o.unitId ? (enemyDef(o.unitId) || (DD.getSummon && DD.getSummon(o.unitId)) || (DD.getHero && DD.getHero(o.unitId))) : null;
         return 'Keep ' + (d ? d.name : 'the VIP') + ' alive and defeat all enemies.';
@@ -278,6 +280,10 @@
       }
     }
     if (o.type === 'survive' && !(o.rounds > 0)) o.rounds = 5;
+    if (o.type === 'protect' && o.objId && !o.objLabel) {
+      const lab = grid.tiles.filter(function (t) { return t.obj && t.obj.id === o.objId && t.obj.label; })[0];
+      if (lab) o.objLabel = lab.obj.label;
+    }
     if (o.type === 'destroy') {
       if (!o.objId) o.objId = 'totem';
       const onMap = countObjects(grid, o.objId);

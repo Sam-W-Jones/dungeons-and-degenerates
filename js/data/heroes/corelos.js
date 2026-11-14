@@ -730,6 +730,7 @@
       start: ['Gentlemen, I believe you\'re standing on my runes.', 'Let\'s settle this out of court. Violently.',
         'Per my last rune, you are all in breach.', 'Everyone signed the waiver? Marwyn, that\'s a napkin.', 'I\'ve drafted a strongly worded explosion.',
         'Betty, do NOT eat the contract before they sign it.'],
+      swap: ['Change of venue, {ally}. Motion granted.', 'Swap places, {ally}. I\'ll invoice you later.'],
       move: ['Changing venue.', 'Mind the runes. They\'re for them, not you.', 'Walking. Billing for it.', 'Strategic relocation. Totally not fleeing.',
         'Stepping carefully. Hjalmar was here first.'],
       kill: ['Contract terminated.', 'Your soul has been processed. Next!', 'Collateral: collected.', 'That\'s what the fine print was for.', 'Paid in full. With you.',

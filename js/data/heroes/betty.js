@@ -11,6 +11,16 @@
 (function () {
   'use strict';
   const DD = window.DD;
+  /**
+   * A range number in a desc as targeting resolves it for this user (range items such as the Yardstick of Reach, Dazzle,
+   * modifyRange hooks: what the card's Range pill says; playtest heroes-v1) via DD.Targeting.reach. No user: the number.
+   */
+  function reach(user, id, base) {
+    const d = DD.getSkill(id);
+    if (!user || !d || !DD.Targeting) return base;
+    if (typeof DD.Targeting.reach === 'function') return DD.Targeting.reach(d, null, user, base);
+    return Math.max(0, base + DD.Targeting.range(user, d, 1)[1] - DD.Targeting.range(null, d, 1)[1]);
+  }
 
   const EAT_HEAL = 4;                       // Eats Anything
   const PASTURE = 'bet_pasture';            // You Shall Not Pasture! (skill and status)
@@ -100,13 +110,18 @@
   };
 
   // ---- pure geometry (targeting, HUD areas and execute share it) ---------------------------------------
-  /** The Family Hammer: an adjacent active foe, or an adjacent breakable object. */
+  /**
+   * The Family Hammer: an adjacent active foe, or an adjacent breakable object the party may aim at (rules run: not one
+   * that says `targetable: false` — the DM's laminated screen, Rocky — nor the object the party must protect).
+   */
   function hammerTarget(user, p) {
     if (!user || !p || G().dist(user, p) !== 1) return null;
     const o = G().unitAt(p.x, p.y);
     if (o) return foeOf(user, o) ? { foe: o } : null;
     const t = G().tile(p.x, p.y);
-    return t && t.obj && t.obj.maxHp > 0 && t.obj.hp > 0 ? { obj: t.obj } : null;
+    const Tg = DD.Targeting;
+    if (!t || !t.obj || !(t.obj.maxHp > 0 && t.obj.hp > 0)) return null;
+    return Tg && Tg.objectTargetable && !Tg.objectTargetable(t.obj) ? null : { obj: t.obj };
   }
 
   /**
@@ -123,11 +138,16 @@
       const nx = at.x + dir.x, ny = at.y + dir.y;
       if (!G().inBounds(nx, ny)) break;
       const o = G().unitAt(nx, ny);
-      if (o) { if (foeOf(user, o)) foe = o; break; }
+      if (o && foeOf(user, o)) { foe = o; break; }
+      if (o && o !== user && G().hostile(user, o)) break;
+      // allies don't stop the run (like any walk; playtest combat-controls-5): he runs through, never ends on one
       if (!runnable(user, at, { x: nx, y: ny })) break;
       path.push({ x: nx, y: ny });
       at = { x: nx, y: ny };
     }
+    while (path.length && G().unitAt(path[path.length - 1].x, path[path.length - 1].y)) path.pop();
+    const end = path.length ? path[path.length - 1] : { x: user.x, y: user.y };
+    if (foe && G().dist(end, foe) !== 1) foe = null;   // an ally right in front of the foe: no room to ram it
     if (!path.length && !foe) return null;
     return { dir: dir, path: path, foe: foe };
   }
@@ -234,7 +254,7 @@
     },
     canUse: function (ctx) { return rootedReason(ctx, 'Rooted: no running start.'); },
     desc: function (L, user) {
-      return 'Charge up to ' + L.range + ' tiles in a straight line. The first foe in the way takes ' + L.dmg + ' damage and is pushed ' +
+      return 'Charge up to ' + reach(user, 'bet_ram', L.range) + ' tiles in a straight line, through allies. The first foe in the way takes ' + L.dmg + ' damage and is pushed ' +
         plural(L.push + (hasItem(user, MALLET) ? 1 : 0), 'tile') + '.';
     },
     flavor: 'Horns first, questions never.',
@@ -284,7 +304,8 @@
     ap: 1, cooldown: 2,
     levels: [{ turns: 1 }, { turns: 2 }, { turns: 2, dmg: 5 }],
     target: {
-      type: 'unit', range: [1, 1], filter: 'enemy',
+      // objects: false (lead D1 opt-out) — a throw: she flips a foe over herself, and the damage at III is its landing
+      type: 'unit', range: [1, 1], filter: 'enemy', objects: false,
       canTarget: function (ctx) {
         const t = ctx.targetUnit;
         if (!t) return false;
@@ -419,7 +440,7 @@
     levels: [{ leap: 3 }, { leap: 4 }, { leap: 5 }],
     target: { type: 'tile', range: function (L) { return [1, L.leap]; }, filter: 'empty', los: false },
     canUse: function (ctx) { return rootedReason(ctx, 'Rooted: even goats need their legs.'); },
-    desc: function (L) { return 'Leap to an empty tile up to ' + L.leap + ' tiles away, whatever its height and whatever is in between.'; },
+    desc: function (L, user) { return 'Leap to an empty tile up to ' + reach(user, 'bet_mountain_goat', L.leap) + ' tiles away, whatever its height and whatever is in between.'; },
     flavor: 'Cliffs, crates, castle walls: if it is taller than Betty, it is a staircase.',
     execute: function (ctx) {
       const u = ctx.user, p = ctx.target;
@@ -523,8 +544,8 @@
       },
     },
     canUse: function (ctx) { return rootedReason(ctx, 'Rooted: even the G.O.A.T. needs legs.'); },
-    desc: function (L) {
-      return 'Charge up to ' + L.range + ' tiles in a straight line, right through every foe in the way: each takes ' + L.dmg +
+    desc: function (L, user) {
+      return 'Charge up to ' + reach(user, 'bet_goat', L.range) + ' tiles in a straight line, right through every foe in the way: each takes ' + L.dmg +
         ' damage and is Stunned.';
     },
     flavor: 'Greatest Of All Time. It says so on his breastplate. Well, it says BETTY. Same thing.',
@@ -687,6 +708,8 @@
         'Somebody hold the map. Wait. I ate the map.',
         'Pebbles, sit. Good boy. Stop toasting my beard.',
       ],
+      swap: ['Shove over, {ally}. Goat coming through.', 'Trade you spots, {ally}. Yours has better grass.',
+        'Scoot, kid. Er, {ally}. BAAA. Same thing.', 'You stand here now, {ally}. It\'s a family tradition.'],
       move: [
         'Hoof it.',
         'Coming through, kid.',
@@ -780,7 +803,7 @@
         'Mm. Crunchy.',
         'Needs salt.',
         'Don\'t tell the DM.',
-        'That was load-bearing? Oops.',
+        'Was that important? Oops.',
       ],
       // his hammer on a foe that walked away from him, and You Shall Not Pasture!
       opportunity: [

@@ -1,6 +1,8 @@
 /* Dungeons and Degenerates — tests/content/hero_basanos.js
  * Suites "hero_basanos: …" for js/data/heroes/basanos.js (owner: hero-basanos): the hero def, the two forms (Transform,
- * form gates, move bonus, basic attack swap, sprite override), the Hair Trigger passive, every skill at every level in
+ * form gates, move bonus, basic attack swap, sprite override), Transform's mend (D9: the first Transform each turn heals;
+ * Hair Trigger, Blood Moon and dispels never do; the Coat's Block; the quick-pass aiScore term), the Hair Trigger
+ * passive, every skill at every level in
  * v2 sandbox fights (desc == effect), the signature, the 3 items, HUD previews, v2 edge cases (stun / silence / sheep /
  * charm, deaths mid-skill, pits / lava / water / walls / edges, AP, own-turn durations), AutoPlay battles of
  * ['basanos', 'test_knight', 'test_cleric', 'test_mage'] against the fixture encounters at levels 1 / 3 / 5, attacks of
@@ -236,6 +238,114 @@
     t.ok(!wolf(w) && w.basic.id === 'bas_sword' && w.mov === 4 && !w.sprite, 'his next turn: back to sword, move 4, human sprite');
   });
 
+  // ---- 2b. Transform mends (sustain, D9) -------------------------------------------------------------------------
+  /** Log lines matching re written while fn runs. */
+  function logged(re, fn) {
+    const list = [], orig = A().log;
+    A().log = function (msg) { if (re.test(String(msg))) list.push(String(msg)); return orig.apply(this, arguments); };
+    try { fn(); } finally { A().log = orig; }
+    return list;
+  }
+  /** HP he gains from one Transform (asserts the use). */
+  function mendOf(t, u, label) {
+    const h0 = u.hp;
+    use(t, u, u.skills[0], u.x, u.y, label);
+    return u.hp - h0;
+  }
+  function words(s) { return s.split(/\s+/).length; }
+
+  T.suite('hero_basanos: Transform mends — his first Transform each turn, either way, heals him 2 / 3 / 4 (D9; the sustain refit fallback)', function (t) {
+    t.eq(JSON.stringify(Bz().MEND), JSON.stringify([2, 3, 4]), 'MEND = 2 / 3 / 4 by Transform level (was 3 / 4 / 5; the balance refit applied the spec fallback for the Flea Collar)');
+    t.eq(Bz().COAT_BLOCK, 5, 'COAT_BLOCK = 5');
+    t.ok(!('COAT_HEAL' in Bz()), 'COAT_HEAL is gone (the Coat no longer heals)');
+    const def = DD.getSkill('bas_transform');
+    t.ok(def.tags.indexOf('heal') < 0 && def.ap === 1 && def.cooldown === 0, 'Transform: 1 AP, no cooldown, no heal tag (not a healer for healer-only Blessings)');
+    [1, 2, 3].forEach(function (lv) {
+      const M = Bz().MEND[lv - 1], L = DD.skillLevel(def, lv);
+      t.eq(L.mend, M, 'L' + lv + ': level key mend = ' + M);
+      t.ok(!L.heal, 'L' + lv + ': no `heal` key (AutoPlay\'s quick pass would credit a spent heal)');
+      t.ok(desc('bas_transform', lv).indexOf('Your first Transform each turn heals you ' + M + ' HP.') >= 0, 'L' + lv + ' desc names the mend: ' + desc('bas_transform', lv));
+      fight({ heroes: [{ x: 2, y: 4, skills: [{ id: 'bas_transform', level: lv }] }], enemies: [{ id: 'test_grunt', x: 6, y: 4 }] });
+      const u = B();
+      u.hp = u.maxHp - 20;              // room for three mends at III (no damage, so Hair Trigger stays out of it)
+      t.ok(desc('bas_transform', lv, u).indexOf('(used this turn)') < 0, 'L' + lv + ': before his first switch the desc has no "(used this turn)"');
+      // turn 1: man → wolf heals, the switch back heals nothing
+      let got = 0;
+      const lines = logged(/knits/, function () { got = mendOf(t, u, 'L' + lv + ' Transform (man → wolf)'); });
+      t.ok(wolf(u) && got === M, 'L' + lv + ': man → wolf, the first switch this turn heals ' + M + ' (' + got + ')');
+      t.eq(lines.length, 1, 'L' + lv + ': one log line ("' + (lines[0] || '') + '")');
+      const live = desc('bas_transform', lv, u);
+      t.ok(live.indexOf('heals you ' + M + ' HP (used this turn).') >= 0, 'L' + lv + ': the live desc says it is spent: ' + live);
+      t.ok(words(live) <= 28, 'L' + lv + ': the live desc still reads in one breath (' + words(live) + ' words)');
+      t.ok(desc('bas_transform', lv).indexOf('(used this turn)') < 0, 'L' + lv + ': the desc without a user never says "(used this turn)"');
+      t.eq(mendOf(t, u, 'L' + lv + ' Transform back (wolf → man)'), 0, 'L' + lv + ': the second switch this turn heals 0');
+      t.ok(!wolf(u) && u.ap === 1, 'L' + lv + ': a man again, 1 AP left');
+      // turn 2: the next turn's first switch heals again (man → wolf)
+      DD.Combat.endTurn();
+      t.ok(DD.Combat.current() === u && desc('bas_transform', lv, u).indexOf('(used this turn)') < 0, 'L' + lv + ': next turn: the desc is fresh');
+      t.eq(mendOf(t, u, 'L' + lv + ' Transform, next turn'), M, 'L' + lv + ': next turn, the first switch heals ' + M + ' again');
+      // turn 3: wolf → man as the first switch heals too
+      DD.Combat.endTurn();
+      t.ok(wolf(u), 'L' + lv + ': still the werewolf on turn 3');
+      t.eq(mendOf(t, u, 'L' + lv + ' Transform (wolf → man)'), M, 'L' + lv + ': wolf → man as the first switch heals ' + M);
+      t.ok(!wolf(u), 'L' + lv + ': a man');
+    });
+    // at full HP the first switch spends it: a later switch that turn heals nothing, and nothing is logged
+    fight({ heroes: [{ x: 2, y: 4, skills: ['bas_transform'] }], enemies: [{ id: 'test_grunt', x: 6, y: 4 }] });
+    let u = B();
+    const lines = logged(/knits/, function () { t.eq(mendOf(t, u, 'Transform at full HP'), 0, 'full HP: nothing to heal'); });
+    t.eq(lines.length, 0, 'full HP: no log line');
+    t.ok(desc('bas_transform', 1, u).indexOf('(used this turn)') >= 0, 'full HP: the mend is spent all the same (the desc says "first")');
+    u.hp -= 10;
+    t.eq(mendOf(t, u, 'Transform back, hurt'), 0, 'hurt after a full-HP switch: the second switch heals 0');
+    // the Flea Collar: the free first switch still heals, once
+    fight({ heroes: [{ x: 2, y: 4, items: ['bas_flea_collar'], skills: ['bas_transform'] }], enemies: [{ id: 'test_grunt', x: 6, y: 4 }] });
+    u = B();
+    u.hp = u.maxHp - 10;
+    t.eq(mendOf(t, u, 'free Transform (Collar)'), Bz().MEND[0], 'Collar: the free first switch heals ' + Bz().MEND[0]);
+    t.eq(u.ap, 3, 'Collar: it cost 0 AP');
+    t.eq(mendOf(t, u, 'second Transform (Collar)'), 0, 'Collar: the second switch costs 1 AP and heals 0');
+    t.eq(u.ap, 2, 'Collar: 1 AP for the second');
+    DD.Combat.endTurn();
+    t.eq(mendOf(t, u, 'free Transform next turn (Collar)'), Bz().MEND[0], 'Collar: next turn, free and healing again');
+    t.eq(u.ap, 3, 'Collar: 0 AP again');
+    // Hair Trigger never heals and never spends the mend: a chosen switch back the same turn still heals
+    fight({ heroes: [{ x: 2, y: 4, skills: ['bas_transform'] }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
+    u = B();
+    A().damage(foes()[0], u, 16, { cause: 'other' });
+    t.ok(wolf(u) && u.hp === 12, 'Hair Trigger on his turn: a wolf at exactly 12 HP (no heal)');
+    t.eq(mendOf(t, u, 'Transform back after Hair Trigger'), Bz().MEND[0], 'his first chosen switch that turn still heals ' + Bz().MEND[0]);
+    // [review sustain] so the desc says "first Transform", not "first switch": the Hair Trigger switch above was his
+    // first switch this turn, yet it healed nothing and the Transform after it healed (desc == execute)
+    [1, 2, 3].forEach(function (lv) {
+      const d0 = desc('bas_transform', lv);
+      t.ok(/Your first Transform each turn heals you/.test(d0) && !/first switch/.test(d0), 'L' + lv + ': the desc counts Transforms, not switches: ' + d0);
+    });
+    // a dispel (syncForm) neither heals nor spends it
+    fight({ heroes: [{ x: 2, y: 4, skills: ['bas_transform'] }], enemies: [{ id: 'test_grunt', x: 6, y: 4 }] });
+    u = B();
+    use(t, u, u.skills[0], u.x, u.y, 'Transform at full HP');
+    DD.Combat.endTurn();
+    u.hp = 20;
+    A().cleanse(u, 'buff');
+    A().addStatus(u, 'silenced', { turns: 1 }, foes()[0]);
+    t.ok(!wolf(u) && u.hp === 20, 'dispelled into a man: no heal');
+    t.eq(mendOf(t, u, 'Transform after a dispel'), Bz().MEND[0], 'the dispel did not spend it: his first switch heals ' + Bz().MEND[0]);
+    // the HUD preview shows the heal, exactly
+    fight({ heroes: [{ x: 2, y: 4, skills: ['bas_transform'] }], enemies: [{ id: 'test_grunt', x: 6, y: 4 }] });
+    u = B();
+    u.hp = 20;
+    const pv = DD.Combat.preview(u, u.skills[0], u.x, u.y);
+    t.ok(!!pv && pv.perUnit[u.id] && pv.perUnit[u.id].heal === Bz().MEND[0], 'the preview shows +' + Bz().MEND[0] + ' HP ' + JSON.stringify(pv && pv.perUnit[u.id]));
+    t.ok(u.hp === 20 && !wolf(u) && !Bz().mendSpent(u), 'the preview spent nothing');
+    previewMatches(t, u, u.skills[0], u.x, u.y, 'Transform (hurt)');
+    const pv2 = DD.Combat.preview(u, u.skills[0], u.x, u.y);
+    t.ok(!!pv2 && !(pv2.perUnit[u.id] && pv2.perUnit[u.id].heal), 'once spent, the preview of the next switch shows no heal');
+    // loading tip
+    const tips = (DD.defs.narration.tips || []).filter(function (l) { return /Basanos/.test(l) && /Transform/.test(l); });
+    t.ok(tips.length >= 1 && tips.every(function (l) { return l.length <= 140; }), 'a loading tip about the mend (' + tips.length + ')');
+  });
+
   // ---- 3. Hair Trigger ----------------------------------------------------------------------------------------
   T.suite('hero_basanos: Hair Trigger (below half HP → werewolf, free)', function (t) {
     fight({ heroes: [{ x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
@@ -284,15 +394,47 @@
     const seen = atTurnStarts(e, function () { return { wolf: wolf(e), basic: e.basic.id, mov: e.mov }; }, function () { DD.Combat.endTurn(); });
     t.ok(e.hp < 15, 'the grunt stabbed him on its turn (' + e.hp + ' HP)');
     t.ok(seen.length === 1 && seen[0].wolf && seen[0].basic === 'bas_claw' && seen[0].mov === 6, 'his next turn starts in werewolf form ' + JSON.stringify(seen));
-    // the Wolfsbane-Lined Coat heals when Hair Trigger fires (not on a chosen Transform)
-    fight({ heroes: [{ x: 2, y: 4, items: ['bas_wolfsbane_coat'], skills: ['bas_transform'] }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
+    // the Wolfsbane-Lined Coat (D9): 5 Block when Transform turns him back into a man; Hair Trigger no longer heals
+    const coat = DD.getItem('bas_wolfsbane_coat');
+    t.eq(coat.desc, '+4 max HP. When Transform turns you back into a human, gain ' + Bz().COAT_BLOCK + ' Block.', 'Coat desc: ' + coat.desc);
+    t.ok(coat.desc.length <= 120 && coat.flavor.length <= 120 && !/heal/i.test(coat.desc), 'Coat desc / flavor short; it no longer heals');
+    fight({ heroes: [{ x: 2, y: 4, items: ['bas_wolfsbane_coat'], skills: ['bas_transform'] }], enemies: [{ id: 'test_grunt', x: 6, y: 4 }] });
     const c = B();
     t.eq(c.maxHp, 32, 'Coat: +4 max HP');
+    c.hp = 22;
     use(t, c, c.skills[0], c.x, c.y, 'Transform (coat)');
-    t.eq(c.hp, 32, 'a chosen Transform does not heal');
+    t.ok(wolf(c) && c.hp === 22 + Bz().MEND[0] && c.block === 0, 'a chosen Transform into the wolf: the mend (+' + Bz().MEND[0] + '), no Block (' + c.hp + ' HP, ' + c.block + ' Block)');
     use(t, c, c.skills[0], c.x, c.y, 'Transform back (coat)');
-    A().damage(foes()[0], c, 17, { cause: 'other' });
-    t.ok(wolf(c) && c.hp === 15 + Bz().COAT_HEAL, 'Hair Trigger with the Coat: 15 HP + ' + Bz().COAT_HEAL + ' (' + c.hp + ')');
+    t.ok(!wolf(c) && c.hp === 22 + Bz().MEND[0] && c.block === Bz().COAT_BLOCK, 'back to the man: ' + Bz().COAT_BLOCK + ' Block and no heal (the mend is spent) (' + c.hp + ' HP, ' + c.block + ' Block)');
+    DD.Combat.endTurn();
+    t.ok(DD.Combat.current() === c && c.block === 0, 'his next turn: the Block expired');
+    use(t, c, c.skills[0], c.x, c.y, 'Transform next turn (coat)');
+    t.ok(wolf(c) && c.hp === 22 + 2 * Bz().MEND[0] && c.block === 0, 'next turn: the first switch heals again (' + c.hp + ')');
+    DD.Combat.endTurn();
+    use(t, c, c.skills[0], c.x, c.y, 'Transform back as the first switch (coat)');
+    t.ok(!wolf(c) && c.hp === 22 + 3 * Bz().MEND[0] && c.block === Bz().COAT_BLOCK, 'wolf → man as the first switch: the mend and the Block (' + c.hp + ' HP, ' + c.block + ' Block)');
+    // a dispel is not Transform: no Block
+    use(t, c, c.skills[0], c.x, c.y, 'Transform (coat, again)');
+    c.block = 0;
+    A().cleanse(c, 'buff');
+    A().addStatus(c, 'silenced', { turns: 1 }, foes()[0]);
+    t.ok(!wolf(c) && c.block === 0, 'dispelled back into a man: no Coat Block');
+    // Hair Trigger with the Coat: exactly 15 HP (no heal)
+    fight({ heroes: [{ x: 2, y: 4, items: ['bas_wolfsbane_coat'], skills: ['bas_transform'] }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
+    const c2 = B();
+    A().damage(foes()[0], c2, 17, { cause: 'other' });
+    t.ok(wolf(c2) && c2.hp === 15 && c2.block === 0, 'Hair Trigger with the Coat: exactly 15 HP, no heal, no Block (' + c2.hp + ')');
+    // Blood Moon from human form heals nothing, with or without the Coat (and leaves the mend for Transform)
+    [[], ['bas_wolfsbane_coat']].forEach(function (items) {
+      const tag = items.length ? ' (Coat)' : ' (no Coat)';
+      fight({ heroes: [{ x: 2, y: 4, items: items, skills: ['bas_transform'] }], enemies: [{ id: 'test_grunt', x: 7, y: 7 }] });
+      const m = B();
+      m.hp = 20;
+      DD.Combat.state.hype = 100;
+      use(t, m, m.signature, m.x, m.y, 'Blood Moon' + tag);
+      t.ok(wolf(m) && m.hp === 20 && m.block === 0, 'Blood Moon' + tag + ': the werewolf, no heal, no Block (' + m.hp + ')');
+      t.ok(!Bz().mendSpent(m), 'Blood Moon' + tag + ': the mend is still unspent');
+    });
   });
 
   // ---- 4. basic attacks --------------------------------------------------------------------------------------
@@ -433,12 +575,11 @@
       t.eq(v.block, L.block, 'L' + lv + ': ' + L.block + ' Block');
       t.eq(v.ap, 2, 'L' + lv + ': 1 AP');
     });
-    // an immovable ally (or a corgi) still swaps: he asked nicely
+    // [finish heroes-4] an immovable ally can't be swapped, not even when he asks nicely (lead decision D2)
     fight({ heroes: [{ x: 1, y: 4 }, { id: 'test_knight', x: 3, y: 4 }], enemies: [{ id: 'test_grunt', x: 8, y: 8 }] });
     const w = B(), kn = hero('test_knight');
     kn.flags.immovable = true;
-    use(t, w, give(w, 'bas_step_in', 1), 3, 4, 'Step In with an immovable ally');
-    t.ok(w.x === 3 && kn.x === 1, 'swapped anyway');
+    t.ok(!valid(w, give(w, 'bas_step_in', 1), 3, 4) && w.x === 1 && kn.x === 3, 'Step In: an immovable ally is no target');
   });
 
   // ---- 6. wolf skills ------------------------------------------------------------------------------------------
@@ -787,6 +928,44 @@
     const g = foes()[0], h0 = g.hp;
     t.tryRun('AutoPlay turn', function () { DD.AutoPlay.takeTurn(); });
     t.ok(wolf(u) && g.hp < h0 && has(g, 'stun'), 'AutoPlay: Transform, then Pounce (' + (wolf(u) ? 'wolf' : 'human') + ', grunt ' + h0 + ' → ' + g.hp + ')');
+  });
+
+  T.suite('hero_basanos: Transform aiScore prices the unspent mend in the quick pass only (D9)', function (t) {
+    /** [quick, exact] scores of his socketed Transform right now (exact: ctx.autoplay set, as AutoPlay's exact pass does). */
+    function scores(u) {
+      const q = DD.Targeting.buildCtx(u, u.skills[0], { x: u.x, y: u.y });
+      const e = DD.Targeting.buildCtx(u, u.skills[0], { x: u.x, y: u.y });
+      e.autoplay = { preview: null };
+      return [Bz().transformScore(q), Bz().transformScore(e)];
+    }
+    // adjacent with Silver Slash ready: the form term is 0, so what is left is the mend
+    [{ lv: 1, miss: 1 }, { lv: 1, miss: 10 }, { lv: 2, miss: 10 }, { lv: 3, miss: 16 }, { lv: 1, miss: 0 }].forEach(function (c) {
+      fight({ heroes: [{ x: 2, y: 4, skills: [{ id: 'bas_transform', level: c.lv }, 'bas_silver_slash'] }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
+      const u = B();
+      u.hp = u.maxHp - c.miss;
+      const s = scores(u);
+      c.want = Math.min(Bz().MEND[c.lv - 1], c.miss) * (c.miss > u.maxHp / 2 ? 1.5 : 0.8);
+      t.eq(s[1], 0, 'L' + c.lv + ', missing ' + c.miss + ': exact pass (ctx.autoplay): the old form value (0)');
+      t.ok(Math.abs(s[0] - s[1] - c.want) < 1e-9, 'L' + c.lv + ', missing ' + c.miss + ': quick pass adds min(mend, missing) × ' + (c.miss > u.maxHp / 2 ? 1.5 : 0.8) + ' = ' + c.want.toFixed(1) + ' (' + s[0].toFixed(2) + ')');
+    });
+    // spent this turn: quick == exact == the old form value
+    fight({ heroes: [{ x: 2, y: 4, skills: ['bas_transform', 'bas_silver_slash'] }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
+    let u = B();
+    u.ap = 10;
+    use(t, u, u.skills[0], u.x, u.y, 'Transform');
+    use(t, u, u.skills[0], u.x, u.y, 'Transform back');
+    u.hp = 12;
+    let s = scores(u);
+    t.ok(Bz().mendSpent(u) && s[0] === s[1], 'mend spent: the quick score equals the old form value (' + s[0].toFixed(2) + ' / ' + s[1].toFixed(2) + ')');
+    DD.Combat.endTurn();
+    s = scores(u);
+    t.ok(!Bz().mendSpent(u) && s[0] - s[1] > 0, 'next turn, unspent again: the quick pass sees the mend (+' + (s[0] - s[1]).toFixed(2) + ')');
+    // the form friction never swallows it: far from the foe, both forms worthless, hurt → still worth something
+    fight({ heroes: [{ x: 0, y: 0, skills: ['bas_transform'] }], enemies: [{ id: 'test_grunt', x: 8, y: 8 }] });
+    u = B();
+    u.hp = 10;
+    s = scores(u);
+    t.ok(s[1] === 0 && Math.abs(s[0] - Bz().MEND[0] * 1.5) < 1e-9, 'nothing to reach in either form, below half HP: quick ' + s[0].toFixed(2) + ' = ' + Bz().MEND[0] + ' × 1.5 (the friction is inside max(0, …))');
   });
 
   function battles(t, plans) {
@@ -1152,5 +1331,76 @@
       previewMatches(t, u, sl, 3, 4, id + ' at a barrel');
       t.ok(!tile(3, 4).obj && g.hp < g0 && !st(g, 'bleed'), id + ': it went off; the grunt next to it takes the blast (no Bleed: the claw hit a barrel)');
     });
+  });
+
+  // ---- finish (Nov 14): the playtest findings held for his rebuild --------------------------------------------------------
+  T.suite('hero_basanos: finish — a forgotten Transform: the locks name the way out he has, the forget card warns (heroes-1)', function (t) {
+    // with Transform socketed the locks still say "Transform first"
+    fight({ heroes: [{ x: 2, y: 4, skills: ['bas_transform', 'bas_rend', 'bas_silver_slash'] }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
+    let u = B();
+    t.eq(DD.Combat.canUse(u, u.skills[1]), WOLF_GATE, 'with Transform: a wolf skill in human form says ' + WOLF_GATE);
+    // forgotten: no lock may point at a skill he doesn't have
+    fight({ heroes: [{ x: 2, y: 4, skills: ['bas_step_in', 'bas_shoulder_check', 'bas_silver_slash', 'bas_frenzy'] }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
+    u = B();
+    const frenzy = u.skills[3];
+    const w1 = DD.Combat.canUse(u, frenzy);
+    t.ok(typeof w1 === 'string' && !/Transform first/.test(w1) && /Hair Trigger/.test(w1) && /Blood Moon/.test(w1), 'no Transform, human form: the wolf lock names Hair Trigger / Blood Moon (' + w1 + ')');
+    A().damage(null, u, Math.ceil(u.maxHp / 2) + 1, { cause: 'other' });
+    t.ok(wolf(u), 'Hair Trigger lets the wolf out');
+    const w2 = DD.Combat.canUse(u, u.skills[2]);
+    t.ok(typeof w2 === 'string' && !/Transform first/.test(w2) && /next fight/.test(w2), 'no Transform, wolf form: the human lock says he is human again next fight (' + w2 + ')');
+    t.ok(DD.Combat.canUse(u, frenzy) === true, 'and the wolf skill opens');
+    // the level-up forget picker shows this on Transform's card (UI.chooseSkillSlot reads def.forgetWarning)
+    const fw = DD.resolve(DD.getSkill('bas_transform').forgetWarning, null, null, '');
+    t.ok(/Hair Trigger/.test(fw) && /Blood Moon/.test(fw) && /until the fight ends/.test(fw), 'Transform carries a forgetWarning: ' + fw);
+    ['bas_rend', 'bas_silver_slash', 'bas_shoulder_check'].forEach(function (id) { t.ok(!DD.getSkill(id).forgetWarning, id + ': no warning (not a keystone)'); });
+  });
+
+  T.suite('hero_basanos: finish — Step In follows the swap rules: no immovable ally, no pit or lava landing (heroes-4)', function (t) {
+    // Slate is immovable (D2: he can start a swap, nobody can swap him)
+    fight({ heroes: [{ x: 3, y: 3, skills: ['bas_step_in'] }, { id: 'slate', x: 5, y: 3 }, { id: 'test_mage', x: 3, y: 5 }], enemies: [{ id: 'test_grunt', x: 8, y: 8 }] });
+    let u = B();
+    const sl = give(u, 'bas_step_in', 1), slate = hero('slate'), mage = hero('test_mage');
+    t.ok(!valid(u, sl, 5, 3), 'Step In: Slate (immovable) is no target');
+    const why = DD.getSkill('bas_step_in').target.canTarget({ user: u, targetUnit: slate, target: { x: 5, y: 3 } });
+    t.ok(/budge/i.test(String(why)), 'the refusal says it won\'t budge (' + why + ')');
+    t.ok(valid(u, sl, 3, 5), 'an ordinary ally is a target');
+    t.ok(use(t, u, sl, 3, 5, 'Step In on the mage') && u.x === 3 && u.y === 5 && mage.x === 3 && mage.y === 3 && slate.x === 5 && slate.y === 3, 'they swap; Slate never moved');
+    // a flying ally over a pit or lava: he can't stand there
+    ['pit', 'lava'].forEach(function (kind) {
+      fight({ heroes: [{ x: 3, y: 3, skills: ['bas_step_in'] }, { id: 'test_mage', x: 5, y: 3 }], enemies: [{ id: 'test_grunt', x: 8, y: 8 }],
+        terrain: function (tl) { if (tl.x === 5 && tl.y === 3) tl.t = kind; } });
+      u = B();
+      const s2 = give(u, 'bas_step_in', 1), m = hero('test_mage');
+      m.flags.flying = true;
+      const hp0 = u.hp;
+      t.ok(!valid(u, s2, 5, 3), 'Step In: a flyer hovering over ' + kind + ' is no target');
+      t.ok(!DD.Combat.useSkill(u, s2, 5, 3) && u.x === 3 && u.hp === hp0, kind + ': nothing happens (no fall, no burn)');
+    });
+    // the engine refuses an immovable ally even when something resolves it anyway (no force)
+    fight({ heroes: [{ x: 3, y: 3, skills: ['bas_step_in'] }, { id: 'slate', x: 4, y: 3 }], enemies: [{ id: 'test_grunt', x: 8, y: 8 }] });
+    u = B();
+    DD.getSkill('bas_step_in').execute({ user: u, targetUnit: hero('slate'), L: DD.skillLevel(DD.getSkill('bas_step_in'), 1) });
+    t.ok(u.x === 3 && hero('slate').x === 4 && u.block === 0, 'a forced resolve on Slate swaps nothing and gives no Block');
+  });
+
+  T.suite('hero_basanos: finish — texts follow his items: +range (Step In, Pounce) and the Wolfsbane-Lined Coat (desc-sweep-5 / -7)', function (t) {
+    fight({ heroes: [{ x: 2, y: 4, skills: ['bas_transform'] }], enemies: [{ id: 'test_grunt', x: 8, y: 8 }] });
+    const u = B();
+    [['bas_step_in', 'within '], ['bas_pounce', 'within ']].forEach(function (p) {
+      [1, 2, 3].forEach(function (lv) {
+        const def = DD.getSkill(p[0]);
+        u.rangeBonus = 0;
+        const base = DD.Targeting.range(u, def, lv)[1];
+        t.ok(desc(p[0], lv, u).indexOf(p[1] + plural(base, 'tile')) >= 0, p[0] + ' L' + lv + ': ' + base + ' tiles without an item');
+        u.rangeBonus = 1;
+        const more = DD.Targeting.range(u, def, lv)[1];
+        t.ok(more === base + 1 && desc(p[0], lv, u).indexOf(p[1] + plural(more, 'tile')) >= 0, p[0] + ' L' + lv + ': a +1 range item reads ' + more + ' (' + desc(p[0], lv, u) + ')');
+      });
+    });
+    u.rangeBonus = 0;
+    t.ok(!/Block/.test(desc('bas_transform', 1, u)), 'Transform without the Coat: no Block');
+    u.items = ['bas_wolfsbane_coat'];
+    t.ok(new RegExp('back into a human gives you ' + Bz().COAT_BLOCK + ' Block').test(desc('bas_transform', 1, u)), 'with the Coat: ' + desc('bas_transform', 1, u));
   });
 })();

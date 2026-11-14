@@ -1,6 +1,6 @@
 # HERO-MARWYN notes
 
-Files: `js/data/heroes/marwyn.js`, `tests/content/hero_marwyn.js` (21 suites `hero_marwyn: …`), this file.
+Files: `js/data/heroes/marwyn.js`, `tests/content/hero_marwyn.js` (23 suites `hero_marwyn: …`), this file.
 Run: `bash tools/test.sh "suite=hero_marwyn&isolate=heroes/marwyn,hero_marwyn"`; generic validation:
 `bash tools/test.sh "suite=content:&isolate=heroes/marwyn,hero_marwyn"`.
 Looks: `bash tools/shot.sh "debug=1&fixtures=1&isolate=heroes/marwyn,hero_marwyn&gallery=marwyn" .tmp/marwyn/g.png 1280x720 4000`.
@@ -21,7 +21,8 @@ huge ginger barbarian with a gold championship belt whose 5 gems light up with h
 sparkles when full = his next skill surges).
 
 **Passive — MAGNIFICENCE** (one rule): *each of his skills that reaches a foe adds 1 MAGNIFICENCE. At 5, his next
-skill also unleashes a MAGNIFICENT SURGE (random good wild magic, +10 party Hype) and resets the meter.* "Reaches a
+skill also unleashes a MAGNIFICENT SURGE (random good wild magic, +10 party Hype, and he heals 8 HP) and resets the
+meter.* (The heal: D9, Nov 12, see "Sustain (Nov 12)" below.) "Reaches a
 foe" = a foe stands in the skill's area (`ctx.foes`, what the HUD highlights). Status `mrw_magnificence` (🦁, 0-5,
 never decays). The surge rolls one `DD.WildMagic` effect from the **good** table with the combat RNG, shows a
 "MAGNIFICENT SURGE!" banner, barks and gives the party 10 Hype (DESIGN §4.5). Implementation: `onSkillUsed` checks the
@@ -135,7 +136,7 @@ mrw_rage`; items `mrw_yeet_gauntlets, mrw_loincloth, mrw_hand_mirror`. No summon
 
 ### Public API
 
-- `DD.Marwyn` (attached at load time): `MAX` (5), `SURGE_HYPE` (10), `GAUNTLET_TILES` (2), `stacksOf(u)`,
+- `DD.Marwyn` (attached at load time): `MAX` (5), `SURGE_HYPE` (10), `SURGE_HEAL` (8, D9), `GAUNTLET_TILES` (2), `stacksOf(u)`,
   `addStacks(u, n)` (now, capped), `gain(u, n)` (banked while his own skill resolves), `surge(u, rng) → [effects]`
   (forces a MAGNIFICENT SURGE; 1 good effect, 2 with the mirror unless the first won the fight; a second that lost
   its target to the first is re-rolled),
@@ -433,3 +434,104 @@ Suite: `hero_marwyn: v2 requests — …`. Rules: `docs/notes/rules.md` "v2 requ
   barrel is canon). He is in the blast: Ginger Snap costs him 8, Use Your Head 2 HP (its cost) + 8; no Stun on a barrel.
   YEET is a direction target (never at objects).
 - **Heals.** Keg Stand heals himself only (self target): never a revive.
+
+## Rules run (Nov 6) — "AutoPlay battles, act 1" fixed (CONTENT SWEEP)
+
+"hero_marwyn: AutoPlay battles, act 1 (level 1)" failed "Marwyn takes turns in every fight — expected 5, got 4": the
+fixture totem fight (`test_a1_totems`) is won in round 1 before his initiative slot comes up (the party can now shoot the
+two test totems from range; the engine notes say it already failed before the run). A fight won in round 1 in which he
+had no turn now counts as taken; every other fight still needs a Marwyn turn. No kit change.
+
+## Sustain (Nov 12) — the crowd's applause heals him (D9; spec `.tmp/wf13/sustain-spec.md` §1.4, owner HERO-TRIO)
+
+The user (D9): no generic heal for every party (the First-Aid Fanny Pack left the starting kit); sustain comes from each
+hero's own verbs, spread over skills, items and passives, "without overloading each character with a self-heal".
+Marwyn's is a **passive rider**: the surge is literally "the crowd goes wild", and he basks in it. It rides the meter he
+fills with every skill that reaches a foe, works from fight 1 with no draft and lands where parties without a healer lose
+(about 1 surge per boss fight, ~0.35 per normal fight in the no-pack sim). He is the taunting tank with the 2nd-most
+damage taken (18.8 a fight) and 0.62x the median. Keg Stand stays his drafted self-heal; no new button.
+
+- `const SURGE_HEAL = 8` (marwyn.js). In `surge(u, rng)`, right after `gainHype(SURGE_HYPE, …)`: `if (active(u))` a
+  `THE CROWD LOVES ME!` pop-up (orange) and `DD.Act.heal(u, u, SURGE_HEAL)`. **Once per surge**: outside the effects
+  loop, so the Hand Mirror's two effects still heal once. No surge (so no heal) once the fight is decided (the existing
+  `onSkillUsed` guard). Not level-scaled; never a revive (he is the one surging). The heal comes before the wild magic.
+- Log: `MAGNIFICENT SURGE! The crowd goes wild, and Marwyn basks in it.` (was `… goes wild.`; the name is `u.name`), then
+  Act.heal's `Marwyn heals 8 HP.`
+- Passive desc (33 words by the test's count, cap 45): `Each of his skills that reaches a foe adds 1 MAGNIFICENCE. At
+  5, his next skill also unleashes a MAGNIFICENT SURGE (random good wild magic, +10 party Hype, and he heals 8 HP) and
+  resets the meter.`
+- `mrw_magnificence` desc at 5: `MAGNIFICENCE 5/5. MAXED: his next skill unleashes a MAGNIFICENT SURGE (random good wild
+  magic, +10 party Hype, he heals 8 HP).` (below 5 unchanged).
+- Export `DD.Marwyn.SURGE_HEAL`. Header comment updated. Loading tip (his file, `DD.registerNarration('tips', …)`):
+  `Every MAGNIFICENT SURGE heals Marwyn 8 HP. Applause is a medical treatment. Ask him.`
+- AutoPlay: nothing. The dry run of the skill that triggers the surge includes the heal (an uncertain preview anyway,
+  because of the wild magic roll); otherwise it is a free rider.
+
+**Tests** (new suite `hero_marwyn: MAGNIFICENT SURGE heals him 8 HP (once per surge, never after the fight is decided)`,
+35 assertions): `SURGE_HEAL` = 8; the passive matches `/heals 8 HP/` at ≤ 45 words; the maxed status names the heal (3/5
+doesn't); hurt by 10, the surging Ginger Snap (wild magic stubbed to a no-op) gives exactly +8, one heal, the brute takes
+the usual 4, both log lines; hurt by 3: back to full, no overheal; full HP: the surge goes off and heals 0; real wild
+magic on 10 seeds: one effect and one heal of 8 each (a wild magic effect's own heal, tagged `wildmagic`, isn't counted);
+the Hand Mirror: two effects, one heal (stubbed and real); the winning blow at 5: no surge, no heal; the skill that fills
+the meter heals nothing; the tip exists (≤ 140 chars).
+
+**Fallback** (balance pass 3 decides, spec §9): if he stays below ~0.7x the median, raise `SURGE_HEAL` to 10 (not another
+button).
+
+**Deviations**: none.
+
+**Known issue (not from this change)**: `hero_marwyn: AutoPlay battles, acts 2-3 (levels 3 / 5)` fails "many different
+skills used" (5 of the needed 6 besides Ginger Snap: War Cry, Gun Show, Rage, Headbutt, Cleave; YEET, Keg Stand, Hero
+Landing and Magnetism unused; several fixture fights now end in 1-2 rounds). It passed in a full run that ended at
+18:48 and fails in every full run since 18:57 (other owners' and the playtest fixers' runs too). Same fixture fights,
+same picks, with `SURGE_HEAL = 0`, with the pre-sustain `marwyn.js` (HEAD) and with the pre-sustain `hjalmar.js`: the
+cause is outside this file (the engine / AutoPlay / wild magic files were being edited in parallel at 19:04-19:14). Left
+as is for the lead: once the parallel fixes land, re-run it; if AutoPlay's new choices are intended, the bar (or the
+loadouts) can be adjusted here.
+
+## Review (sustain, Nov 12) — adversarial review: the user's intent and the rules text (ADVERSARIAL REVIEWER role)
+
+- **Verified** (suites; scratch harness `.tmp/rev13/rt.js` on real encounters with real allies; `tools/sim.sh`): each
+  MAGNIFICENT SURGE heals him 8 once (the Hand Mirror's second effect doesn't heal again), none once the fight is
+  decided, never a revive; the passive desc, the maxed meter desc, the log ("... The crowd goes wild, and Marwyn basks
+  in it." then "Marwyn heals 8 HP.") and the tip agree with the code. Real fights (harness, 9 / 7 / 7 fights at hero
+  level 2 / 4 / 6): 3 / 4 / 9 surges, 2.7 / 3.0 / 9.7 HP a fight; the act 1 sim (33 fights): about 0.42 surges a normal
+  fight (MAGNIFICENT SURGE Hype 4.2 a normal fight), the spec's ~0.35.
+- **Fixed**: nothing.
+- **Not from the sustain run, still failing**: `hero_marwyn: AutoPlay battles, acts 2-3 (levels 3 / 5)` — "many different
+  skills used (6)": Marwyn uses 5 skills besides Ginger Snap in the 8 fixture fights. It fails alone too
+  (`suite=hero_marwyn: AutoPlay battles, acts 2&isolate=marwyn`), deterministically; the test file's battle code is
+  unchanged since HEAD (the sustain run only added the surge-heal suite), and the build agent found the same result with
+  HEAD's marwyn.js. The fixture fights got shorter (test_a2_keg in 1 round, test_a2_normal in 2), which points at the
+  parallel engine / AutoPlay playtest fixes (`docs/notes/autoplay.md` "Playtest fixes (Nov 12)"). Left as is, so it
+  doesn't hide a possible AutoPlay regression: **Request (AUTOPLAY / lead)**: re-check it once the playtest fixes settle;
+  if AutoPlay's choices are intended, the bar or the loadouts in this suite can be adjusted then.
+
+## Review (sustain, Nov 12) — engine, AutoPlay and tests (ADVERSARIAL REVIEWER role)
+
+- **Verified (by running code)**: a surging basic's HUD preview shows his +8 and leaves the board and the log untouched
+  (probe, `.tmp/rev-engine/probe.js`); in AutoPlay fights the "basks in it" surges heal only through real,
+  non-simulated `DD.Act.heal` calls (the surge runs inside the dry runs of the skill that triggers it, on a cloned state).
+- **`hero_marwyn: AutoPlay battles, acts 2-3` — what the failure is** (AutoPlay traces of the same seeds): not a
+  sustain or Marwyn-logic change. The fixture fights are over before his skills come up: test_a2_keg in 1 round,
+  test_a2_normal in 2 (War Cry, then one Ginger Snap before the party finishes it), test_a3_survive in 2; in
+  test_a3_normal the Test Spider roots him on its round-2 turn, so he passes round 3 with nothing in reach, and the
+  fixture mage wins in round 4. YEET, Keg Stand, Hero Landing and Magnetism never get a turn where they reach anyone, so the count stays at
+  5 besides Ginger Snap. The AutoPlay hint suites (YEET into a pit, Hero Landing, BEHOLD) still pass, so his choices are
+  intact when the chance is there. Left failing on purpose with the other reviewer's Request: once the playtest fixes
+  settle, either give this suite fights long enough to show his kit (for example the act 3 boss at level 3 with the
+  YEET / Hero Landing loadout) or lower the bar to 5, with that reason.
+
+## Finish (Nov 14) — the playtest findings held for the sustain build (FIX: CONTENT)
+
+- **text-tone-2 / review-open-9 (fixed)**: "Basanos, get up! Marwyn still owes you an arm-wrestle!" is now
+  "{downed}, get up! …" (the engine fills in whoever went down). A Basanos line stays (his bark suite wants one): "Basanos!
+  Bite whoever did that! Marwyn will hold your coat!", a call to a standing Basanos, which the engine never picks while
+  he is the one down (`Act.aboutLines`).
+- **heroes-v1 / desc-sweep-5 (fixed)**: Hero Landing's "up to N tiles" prints `DD.Targeting.reach`.
+- **audit-5 / review-open-17 (fixed)**: `hero_marwyn: AutoPlay battles, acts 2-3` failed on a coin flip ("many different
+  skills used (6)"): the fixture party ends most fights in 1-5 rounds, so 8 fights gave him few turns and 5-7 of his 9
+  socketed skills. The suite now plays every plan on five seed sets (40 fights, ~2.7 s): all 9 skills show up (war cry
+  35, gun show 13, rage 14, headbutt 14, cleave 2, landing 2, magnetism 2, YEET 2, keg stand 1), bar 7 of 9; uses ≥ 30;
+  the party wins ≥ 75%. Deterministic (fixed seeds), with a margin of 2.
+- Suite `hero_marwyn: finish — his ally_down call …`. D7: two swap barks.

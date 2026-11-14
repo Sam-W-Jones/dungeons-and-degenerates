@@ -28,6 +28,23 @@
   function has(u, id) { return DD.Act.hasStatus(u, id); }
   function byId(id) { return id == null || !DD.Combat ? null : DD.Combat.byId(id); }
   function hasItem(u, id) { return !!u && Array.isArray(u.items) && u.items.indexOf(id) >= 0; }
+  /** Item check for descs: combat units (items array) and RunHeroes (slot object) alike. */
+  function wears(u, id) {
+    if (!u) return false;
+    if (Array.isArray(u.items)) return u.items.indexOf(id) >= 0;
+    if (u.items && typeof u.items === 'object') { for (const k in u.items) if (u.items[k] === id) return true; }
+    return !!(u.runHero && u.runHero !== u && wears(u.runHero, id));
+  }
+  /**
+   * A range number in a desc as targeting resolves it for this user: the generic range items (+1 on skills reaching 2+),
+   * Dazzle, modifyRange hooks (playtest heroes-v1). No user: the listed number.
+   */
+  function reach(user, id, base) {
+    const d = DD.getSkill(id);
+    if (!user || !d || !DD.Targeting) return base;
+    if (typeof DD.Targeting.reach === 'function') return DD.Targeting.reach(d, null, user, base);
+    return Math.max(0, base + DD.Targeting.range(user, d, 1)[1] - DD.Targeting.range(null, d, 1)[1]);
+  }
   function isBuga(u) { return !!u && u.kind === 'hero' && u.defId === HERO; }
 
   /** Cosmetic speech bubble with a literal line (DD.rng only, never during previews). */
@@ -262,9 +279,9 @@
   DD.registerObject({
     // hp 1: "as soon as it is hit" (any damage, even a 1-damage splash, pops it)
     id: 'buga_pork_barrel', name: 'Pork Barrel', blocksMove: true, blocksLos: false, hp: 1, height: 0.9, color: '#d24a5e',
-    // volatile: it explodes when destroyed, so any hero's single-target attack can be aimed at it to set it off
+    // volatile: it explodes when destroyed, so any hero's single-target damage skill can be aimed at it to set it off
     smashable: true, volatile: true,
-    desc: 'Its fuse is lit: it explodes at the end of the round, or as soon as it is hit or set alight, for the fire damage in ' +
+    desc: 'Its fuse is lit: it explodes at the end of the round, or as soon as it is hit or set alight (aim any single-target damage skill at it), for the fire damage in ' +
       'its name (8-12 by Pork Barrel level) to everything within 1 tile, whoever smashed it included. Taxpayer funded, pork filled.',
     react: { fire: { destroy: true } },
     // AutoPlay: worth popping when foes (not friends, not the smasher) stand next to it; a lit one blows anyway at the end
@@ -311,7 +328,11 @@
     id: 'buga_pamphlet', name: 'Campaign Pamphlet', owner: HERO, icon: '🗞️', kind: 'attack', tags: ['ranged'],
     ap: 1, cooldown: 0, levels: [{ dmg: 4 }],
     target: { type: 'unit', range: [1, 4], los: true, filter: 'enemy' },
-    desc: function (L) { return 'Deal ' + L.dmg + ' damage to a foe within 4 tiles.'; },
+    // the Pen's Mark rides on it: the text says so (playtest heroes-2)
+    desc: function (L, user) {
+      return 'Deal ' + L.dmg + ' damage to a foe within ' + reach(user, 'buga_pamphlet', 4) + ' tiles' +
+        (wears(user, 'buga_golden_pen') ? ' and Mark it: the next hit it takes deals +' + PEN_MARK + ' damage.' : '.');
+    },
     flavor: 'Fourteen promises and a coupon. The coupon has expired.',
     execute: function (ctx) {
       const t = ctx.targetUnit;
@@ -328,8 +349,8 @@
     target: { type: 'unit', range: [1, 6], los: false, filter: 'enemy',
       canTarget: function (ctx) { return ctx.targetUnit && delegates(ctx.user, ctx.targetUnit, 1).length ? true : 'No ally can reach that foe.'; } },
     area: { shape: 'custom', fn: crewArea(99) },
-    desc: function () {
-      return 'Point at a foe within 6 tiles: every ally who can hit it makes 2 free basic attacks on it.';
+    desc: function (L, user) {
+      return 'Point at a foe within ' + reach(user, 'buga_toast_of_the_town', 6) + ' tiles: every ally who can hit it makes 2 free basic attacks on it.';
     },
     flavor: '"To my brave volunteers!" He raises a glass. They charge. Twice. He does not.',
     execute: function (ctx) {
@@ -354,8 +375,8 @@
     target: { type: 'unit', range: [1, 6], los: false, filter: 'enemy',
       canTarget: function (ctx) { return ctx.targetUnit && delegates(ctx.user, ctx.targetUnit, 1).length ? true : 'No ally can reach that foe.'; } },
     area: { shape: 'custom', fn: crewArea(function (ctx) { return (ctx.L && ctx.L.allies) || 1; }) },
-    desc: function (L) {
-      return 'Point at a foe within 6 tiles: ' + (L.allies > 1 ? 'the ' + L.allies + ' best-placed allies make free basic attacks' :
+    desc: function (L, user) {
+      return 'Point at a foe within ' + reach(user, 'buga_delegate', 6) + ' tiles: ' + (L.allies > 1 ? 'the ' + L.allies + ' best-placed allies make free basic attacks' :
         'the best-placed ally makes a free basic attack') + ' on it.';
     },
     flavor: 'Leadership is mostly pointing.',
@@ -375,7 +396,7 @@
     ap: 1, cooldown: 1,
     levels: [{ dmg: 4, gold: 2 }, { dmg: 5, gold: 2 }, { dmg: 6, gold: 3 }],
     target: { type: 'unit', range: [1, 3], los: true, filter: 'enemy' },
-    desc: function (L) { return 'Deal ' + L.dmg + ' damage to a foe within 3 tiles and pocket ' + L.gold + ' gold.'; },
+    desc: function (L, user) { return 'Deal ' + L.dmg + ' damage to a foe within ' + reach(user, 'buga_fine', 3) + ' tiles and pocket ' + L.gold + ' gold.'; },
     flavor: 'Loitering in a dungeon is a 2-gold fine. Loitering while undead is extra.',
     // the gold is run value the dry run can't see: worth a little over a plain pamphlet (a fine served on a barrel sets
     // it off and collects nothing)
@@ -397,7 +418,7 @@
     ap: 0, cooldown: function (L) { return L.cd; },
     levels: [{ ap: 1, cd: 3 }, { ap: 1, cd: 2 }, { ap: 2, cd: 2 }],
     target: { type: 'unit', range: [1, 5], los: false, filter: 'ally' },
-    desc: function (L) { return 'An ally within 5 tiles gains ' + L.ap + ' AP on its next turn.'; },
+    desc: function (L, user) { return 'An ally within ' + reach(user, 'buga_promise', 5) + ' tiles gains ' + L.ap + ' AP on its next turn.'; },
     flavor: 'Read my crust: more AP. Terms and conditions apply. Promises cost nothing (that is the problem).',
     execute: function (ctx) {
       const ally = ctx.targetUnit;
@@ -420,7 +441,7 @@
         if (!G().isFlying(u) && (G().isDrop(a.x, a.y) || !G().isWalkable(a.x, a.y, u))) return 'Buga can\'t stand there.';
         return true;
       } },
-    desc: function (L) { return 'Swap places with an ally within ' + L.r + ' tiles; it gains ' + L.block + ' Block.'; },
+    desc: function (L, user) { return 'Swap places with an ally within ' + reach(user, 'buga_human_shield', L.r) + ' tiles; it gains ' + L.block + ' Block.'; },
     flavor: 'A good leader stands behind his people. Directly behind. Using them as cover.',
     execute: function (ctx) {
       const u = ctx.user, ally = ctx.targetUnit;
@@ -440,8 +461,8 @@
     target: { type: 'unit', range: function (L) { return [1, L.r]; }, los: true, filter: 'enemy',
       canTarget: function (ctx) { return bribeProblem(ctx.targetUnit, ctx.L) || true; } },
     canUse: function (ctx) { return A().gold() >= ctx.L.gold ? true : 'Not enough gold (' + ctx.L.gold + ' needed).'; },
-    desc: function (L) {
-      return 'Pay ' + L.gold + ' gold to Charm a foe within ' + L.r + ' tiles (not a boss): on its next ' +
+    desc: function (L, user) {
+      return 'Pay ' + L.gold + ' gold to Charm a foe within ' + reach(user, 'buga_bribe', L.r) + ' tiles (not a boss): on its next ' +
         (L.turns > 1 ? L.turns + ' turns' : 'turn') + ' it fights for you.';
     },
     flavor: 'Everyone has a price. Goblins are on sale.',
@@ -464,8 +485,8 @@
     ap: 1, cooldown: function (L) { return L.cd; },
     levels: [{ r: 3, cd: 2 }, { r: 5, cd: 1 }, { r: 5, cd: 1, inspire: true }],
     target: { type: 'unit', range: function (L) { return [1, L.r]; }, los: false, filter: 'ally' },
-    desc: function (L) {
-      return 'An ally within ' + L.r + ' tiles is Empowered: its next damaging skill deals +50%' +
+    desc: function (L, user) {
+      return 'An ally within ' + reach(user, 'buga_butter_up', L.r) + ' tiles is Empowered: its next damaging skill deals +50%' +
         (L.inspire ? ', and it is Inspired (+25% damage) through its next turn' : '') + '.';
     },
     flavor: 'Flattery gets you everywhere. Butter gets you there faster.',
@@ -485,8 +506,8 @@
     ap: 1, cooldown: 2,
     levels: [{ r: 4, pull: 2 }, { r: 4, pull: 3 }, { r: 5, pull: 4 }],
     target: { type: 'unit', range: function (L) { return [2, L.r]; }, los: true, filter: 'enemy' },
-    desc: function (L) {
-      return 'Pull a foe 2-' + L.r + ' tiles away up to ' + L.pull + ' tiles toward Buga and Root it for its next turn.';
+    desc: function (L, user) {
+      return 'Pull a foe 2-' + reach(user, 'buga_red_tape', L.r) + ' tiles away up to ' + L.pull + ' tiles toward Buga and Root it for its next turn.';
     },
     flavor: 'Please fill out Form 27-B in triplicate before attacking the Mayor.',
     execute: function (ctx) {
@@ -533,8 +554,8 @@
     target: { type: 'tile', range: [1, 4], los: true, filter: 'empty',
       canTarget: function (ctx) { return ctx.target && barrelSpotOk(ctx.target.x, ctx.target.y) ? true : 'No room for the barrel.'; } },
     area: { shape: 'circle', size: 1 },
-    desc: function (L) {
-      return 'Plant a Pork Barrel within 4 tiles. It explodes at round end, or when hit or lit: ' + L.boom +
+    desc: function (L, user) {
+      return 'Plant a Pork Barrel within ' + reach(user, 'buga_pork_barrel', 4) + ' tiles. It explodes at round end, or when hit or lit: ' + L.boom +
         ' fire damage within 1 tile' + (L.gold > 0 ? ', +' + L.gold + ' gold' : '') + '.';
     },
     flavor: 'Taxpayer funded and highly explosive. Like most public works.',
@@ -564,8 +585,8 @@
     levels: [{ r: 1, turns: 3 }, { r: 2, turns: 3 }, { r: 2, turns: 5 }],
     target: { type: 'tile', range: [1, 4], los: true, filter: 'any' },
     area: { shape: 'cross', size: function (L) { return L.r; } },
-    desc: function (L) {
-      return 'Scatter flammable crumbs on the bare floor of a ' + (4 * L.r + 1) + '-tile cross within 4 for ' + L.turns +
+    desc: function (L, user) {
+      return 'Scatter flammable crumbs on the bare floor of a ' + (4 * L.r + 1) + '-tile cross within ' + reach(user, 'buga_crumbs', 4) + ' for ' + L.turns +
         ' rounds: grounded foes there are Slowed (−2 move).';
     },
     flavor: 'He sheds when he is nervous. He is always nervous.',
@@ -827,6 +848,7 @@
       start: ['This dungeon is now under municipal jurisdiction!', 'Positions, everyone! I\'ll supervise.',
         'Remember, team: I take the credit, you take the hits.', 'Marwyn, you\'re up front. I\'ll be up back.',
         'I hereby declare this dungeon open... for business!', 'Roll for initiative? I\'d like a recount first.'],
+      swap: ['A peaceful transfer of power, {ally}.', 'Swap seats with me, {ally}. It\'s called delegating.'],
       move: ['Pressing the flesh! Er, the crust.', 'A brisk constitutional!', 'Heading where the votes are.',
         'Mind the crumbs.', 'Walking. Strictly for the cameras.', 'Hjalmar, if you rigged this floor, I\'m suing.'],
       kill: ['Another problem solved by the Mayor\'s office!', 'Taxes: collected. Permanently.', 'Your vote has been counted. Against you.',
@@ -836,7 +858,7 @@
       lowhp: ['I\'m getting burnt out here!', 'Call my lawyer! And a medic! Lawyer first!', 'One more bite and I\'m crumbs!',
         'Josiah! I need a potion and a press release!', 'This is not a good look for re-election.',
         'Basanos, stop looking at me like I\'m breakfast!'],
-      downed: ['Tell the voters... I loved them... mostly their gold...', 'Toast... is... toast...', 'I demand... a recount...',
+      downed: ['This... does not... count as... a term limit...', 'Toast... is... toast...', 'I demand... a recount...',
         'Butter me... one last time...'],
       revive: ['The Mayor has been re-elected!', 'POP! Fresh out of the toaster!', 'Rumors of my staleness were exaggerated.',
         'I\'m back! Did anyone touch the treasury?'],

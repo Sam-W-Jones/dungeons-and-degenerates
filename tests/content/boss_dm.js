@@ -39,8 +39,18 @@
     opts = opts || {};
     const diff = opts.diff || 'normal';
     const setup = DD.Encounter.build('boss_dm', partyAt(opts.level || LV, opts.ids), { rng: DD.RNG('dm:' + seed), difficulty: diff, act: 3 });
-    if (opts.real) return DD.Combat.start(setup, { seed: seed, headless: true, difficulty: diff, kind: 'boss' });
+    if (opts.real) return bare(function () { return DD.Combat.start(setup, { seed: seed, headless: true, difficulty: diff, kind: 'boss' }); });
     return DD.Combat.start(setup, { seed: seed, headless: true, difficulty: diff, kind: 'boss', sandbox: true, initiative: opts.initiative || 'heroesFirst', order: opts.order });
+  }
+  /**
+   * Start a real-path fight without his DD.Balance row (balance pass 2: the row pays for a campaign party's items,
+   * Blessings and starting kit): these parties are bare, so the sims measure his own numbers (docs/notes/balance.md).
+   * balance=1 keeps the row.
+   */
+  function bare(start) {
+    const rows = DD.Balance && DD.Balance.encounters, row = rows && rows.boss_dm;
+    if (row && DD.params.balance !== '1') delete rows.boss_dm;
+    try { return start(); } finally { if (row) rows.boss_dm = row; }
   }
   function S() { return DD.Combat.state; }
   function dmUnit() { return S().units.filter(function (u) { return u.defId === DM; })[0]; }
@@ -374,6 +384,10 @@
     t.ok(put(k, panels[0].x, panels[0].y + 1), 'knight next to the left panel');
     const ix = DD.Combat.interactions(k).filter(function (o) { return o.x === panels[0].x && o.y === panels[0].y; })[0];
     t.ok(ix && ix.kind === 'smash' && ix.ap === 1, 'Smash interaction (1 AP)');
+    // rules run: objects with HP are attack targets, but the screen is laminated: walk up and Smash it (or blast it)
+    t.ok(pdef.targetable === false && /attacks can't be aimed at it/.test(pdef.desc), 'panels opt out of aimed attacks (targetable: false), and the desc says so');
+    t.ok(!DD.Targeting.validTargets(k, k.basic).some(function (q) { return q.obj === 'dm_screen_panel'; }) && !DD.Targeting.isValidTarget(k, k.basic, panels[0].x, panels[0].y),
+      'not even the knight next to it can aim his attack at a panel');
     t.ok(DD.Combat.interact(k, panels[0].x, panels[0].y), 'smash 1');
     t.eq(objs('dm_screen_panel').length, 3, 'still standing at 5 HP');
     t.ok(DD.Combat.interact(k, panels[0].x, panels[0].y), 'smash 2');
@@ -819,6 +833,27 @@
     put(c, dm.x - 1, dm.y);
     c.armor = 0;
     DD.Combat.giveTurnTo(r);
+    // playtest bosses-objectives-7: AutoPlay prices team-mates on his row who get no turn of their own before it lands
+    const ord = S().order.map(function (e) { return e.unitId; });
+    const cActed = ord.indexOf(c.id) < S().turnIndex;
+    t.eq(sdef.autoplay(), cActed ? 0 : 34, 'a team-mate on his row ' + (cActed ? 'with no turn left: no switch (review: not 34 − 30)' : 'who still gets a turn: no cost'));
+    const hp0 = c.hp;
+    c.hp = 5;
+    t.eq(sdef.autoplay(), cActed ? 0 : 34, 'one the train would knock out' + (cActed ? ': 0' : ' (he still gets a turn): no cost'));
+    c.hp = hp0;
+    DD.Act.addStatus(c, 'root', { turns: 1 }, null);
+    t.eq(sdef.autoplay(), 0, 'a Rooted team-mate on his row: no switch, whatever the order');
+    DD.Act.removeStatus(c, 'root', { silent: true });
+    // playtest review: the switcher on his row needs 3 AP (walk up, switch, step off) or the train runs it over too
+    const rx = r.x, ry = r.y, rap = r.ap;
+    const rowTile = [-2, -3, -4, 2, 3, 4].map(function (dx) { return { x: dm.x + dx, y: dm.y }; }).filter(function (p) { return DD.Grid.isFree(p.x, p.y, r); })[0];
+    t.ok(!!rowTile && put(r, rowTile.x, rowTile.y), 'the rogue stands on his row');
+    r.ap = 1;
+    t.ok(B().stuckOnRow(dm).indexOf(r) >= 0, 'the switcher on his row with 1 AP left counts as stuck');
+    r.ap = 3;
+    t.ok(B().stuckOnRow(dm).indexOf(r) < 0, 'with 3 AP it can still step off');
+    put(r, rx, ry);
+    r.ap = rap;
     t.ok(DD.Combat.interact(r, sw.x, sw.y), 'switched on the rogue\'s turn');
     t.ok(due.data.diverted && due.data.unstoppable && DD.AI.intentTiles(dm, due).every(function (p) { return p.y === dm.y; }) && DD.AI.intentTiles(dm, due).length === 14,
       'the train now runs down the DM\'s row, and nothing he does can stop it');
@@ -1144,7 +1179,7 @@
   /** One sim fight on the real path; key names its dice (the same key and party replay the same fight: dump=1&simkey=). */
   function simStart(key, team) {
     const setup = DD.Encounter.build('boss_dm', team, { rng: DD.RNG('dm-sim:' + key), difficulty: 'normal', act: 3 });
-    return DD.Combat.start(setup, { seed: 'dm-sim' + key, headless: true, difficulty: 'normal', kind: 'boss' });
+    return bare(function () { return DD.Combat.start(setup, { seed: 'dm-sim' + key, headless: true, difficulty: 'normal', kind: 'boss' }); });
   }
   function sims(t, n, party, label) {
     const watch = T.contentHelpers && T.contentHelpers.watchAreas;
@@ -1230,7 +1265,7 @@
     for (let i = 0; i < n; i++) {
       const team = real ? partyAt(lv, rng.sample(pool, 4)) : partyAt(lv);
       const setup = DD.Encounter.build('boss_dm', team, { rng: DD.RNG('dm-probe:' + t.seed + ':' + i), difficulty: t.param('diff', 'normal'), act: 3 });
-      DD.Combat.start(setup, { seed: 'dm-probe' + t.seed + ':' + i, headless: true, difficulty: t.param('diff', 'normal'), kind: 'boss' });
+      bare(function () { DD.Combat.start(setup, { seed: 'dm-probe' + t.seed + ':' + i, headless: true, difficulty: t.param('diff', 'normal'), kind: 'boss' }); });
       const dm = dmUnit();
       DD.Act.addRule({ id: 'test_dm_probe', name: 'probe', hooks: {
         onTakeDamage: function (d) {
@@ -1492,4 +1527,85 @@
     t.ok(k90 > 10 && k180 === 0, 'the bottom book\'s spine faces east (' + k90 + ' px at 90°, ' + k180 + ' at 180°)');
     t.eq(DD.problems.slice(n0).filter(function (p) { return /^Error in /.test(p); }).length, 0, 'no swallowed errors');
   }, { tags: ['render'] });
+})();
+
+// ---- playtest fixes (Nov 12) --------------------------------------------------------------------------------------------
+(function () {
+  'use strict';
+  const T = window.DD_TEST;
+  const DD = window.DD;
+  if (!T || !DD) return;
+  T.suite('boss_dm: playtest fixes (Nov 12) — wind-ups are not instant reach, articles, cameo lists', function (t) {
+    const n0 = DD.problems.length;
+    const B = DD.BossDM;
+    // robustness-3: his three wind-ups are windupOnly (threat shading and AutoPlay never read them as an instant hit)
+    ['dm_rocks_fall', 'dm_railroad', 'dm_tpk'].forEach(function (id) { t.ok(DD.AI.windupOnly(DD.getSkill(id)), id + ' is windupOnly'); });
+    // text-tone-11: "Rolled an 8 / an 11 / an 18"; the narration needs no article
+    const setup = DD.Encounter.build('boss_dm', ['test_knight', 'test_cleric', 'test_mage', 'test_rogue'].map(function (id) {
+      return DD.Combat.makeRunHero({ id: id, level: 5 });
+    }), { rng: DD.RNG('dm:pt'), difficulty: 'normal', act: 3 });
+    DD.Combat.start(setup, { seed: 5, headless: true, difficulty: 'normal', kind: 'boss', sandbox: true, initiative: 'heroesFirst' });
+    const dm = B.findDM();
+    [[8, 'an 8'], [11, 'an 11'], [18, 'an 18'], [3, 'a 3']].forEach(function (c) {
+      DD.Combat._action(function () { B.rollHouseRule(dm, c[0]); });
+      const cur = DD.Combat.state.rules.filter(function (x) { return x.id === 'dm_house_rule'; })[0];
+      t.ok(cur && cur.desc.indexOf('(Rolled ' + c[1] + '.') >= 0, 'house rule ' + c[0] + ': "Rolled ' + c[1] + '"');
+    });
+    // text-tone-19: cameo minis are counted and listed
+    t.eq(B.listOf(['Skeletal Backup Dancer', 'Skeletal Backup Dancer']), 'two Skeletal Backup Dancers', 'two of a kind');
+    t.eq(B.listOf(['Gary', 'Mimic', 'Owlbear']), 'Gary, Mimic and Owlbear', 'three different ones');
+    t.eq(B.listOf(['Mind Flayer']), 'Mind Flayer', 'one');
+    t.eq(DD.problems.slice(n0).filter(function (p) { return /^Error in /.test(p); }).length, 0, 'no swallowed errors');
+  });
+
+  // ---- finish (Nov 14): playtest desc-sweep-3 --------------------------------------------------------------------------
+  T.suite('boss_dm: finish — his own numbers in texts are this fight\'s: the phase-3 doom log, and the Track Switch quotes no raw number', function (t) {
+    const n0 = DD.problems.length;
+    const S = function () { return DD.Combat.state; }, dmUnit = function () { return S().units.filter(function (u) { return u.defId === 'dungeon_master'; })[0]; };
+    const party = ['test_knight', 'test_cleric', 'test_mage', 'test_rogue'].map(function (id) { return DD.Combat.makeRunHero({ id: id, level: 5 }); });
+    const s = DD.Combat.start(DD.Encounter.build('boss_dm', party, { rng: DD.RNG('dm:finish'), difficulty: 'normal', act: 3 }),
+      { seed: 1402, headless: true, difficulty: 'normal', kind: 'boss' });
+    const dm = dmUnit(), f = S().difficulty.dmg;
+    t.ok(f > 1, 'his real fight scales his damage (×' + f + ', the boss_dm row)');
+    const doom = Math.round(DD.getSkill('dm_tpk').levels[0].dmg * f);
+    // to 1 HP, then his phase check (Plot Armor stops a single hit at each phase floor; the round start runs it too)
+    dm.hp = 1;
+    DD.Combat._action(function () { DD.BossDM.syncPhase(dm); });
+    const log = S().log.map(function (e) { return e.text; }).filter(function (x) { return /PHASE 3/.test(x); })[0] || '';
+    t.ok(new RegExp('every hero takes ' + doom + ' damage').test(log), 'phase 3 log: ' + doom + ' (raw ' + DD.getSkill('dm_tpk').levels[0].dmg + ') — ' + log);
+    t.eq(DD.AI.fightLevel(DD.getSkill('dm_tpk'), 1, dm).dmg, doom, 'the same number the doom wind-up shows');
+    const sw = DD.getObject('dm_track_switch').desc;
+    t.ok(!/\b\d+ damage\b/.test(sw) && /full damage/.test(sw), 'the Track Switch quotes no raw number (its wind-up row shows the hit): ' + sw);
+    t.ok(!!s, 'fight started');
+    t.eq(DD.problems.slice(n0).filter(function (p) { return /^Error in /.test(p); }).length, 0, 'no swallowed errors');
+  });
+
+  // ---- finish (Nov 14): playtest FF-5 ----------------------------------------------------------------------------------
+  T.suite('boss_dm: finish — his mercy: a roll never takes a hero with 75%+ HP straight to 0 (a rule chip says so); a hurt hero still goes down', function (t) {
+    const n0 = DD.problems.length;
+    const S = function () { return DD.Combat.state; };
+    const party = ['syllamin', 'kiri', 'zarathor', 'josiah'].map(function (id) { return DD.Combat.makeRunHero({ id: id, level: 5 }); });
+    DD.Combat.start(DD.Encounter.build('boss_dm', party, { rng: DD.RNG('dm:mercy'), difficulty: 'normal', act: 3 }), { seed: 5, headless: true, difficulty: 'normal', kind: 'boss' });
+    const dm = S().units.filter(function (u) { return u.defId === 'dungeon_master'; })[0];
+    const by = function (id) { return S().units.filter(function (u) { return u.defId === id; })[0]; };
+    const rule = S().rules.filter(function (r) { return r.id === 'dm_mercy'; })[0];
+    t.ok(!!rule && /75%\+ of their HP/.test(rule.desc), 'a whole-fight rule chip says it: ' + (rule && rule.desc));
+    ['dm_fudged_roll', 'dm_secret_roll'].forEach(function (id) {
+      const h = by('syllamin');
+      h.hp = h.maxHp; h.block = 0; h.downed = false;
+      const raw = DD.AI.fightLevel(DD.getSkill(id), 1, dm).dmg;
+      t.ok(raw >= h.maxHp, id + ': the roll (' + raw + ') would down Syllamin (' + h.maxHp + ' HP) outright');
+      const prev = DD.Combat.preview ? DD.Targeting.preview(dm, id, { x: h.x, y: h.y }) : null;
+      DD.Combat._action(function () { DD.AI.useNow(dm, id, h, { noCooldown: true }); });
+      t.ok(!h.downed && h.hp === 1, id + ': at full HP she is left at 1 HP (' + h.hp + ')');
+      t.ok(!prev || !prev.perUnit[h.id] || !prev.perUnit[h.id].lethal, id + ': the preview agrees (not lethal)');
+      t.ok(/he fudges it/.test(DD.skillDesc(DD.getSkill(id), 1, null)), id + ': its text says so');
+    });
+    // a hero under 75% HP gets no mercy
+    const k = by('kiri');
+    k.block = 0; k.hp = Math.ceil(k.maxHp * 0.75) - 1;
+    DD.Combat._action(function () { DD.AI.useNow(dm, 'dm_fudged_roll', k, { noCooldown: true }); });
+    t.ok(k.downed, 'Kiri at ' + Math.round(100 * (Math.ceil(k.maxHp * 0.75) - 1) / k.maxHp) + '% HP: the roll downs her (no mercy below 75%)');
+    t.eq(DD.problems.slice(n0).filter(function (p) { return /^Error in /.test(p); }).length, 0, 'no swallowed errors');
+  });
 })();

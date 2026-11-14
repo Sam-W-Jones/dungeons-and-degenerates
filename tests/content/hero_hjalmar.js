@@ -16,7 +16,7 @@
   const TRAPS = ['hja_peel', 'hja_bear_trap', 'hja_cushion', 'hja_paint', 'hja_firecracker', 'hja_glove'];
   const OBJS = { hja_peel: 'hja_peel', hja_bear_trap: 'hja_bear_trap', hja_cushion: 'hja_cushion', hja_paint: 'hja_paint', hja_firecracker: 'hja_firecracker', hja_glove: 'hja_glove' };
   const ALL = POOL.concat(['hja_basic', 'hja_signature']);
-  const ITEMS = ['hja_coconut', 'hja_pomade', 'hja_prop_sack'];
+  const ITEMS = ['hja_coconut', 'hja_pomade', 'hja_prop_sack', 'hja_canned_laughter'];
   const BARK_KEYS = ['select', 'start', 'move', 'kill', 'hurt', 'lowhp', 'downed', 'revive', 'ally_down', 'levelup', 'victory', 'idle', 'signature'];
   const FEM = /\b(she|her|hers|herself)\b/i;
   const SLIPPED = 'hja_slipped';
@@ -235,7 +235,7 @@
       t.ok(!o.hazard, OBJS[id] + ': no AI hazard (foes never see it coming)');
     });
     const items = Object.keys(DD.defs.items).map(function (k) { return DD.defs.items[k]; }).filter(function (it) { return it.hero === 'hjalmar'; });
-    t.eq(items.length, 3, 'three hero items');
+    t.eq(items.length, 4, 'four hero items (Canned Laughter joined in D9)');
     t.ok(items.some(function (it) { return it.rarity === 'rare'; }) && items.some(function (it) { return it.rarity === 'legendary'; }), 'a rare and a legendary item');
   });
 
@@ -759,6 +759,153 @@
     t.ok(e && e.init === 4 && e.total === e.roll + 4, 'rolled initiative: d20 + 4');
   });
 
+  // D9 (Nov 12): sustain from his own verb, delivered as an optional hero item
+  T.suite('hero_hjalmar: Canned Laughter — he heals 4 HP whenever a foe springs one of his traps (D9)', function (t) {
+    const HEAL = DD.Hjalmar.CANNED_HEAL, ID = DD.Hjalmar.CANNED;
+    t.ok(HEAL === 4 && ID === 'hja_canned_laughter', 'DD.Hjalmar.CANNED_HEAL = 4, CANNED = hja_canned_laughter');
+    const it = DD.getItem(ID);
+    if (!t.ok(!!it, 'registered')) return;
+    t.ok(it.hero === 'hjalmar' && it.slot === 'trinket' && it.rarity === 'rare' && it.icon === '🥫', 'a rare trinket only Hjalmar wears');
+    t.eq(JSON.stringify(it.stats || {}), '{}', 'no stats');
+    t.eq(it.desc, 'Whenever a foe springs one of Hjalmar\'s traps, he heals 4 HP.', 'desc');
+    t.ok(it.desc.length <= 120 && it.flavor.length <= 120, 'desc and flavor ≤ 120 chars (' + it.desc.length + ' / ' + it.flavor.length + ')');
+    const LAUGH = 'Hjalmar laughs so hard at the pratfall that it heals him.';
+    const logs = function () { return DD.Combat.state.log.map(function (l) { return l.text; }); };
+    /** A bear trap at 3,4 and a grunt at 4,4 (pushed west onto it); Hjalmar hurt by `hurt`. */
+    function bear(items, hurt) {
+      const a = arena({ at: [1, 4], items: items, skills: [['hja_bear_trap', 1]], enemies: [E(4, 4, 'test_grunt', 3), E(8, 8)] });
+      a.h.hp = a.h.maxHp - hurt;
+      set(t, a, 'hja_bear_trap', 3, 4);
+      return a;
+    }
+    // worn: a foe pushed onto his bear trap heals him exactly 4
+    const w = bear([ID], 10);
+    const texts = [], text0 = DD.FX.text;
+    DD.FX.text = function (at0, txt) { texts.push({ at: at0, txt: txt }); return text0.apply(this, arguments); };
+    try { DD.Act.push(null, w.foes[0], WEST, 1); } finally { DD.FX.text = text0; }
+    t.ok(has(w.foes[0], 'root') && w.foes[0].hp === 42 - 5, 'the trap sprang (SNAP: 5, Rooted)');
+    t.eq(w.h.hp, w.h.maxHp - 10 + HEAL, 'worn: +' + HEAL + ' HP (' + w.h.hp + '/' + w.h.maxHp + ')');
+    t.ok(logs().indexOf(LAUGH) >= 0 && logs().indexOf('Hjalmar heals 4 HP.') >= 0, 'logged: the laugh and the heal');
+    t.ok(texts.some(function (x) { return x.txt === '🥫 HA-HA-HA!' && x.at === w.h; }), 'a "🥫 HA-HA-HA!" pop-up over him');
+    hypeIs(t, DD.Combat.state.hype, 5, 'Monkey Business still pays its 5 Hype');
+    // not worn: nothing
+    const n = bear([], 10);
+    DD.Act.push(null, n.foes[0], WEST, 1);
+    t.ok(has(n.foes[0], 'root') && n.h.hp === n.h.maxHp - 10 && logs().indexOf(LAUGH) < 0, 'not worn: the trap springs, he heals 0');
+    // a trap a foe walks into on its own turn heals him too
+    const o = arena({ at: [1, 4], items: [ID], skills: [['hja_bear_trap', 1]], ai: true, enemies: [E(5, 4, 'test_grunt', 3)] });
+    o.h.hp = o.h.maxHp - 10;
+    set(t, o, 'hja_bear_trap', 3, 4);
+    DD.Combat.endRound();
+    t.ok(o.foes[0].x === 3 && has(o.foes[0], 'root'), 'the grunt walked in on its own turn');
+    t.eq(o.h.hp, o.h.maxHp - 10 + HEAL, 'on the foe\'s turn: +' + HEAL);
+    // one heal per trap sprung: a firecracker that hits 2 foes is one spring; a second trap is a second heal
+    const f = arena({ at: [1, 4], items: [ID], skills: [['hja_firecracker', 1], ['hja_peel', 1]], enemies: [E(4, 4, 'test_grunt', 3), E(3, 5, 'test_grunt', 3), E(2, 6, 'test_grunt', 3)] });
+    f.h.hp = f.h.maxHp - 20;
+    set(t, f, 'hja_firecracker', 3, 4);
+    DD.Act.push(null, f.foes[0], WEST, 1);
+    t.ok(f.foes[0].hp < 42 && f.foes[1].hp < 42, 'BANG: two foes hit');
+    t.eq(f.h.hp, f.h.maxHp - 20 + HEAL, 'one firecracker, two foes: one heal of ' + HEAL);
+    set(t, f, 'hja_peel', 2, 5);
+    DD.Act.push(null, f.foes[2], NORTH, 1);
+    t.ok(has(f.foes[2], SLIPPED) && f.h.hp === f.h.maxHp - 20 + 2 * HEAL, 'a second trap sprung: a second heal (' + f.h.hp + ')');
+    // a downed Hjalmar: his trap still bites and cheers, but the laughter never revives him
+    const d = bear([ID], 0);
+    DD.Act.damage(d.foes[1], d.h, 999, { cause: 'other' });
+    const dh = d.h.hp;
+    t.ok(d.h.downed, 'Hjalmar is down');
+    DD.Act.push(null, d.foes[0], WEST, 1);
+    t.ok(has(d.foes[0], 'root') && d.h.downed && d.h.hp === dh, 'downed: the trap springs, he heals nothing and stays down');
+    hypeIs(t, DD.Combat.state.hype, 5, 'and the crowd still cheers (+5)');
+    // full HP: nothing to heal, no laugh in the log
+    const full = bear([ID], 0);
+    DD.Act.push(null, full.foes[0], WEST, 1);
+    t.ok(has(full.foes[0], 'root') && full.h.hp === full.h.maxHp && logs().indexOf(LAUGH) < 0, 'full HP: no overheal, no log line');
+    // a small wound: capped at max HP
+    const cap = bear([ID], 2);
+    DD.Act.push(null, cap.foes[0], WEST, 1);
+    t.eq(cap.h.hp, cap.h.maxHp, 'hurt by 2: back to full, no overheal');
+    // an ownerless trap is nobody's joke
+    const ow = arena({ at: [1, 4], items: [ID], enemies: [E(4, 4, 'test_grunt', 3)] });
+    ow.h.hp = ow.h.maxHp - 10;
+    DD.Hjalmar.setTrap(null, 3, 4, 'bear', { snap: 6 });
+    DD.Act.push(null, ow.foes[0], WEST, 1);
+    t.ok(has(ow.foes[0], 'root') && ow.h.hp === ow.h.maxHp - 10, 'an ownerless trap heals nobody');
+    // the loading tip
+    const tips = (DD.defs.narration.tips || []).filter(function (l) { return /Canned Laughter/.test(l) && /Hjalmar/.test(l); });
+    t.ok(tips.length === 1 && tips[0].length <= 140 && !FEM.test(tips[0]), 'a loading tip: ' + tips[0]);
+  });
+
+  // [review sustain] the heal mostly lands on a foe's turn, where no AutoPlay dry run sees it: the trap hint prices it
+  T.suite('hero_hjalmar: review (sustain) — AutoPlay prices Canned Laughter\'s heal when he sets a trap; previews show it and leak nothing; loot, shops and saves', function (t) {
+    const p0 = DD.problems.length;
+    const ID = DD.Hjalmar.CANNED, HEAL = DD.Hjalmar.CANNED_HEAL, Lb = L('hja_bear_trap', 1), P = { x: 3, y: 4 };
+    /** trapValue of a bear trap on 3,4 for the grunt walking at Hjalmar from 5,4; Hjalmar hurt by `hurt`. */
+    function hint(items, hurt) {
+      const a = arena({ at: [2, 4], skills: [['hja_bear_trap', 1]], items: items, enemies: [E(5, 4, 'test_grunt', 3)] });
+      a.h.hp = a.h.maxHp - hurt;
+      return { v: DD.Hjalmar.trapValue({ user: a.h, target: P, L: Lb }, 'bear'), c: DD.Hjalmar.crossChance(a.foes[0], P, [a.h]), h: a.h };
+    }
+    const base = hint([], 10), full = hint([ID], 0), hurt = hint([ID], 3), low = hint([ID], 16);
+    t.ok(base.v > 0 && base.c > 0, 'premise: the grunt is likely to walk over 3,4 (chance ' + base.c + ', hint ' + base.v.toFixed(2) + ')');
+    t.eq(hint([ID], 10).v > base.v, true, 'worn and hurt: the trap is worth more than without the item');
+    t.ok(Math.abs(full.v - hint([], 0).v) < 1e-9, 'worn at full HP: nothing to heal, the same hint as without it');
+    t.ok(Math.abs(hurt.v - hint([], 3).v - base.c * 3 * 0.8) < 1e-9, 'missing 3: + chance × 3 × 0.8 (' + (hurt.v - hint([], 3).v).toFixed(3) + ')');
+    t.ok(low.h.hp * 2 < low.h.maxHp && Math.abs(low.v - hint([], 16).v - base.c * HEAL * 1.5) < 1e-9,
+      'below half HP: + chance × ' + HEAL + ' × 1.5 (' + (low.v - hint([], 16).v).toFixed(3) + ')');
+    // a party push onto his trap: the HUD preview shows his +4, and the preview itself heals and logs nothing
+    if (DD.getHero('basanos')) {
+      const a = arena({ at: [1, 1], items: [ID], heroes: [{ id: 'basanos', x: 5, y: 4, level: 1, skills: ['bas_shoulder_check'] }],
+        enemies: [E(4, 4, 'test_grunt', 3), E(8, 8)] });
+      const b = DD.Combat.state.units.filter(function (u) { return u.defId === 'basanos'; })[0], sc = slotOf(b, 'bas_shoulder_check');
+      a.h.hp = a.h.maxHp - 10;
+      t.ok(!!DD.Hjalmar.setTrap(a.h, 3, 4, 'bear', { snap: 5 }), 'his bear trap behind the grunt');
+      DD.Combat.endTurn();
+      t.ok(DD.Combat.current() === b, 'Basanos\'s turn');
+      const l0 = DD.Combat.state.log.length, hype0 = DD.Combat.state.hype, hp0 = a.h.hp;
+      const pv = DD.Combat.preview(b, sc, 4, 4);
+      t.ok(!!pv && pv.perUnit[a.h.id] && pv.perUnit[a.h.id].heal === HEAL, 'Shoulder Check\'s preview shows Hjalmar +' + HEAL + ': ' + JSON.stringify(pv && pv.perUnit[a.h.id]));
+      t.ok(a.h.hp === hp0 && !!trapAt(3, 4) && DD.Combat.state.log.length === l0 && DD.Combat.state.hype === hype0, 'the preview healed, sprang and logged nothing');
+      t.ok(DD.Combat.useSkill(b, sc, 4, 4) && a.h.hp === hp0 + HEAL && !trapAt(3, 4), 'for real: sprung, and he heals ' + HEAL);
+    }
+    // the run layer: rare loot and shops carry it only while he is in the party, and a save / load keeps it on him
+    if (DD.Run && DD.Rewards && DD.getEncounter('test_a1_normal')) {
+      const savedUi = DD.Run.useUi, savedMeta = DD.util.deepClone(DD.Meta.data);
+      DD.Run.useUi = false;
+      try {
+        DD.Run.newRun(['hjalmar', 'test_knight', 'test_cleric', 'test_mage'], 'normal', 'hja-canned-run');
+        let found = 0, shops = 0, gone = 0;
+        for (let i = 0; i < 400; i++) if (DD.Rewards.randomItem({ rarity: 'rare', run: DD.Run.state }, DD.RNG('hja-cl:' + i)) === ID) found++;
+        for (let i = 0; i < 150; i++) if (JSON.stringify(DD.Rewards.shopInventory(1 + (i % 3), DD.RNG('hja-cs:' + i), DD.Run.state)).indexOf(ID) >= 0) shops++;
+        t.ok(found > 0 && shops > 0, 'with Hjalmar in the party it drops from rare loot (' + found + '/400) and shows up in shops (' + shops + '/150)');
+        t.ok(DD.Run.addItem(ID) && DD.Run.equip(0, ID), 'he wears it');
+        t.ok(DD.Run.save(), 'saved');
+        DD.Run.state = null;
+        t.ok(DD.Run.load(), 'loaded');
+        const it = DD.Run.state.party[0].items;
+        t.ok(Object.keys(it).some(function (k) { return it[k] === ID; }), 'still worn after the reload: ' + JSON.stringify(it));
+        t.ok(!!DD.Run.startCombat('test_a1_normal', 'normal'), 'a fight from the reloaded run');
+        const hu = DD.Combat.state.units.filter(function (u) { return u.defId === 'hjalmar'; })[0];
+        t.ok(!!hu && hu.items.indexOf(ID) >= 0, 'he fights with it');
+        DD.Act.endCombat('victory');
+        if (DD.FX && DD.FX.flush) DD.FX.flush();
+        if (DD.Run.inCombat()) DD.Run.finishCombat('victory', DD.Combat.state);
+        DD.Run.newRun(['test_knight', 'test_cleric', 'test_mage', 'test_rogue'], 'normal', 'hja-canned-none');
+        for (let i = 0; i < 400; i++) if (DD.Rewards.randomItem({ rarity: 'rare', run: DD.Run.state }, DD.RNG('hja-cn:' + i)) === ID) gone++;
+        t.eq(gone, 0, 'never without him');
+      } finally {
+        DD.Run.useUi = savedUi;
+        DD.Run.state = null;
+        DD.Storage.remove(DD.Run.SAVE_KEY);
+        DD.Meta.data = savedMeta;
+        DD.Meta.save();
+        if (DD.FX && DD.FX.reset) DD.FX.reset();
+      }
+    }
+    const errs = DD.problems.slice(p0).filter(function (w) { return /^Error in /.test(w); });
+    t.eq(errs.length, 0, 'no swallowed errors' + (errs.length ? ' — ' + errs[0].slice(0, 160) : ''));
+  });
+
   // ---- previews -------------------------------------------------------------------------------------------------------
   T.suite('hero_hjalmar: previews match reality for every skill at every level', function (t) {
     const cases = [
@@ -1150,4 +1297,36 @@
       'the other traps have no box: they stay billboards');
     t.eq(DD.problems.slice(n0).filter(function (p) { return /^Error in /.test(p); }).length, 0, 'no swallowed errors');
   }, { tags: ['render'] });
+
+  // ---- finish (Nov 14): the playtest findings held for the sustain build -----------------------------------------------
+  T.suite('hero_hjalmar: finish — texts follow his items: the Coconut\'s knockback, +range on every "within N"; Pickpocket says Weakened', function (t) {
+    const n0 = DD.problems.length;
+    const a = arena({ at: [1, 4], skills: [['hja_peel', 1], ['hja_bear_trap', 1], ['hja_cushion', 1], ['hja_paint', 1], ['hja_firecracker', 1], ['hja_glove', 1],
+      ['hja_swing', 1], ['hja_switch', 1]], enemies: [E(6, 4), E(8, 8)] });
+    const h = a.h, d = function (id, lv) { return DD.skillDesc(sk(id), lv || 1, h); };
+    // heroes-2 / desc-sweep-7: the Coconut of Unusual Size
+    t.ok(!/knock/.test(d('hja_basic')), 'Coconut Toss without the Coconut: no knockback in the text');
+    h.items = ['hja_coconut'];
+    t.ok(/knock it 1 tile back/.test(d('hja_basic')), 'with it: ' + d('hja_basic'));
+    const g = at(6, 4);
+    h.rangeBonus = 1;
+    t.ok(use(t, h, h.basic, 6, 4, 'Coconut Toss at 5 tiles (+1 range)') && g.x === 7, 'it reaches 5 and knocks the grunt 1 tile back (to ' + g.x + ',' + g.y + ')');
+    h.items = [];
+    // heroes-v1 / desc-sweep-5: every "within N" is the range the card shows
+    ['hja_basic', 'hja_peel', 'hja_bear_trap', 'hja_cushion', 'hja_paint', 'hja_firecracker', 'hja_glove', 'hja_swing', 'hja_switch', 'hja_signature'].forEach(function (id) {
+      [0, 1].forEach(function (bonus) {
+        h.rangeBonus = bonus;
+        [1, 2, 3].forEach(function (lv) {
+          if (lv > ((sk(id).levels || []).length || 1)) return;
+          const n = DD.Targeting.range(h, sk(id), lv)[1];
+          t.ok(new RegExp('within ' + n + '(?![0-9])').test(d(id, lv)), id + ' L' + lv + ' (+' + bonus + ' range): "within ' + n + '" (' + d(id, lv) + ')');
+        });
+      });
+    });
+    h.rangeBonus = 0;
+    // text-tone-24: the status is called Weakened
+    [1, 2, 3].forEach(function (lv) { t.ok(/is Weakened through/.test(d('hja_pickpocket', lv)) && !/\bWeak\b/.test(d('hja_pickpocket', lv)), 'Pickpocket L' + lv + ': ' + d('hja_pickpocket', lv)); });
+    t.eq(DD.getStatus('weak').name, 'Weakened', 'the status it names');
+    t.eq(DD.problems.slice(n0).filter(function (p) { return /^Error in /.test(p); }).length, 0, 'no swallowed errors');
+  });
 })();

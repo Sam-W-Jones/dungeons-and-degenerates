@@ -51,7 +51,7 @@
         d.epithet ? el('div.sheet-epithet', null, d.epithet) : null,
         el('div.sheet-class', null, [d.race, d.cls].filter(Boolean).join(' ')),
         el('div.sheet-level', null, el('span.lvl-badge.big', null, 'Level ' + num(rh.level || 1)), num(rh.kills) ? el('span.chip', { title: 'Kills this run' }, '💀 ' + num(rh.kills)) : null))));
-    if (rh.dead) col.appendChild(el('div.sheet-dead', null, '⚰️ Written out of the campaign. Replace them at a tavern.'));
+    if (rh.dead) col.appendChild(el('div.sheet-dead', null, '⚰️ Written out of the campaign. Replace ' + UI.heroName(rh) + ' at a tavern.'));
     col.appendChild(UI.hpBar(rh.hp, s.maxHp, { big: true, dead: rh.dead, deadText: 'Written out', label: '❤' }));
     const next = rh.dead ? '' : UI.levelLine(rh, idx);
     if (next) {

@@ -372,6 +372,105 @@
     t.eq(DD.Marwyn.surge(M(), DD.Combat.state.rng)[0].id, ids[4], 'deterministic per combat seed');
   });
 
+  // ---- 2b. the surge heals him (D9, Nov 12: sustain from his own verbs) ------------------------------------------
+  T.suite('hero_marwyn: MAGNIFICENT SURGE heals him 8 HP (once per surge, never after the fight is decided)', function (t) {
+    const HEAL = DD.Marwyn.SURGE_HEAL;
+    t.eq(HEAL, 8, 'DD.Marwyn.SURGE_HEAL = 8');
+    const h = DD.getHero('marwyn');
+    t.ok(/heals 8 HP/.test(h.passive.desc) && words(h.passive.desc) <= 45, 'passive desc names the heal, ≤ 45 words (' + words(h.passive.desc) + '): ' + h.passive.desc);
+    const maxed = DD.getStatus('mrw_magnificence').desc({ id: 'mrw_magnificence', stacks: 5, turns: -1, data: {} });
+    t.ok(/MAXED/.test(maxed) && /he heals 8 HP/.test(maxed), 'the maxed meter names the heal: ' + maxed);
+    t.ok(!/heals/.test(DD.getStatus('mrw_magnificence').desc({ id: 'mrw_magnificence', stacks: 3, turns: -1, data: {} })), 'the meter at 3 keeps its short text');
+    /** The surge's own heals on Marwyn while fn runs (a wild magic effect's heal is tagged 'wildmagic' and not counted). */
+    function surgeHeals(m, fn) {
+      const list = [], orig = DD.Act.heal;
+      DD.Act.heal = function (src, target, n, opts) {
+        const r = orig.apply(this, arguments);
+        if (target === m && src === m && !(opts && opts.tags && opts.tags.indexOf('wildmagic') >= 0)) list.push({ n: n, healed: r });
+        return r;
+      };
+      try { fn(); } finally { DD.Act.heal = orig; }
+      return list;
+    }
+    /** Wild magic that goes off without doing anything (counted), so only the surge's own heal moves his HP. */
+    function tameMagic(fn) {
+      const WM = DD.WildMagic, ap = WM.apply;
+      let n = 0;
+      WM.apply = function (id) { n++; return { id: id, good: true }; };
+      try { fn(); } finally { WM.apply = ap; }
+      return n;
+    }
+    // hurt by 10: the surging Ginger Snap (a normal hit on the brute) heals him exactly 8
+    fight({ enemies: [{ id: 'test_brute', x: 3, y: 4 }] });
+    let m = M();
+    m.hp = m.maxHp - 10;
+    setStacks(m, 5);
+    let heals = [];
+    let fx = tameMagic(function () { heals = surgeHeals(m, function () { use(t, m, m.basic, 3, 4, 'surging Ginger Snap, hurt by 10'); }); });
+    t.eq(fx, 1, 'one wild magic effect');
+    t.eq(m.hp, m.maxHp - 10 + HEAL, 'exactly +' + HEAL + ' HP from the surge (' + m.hp + '/' + m.maxHp + ')');
+    t.ok(heals.length === 1 && heals[0].n === HEAL && heals[0].healed === HEAL, 'one heal of ' + HEAL + ' (' + JSON.stringify(heals) + ')');
+    t.eq(foes()[0].hp, 50 - 4, 'the surging hit is still a normal hit (5 − 1 armor)');
+    const log = DD.Combat.state.log.map(function (l) { return l.text; });
+    t.ok(log.indexOf('MAGNIFICENT SURGE! The crowd goes wild, and Marwyn basks in it.') >= 0, 'logged: the crowd goes wild, and Marwyn basks in it');
+    t.ok(log.indexOf('Marwyn heals 8 HP.') >= 0, 'logged: Marwyn heals 8 HP.');
+    // a smaller wound: the heal stops at max HP (no overheal); at full HP the surge still happens, healing nothing
+    fight({ enemies: [{ id: 'test_brute', x: 3, y: 4 }] });
+    m = M();
+    m.hp = m.maxHp - 3;
+    setStacks(m, 5);
+    tameMagic(function () { heals = surgeHeals(m, function () { use(t, m, m.basic, 3, 4, 'surge, hurt by 3'); }); });
+    t.ok(m.hp === m.maxHp && heals.length === 1 && heals[0].healed === 3, 'hurt by 3: back to full, no overheal');
+    fight({ enemies: [{ id: 'test_brute', x: 3, y: 4 }] });
+    m = M();
+    setStacks(m, 5);
+    fx = tameMagic(function () { heals = surgeHeals(m, function () { use(t, m, m.basic, 3, 4, 'surge at full HP'); }); });
+    t.ok(fx === 1 && m.hp === m.maxHp && heals.length === 1 && heals[0].healed === 0, 'full HP: the surge goes off, heals 0');
+    // real wild magic, several seeds: exactly one surge heal of 8 each time, before the effect (whatever it does)
+    let ok = 0;
+    for (let i = 0; i < 10; i++) {
+      fight({ seed: 500 + i, enemies: [{ id: 'test_brute', x: 3, y: 4 }, { id: 'test_grunt', x: 7, y: 7 }] });
+      m = M();
+      m.hp = m.maxHp - 20;
+      setStacks(m, 5);
+      let sg = [];
+      heals = surgeHeals(m, function () { sg = surges(function () { use(t, m, m.basic, 3, 4, 'real surge (seed ' + (500 + i) + ')'); }); });
+      if (sg.length === 1 && heals.length === 1 && heals[0].healed === HEAL) ok++;
+    }
+    t.eq(ok, 10, 'real surges: one wild magic effect and one heal of ' + HEAL + ' each (10 seeds)');
+    // the Hand Mirror: two effects, still one heal
+    fight({ heroes: [{ x: 2, y: 4, items: ['mrw_hand_mirror'] }], enemies: [{ id: 'test_brute', x: 3, y: 4 }] });
+    m = M();
+    m.hp = m.maxHp - 10;
+    setStacks(m, 5);
+    fx = tameMagic(function () { heals = surgeHeals(m, function () { use(t, m, m.basic, 3, 4, 'mirror surge'); }); });
+    t.ok(fx === 2 && heals.length === 1 && m.hp === m.maxHp - 10 + HEAL, 'Hand Mirror: two effects, one heal of ' + HEAL + ' (' + fx + ' effects, ' + heals.length + ' heals)');
+    fight({ heroes: [{ x: 2, y: 4, items: ['mrw_hand_mirror'] }], enemies: [{ id: 'test_brute', x: 3, y: 4 }, { id: 'test_grunt', x: 7, y: 7 }] });
+    m = M();
+    m.hp = m.maxHp - 20;
+    setStacks(m, 5);
+    let sg2 = [];
+    heals = surgeHeals(m, function () { sg2 = surges(function () { use(t, m, m.basic, 3, 4, 'real mirror surge'); }); });
+    t.ok(sg2.length === 2 && heals.length === 1 && heals[0].healed === HEAL, 'real wild magic with the mirror: two effects, one heal');
+    // the winning blow at 5: no surge after the victory, so no heal either
+    DD.Combat.sandbox({ w: 9, h: 9, seed: 7, enemyAi: false, heroes: [{ id: 'marwyn', x: 2, y: 4, level: 1 }], enemies: [{ id: 'test_minion', x: 3, y: 4, hpMult: 0.5 }] });
+    m = M();
+    m.hp = m.maxHp - 10;
+    setStacks(m, 5);
+    heals = surgeHeals(m, function () { use(t, m, m.basic, 3, 4, 'winning blow at 5, hurt'); });
+    t.ok(DD.Combat.state.result === 'victory' && heals.length === 0 && m.hp === m.maxHp - 10 && stacks(m) === 5, 'the fight is decided: no surge, no heal');
+    // filling the meter heals nothing; only the surge does
+    fight({ enemies: [{ id: 'test_brute', x: 3, y: 4 }] });
+    m = M();
+    m.hp = m.maxHp - 10;
+    setStacks(m, 4);
+    heals = surgeHeals(m, function () { use(t, m, m.basic, 3, 4, 'basic at 4 (fills the meter)'); });
+    t.ok(stacks(m) === 5 && heals.length === 0 && m.hp === m.maxHp - 10, 'the skill that fills the meter heals nothing');
+    // the tip
+    const tips = (DD.defs.narration.tips || []).filter(function (l) { return /MAGNIFICENT SURGE heals Marwyn 8 HP/.test(l); });
+    t.ok(tips.length === 1 && tips[0].length <= 140, 'a loading tip: ' + tips[0]);
+  });
+
   // ---- 3. basic + Cleave ---------------------------------------------------------------------------------
   T.suite('hero_marwyn: Ginger Snap and Glorious Cleave at every level', function (t) {
     fight({ enemies: [{ id: 'test_grunt', x: 3, y: 4 }] });
@@ -1212,7 +1311,9 @@
     try { fn(); } finally { DD.Combat.resolveSkill = rs0; DD.Combat.useSkill = us0; off(); }
     return out;
   }
-  function battles(t, plans) {
+  function battles(t, plans, reps) {
+    // [finish audit-5] reps: every plan again on fresh seeds (more of his turns, so a variety bar is no coin flip)
+    if (reps > 1) { const all = []; for (let r = 0; r < reps; r++) plans.forEach(function (p) { all.push(Object.assign({ rep: r }, p)); }); plans = all; }
     const totals = {};
     const audit = { acc: 0, accBad: 0, prev: 0, prevBad: 0, bad: [] };
     let fought = 0, wins = 0, skillUses = 0, turned = 0;
@@ -1224,8 +1325,8 @@
         const h = DD.getHero(id);
         return DD.Combat.makeRunHero({ id: id, level: p.level, skills: h.startingSkills.map(function (sid) { return { id: sid, level: Math.min(3, 1 + Math.floor(p.level / 3)) }; }) });
       });
-      const setup = DD.Encounter.build(enc, party, { rng: DD.RNG('mrw-ap-' + i + ':' + t.seed), difficulty: 'normal', act: enc.act });
-      DD.Combat.start(setup, { seed: 900 + i, headless: true, difficulty: 'normal', kind: enc.kind });
+      const setup = DD.Encounter.build(enc, party, { rng: DD.RNG('mrw-ap-' + i + ':' + t.seed + (p.rep ? ':r' + p.rep : '')), difficulty: 'normal', act: enc.act });
+      DD.Combat.start(setup, { seed: 900 + i + 100 * (p.rep || 0), headless: true, difficulty: 'normal', kind: enc.kind });
       const counts = {};
       let turns = 0;
       A().addRule({ id: 'mrw_usage_probe', name: 'Usage probe', hooks: { onSkillUsed: function (ctx) {
@@ -1241,7 +1342,9 @@
       } finally { off(); }
       fought++;
       if (r.result === 'victory') wins++;
-      if (turns > 0) turned++;
+      // a fight won in round 1 before his initiative slot came up gave him no turn to take (rules run: the party can
+      // shoot the test totems from range, so the destroy objective can fall before he acts)
+      if (turns > 0 || (r.result === 'victory' && r.rounds <= 1)) turned++;
       Object.keys(counts).forEach(function (k) { totals[k] = (totals[k] || 0) + counts[k]; if (k !== 'mrw_ginger_snap') skillUses += counts[k]; });
       t.ok(r.rounds > 0 && !r.timeout, p.enc + ' L' + p.level + ': finished (' + r.result + ' in ' + r.rounds + ' rounds)');
       t.ok(!!DD.Combat.state.order && DD.Combat.state.order.length > 0, p.enc + ' L' + p.level + ': initiative was rolled');
@@ -1281,12 +1384,15 @@
       { enc: 'test_a3_elite', level: 5, skills: [['mrw_war_cry', 2], ['mrw_cleave', 2], ['mrw_headbutt', 2], ['mrw_magnetism', 1]] },
       { enc: 'test_a3_boss', level: 5, skills: [['mrw_war_cry', 3], ['mrw_gun_show', 2], ['mrw_rage', 2], ['mrw_headbutt', 2]] },
       { enc: 'test_a3_survive', level: 5, skills: [['mrw_yeet', 3], ['mrw_cleave', 2], ['mrw_magnetism', 2], ['mrw_keg_stand', 2]] },
-    ]);
+    ], 5);
     t.log('totals: ' + JSON.stringify(res.totals) + ' · wins ' + res.wins + '/' + res.fought);
     t.eq(res.turned, res.fought, 'Marwyn takes turns in every fight');
-    t.ok(res.uses >= 10, 'he uses his skills (' + res.uses + ')');
-    t.ok(Object.keys(res.totals).filter(function (k) { return k !== 'mrw_ginger_snap'; }).length >= 6, 'many different skills used (' + Object.keys(res.totals).length + ')');
-    t.ok(res.wins >= 6, 'the party mostly wins (' + res.wins + '/' + res.fought + ')');
+    t.ok(res.uses >= 30, 'he uses his skills (' + res.uses + ' uses in ' + res.fought + ' fights)');
+    // [finish audit-5] the bar is counted over the 40 fights of five seed sets (8 fights alone were a coin flip at 5-7 of
+    // the 9 socketed skills: the fixture party ends most fights in 1-5 rounds, so he gets few turns); all 9 show up, bar 7
+    const used = Object.keys(res.totals).filter(function (k) { return k !== 'mrw_ginger_snap'; });
+    t.ok(used.length >= 7, 'many different skills used (' + used.length + ' of the 9 socketed: ' + used.join(', ') + ')');
+    t.ok(res.wins >= Math.ceil(res.fought * 0.75), 'the party mostly wins (' + res.wins + '/' + res.fought + ')');
   });
 
   // YEET has no dmg number, so AutoPlay's quick pass (which picks the move + skill options worth an exact dry run) only
@@ -1389,5 +1495,33 @@
     const sl = give(m, 'mrw_headbutt', 1);
     use(t, m, sl, 3, 4, 'Use Your Head on the barrel');
     t.ok(!tile(3, 4).obj && m.hp === m.maxHp - 2 - 8 && m.ap === 1 && sl.cd === 3, 'he pays 2 HP, then eats the 8; 2 AP, cooldown 3 (no Stun on a barrel)');
+  });
+
+  // ---- finish (Nov 14): texts held for the sustain build -------------------------------------------------------------
+  T.suite('hero_marwyn: finish — his ally_down call names whoever went down ({downed}), Hero Landing prints his real reach', function (t) {
+    const lines = DD.getHero('marwyn').barks.ally_down;
+    t.ok(lines.indexOf('{downed}, get up! Marwyn still owes you an arm-wrestle!') >= 0 && !lines.some(function (l) { return /^Basanos, get up/.test(l); }),
+      'the arm-wrestle call is to {downed}, not to Basanos (who may be standing: playtest text-tone-2)');
+    // the engine passes the downed hero: the line names Kiri; "Basanos! Bite whoever did that!" is a call to a standing
+    // Basanos (a helper line), so it never fires while he is the one down
+    fight({ heroes: [{ x: 2, y: 4 }, { id: 'kiri', x: 3, y: 4 }, { id: 'basanos', x: 2, y: 5 }], enemies: [{ id: 'test_grunt', x: 8, y: 8 }] });
+    const m = DD.Combat.heroes()[0], k = DD.Combat.heroes()[1];
+    const heard = {};
+    for (let i = 0; i < 40; i++) { const l = DD.Act.bark(m, 'ally_down', { about: k }); heard[l] = 1; }
+    const said = Object.keys(heard);
+    t.ok(said.indexOf('Kiri, get up! Marwyn still owes you an arm-wrestle!') >= 0, 'with Kiri down the call is to Kiri (' + said.length + ' lines heard)');
+    t.ok(!said.some(function (l) { return /Basanos, get up|\{downed\}/.test(l); }), 'never "Basanos, get up" to a standing Basanos, never an unfilled token');
+    const b = DD.Combat.heroes()[2], heardB = {};
+    A().damage(null, b, 999, { cause: 'other' });
+    for (let i = 0; i < 40; i++) heardB[DD.Act.bark(m, 'ally_down', { about: b })] = 1;
+    t.ok(Object.keys(heardB).indexOf('Basanos, get up! Marwyn still owes you an arm-wrestle!') >= 0 && !Object.keys(heardB).some(function (l) { return /Bite whoever/.test(l); }),
+      'with Basanos down: the arm-wrestle call is to him, the "Bite whoever did that" call never fires');
+    // heroes-v1: Hero Landing's "up to N tiles" is the range the card shows
+    m.rangeBonus = 1;
+    [1, 2, 3].forEach(function (lv) {
+      const n = DD.Targeting.range(m, DD.getSkill('mrw_hero_landing'), lv)[1];
+      t.ok(new RegExp('Leap up to ' + n + ' tiles').test(DD.skillDesc(DD.getSkill('mrw_hero_landing'), lv, m)), 'Hero Landing L' + lv + ' with +1 range: up to ' + n);
+    });
+    m.rangeBonus = 0;
   });
 })();

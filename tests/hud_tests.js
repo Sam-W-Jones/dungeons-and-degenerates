@@ -503,21 +503,21 @@
       t.ok(/Engaged — a move away provokes: Test Grunt/.test(text('.hud-inspect')), 'the knight\'s inspect panel names the grunt');
       t.ok(/Holds the line: a foe walking away from Sir Testsalot takes a free/.test(text('.hud-inspect')), 'and says the knight holds the line (melee basic)');
       DD.HUD.hover(g.x, g.y);
-      t.ok(/Holds the line: walking away from it provokes .+\(≈\d+ to Sir Testsalot\)/.test(text('.hud-inspect')), 'the grunt\'s panel: walking away from it provokes (≈ on the selected hero): ' + text('.hud-inspect .hi-line.aoo'));
+      t.ok(/Holds the line: walking away provokes .+\(≈\d+ to Sir Testsalot\)/.test(text('.hud-inspect')), 'the grunt\'s panel: walking away from it provokes (≈ on the selected hero): ' + text('.hud-inspect .hi-line.aoo'));
       DD.HUD.hover(a.x, a.y);
-      t.ok(/No melee attack ready: walking away from it is free/.test(text('.hud-inspect')), 'the archer makes none');
+      t.ok(/No melee attack ready: walking away is free/.test(text('.hud-inspect')), 'the archer makes none');
       // review: the panel follows the engine's exceptions — a Dazzled AI unit never strikes, a taunted one only its taunter
       DD.Act.addStatus(g, 'dazzled');
       DD.HUD.refresh();
       DD.HUD.hover(g.x, g.y);
-      t.ok(!DD.Combat.provokes(k, 1, 2).length && /No attacks of opportunity while Dazzled/.test(text('.hud-inspect')) && !/Holds the line: walking away from it/.test(text('.hud-inspect')),
+      t.ok(!DD.Combat.provokes(k, 1, 2).length && /No attacks of opportunity while Dazzled/.test(text('.hud-inspect')) && !/Holds the line: walking away/.test(text('.hud-inspect')),
         'a Dazzled grunt: no "holds the line" (the engine agrees: nothing provoked): ' + text('.hud-inspect .hi-line'));
       DD.Act.removeStatus(g, 'dazzled');
       const m0 = byDef('test_mage');
       DD.Act.addStatus(g, 'taunt', {}, m0);
       DD.HUD.refresh();
       DD.HUD.hover(g.x, g.y);
-      t.ok(!DD.Combat.provokes(k, 1, 2).length && /taunted: only .+ provokes it/.test(text('.hud-inspect')) && !/≈\d+ to Sir Testsalot/.test(text('.hud-inspect')),
+      t.ok(!DD.Combat.provokes(k, 1, 2).length && /taunted: only .+ gets the free hit/.test(text('.hud-inspect')) && !/≈\d+ to Sir Testsalot/.test(text('.hud-inspect')),
         'a grunt taunted by the mage: only the mage provokes it, no estimate on the knight: ' + text('.hud-inspect .hi-line.aoo'));
       DD.Act.removeStatus(g, 'taunt');
       DD.HUD.refresh();
@@ -538,9 +538,9 @@
       t.ok(k.x === 2 && k.y === 2, 'back next to the grunt (stepping next to a foe never provokes)');
       t.ok(cards[0].querySelector('.hc-engaged').classList.contains('hud-hidden'), 'no engaged line: the grunt\'s attack of opportunity is spent');
       DD.HUD.hover(2, 1);
-      t.ok(!/Provokes/.test(DD.HUD.hint()) && /already used its attack of opportunity this round/.test(DD.HUD.hint()), 'the move hint says this walk is free: ' + DD.HUD.hint());
+      t.ok(!/Provokes/.test(DD.HUD.hint()) && /already used an attack of opportunity this round/.test(DD.HUD.hint()), 'the move hint says this walk is free: ' + DD.HUD.hint());
       DD.HUD.hover(k.x, k.y);
-      t.ok(/Test Grunt already used its attack of opportunity this round/.test(text('.hud-inspect')), 'so does the inspect panel');
+      t.ok(/Test Grunt already used an attack of opportunity this round/.test(text('.hud-inspect')), 'so does the inspect panel');
       DD.HUD.hover(null);
       // the heroes hold the line too: an enemy walking away from the knight takes his free hit (logged, marked)
       const ghp = g.hp;
@@ -649,7 +649,7 @@
       t.ok(!insp.classList.contains('hud-hidden') && /Test Grunt/.test(txt), 'hovering an enemy opens its panel');
       t.ok(/👣 3 Move/.test(txt), 'move: ' + txt.slice(0, 120));
       t.ok(/Init \+0/.test(txt) && insp.querySelector('.hi-order') && /#3/.test(insp.querySelector('.hi-order').textContent), 'initiative modifier and position (#3)');
-      t.ok(/it can reach: Sir Testsalot \d+/.test(txt), 'reach: who it can hit on its next turn: ' + txt);
+      t.ok(/, .+ can reach: Sir Testsalot \d+/.test(txt), 'reach: who it can hit on its next turn: ' + txt);
       t.ok(/Abilities/.test(txt) && insp.querySelector('.hi-abil'), 'an Abilities section');
       const stab = DD.getSkill('test_grunt_stab');
       t.ok(stab && txt.indexOf(stab.name) >= 0 && txt.indexOf(DD.skillDesc(stab, 1, g)) >= 0, 'each ability: name + its exact desc');
@@ -667,7 +667,7 @@
       DD.Act.addStatus(g, 'stun', { turns: 1 }, k);
       DD.HUD.refresh();
       DD.HUD.hover(g.x, g.y);
-      t.ok(/loses its next turn/.test(text('.hud-inspect')), 'stunned: the panel says it loses its next turn');
+      t.ok(/loses the next turn/.test(text('.hud-inspect')), 'stunned: the panel says it loses its next turn');
       t.ok(!ov().reach, 'and no reach is shaded');
       // heroes: initiative, stats, Blessings
       DD.HUD.hover(m.x, m.y);
@@ -703,7 +703,7 @@
       const spot = tiles.filter(function (p) { return DD.Combat.reachable(k).has(p.x + ',' + p.y); })[0];
       if (spot) {
         DD.HUD.hover(spot.x, spot.y);
-        t.ok(/⏳ Meteor of Regression \d+ lands here at the start of its next turn/.test(DD.HUD.hint()), 'moving into it warns: ' + DD.HUD.hint());
+        t.ok(/⏳ Meteor of Regression \d+ lands here at the start of .+'s next turn/.test(DD.HUD.hint()), 'moving into it warns: ' + DD.HUD.hint());
       }
       DD.HUD.hover(tiles[0].x, tiles[0].y);
       t.ok(/Wind-up lands here/.test(text('.hud-inspect')) || /lands here/.test(DD.HUD.hint()), 'the tile names the wind-up');
@@ -730,7 +730,7 @@
       t.ok(DD.HUD.threat(), 'holding Alt turns it on');
       const th = ov().threat;
       t.ok(th && th.tiles.length > 0 && th.ref > 0, 'overlay.threat lists tiles (' + (th ? th.tiles.length : 0) + ')');
-      const map = DD.AI.threatMap('hero');
+      const map = DD.AI.threatMap('hero', { hero: k });
       let missing = 0;
       map.forEach(function (v, key) { const p = key.split(','); if (!th.tiles.some(function (x) { return x.x === +p[0] && x.y === +p[1] && x.dmg >= v.dmg; })) missing++; });
       t.eq(missing, 0, 'every tile of DD.AI.threatMap is shaded with at least its damage');
@@ -765,11 +765,16 @@
       t.ok(/can reach: up to \d+/.test(qa('.hud-card')[0].querySelector('.hc-threat').textContent), 'party cards show the reach on their tile: ' + qa('.hud-card')[0].querySelector('.hc-threat').textContent);
       q('.hud-threat').click();
       t.ok(!DD.HUD.threat() && !ov().threat, 'the button toggles it off');
-      // four reachers: the list names three and says how many more ("+1" alone read like damage)
-      [[3, 4], [4, 3], [3, 2]].forEach(function (p) { DD.Act.spawn('test_grunt', p[0], p[1], { noFx: true, silent: true }); });
+      // four reachers: the list names three and says how many more ("+1" alone read like damage). [playtest
+      // bosses-objectives-3] only foes that act before the knight's next turn count: these four are in the order now
+      // (a foe spawned mid-round joins next round, after him, and would not count)
+      leave();
+      fight({ w: 10, h: 8, heroes: [{ id: 'test_knight', x: 1, y: 3 }], enemies: [[3, 3], [3, 4], [4, 3], [3, 2]].map(function (p) { return { id: 'test_grunt', x: p[0], y: p[1] }; }), enemyAi: false });
+      const k2 = byDef('test_knight');
       DD.HUD.threat(true);
       DD.HUD.refresh();
-      const crowd = DD.HUD.threatData().tiles.filter(function (x) { return DD.Combat.reachable(k).has(x.x + ',' + x.y) && DD.AI.threatMap('hero').get(x.x + ',' + x.y).from.length >= 4; })[0];
+      const hmap = DD.AI.threatMap('hero', { hero: k2 });
+      const crowd = DD.HUD.threatData().tiles.filter(function (x) { const v = hmap.get(x.x + ',' + x.y); return DD.Combat.reachable(k2).has(x.x + ',' + x.y) && v && v.from.length >= 4; })[0];
       if (crowd) {
         DD.HUD.hover(crowd.x, crowd.y);
         t.ok(/\(\+\d+ more\)/.test(DD.HUD.hint()) && !/\d \+\d/.test(DD.HUD.hint()), 'more than three reachers: "(+N more)": ' + DD.HUD.hint());
@@ -991,13 +996,13 @@
       // move preview: a tile still inside the aura, and one that escapes it
       DD.HUD.select(k.id);
       DD.HUD.hover(1, 3);
-      t.ok(/Ending the turn here: Stink Aura 7 before its next turn/.test(DD.HUD.hint()), 'move hint warns for the tile it would end on: ' + DD.HUD.hint());
+      t.ok(/Ending the turn here: Stink Aura 7 before Sir Testsalot's next turn/.test(DD.HUD.hint()), 'move hint warns for the tile it would end on: ' + DD.HUD.hint());
       DD.HUD.hover(0, 2);
       t.ok(/Out of Stink Aura here \(7 where/.test(DD.HUD.hint()) && q('.hud-hint').classList.contains('good'), 'move hint: escaping the aura reads as good news: ' + DD.HUD.hint());
       // inspect: the hero, the tile, the enemy (its passive line too)
       DD.HUD.hover(k.x, k.y);
       let txt = text('.hud-inspect');
-      t.ok(/Auras: 7 before its next turn/.test(txt) && /Stink Aura \(Test Grunt\): 7/.test(txt), 'hero inspect lists the aura: ' + txt.slice(0, 220));
+      t.ok(/Auras: 7 before Sir Testsalot's next turn/.test(txt) && /Stink Aura \(Test Grunt\): 7/.test(txt), 'hero inspect lists the aura: ' + txt.slice(0, 220));
       t.ok(!/No enemy can reach this tile/.test(txt), 'and does not claim the tile is safe');
       DD.HUD.hover(3, 4);
       txt = q('.hud-inspect').classList.contains('hud-hidden') ? '' : text('.hud-inspect');
@@ -1401,11 +1406,26 @@
   /** A board with an explosive barrel between two grunts and the knight; the mage (basic: Magic Missile, range 5) acts. */
   function barrelFight(extra) {
     return fight(Object.assign({
-      heroes: [{ id: 'test_mage', x: 1, y: 3, skills: ['test_chain_zap'] }, { id: 'test_knight', x: 4, y: 3 }],
+      heroes: [{ id: 'test_mage', x: 1, y: 3, skills: [shyZap()] }, { id: 'test_knight', x: 4, y: 3 }],
       enemies: [{ id: 'test_grunt', x: 5, y: 2 }, { id: 'test_grunt', x: 6, y: 3 }, { id: 'test_archer', x: 7, y: 7 }],
       objects: [{ x: 5, y: 3, id: 'barrel_explosive' }, { x: 1, y: 6, id: 'barrel' }], enemyAi: false,
     }, extra || {}));
   }
+  /**
+   * [finish D1] Shy Zap: a single-target damage spell that opts out of objects (target.objects false), so it never aims
+   * at a crate or a barrel whatever the engine's rule for spells is. Registered on use; dropShyZap() in finally.
+   */
+  const SHY = 'hudtest_shy_zap';
+  function shyZap() {
+    if (!DD.getSkill(SHY)) {
+      DD.registerSkill({ id: SHY, name: 'Shy Zap', owner: 'test_mage', icon: '⚡', kind: 'spell', tags: ['lightning', 'ranged'], ap: 2, cooldown: 2,
+        levels: [{ dmg: 5 }], target: { type: 'unit', range: [1, 5], filter: 'enemy', objects: false },
+        desc: function (L) { return 'Deal ' + L.dmg + ' lightning damage to a foe. Too shy for furniture.'; },
+        execute: function (ctx) { if (ctx.targetUnit) DD.Act.damage(ctx.user, ctx.targetUnit, ctx.L.dmg, { element: 'lightning' }); } });
+    }
+    return SHY;
+  }
+  function dropShyZap() { delete DD.defs.skills[SHY]; }
   function barrelsReady(t) {
     if (!ready(t)) return false;
     if (!DD.getObject('barrel_explosive') || !DD.Targeting.aimsAtObjects) { t.skip('no explosive barrel / barrel targeting'); return false; }
@@ -1423,8 +1443,9 @@
       DD.HUD.key('1');
       t.ok(has(ov().targetTiles, { x: 5, y: 3 }), 'the armed basic attack lists the explosive barrel as a target');
       t.ok(has(ov().objTargets, { x: 5, y: 3 }) && ov().objTargets.length === 1, 'and the renderer gets its 💥 marker (overlay.objTargets)');
-      t.ok(!has(ov().targetTiles, { x: 1, y: 6 }), 'a plain barrel is no target');
-      t.ok(/or 💥 the Explosive Barrel/.test(DD.HUD.hint()), 'the aim hint offers the barrel: ' + DD.HUD.hint());
+      // rules run: a plain barrel is a breakable (🔨), never a 💥 — the boom count is for things that explode only
+      t.ok(has(ov().targetTiles, { x: 1, y: 6 }) && has(ov().breakTargets, { x: 1, y: 6 }) && !has(ov().objTargets, { x: 1, y: 6 }), 'a plain barrel is a 🔨 breakable target, not a 💥 one');
+      t.ok(/or 💥 the Explosive Barrel or 🔨 the Barrel \(/.test(DD.HUD.hint()), 'the aim hint offers the barrel and the breakable: ' + DD.HUD.hint());
       // hover: the blast, exactly as the engine previews it
       DD.HUD.hover(5, 3);
       const p = DD.Combat.preview(m, m.basic, 5, 3);
@@ -1438,14 +1459,14 @@
       t.ok(/Hits 2 foes/.test(DD.HUD.hint()) && /⚠ hits Sir Testsalot!/.test(DD.HUD.hint()), 'who it catches, the knight by name');
       t.ok(!/💥 Explosive Barrel( ·|$)/.test(DD.HUD.hint()), 'the barrel itself is not listed again as a destroyed object');
       t.ok(DD.Act.explode === explode0, 'the blast watch put DD.Act.explode back');
-      t.ok(/💥 Volatile: aim a single-target attack at it/.test(text('.hud-inspect')), 'the barrel\'s inspect panel says attacks set it off');
+      t.ok(/💥 Volatile: any single-target damage skill aimed at it \(in range and line of sight\) sets it off/.test(text('.hud-inspect')), 'the barrel\'s inspect panel says damage skills set it off (D1 words)');
       t.ok(/🎯 Click: Magic Missile \(Unit\) sets it off — 8 fire damage within 1 tile/.test(text('.hud-inspect')), 'and what the click does: ' + text('.hud-inspect'));
-      // a skill that can't aim at objects (a non-basic spell): no barrel target, and the click explains why
+      // a skill that can't aim at objects (finish D1: one that opts out): no barrel target, and the click explains why
       DD.HUD.rightClick();
       DD.HUD.key('2');
-      t.ok(!has(ov().targetTiles, { x: 5, y: 3 }) && !ov().objTargets.length, 'Chain Zap (a non-basic spell) does not aim at the barrel');
+      t.ok(!has(ov().targetTiles, { x: 5, y: 3 }) && !ov().objTargets.length, 'Shy Zap (opts out) does not aim at the barrel');
       DD.HUD.click(5, 3);
-      t.ok(/Chain Zap can't set off the Explosive Barrel/.test(DD.HUD.hint()), 'clicking it says why: ' + DD.HUD.hint());
+      t.ok(/Shy Zap is for foes only, not the Explosive Barrel: another single-target damage skill can set it off\./.test(DD.HUD.hint()), 'clicking it says why: ' + DD.HUD.hint());
       t.ok(!!DD.Grid.tile(5, 3).obj, 'and nothing went off');
       DD.HUD.rightClick();
       t.eq(ov().objTargets.length, 0, 'no 💥 marker in move mode');
@@ -1458,7 +1479,7 @@
       grunts.concat([k]).forEach(function (u) { t.eq(hp0[u.id] - u.hp, p.perUnit[u.id].dmg, u.name + ' took exactly the previewed blast'); });
       t.eq(m.ap, 2, 'it cost the attack\'s 1 AP');
       t.eq(DD.HUD.mode().kind, 'move', 'back to move mode');
-    } finally { DD.Act.explode = explode0; leave(); }
+    } finally { DD.Act.explode = explode0; leave(); dropShyZap(); }
   });
 
   T.suite('hud: v2 requests — a heal aimed at a downed ally: target, "UP! N HP", cards, inspect, the revive', function (t) {
@@ -1535,18 +1556,18 @@
     if (!ready(t)) return;
     if (!DD.UI.aimNotes || !DD.Targeting.aimsAtObjects) { t.skip('no aim notes'); return; }
     try {
-      fight({ heroes: [{ id: 'test_mage', x: 1, y: 3, skills: ['test_chain_zap'] }, { id: 'test_cleric', x: 2, y: 3, skills: ['test_heal', 'test_sanctuary'] }],
+      fight({ heroes: [{ id: 'test_mage', x: 1, y: 3, skills: [shyZap()] }, { id: 'test_cleric', x: 2, y: 3, skills: ['test_heal', 'test_sanctuary'] }],
         enemies: [{ id: 'test_grunt', x: 7, y: 7 }], enemyAi: false });
       const m = byDef('test_mage'), c = byDef('test_cleric');
       t.ok(/💥 Can also be aimed at an explosive barrel/.test(DD.UI.skillTooltipHtml('test_bolt', 1, m)), 'the mage\'s basic attack (a spell) can set barrels off');
-      t.ok(!/explosive barrel/.test(DD.UI.skillTooltipHtml('test_chain_zap', 1, m)), 'his non-basic spell can\'t');
+      t.ok(!/explosive barrel/.test(DD.UI.skillTooltipHtml(SHY, 1, m)), 'a damage spell that opts out (target.objects false) can\'t');
       t.ok(/💥 Can also be aimed/.test(DD.UI.skillTooltipHtml('test_slash', 1, null)), 'any kind:attack single-target skill can, even without a unit');
       t.ok(/🆘 Aimed at a downed ally, it gets that ally back up with the healed HP/.test(DD.UI.skillTooltipHtml('test_heal', 1, c)), 'a single-target heal revives');
       t.ok(!/downed ally, it gets/.test(DD.UI.skillTooltipHtml('test_sanctuary', 1, c)), 'an area heal does not');
       t.ok(!/Aimed at a downed|explosive barrel/.test(DD.UI.consumableTooltipHtml('test_potion')), 'a consumable without a kind and an ally target: neither');
       const drink = DD.getConsumable('con_red_drink');
       if (drink && DD.Targeting.revivesWith({ kind: 'hero', side: 'hero' }, drink)) t.ok(/🆘 Aimed at a downed ally/.test(DD.UI.consumableTooltipHtml('con_red_drink')), 'Red Drink revives (consumable tooltip)');
-    } finally { leave(); }
+    } finally { leave(); dropShyZap(); }
   });
 
   T.suite('hud: v2 requests — flyers: no floor-hazard warnings, "Flying: ignores floor effects", clouds still count', function (t) {
@@ -1650,6 +1671,1140 @@
         t.ok(bd && Math.abs(bd.cx - W / 2) <= 6 && bd.y1 < H / 2, 'yaw ' + yaw + ': "UP!" floats right above the knight ' + JSON.stringify(bd));
       });
     } finally { Math.random = rand; leave(); }
+  });
+
+  // ---- rules run: moving through allies (click-through, pass-through range, swaps) and breaking objects ---------------
+  /**
+   * Real input: DD.Input bound to a canvas laid over the view and the board fitted at `yaw`; io.move / io.click send
+   * pointer events through it, so the HUD hears input:tileHover / input:tileClick exactly as from a mouse.
+   */
+  function realInput(yaw, fn) {
+    const r = DD.Render, I = DD.Input;
+    const size = r.size();
+    const cv = document.createElement('canvas');
+    cv.width = size.width; cv.height = size.height;
+    cv.style.cssText = 'position:fixed;left:0;top:0;width:' + size.width + 'px;height:' + size.height + 'px';
+    document.body.appendChild(cv);
+    const scene = r.getScene();
+    r.setScene('combat');
+    r.setYaw(yaw, { keepFocus: false });
+    r.fitMap({ instant: true });
+    I.init(cv);
+    const pe = function (type, p, extra) {
+      cv.dispatchEvent(new PointerEvent(type, Object.assign({ clientX: p.x, clientY: p.y, pointerId: 31, bubbles: true, cancelable: true }, extra || {})));
+    };
+    const io = {
+      move: function (p, shift) { pe('pointermove', p, { shiftKey: !!shift }); },
+      click: function (p, shift) {
+        pe('pointermove', p, { shiftKey: !!shift });
+        pe('pointerdown', p, { button: 0, buttons: 1, shiftKey: !!shift });
+        pe('pointerup', p, { button: 0, buttons: 0, shiftKey: !!shift });
+      },
+      /** A screen point on tile (x, y) that `who`'s sprite covers: the pick hits the sprite, the ground there is the tile. */
+      covered: function (x, y, who) {
+        const c = r.worldToScreen(x, y), z = r.camera.zoom;
+        for (let j = -6; j <= 6; j++) {
+          for (let i = -8; i <= 8; i++) {
+            const p = { x: c.x + i * 4 * z, y: c.y + j * 2.5 * z };
+            const h = I.pick(p.x, p.y);
+            if (h && h.unitId === who.id && h.under && h.under.x === x && h.under.y === y) return p;
+          }
+        }
+        return null;
+      },
+      /** A screen point that picks the unit over its own tile (its feet). */
+      feet: function (u) {
+        const c = r.worldToScreen(u.x, u.y), z = r.camera.zoom;
+        for (let j = 0; j <= 8; j++) {
+          for (let i = -4; i <= 4; i++) {
+            const p = { x: c.x + i * 2 * z, y: c.y + 4 * z - j * 2 * z };
+            const h = I.pick(p.x, p.y);
+            if (h && h.unitId === u.id && (!h.under || (h.under.x === u.x && h.under.y === u.y))) return p;
+          }
+        }
+        return null;
+      },
+    };
+    try { return fn(io); } finally {
+      I.detach();
+      cv.remove();
+      r.setYaw(0, { keepFocus: false });
+      r.setScene(scene);
+    }
+  }
+  function inputReady(t) {
+    if (!ready(t)) return false;
+    if (!DD.Input || typeof DD.Input.pick !== 'function' || typeof DD.Render.setYaw !== 'function') { t.skip('no DD.Input / rotation'); return false; }
+    return true;
+  }
+  /** Render the live overlay offscreen (ambient motes pinned so two renders differ only by the overlay). */
+  function shot(cv, at, zoom) {
+    const rand = Math.random;
+    let s = 7;
+    Math.random = function () { s = (s * 16807) % 2147483647; return s / 2147483647; };
+    try {
+      const w = DD.Iso.toWorld(at.x, at.y, 0);
+      return DD.Render.renderTo(cv, { width: 360, height: 260, camera: { x: w.x, y: w.y, zoom: zoom || 1.4 } });
+    } finally { Math.random = rand; }
+  }
+  function tiles(list) { return (list || []).map(function (p) { return p.x + ',' + p.y; }).join(' '); }
+
+  T.suite('hud: rules run — a click on a reachable tile an ally\'s sprite covers moves there (real pointer events; yaw 0, 30, 200)', function (t) {
+    if (!inputReady(t)) return;
+    try {
+      [0, 30, 200].forEach(function (yaw) {
+        fight({ w: 9, h: 9, heroes: [{ id: 'test_knight', x: 3, y: 6 }, { id: 'test_mage', x: 4, y: 4 }, { id: 'test_cleric', x: 6, y: 5 }],
+          enemies: [{ id: 'test_grunt', x: 8, y: 0 }], enemyAi: false });
+        const k = byDef('test_knight'), m = byDef('test_mage');
+        const allies = DD.Combat.state.units.filter(function (u) { return u.side === 'hero' && u !== k; });
+        realInput(yaw, function (io) {
+          t.eq(DD.HUD.selected().id, k.id, 'yaw ' + yaw + ': the knight acts');
+          if (yaw === 0) t.ok(!!io.covered(3, 3, m), 'yaw 0: the mage\'s sprite covers the tile right behind the mage (3,3), one the knight can reach');
+          let spot = null;
+          DD.Combat.reachable(k).forEach(function (e) {
+            allies.forEach(function (a) { if (!spot) { const p = io.covered(e.x, e.y, a); if (p) spot = { p: p, x: e.x, y: e.y, ally: a }; } });
+          });
+          t.ok(!!spot, 'yaw ' + yaw + ': a reachable tile under an ally\'s sprite' + (spot ? ' (' + spot.x + ',' + spot.y + ' under ' + spot.ally.name + ')' : ''));
+          if (!spot) return;
+          io.move(spot.p);
+          t.ok(ov().hover && ov().hover.x === spot.x && ov().hover.y === spot.y, 'yaw ' + yaw + ': the hover lands on the covered tile, not on ' + spot.ally.name);
+          const path = ov().path;
+          t.ok(path.length > 0 && path[path.length - 1].x === spot.x && path[path.length - 1].y === spot.y, 'yaw ' + yaw + ': the path preview runs there');
+          t.ok(ov().ghosts && ov().ghosts[spot.ally.id] === 0.35, 'yaw ' + yaw + ': ' + spot.ally.name + ' fades while the cursor is on the tile behind');
+          t.ok(/^Move here/.test(DD.HUD.hint()), 'yaw ' + yaw + ': the hint is the move: ' + DD.HUD.hint());
+          const ap0 = k.ap;
+          io.click(spot.p);
+          t.ok(k.x === spot.x && k.y === spot.y, 'yaw ' + yaw + ': the click moved the knight there');
+          t.eq(DD.HUD.selected().id, k.id, 'yaw ' + yaw + ': and selected or inspected nobody else');
+          t.eq(k.ap, ap0 - DD.Combat.moveApCost(k), 'yaw ' + yaw + ': it cost a move');
+          DD.HUD.key('z');
+          t.ok(k.x === 3 && k.y === 6, 'yaw ' + yaw + ': Z undoes it');
+          // outside move aiming (no AP to move) a click there inspects the ally as before
+          k.ap = 0;
+          DD.HUD.refresh();
+          io.click(spot.p);
+          t.ok(k.x === 3 && k.y === 6, 'yaw ' + yaw + ': with no AP to move, the click moves nobody');
+          t.ok(text('.hud-inspect').indexOf(spot.ally.name) >= 0, 'yaw ' + yaw + ': it inspects ' + spot.ally.name + ' instead');
+        });
+      });
+    } finally { leave(); }
+  });
+
+  T.suite('hud: rules run — deployment and aiming click through a friendly sprite too (real pointer events)', function (t) {
+    if (!inputReady(t)) return;
+    try {
+      // deployment: a free green tile behind the mage
+      const zone = [];
+      for (let y = 1; y <= 3; y++) for (let x = 1; x <= 3; x++) zone.push({ x: x, y: y });
+      fight({ heroes: [{ id: 'test_knight', x: 1, y: 1 }, { id: 'test_mage', x: 3, y: 3 }], enemies: [{ id: 'test_grunt', x: 7, y: 7 }],
+        deploy: true, deployTiles: zone, initiative: 'roll', enemyAi: false });
+      const k = byDef('test_knight'), m = byDef('test_mage');
+      DD.HUD.select(k.id);
+      realInput(0, function (io) {
+        const p = io.covered(2, 2, m);
+        t.ok(!!p, 'the mage\'s sprite covers the green tile (2,2)');
+        if (!p) return;
+        io.move(p);
+        t.ok(ov().ghosts && ov().ghosts[m.id] === 0.35, 'the mage fades');
+        io.click(p);
+        t.ok(k.x === 2 && k.y === 2, 'the click placed the knight on (2,2)');
+        t.eq(DD.HUD.selected().id, k.id, 'the knight stays selected');
+        const f = io.feet(m);
+        io.click(f, true);
+        t.ok(k.x === 3 && k.y === 3 && m.x === 2 && m.y === 2, 'Shift+click on the mage still swaps them in deployment');
+        io.click(io.feet(m));
+        t.eq(DD.HUD.selected().id, m.id, 'a plain click on the mage selects the mage');
+        // Shift+click on the mage's head, over a free green tile: Shift means the mage (swap), not the tile behind
+        DD.HUD.select(k.id);
+        const hp = io.covered(1, 1, m);
+        t.ok(!!hp, 'the mage\'s sprite covers the free green tile (1,1)');
+        if (hp) {
+          io.click(hp, true);
+          t.ok(k.x === 2 && k.y === 2 && m.x === 3 && m.y === 3, 'Shift+click over the mage\'s head swaps with the mage (knight ' + k.x + ',' + k.y + ')');
+        }
+      });
+      leave();
+      // aiming: a crate behind the knight's sprite, the mage's basic attack armed
+      if (!DD.Targeting.breakable || !DD.getObject('crate')) return;
+      fight({ heroes: [{ id: 'test_mage', x: 1, y: 3 }, { id: 'test_knight', x: 4, y: 4 }], enemies: [{ id: 'test_grunt', x: 7, y: 0 }],
+        objects: [{ x: 3, y: 3, id: 'crate' }], enemyAi: false });
+      const mg = byDef('test_mage'), kn = byDef('test_knight');
+      const crate = DD.Grid.tile(3, 3).obj;
+      DD.HUD.key('1');
+      realInput(0, function (io) {
+        const p = io.covered(3, 3, kn);
+        t.ok(!!p, 'the knight\'s sprite covers the crate\'s tile');
+        if (!p) return;
+        io.move(p);
+        t.ok(ov().hover && ov().hover.x === 3 && ov().hover.y === 3, 'aiming over the knight\'s head lands on the crate');
+        t.ok(ov().ghosts && ov().ghosts[kn.id] === 0.35, 'and the knight fades');
+        t.ok(/🔨 Break: Crate/.test(DD.HUD.hint()), 'the hint previews the break: ' + DD.HUD.hint());
+        const hp0 = crate.hp, ap0 = mg.ap;
+        io.click(p);
+        t.ok(crate.hp < hp0 || !DD.Grid.tile(3, 3).obj, 'the click hit the crate (' + hp0 + ' → ' + crate.hp + ')');
+        t.ok(mg.ap < ap0 && kn.hp === kn.maxHp, 'the mage paid for the attack; the knight was not hit');
+      });
+    } finally { leave(); }
+  });
+
+  T.suite('hud: rules run — the move range runs on through allies in a corridor: pass tiles, a ⇄ end, the path, the walk', function (t) {
+    if (!ready(t)) return;
+    if (!DD.Render.renderTo) { t.skip('no renderTo'); return; }
+    try {
+      fight({ w: 9, h: 5, terrain: function (tl) { return tl.y !== 2 ? { t: 'wall' } : null; },
+        heroes: [{ id: 'test_knight', x: 1, y: 2 }, { id: 'test_mage', x: 2, y: 2 }, { id: 'test_cleric', x: 3, y: 2 }],
+        enemies: [{ id: 'test_grunt', x: 8, y: 2 }], enemyAi: false });
+      const k = byDef('test_knight'), m = byDef('test_mage'), c = byDef('test_cleric');
+      t.eq(DD.HUD.selected().id, k.id, 'the knight acts, last in line');
+      t.eq(tiles(ov().moveTiles), '0,2 4,2', 'ahead, the knight can end only past both allies (4,2), never on one');
+      t.eq(tiles(ov().swapTiles), '2,2', 'the adjacent mage is a ⇄ end (a swap)');
+      t.eq(tiles(ov().passTiles), '3,2', 'the cleric\'s tile is pass-through: the range has no hole');
+      DD.HUD.hover(4, 2);
+      t.eq(tiles(ov().path), '2,2 3,2 4,2', 'the path preview runs through both allies');
+      t.ok(ov().ghosts && ov().ghosts[m.id] === 0.55 && ov().ghosts[c.id] === 0.55, 'both fade a little while the walk through them is aimed');
+      t.ok(/Walks through Wizzy McTest and Father Unittest\./.test(DD.HUD.hint()), 'the hint says who it walks through: ' + DD.HUD.hint());
+      DD.HUD.hover(3, 2);
+      t.ok(/Father Unittest doesn't block: Sir Testsalot walks through/.test(DD.HUD.hint()), 'hovering a farther ally says it does not block: ' + DD.HUD.hint());
+      DD.HUD.hover(null);
+      t.ok(/^⇄ Boxed in\? Click an ally next to Sir Testsalot to swap places \(1 AP, uses the move\)/.test(DD.HUD.hint()), 'boxed in (2 tiles of range): the idle hint says how to swap out: ' + DD.HUD.hint());
+      // the renderer draws the pass tile, the ⇄ ring and the fades only while the overlay has them
+      DD.HUD.hover(4, 2);
+      const full = JSON.parse(JSON.stringify(ov()));
+      const cvA = document.createElement('canvas'), cvB = document.createElement('canvas');
+      const a = shot(cvA, { x: 3, y: 2 });
+      t.ok(a && a.swapRings === 1 && a.ghosted === 2, '⇄ ring under the mage, both allies faded (' + (a && a.swapRings) + ', ' + (a && a.ghosted) + ')');
+      Object.assign(ov(), full, { passTiles: [], swapTiles: [], ghosts: null });
+      const b = shot(cvB, { x: 3, y: 2 });
+      t.ok(b && b.swapRings === 0 && b.ghosted === 0, 'none without them');
+      const d = diffBox(cvA, cvB);
+      t.ok(d && d.x1 - d.x0 > 30, 'and the frames differ there ' + JSON.stringify(d));
+      Object.assign(ov(), full);
+      DD.HUD.click(4, 2);
+      t.ok(k.x === 4 && k.y === 2 && m.x === 2 && c.x === 3, 'the knight walked through both allies to (4,2)');
+    } finally { leave(); }
+  });
+
+  T.suite('hud: rules run — swap with an adjacent ally: ⇄ preview, the click (real pointer), undo, attacks of opportunity, refusals, Help Up', function (t) {
+    if (!inputReady(t)) return;
+    if (!DD.Combat.swapInfo) { t.skip('no swaps in the engine'); return; }
+    try {
+      fight({ heroes: [{ id: 'test_knight', x: 2, y: 3 }, { id: 'test_mage', x: 3, y: 3 }], enemies: [{ id: 'test_grunt', x: 7, y: 7 }], enemyAi: false });
+      const k = byDef('test_knight'), m = byDef('test_mage');
+      t.ok(has(ov().swapTiles, m), 'the adjacent mage is marked ⇄ (overlay.swapTiles)');
+      DD.HUD.hover(m.x, m.y);
+      t.ok(ov().swap && ov().swap.from.x === 2 && ov().swap.to.x === 3 && !ov().swap.bad, 'hovering the mage previews the swap (arrows both ways)');
+      t.ok(/⇄ Swap with Wizzy McTest: 1 move, 1 AP; it costs Wizzy McTest nothing \(no AP, no turn\)\./.test(DD.HUD.hint()), 'and says what it costs: ' + DD.HUD.hint());
+      const mAp = m.ap, kAp = k.ap;
+      realInput(0, function (io) {
+        const p = io.feet(m);
+        t.ok(!!p, 'a screen spot on the mage');
+        if (!p) return;
+        io.move(p);
+        t.ok(ov().swap && ov().swap.to.x === 3, 'the real hover previews it too');
+        io.click(p);
+      });
+      t.ok(k.x === 3 && k.y === 3 && m.x === 2 && m.y === 3, 'the click swapped them');
+      t.eq(k.ap, kAp - DD.Combat.moveApCost(k), 'it cost the knight a move');
+      t.eq(m.ap, mAp, 'the mage paid nothing');
+      t.eq(DD.HUD.selected().id, k.id, 'the knight is still selected');
+      DD.HUD.undo();
+      t.ok(k.x === 2 && m.x === 3 && k.ap === kAp, 'Z undoes the swap');
+      // a stunned ally won't budge
+      DD.Act.addStatus(m, 'stun', { turns: 1 }, null);
+      DD.HUD.refresh();
+      t.ok(!has(ov().swapTiles, m), 'a stunned ally is no ⇄ end');
+      DD.HUD.hover(m.x, m.y);
+      t.ok(/⇄ Wizzy McTest is out cold and won't budge\./.test(DD.HUD.hint()), 'hovering says why (greyed; the reason names the ally first): ' + DD.HUD.hint());
+      DD.HUD.click(m.x, m.y);
+      t.ok(k.x === 2 && m.x === 3, 'the click swapped nobody');
+      t.ok(/⇄ Wizzy McTest is out cold/.test(DD.HUD.hint()), 'and says why: ' + DD.HUD.hint());
+      // a downed ally next to the knight: the click is still Help Up
+      DD.Act.kill(m, null);
+      DD.HUD.refresh();
+      t.ok(m.downed && !has(ov().swapTiles, m), 'downed: no ⇄');
+      DD.HUD.click(m.x, m.y);
+      t.ok(!m.downed, 'clicking a downed ally next to the knight helps the ally up');
+    } finally { leave(); }
+    try {
+      // the swap walks the knight away from a grunt: an attack of opportunity
+      fight({ heroes: [{ id: 'test_knight', x: 2, y: 3 }, { id: 'test_mage', x: 3, y: 3 }], enemies: [{ id: 'test_grunt', x: 2, y: 4 }], enemyAi: false });
+      const k = byDef('test_knight'), m = byDef('test_mage');
+      const si = DD.Combat.swapInfo(k, m.x, m.y);
+      t.ok(si && si.ok === true && si.provokes.length === 1, 'engine: this swap provokes the grunt');
+      DD.HUD.hover(m.x, m.y);
+      t.ok(ov().swap && ov().swap.bad, 'red swap arrows');
+      t.ok(ov().previews[k.id] && ov().previews[k.id].text === '⚔' && ov().previews[k.id].dmg === si.provokes[0].dmg, 'the hit on the knight is previewed (' + si.provokes[0].dmg + ')');
+      t.ok(/⚔ <?b?>?Provokes 1|⚔ Provokes 1/.test(DD.HUD.hint()) && /Can't be undone/.test(DD.HUD.hint()), 'the hint warns: ' + DD.HUD.hint());
+    } finally { leave(); }
+    try {
+      // a unit of this turn (the summoner's hound): a click selects it, Shift+click swaps
+      fight({ heroes: [{ id: 'test_summoner', x: 2, y: 3 }], summons: [{ id: 'test_hound', x: 3, y: 3, owner: 'test_summoner' }],
+        enemies: [{ id: 'test_grunt', x: 7, y: 7 }], enemyAi: false });
+      const sm = byDef('test_summoner'), hd = byDef('test_hound');
+      t.eq(DD.HUD.selected().id, sm.id, 'the summoner acts');
+      t.ok(has(ov().swapTiles, hd), 'the hound can be swapped with');
+      DD.HUD.hover(hd.x, hd.y);
+      t.ok(DD.HUD.hint().indexOf('Click selects ' + hd.name + ' · Shift+click: ⇄ swap places (1 move, 1 AP)') === 0, 'hover: click selects, Shift+click swaps: ' + DD.HUD.hint());
+      t.ok(!ov().swap, 'no swap arrows for a plain click that selects');
+      DD.HUD.click(hd.x, hd.y, { shift: true });
+      t.ok(sm.x === 3 && hd.x === 2, 'Shift+click swapped them');
+      DD.HUD.click(hd.x, hd.y);
+      t.eq(DD.HUD.selected().id, hd.id, 'a plain click selects the hound');
+    } finally { leave(); }
+  });
+
+  T.suite('hud: rules run review — the acting hero\'s own sprite in front of an adjacent ally: the click swaps / helps up (real pointer events)', function (t) {
+    if (!inputReady(t)) return;
+    if (!DD.Combat.swapInfo) { t.skip('no swaps in the engine'); return; }
+    // the knight's sprite covers part of the mage's tile right behind (up-screen of) him at these views; before the
+    // review a click there hit the knight himself and did nothing
+    [0, 45, 200].forEach(function (yaw) {
+      try {
+        let k = null, m = null, spot = null;
+        [[3, 4], [4, 3], [5, 4], [4, 5]].some(function (at) {
+          fight({ heroes: [{ id: 'test_knight', x: 4, y: 4 }, { id: 'test_mage', x: at[0], y: at[1] }], enemies: [{ id: 'test_grunt', x: 8, y: 8 }], enemyAi: false });
+          k = byDef('test_knight'); m = byDef('test_mage');
+          realInput(yaw, function (io) { spot = io.covered(m.x, m.y, k); });
+          return !!spot;
+        });
+        t.ok(!!spot, 'yaw ' + yaw + ': the knight\'s sprite covers part of an adjacent mage\'s tile (' + (m ? m.x + ',' + m.y : '-') + ')');
+        if (!spot) return;
+        const mx = m.x, my = m.y;
+        realInput(yaw, function (io) {
+          io.move(spot);
+          t.ok(ov().hover && ov().hover.x === mx && ov().hover.y === my, 'yaw ' + yaw + ': the hover lands on the mage\'s tile');
+          t.ok(ov().swap && ov().swap.to.x === mx && ov().swap.to.y === my, 'yaw ' + yaw + ': and previews the swap');
+          t.ok(ov().ghosts && ov().ghosts[k.id] === 0.35, 'yaw ' + yaw + ': the knight fades so the mage shows');
+          t.ok(/⇄ Swap with Wizzy McTest/.test(DD.HUD.hint()), 'yaw ' + yaw + ': the hint: ' + DD.HUD.hint());
+          io.click(spot);
+          t.ok(k.x === mx && k.y === my && m.x === 4 && m.y === 4, 'yaw ' + yaw + ': the click swapped them');
+          DD.HUD.undo();
+          t.ok(k.x === 4 && k.y === 4 && m.x === mx, 'yaw ' + yaw + ': Z undoes it');
+          // a downed mage there: the same click helps her up
+          DD.Act.kill(m, null);
+          DD.HUD.refresh();
+          io.click(spot);
+          t.ok(!m.downed && k.x === 4 && k.y === 4, 'yaw ' + yaw + ': downed, the click is Help Up');
+        });
+      } finally { leave(); }
+    });
+  });
+
+  T.suite('hud: rules run — breakable objects: 🔨 target, "Break: …" preview, the HP bar, inspect, the hit; opt-outs say why', function (t) {
+    if (!ready(t)) return;
+    if (!DD.Targeting.breakable || !DD.getObject('crate')) { t.skip('no breakable targeting'); return; }
+    try {
+      fight({ heroes: [{ id: 'test_mage', x: 1, y: 3, skills: ['test_chain_zap'] }, { id: 'test_knight', x: 1, y: 6 }],
+        enemies: [{ id: 'test_grunt', x: 7, y: 7 }], objects: [{ x: 4, y: 3, id: 'crate' }, { x: 3, y: 5, id: 'crate', targetable: false }], enemyAi: false });
+      const m = byDef('test_mage');
+      const crate = DD.Grid.tile(4, 3).obj;
+      DD.HUD.key('1');
+      t.ok(has(ov().targetTiles, { x: 4, y: 3 }) && has(ov().breakTargets, { x: 4, y: 3 }) && !ov().objTargets.length, 'the armed basic attack can hit the crate: a 🔨 target, no 💥');
+      t.ok(!has(ov().targetTiles, { x: 3, y: 5 }), 'a crate marked targetable: false is no target');
+      t.ok(/or 🔨 the Crate \(/.test(DD.HUD.hint()), 'the aim hint offers it: ' + DD.HUD.hint());
+      DD.HUD.click(3, 5);
+      t.ok(/The Crate can't be targeted: (Smash it from next to it or catch it in an area attack|only an area attack or a blast reaches it)\./.test(DD.HUD.hint()), 'clicking the opted-out crate says why: ' + DD.HUD.hint());
+      t.eq(DD.Grid.tile(3, 5).obj.hp, 6, 'and nothing hit it');
+      DD.HUD.clearHint();
+      DD.HUD.hover(4, 3);
+      const p = DD.Combat.preview(m, m.basic, 4, 3);
+      t.ok(p && p.breaks && p.breaks.id === 'crate', 'the engine preview breaks it');
+      t.ok(DD.HUD.hint().indexOf('🔨 ' + p.breaks.text) >= 0, 'the hint shows "' + (p.breaks && p.breaks.text) + '": ' + DD.HUD.hint());
+      t.ok(ov().objPreview && ov().objPreview.x === 4 && ov().objPreview.dmg === p.breaks.dmg && ov().objPreview.breaks === p.breaks.destroyed, 'the HP bar previews the hit (overlay.objPreview)');
+      t.ok(/🔨 Breakable \(6\/6 HP\): any single-target damage skill can break it \(in range and line of sight\)\. It takes the skill's listed damage and nothing else/.test(text('.hud-inspect')), 'inspect: its HP and that any single-target damage skill can break it (D1 words): ' + text('.hud-inspect'));
+      t.ok(/🎯 Click: Magic Missile \(Unit\) hits it for \d+/.test(text('.hud-inspect')), 'and what this click does');
+      // the 🔨 marker: drawn over the crate, a "break" box; nothing without breakTargets
+      const cvA = document.createElement('canvas'), cvB = document.createElement('canvas');
+      const full = JSON.parse(JSON.stringify(ov()));
+      [0, 30, 200].forEach(function (yaw) {
+        Object.assign(ov(), full);
+        const camAt = function (cv) {
+          const cam = DD.Iso.withYaw(yaw, function () { const w = DD.Iso.toWorld(4, 3, 0); return { x: w.x, y: w.y, zoom: 1.4 }; });
+          const rand = Math.random; let s = 7;
+          Math.random = function () { s = (s * 16807) % 2147483647; return s / 2147483647; };
+          try { return DD.Render.renderTo(cv, { width: 360, height: 260, yaw: yaw, camera: cam }); } finally { Math.random = rand; }
+        };
+        const a = camAt(cvA);
+        const bm = a && a.booms && a.booms.filter(function (x) { return x.x === 4 && x.y === 3; })[0];
+        t.ok(bm && bm.kind === 'break' && Math.abs((bm.x0 + bm.x1) / 2 - 180) <= 5 && bm.y1 < 130, 'yaw ' + yaw + ': the 🔨 marker stands over the crate ' + JSON.stringify(bm));
+        Object.assign(ov(), full, { breakTargets: [], objPreview: null });
+        const b = camAt(cvB);
+        t.ok(b && !b.booms.length, 'yaw ' + yaw + ': no marker without breakTargets');
+        const d = diffBox(cvA, cvB);
+        t.ok(d && Math.abs(d.cx - 180) <= 8 && d.y1 < 130, 'yaw ' + yaw + ': only the marker and the HP bar differ, over the crate ' + JSON.stringify(d));
+      });
+      Object.assign(ov(), full);
+      // the hit: exactly the preview, the attack's AP paid, back to move mode
+      const hp0 = crate.hp, ap0 = m.ap;
+      DD.HUD.click(4, 3);
+      if (p.breaks.destroyed) t.ok(!DD.Grid.tile(4, 3).obj, 'it broke');
+      else t.eq(crate.hp, hp0 - p.breaks.dmg, 'it took exactly the previewed damage');
+      t.ok(m.ap < ap0 && DD.HUD.mode().kind === 'move', 'the attack was paid; back to move mode');
+      // a last hit: "— breaks!"
+      if (DD.Grid.tile(4, 3).obj) {
+        crate.hp = 1;
+        DD.HUD.key('1');
+        DD.HUD.hover(4, 3);
+        t.ok(/🔨 Break: Crate − \d+ damage — breaks!/.test(DD.HUD.hint()), 'one HP left: "breaks!": ' + DD.HUD.hint());
+        t.ok(ov().objPreview && ov().objPreview.breaks, 'the bar shows it all going');
+        DD.HUD.click(4, 3);
+        t.ok(!DD.Grid.tile(4, 3).obj, 'and the click broke it');
+      }
+      // the opted-out crate's inspect
+      DD.HUD.rightClick();
+      DD.HUD.hover(3, 5);
+      t.ok(/🚫 Not a target/.test(text('.hud-inspect')), 'the opted-out crate\'s inspect says so: ' + text('.hud-inspect'));
+    } finally { leave(); }
+    try {
+      // a skill that can't hit objects (finish D1: it opts out)
+      fight({ heroes: [{ id: 'test_mage', x: 1, y: 3, skills: [shyZap()] }], enemies: [{ id: 'test_grunt', x: 4, y: 3 }], objects: [{ x: 3, y: 3, id: 'crate' }], enemyAi: false });
+      DD.HUD.key('2');
+      t.eq(DD.HUD.mode().kind, 'skill', 'Shy Zap is armed');
+      t.ok(!has(ov().targetTiles, { x: 3, y: 3 }) && !ov().breakTargets.length, 'Shy Zap (opts out) does not aim at objects');
+      DD.HUD.click(3, 3);
+      t.ok(/Shy Zap is for foes only, not the Crate: another single-target damage skill can break it\./.test(DD.HUD.hint()), 'the click says why: ' + DD.HUD.hint());
+      t.eq(DD.Grid.tile(3, 3).obj.hp, 6, 'and the crate is untouched');
+      DD.HUD.hover(3, 3);
+      t.ok(/· Shy Zap is for foes only and can't break it\./.test(text('.hud-inspect')), 'the crate\'s inspect says the armed skill opts out: ' + text('.hud-inspect'));
+    } finally { leave(); dropShyZap(); }
+  });
+
+  T.suite('hud: rules run — breaking: what it does (objective count, loot, puzzle step); tooltips offer it', function (t) {
+    if (!ready(t)) return;
+    if (!DD.Targeting.breakable || !DD.Targeting.objectDamage) { t.skip('no breakable targeting'); return; }
+    const oid = 'hudtest_piggy';
+    try {
+      DD.registerObject({ id: oid, name: 'Piggy Bank', hp: 3, blocksMove: true, blocksLos: false, color: '#f49ac1', autoplay: 7,
+        desc: 'Destructible (3 HP). Holds 4 gold and one IOU.', onDestroyed: function () { DD.Act.gainGold(4); } });
+      fight({ heroes: [{ id: 'test_mage', x: 1, y: 3 }], enemies: [{ id: 'test_grunt', x: 7, y: 7 }],
+        objects: [{ x: 3, y: 3, id: oid }, { x: 3, y: 5, id: oid }, { x: 4, y: 1, id: 'crate' }], enemyAi: false, kind: 'boss',
+        objective: { type: 'destroy', objId: oid, count: 2 } });
+      const m = byDef('test_mage');
+      const gold0 = DD.Act.gold();
+      DD.HUD.key('1');
+      DD.HUD.hover(3, 3);
+      const h = DD.HUD.hint();
+      t.ok(/🔨 Break: Piggy Bank − 3 damage — breaks!/.test(h), 'the break: ' + h);
+      t.ok(/🎯 Objective 1\/2/.test(h) && !/wins the fight/.test(h), 'it counts toward the objective (1 of 2)');
+      t.ok(/💰 \+4 gold/.test(h), 'its loot (the gold its onDestroyed hands out)');
+      t.ok(/🧩 Puzzle step/.test(h), 'a boss fight object with a puzzle hint: a puzzle step');
+      t.eq(DD.Act.gold(), gold0, 'the preview gave no real gold');
+      t.ok(/🎯 Objective: break 2 of these \(0 so far\)\./.test(text('.hud-inspect')), 'inspect: the objective line');
+      DD.HUD.hover(4, 1);
+      t.ok(/🔨 Break: Crate/.test(DD.HUD.hint()) && !/Objective|gold|Puzzle/.test(DD.HUD.hint()), 'a plain crate: just the break: ' + DD.HUD.hint());
+      DD.HUD.click(3, 3);
+      t.ok(!DD.Grid.tile(3, 3).obj && DD.Act.gold() === gold0 + 4, 'the click broke it and paid out');
+      m.ap = 3;
+      DD.HUD.refresh();
+      DD.HUD.key('1');
+      DD.HUD.hover(3, 5);
+      t.ok(/🎯 Objective 2\/2: that wins the fight!/.test(DD.HUD.hint()), 'the last one says it wins the fight: ' + DD.HUD.hint());
+      // the skill tooltip offers objects too (UI.aimNotes), with the damage an object takes
+      t.ok(/🔨 Can also hit a breakable object in range \(crates, totems…\) for 4 damage and nothing else; it breaks at 0 HP\./.test(DD.UI.skillTooltipHtml('test_bolt', 1, m)), 'the basic attack\'s tooltip: 🔨 for its listed damage and nothing else');
+      t.ok(!/breakable object/.test(DD.UI.skillTooltipHtml(shyZap(), 1, m)), 'a damage spell that opts out: no 🔨 line');
+    } finally {
+      delete DD.defs.objects[oid];
+      leave();
+      dropShyZap();
+    }
+  });
+
+  // ---- render / HUD polish (wf10) ------------------------------------------------------------------------------------
+  /** The src of the first portrait image inside an element (party card, tracker chip, inspect head). */
+  function portSrc(node) { const img = node && node.querySelector('.portrait img, img.portrait-canvas'); return img ? img.getAttribute('src') : ''; }
+  function cardOf(name) { return qa('.hud-card').filter(function (c) { return c.textContent.indexOf(name) >= 0; })[0] || null; }
+
+  T.suite('hud: polish — portraits follow forms (party card, tracker, inspect)', function (t) {
+    if (!ready(t)) return;
+    try {
+      fight({ heroes: [{ id: 'test_knight', x: 2, y: 2 }, { id: 'test_mage', x: 2, y: 5 }], enemies: [{ id: 'test_grunt', x: 5, y: 2 }], enemyAi: false });
+      const k = byDef('test_knight');
+      const card0 = portSrc(cardOf(k.name)), chip0 = portSrc(q('.tk-chip[data-unit="' + k.id + '"]'));
+      DD.HUD.hover(k.x, k.y);
+      const insp0 = portSrc(q('.hud-inspect .hi-head'));
+      t.ok(card0 && chip0 && insp0, 'portraits drawn (card, tracker chip, inspect)');
+      // a form change (what Transform / Wild Shape do): unit.sprite now holds another look
+      k.sprite = { base: 'quadruped', palette: { skin: '#8f8c98', accent: '#ffd23f' }, shape: { body: 'long' } };
+      DD.HUD.hover(null);
+      DD.HUD.refresh();
+      const card1 = portSrc(cardOf(k.name)), chip1 = portSrc(q('.tk-chip[data-unit="' + k.id + '"]'));
+      t.ok(card1 && card1 !== card0, 'the party card shows the new form');
+      t.ok(chip1 && chip1 !== chip0, 'so does its tracker portrait');
+      DD.HUD.hover(k.x, k.y);
+      t.ok(portSrc(q('.hud-inspect .hi-head')) !== insp0, 'and the inspect panel');
+      // the on-screen pin (vis.sprite) wins while FX playback catches up, like on the board
+      const pin = { base: 'blob', palette: { skin: '#59d36a' } };
+      k.vis.sprite = pin;
+      DD.HUD.hover(null);
+      DD.HUD.refresh();
+      t.ok(portSrc(cardOf(k.name)) !== card1, 'a pinned look (vis.sprite) shows first');
+      // back to the def look: the very same cached portrait as at the start
+      k.vis.sprite = null;
+      delete k.sprite;
+      DD.HUD.refresh();
+      t.eq(portSrc(cardOf(k.name)), card0, 'back in his own look: the original portrait');
+      t.eq(portSrc(q('.tk-chip[data-unit="' + k.id + '"]')), chip0, '...on the tracker too');
+    } finally { leave(); }
+  });
+
+  T.suite('hud: polish — a skill\'s own canTarget refusal is the hint; inspect pills for noProvoke / noOpportunity / immunities; every ability listed', function (t) {
+    if (!ready(t)) return;
+    const sid = 'hudtest_picky';
+    try {
+      DD.registerSkill({
+        id: sid, name: 'Picky Poke', owner: 'test_knight', icon: '👉', ap: 1, levels: [{ dmg: 2 }],
+        target: { type: 'unit', range: [1, 6], filter: 'enemy', canTarget: function (ctx) { return ctx.target && ctx.target.x === 5 ? 'Only on Tuesdays. Today is not Tuesday.' : true; } },
+        desc: function () { return 'Poke a foe for 2 damage, but only on Tuesdays.'; },
+        execute: function (ctx) { DD.Act.damage(ctx.user, ctx.targetUnit, 2); },
+      });
+      fight({ heroes: [{ id: 'test_knight', x: 2, y: 2, skills: [sid], passives: [] }, { id: 'test_mage', x: 2, y: 5 }],
+        enemies: [{ id: 'test_grunt', x: 5, y: 2 }, { id: 'test_archer', x: 3, y: 4 }], enemyAi: false, noPlan: true });
+      const g = byDef('test_grunt'), k = byDef('test_knight');
+      DD.HUD.key('2');
+      t.eq((DD.HUD.mode() || {}).kind, 'skill', 'Picky Poke armed');
+      DD.HUD.hover(g.x, g.y);
+      DD.HUD.click(g.x, g.y);
+      t.ok(/Only on Tuesdays\. Today is not Tuesday\./.test(DD.HUD.hint()), 'clicking a foe it refuses says the skill\'s own reason: ' + DD.HUD.hint());
+      t.eq(g.hp, g.maxHp, 'and nothing happened');
+      DD.HUD.key('Escape');
+      DD.HUD.rightClick();
+      DD.HUD.hover(null);
+      // pills: noProvoke / noOpportunity on anyone; resistances and status immunities on heroes too
+      g.flags.noProvoke = true;
+      g.flags.noOpportunity = true;
+      DD.HUD.refresh();
+      DD.HUD.hover(g.x, g.y);
+      const gt = text('.hud-inspect');
+      t.ok(/👻 Can't be pinned/.test(gt), 'noProvoke pill: ' + gt.slice(0, 200));
+      t.ok(/🕊 No free hits/.test(gt), 'noOpportunity pill');
+      DD.HUD.hover(null);
+      k.resist = { fire: 0, poison: 0.5 };
+      k.flags.immune = ['burn'];
+      DD.HUD.refresh();
+      DD.HUD.hover(k.x, k.y);
+      const kt = text('.hud-inspect');
+      t.ok(/Immune: fire/.test(kt) && /Resists poison/.test(kt), 'a hero\'s resistances: ' + kt.slice(0, 220));
+      t.ok(/Immune: Burning/.test(kt), 'and status immunities (flags.immune)');
+      // every ability, not just four
+      DD.HUD.hover(null);
+      const stab = (g.skillSlots || [])[0];
+      for (let i = 0; i < 5 && stab; i++) g.skillSlots.push(DD.Act.makeSlot(stab.id, 1));
+      DD.HUD.refresh();
+      DD.HUD.hover(g.x, g.y);
+      const n = (DD.Combat.slotsOf(g) || []).filter(Boolean).length;
+      t.ok(n > 4, 'the grunt now has ' + n + ' abilities');
+      t.eq(qa('.hud-inspect .hi-abil').length, n, 'the inspect panel lists all of them');
+      t.ok(/Abilities \(\d+\)/.test(text('.hud-inspect')), 'with the count in the heading');
+    } finally {
+      delete DD.defs.skills[sid];
+      leave();
+    }
+  });
+
+  T.suite('hud: polish — Loaded Dice shows every die it rolled on the dice moment and the initiative badge', function (t) {
+    if (!ready(t)) return;
+    if (!DD.FXRender || !DD.FXRender.moments || !DD.getPassive || !DD.getPassive('rp_loaded_dice')) { t.skip('moments or Loaded Dice missing'); return; }
+    try {
+      const zone = [{ x: 1, y: 1 }, { x: 1, y: 2 }, { x: 1, y: 3 }, { x: 2, y: 1 }];
+      fight({ heroes: [{ id: 'test_knight', x: 1, y: 1, passives: [{ id: 'rp_loaded_dice', level: 3 }] }, { id: 'test_mage', x: 1, y: 2 }], enemies: [{ id: 'test_grunt', x: 6, y: 6 }],
+        deploy: true, deployTiles: zone, initiative: 'roll', enemyAi: false });
+      DD.HUD.forceMoments(true);
+      withAnimatedFx(function (F) {
+        const k = byDef('test_knight');
+        DD.HUD.rollInitiative();
+        for (let i = 0; i < 40 && !DD.HUD.moment(); i++) { F.update(40); DD.HUD.tick(); }
+        const p = (k.passives || []).filter(function (x) { return x && x.id === 'rp_loaded_dice'; })[0];
+        const dice = p && p.data && p.data.dice;
+        t.ok(Array.isArray(dice) && dice.length === 3, 'Loaded Dice III rolled 3 d20s (' + JSON.stringify(dice) + ')');
+        const marker = F.active.filter(function (e) { return e.type === 'initiative'; })[0];
+        t.ok(!!DD.HUD.moment() && !!marker, 'the dice moment plays');
+        if (!marker) return;
+        F.update(marker.ms * 0.8); DD.HUD.tick();
+        const xd = qa('.hud-rolltray .rt-xd');
+        t.eq(xd.length, 1, 'one card shows extra dice (only the knight has Loaded Dice)');
+        const tx = xd[0] ? xd[0].textContent : '';
+        t.ok(dice && dice.every(function (v) { return tx.indexOf(String(v)) >= 0; }), 'it shows every die: ' + tx);
+        t.ok(xd[0] && xd[0].querySelector('b') && +xd[0].querySelector('b').textContent === Math.max.apply(null, dice), 'the kept (best) die in bold');
+        t.ok(xd[0] && /kept the best/.test(xd[0].getAttribute('title') || ''), 'its tooltip says so');
+        DD.HUD.skipMoment();
+        F.flush();
+        DD.HUD.tick();
+        DD.HUD.hover(k.x, k.y);
+        const badge = q('.hud-inspect .hi-order');
+        t.ok(badge && /d20s [\d /]+, kept \d+/.test(badge.getAttribute('title') || ''), 'the inspect initiative badge lists the dice: ' + (badge && badge.getAttribute('title')));
+      });
+    } finally { DD.HUD.forceMoments(false); leave(); }
+  });
+
+  T.suite('hud: polish — the HUD reports its panels so the board fit keeps out from under them', function (t) {
+    if (!ready(t)) return;
+    const R = DD.Render, before = R.hudMargins;
+    try {
+      fight({ w: 10, h: 7, heroes: [{ id: 'test_knight', x: 1, y: 5 }, { id: 'test_mage', x: 2, y: 6 }], enemies: [{ id: 'test_grunt', x: 9, y: 0 }, { id: 'test_archer', x: 0, y: 0 }], enemyAi: false });
+      t.ok(typeof R.hudMargins === 'function', 'mounted: DD.Render.hudMargins is the HUD\'s');
+      const W = R.size().width, H = R.size().height;
+      t.eq(R.hudMargins(W, H).avoid.length, 0, 'headless: no panels reported unless a test asks');
+      const boxes = DD.HUD.fitAvoid(true);
+      const log = q('.hud-log').getBoundingClientRect(), obj = q('.hud-obj').getBoundingClientRect();
+      t.ok(boxes.length >= 5, 'panels reported (' + boxes.length + ')');
+      t.ok(boxes.some(function (b) { return Math.abs(b.x0 - log.left) < 1 && Math.abs(b.y1 - log.bottom) < 1 && !b.soft; }), 'the combat log (hard)');
+      t.ok(boxes.some(function (b) { return Math.abs(b.x0 - obj.left) < 1 && b.soft; }), 'the objective (soft: it fades when something is under it)');
+      t.ok(boxes.every(function (b) { return b.x1 > b.x0 && b.y1 > b.y0; }), 'every box is a real box');
+      t.eq(R.hudMargins(W, H, { live: false }).avoid.length, 0, 'offscreen renders (renderTo) get none');
+      t.ok(R.hudMargins(W, H).avoid.length === boxes.length, 'the renderer sees the same boxes');
+      // the fit at a diagonal view keeps every unit head and tile centre out of the hard panels
+      R.setYaw(45, { keepFocus: false });
+      R.fitMap({ instant: true });
+      const s = DD.Combat.state;
+      const hard = boxes.filter(function (b) { return !b.soft; });
+      const hidden = [];
+      s.grid.tiles.forEach(function (tl) {
+        const p = R.worldToScreen(tl.x, tl.y, R.tileTop(tl.x, tl.y));
+        if (hard.some(function (b) { return p.x > b.x0 && p.x < b.x1 && p.y > b.y0 && p.y < b.y1; })) hidden.push(tl.x + ',' + tl.y);
+      });
+      s.units.forEach(function (u) {
+        const p = R.worldToScreen(u.x, u.y), hy = p.y - DD.Sprites.metrics(u).height * R.camera.zoom;
+        if (boxes.some(function (b) { return p.x > b.x0 && p.x < b.x1 && hy > b.y0 && hy < b.y1; })) hidden.push(u.name);
+      });
+      t.eq(hidden.length, 0, 'at 45 deg nothing sits under a panel (' + (hidden.join(' ') || 'none') + ')');
+      DD.HUD.fitAvoid(false);
+    } finally {
+      R.setYaw(0, { keepFocus: false });
+      leave();
+    }
+    t.eq(R.hudMargins, before, 'unmounted: the previous hudMargins is back');
+  });
+
+  // Review (balance run): the objective faded over a boss whose head and HP pill were well clear of it (the peek test
+  // guessed every boss 120 px tall at any zoom, while the board fit keeps the real sprite and pill clear); and a resize
+  // refitted with the panels measured at the old window size.
+  T.suite('hud: review — the objective fades for the real sprite and HP pill; a resize measures the panels again', function (t) {
+    if (!ready(t)) return;
+    const R = DD.Render;
+    const w2s = R.worldToScreen;
+    try {
+      fight({ heroes: [{ id: 'test_knight', x: 2, y: 2 }], enemies: [{ id: 'test_boss', x: 6, y: 6 }], enemyAi: false });
+      const b = byDef('test_boss');
+      const E = DD.HUD.els();
+      const r = E.obj.getBoundingClientRect();
+      const z = R.camera.zoom, zc = Math.max(0.65, Math.min(1.5, z)), m = DD.Sprites.metrics(b);
+      t.ok(b.tier === 'boss' && m.height > 0, 'a boss with real sprite metrics (height ' + Math.round(m.height) + ')');
+      // its feet so low that its HP pill sits 6 px under the panel: head and pill clear
+      const sts = (b.statuses || []).some(function (x) { return x && x.id; });
+      const top = Math.max((m.height + 16) * z, m.height * z + 4 * z + (sts ? 18 * zc + 8 : 5 * zc + 4));
+      const at = function (dy) { R.worldToScreen = function (x, y) { return x === b.x && y === b.y ? { x: (r.left + r.right) / 2, y: r.bottom + top + dy } : { x: -500, y: -500 }; }; };
+      at(6);
+      t.ok(!DD.HUD.objPeek(), 'a boss whose head and HP pill are clear of the objective: it stays solid');
+      at(-8);
+      t.ok(DD.HUD.objPeek(), 'its HP pill under the panel: it fades');
+      // beside the panel: the HP number left of the bar still counts (the pill reaches ' + Math.round(48 * zc + 9) + ' px left)
+      R.worldToScreen = function (x, y) { return x === b.x && y === b.y ? { x: r.right + 48 * zc, y: r.bottom + top - 8 } : { x: -500, y: -500 }; };
+      t.ok(DD.HUD.objPeek(), 'the pill\'s left end under the panel\'s right edge: it fades');
+      R.worldToScreen = function () { return { x: -500, y: -500 }; };
+      t.ok(!DD.HUD.objPeek(), 'nobody near it: solid again');
+      // the panels the fit avoids are measured again at a new window size (not reused for AVOID_MS)
+      R.worldToScreen = w2s;
+      const a1 = DD.HUD.fitAvoid(true);
+      const iw = Object.getOwnPropertyDescriptor(window, 'innerWidth');
+      let measured = 0;
+      const gbcr = Element.prototype.getBoundingClientRect;
+      Element.prototype.getBoundingClientRect = function () { measured++; return gbcr.call(this); };
+      try {
+        Object.defineProperty(window, 'innerWidth', { configurable: true, get: function () { return 1234; } });
+        R.hudMargins(800, 600);
+        t.ok(measured > 0, 'a new window size: the panels are measured again (' + measured + ' boxes read)');
+        measured = 0;
+        R.hudMargins(800, 600);
+        t.eq(measured, 0, 'the same size within the cache window: reused');
+      } finally {
+        Element.prototype.getBoundingClientRect = gbcr;
+        if (iw) Object.defineProperty(window, 'innerWidth', iw); else delete window.innerWidth;
+      }
+      t.ok(a1.length >= 5, '(panels reported: ' + a1.length + ')');
+      DD.HUD.fitAvoid(false);
+    } finally {
+      R.worldToScreen = w2s;
+      leave();
+    }
+  });
+
+  // ---- playtest fixes (Nov 12; .tmp/wf12/confirmed-findings.json) ---------------------------------------------------------
+  /** Every screen point (a grid around the unit) whose pick hits `who`'s sprite: [{ x, y, under }]. */
+  function spritePoints(who) {
+    const r = DD.Render, I = DD.Input;
+    const c = r.worldToScreen(who.x, who.y), z = r.camera.zoom;
+    const out = [];
+    for (let j = -24; j <= 6; j++) {
+      for (let i = -10; i <= 10; i++) {
+        const p = { x: c.x + i * 2 * z, y: c.y + j * 2 * z };
+        const h = I.pick(p.x, p.y);
+        if (h && h.unitId === who.id) out.push({ x: p.x, y: p.y, under: h.under || null });
+      }
+    }
+    return out;
+  }
+
+  T.suite('hud: playtest first-hour-2 — anywhere on an adjacent ally\'s sprite a click swaps (never the tile behind); Shift keeps the ally on hover', function (t) {
+    if (!inputReady(t)) return;
+    if (!DD.Combat.swapInfo) { t.skip('no swaps in the engine'); return; }
+    [0, 135, 315].forEach(function (yaw) {
+      try {
+        fight({ w: 9, h: 9, heroes: [{ id: 'test_knight', x: 4, y: 5 }, { id: 'test_mage', x: 4, y: 4 }], enemies: [{ id: 'test_grunt', x: 8, y: 0 }], enemyAi: false });
+        const k = byDef('test_knight'), m = byDef('test_mage');
+        realInput(yaw, function (io) {
+          const pts = spritePoints(m);
+          const behind = pts.filter(function (p) { return p.under && !(p.under.x === m.x && p.under.y === m.y) && DD.Combat.reachable(k).get(p.under.x + ',' + p.under.y); });
+          t.ok(pts.length > 20, 'yaw ' + yaw + ': ' + pts.length + ' points on the mage\'s sprite (' + behind.length + ' over a reachable tile behind)');
+          const off = pts.filter(function (p) { io.move(p); return !(ov().hover && ov().hover.x === m.x && ov().hover.y === m.y && ov().swap); });
+          t.eq(off.length, 0, 'yaw ' + yaw + ': every one of them previews the swap with the mage (' + off.length + ' did not)');
+          const p = behind[0] || pts[0];
+          io.move(p);
+          t.ok(/⇄ Swap with Wizzy McTest/.test(DD.HUD.hint()), 'yaw ' + yaw + ': the hint is the swap: ' + DD.HUD.hint());
+          io.click(p);
+          t.ok(k.x === 4 && k.y === 4 && m.x === 4 && m.y === 5, 'yaw ' + yaw + ': the click swapped them (knight ' + k.x + ',' + k.y + ')');
+          DD.HUD.undo();
+          // downed: the same sprite helps up, anywhere on it
+          DD.Act.kill(m, null);
+          DD.HUD.refresh();
+          const dp = spritePoints(m);
+          const wrong = dp.filter(function (q) { io.move(q); return !/^🆘 Click: Help Up Wizzy McTest/.test(DD.HUD.hint()); });
+          t.ok(dp.length > 0 && wrong.length === 0, 'yaw ' + yaw + ': hovering the downed mage (' + dp.length + ' points) previews Help Up everywhere (' + wrong.length + ' not): ' + DD.HUD.hint());
+          if (dp.length) io.click(dp[dp.length - 1]);
+          t.ok(!m.downed && k.x === 4 && k.y === 5, 'yaw ' + yaw + ': the click helped the mage up and moved nobody');
+        });
+      } finally { leave(); }
+    });
+    try {
+      // a farther ally: the click still reaches the tile behind it; Shift held keeps the ally (the hover agrees with Shift+click)
+      fight({ w: 9, h: 9, heroes: [{ id: 'test_knight', x: 3, y: 6 }, { id: 'test_mage', x: 4, y: 4 }], enemies: [{ id: 'test_grunt', x: 8, y: 0 }], enemyAi: false });
+      const m = byDef('test_mage');
+      realInput(0, function (io) {
+        const p = io.covered(3, 3, m);
+        t.ok(!!p, 'the mage\'s sprite covers (3,3)');
+        if (!p) return;
+        io.move(p);
+        t.ok(ov().hover && ov().hover.x === 3 && ov().hover.y === 3 && /^Move here/.test(DD.HUD.hint()), 'no Shift: the hover goes through to (3,3)');
+        io.move(p, true);
+        t.ok(ov().hover && ov().hover.x === 4 && ov().hover.y === 4 && /Wizzy McTest doesn't block/.test(DD.HUD.hint()), 'Shift held: the hover stays on the mage: ' + DD.HUD.hint());
+        io.move(p);
+      });
+    } finally { leave(); }
+  });
+
+  T.suite('hud: playtest first-hour-v1 / combat-controls-3 — hovering a downed ally previews Help Up (or why not); a chest previews its click', function (t) {
+    if (!ready(t)) return;
+    try {
+      fight({ heroes: [{ id: 'test_knight', x: 3, y: 3 }, { id: 'test_mage', x: 4, y: 3 }, { id: 'test_cleric', x: 3, y: 6 }], enemies: [{ id: 'test_grunt', x: 7, y: 7 }],
+        objects: [{ x: 2, y: 3, id: 'chest' }], enemyAi: false });
+      const k = byDef('test_knight'), m = byDef('test_mage'), c = byDef('test_cleric');
+      DD.Act.kill(m, null);
+      DD.Act.kill(c, null);
+      DD.HUD.refresh();
+      DD.HUD.hover(m.x, m.y);
+      const upHp = Math.max(1, Math.round(m.maxHp * 0.25));
+      t.ok(DD.HUD.hint().indexOf('🆘 Click: Help Up Wizzy McTest: 2 AP, back up with ' + upHp + ' HP (25%).') === 0 && /Can't be undone\.$/.test(DD.HUD.hint()),
+        'adjacent downed ally: the hover says what the click does: ' + DD.HUD.hint());
+      t.ok(!/doesn't block/.test(DD.HUD.hint()), 'and not "doesn\'t block"');
+      DD.HUD.hover(c.x, c.y);
+      t.ok(/^🆘 Father Unittest is down\. /.test(DD.HUD.hint()) && /Help Up \(2 AP/.test(DD.HUD.hint()), 'a downed ally farther away: how to get him up: ' + DD.HUD.hint());
+      DD.HUD.hover(2, 3);
+      // E takes the first interaction (Help Up here), so the hint offers the click only
+      t.ok(/^🖐 Chest — Click: Open \(1 AP\)\.$/.test(DD.HUD.hint()), 'a chest next to the knight: what the click does: ' + DD.HUD.hint());
+      k.ap = 1;
+      DD.HUD.refresh();
+      DD.HUD.hover(m.x, m.y);
+      t.ok(/Help Up<?\/?b?>? needs 2 AP \(Sir Testsalot has 1\)|Help Up needs 2 AP \(Sir Testsalot has 1\)/.test(DD.HUD.hint()), 'with 1 AP: why not: ' + DD.HUD.hint());
+      DD.HUD.click(m.x, m.y);
+      t.ok(m.downed && k.x === 3 && k.y === 3 && k.ap === 1, 'and the click spends nothing and moves nobody');
+      k.ap = 3;
+      DD.HUD.refresh();
+      DD.HUD.click(m.x, m.y);
+      t.ok(!m.downed && m.hp === upHp && k.ap === 1, 'with 3 AP the click is the Help Up the hover promised (' + m.hp + ' HP)');
+      DD.HUD.hover(2, 3);
+      t.ok(/^🖐 Chest — Click or E: Open \(1 AP\)\.$/.test(DD.HUD.hint()), 'the chest is now the first interaction: E opens it too: ' + DD.HUD.hint());
+    } finally { leave(); }
+  });
+
+  T.suite('hud: playtest first-hour-7 — a refusal for one unit never covers the next unit\'s hints; arming replaces it', function (t) {
+    if (!ready(t)) return;
+    try {
+      fight({ heroes: [{ id: 'test_knight', x: 1, y: 3 }, { id: 'test_mage', x: 1, y: 5 }], enemies: [{ id: 'test_grunt', x: 2, y: 3 }], enemyAi: false });
+      const m = byDef('test_mage');
+      DD.HUD.key('4');
+      t.eq(DD.HUD.hint(), 'That socket is empty.', 'an empty socket: the refusal');
+      DD.HUD.key('1');
+      t.ok(/^🗡️ Test Slash — /.test(DD.HUD.hint()), 'arming the basic attack replaces it at once: ' + DD.HUD.hint());
+      DD.HUD.rightClick();
+      DD.HUD.key('4');
+      t.eq(DD.HUD.hint(), 'That socket is empty.', 'the refusal again');
+      DD.HUD.endTurn();
+      t.eq(DD.HUD.selected().id, m.id, 'the mage acts');
+      t.ok(DD.HUD.hint() !== 'That socket is empty.', 'the knight\'s refusal is gone on the mage\'s turn: ' + DD.HUD.hint());
+      DD.HUD.hover(2, 5);
+      t.ok(/^Move here/.test(DD.HUD.hint()), 'and the mage\'s move hint shows: ' + DD.HUD.hint());
+    } finally { leave(); }
+  });
+
+  T.suite('hud: playtest combat-controls-4 — the swap hint counts Bleed (the line, the 💀 check, red arrows, the HP preview)', function (t) {
+    if (!ready(t)) return;
+    if (!DD.Combat.swapInfo || !DD.getStatus('bleed')) { t.skip('no swaps or no bleed'); return; }
+    try {
+      fight({ heroes: [{ id: 'test_knight', x: 2, y: 3 }, { id: 'test_mage', x: 3, y: 3 }], enemies: [{ id: 'test_grunt', x: 7, y: 7 }], enemyAi: false });
+      const k = byDef('test_knight'), m = byDef('test_mage');
+      DD.Act.addStatus(k, 'bleed', { stacks: 3 }, null);
+      k.block = 0;
+      DD.HUD.refresh();
+      DD.HUD.hover(m.x, m.y);
+      t.ok(/⇄ Swap with Wizzy McTest/.test(DD.HUD.hint()) && /🩸 Bleeding 3: this move costs 3 HP when it ends\./.test(DD.HUD.hint()), 'the swap hint warns of the bleed: ' + DD.HUD.hint());
+      t.ok(ov().swap && ov().swap.bad, 'red swap arrows');
+      t.ok(ov().previews[k.id] && ov().previews[k.id].dmg === 3 && !ov().previews[k.id].lethal, 'the knight\'s HP preview shows the 3');
+      k.hp = 2;
+      DD.HUD.refresh();
+      DD.HUD.hover(m.x, m.y);
+      t.ok(/costs 3 HP when it ends 💀/.test(DD.HUD.hint()) && ov().previews[k.id].lethal, 'at 2 HP the swap would drop him: 💀 ' + DD.HUD.hint());
+    } finally { leave(); }
+  });
+
+  T.suite('hud: playtest text-tone-v1 / text-tone-3 — a flyer still pockets gold; named units get no "it" / "its" in the panels', function (t) {
+    if (!ready(t)) return;
+    try {
+      fight({ heroes: [{ id: 'test_mage', x: 1, y: 1 }, { id: 'test_knight', x: 1, y: 4 }], enemies: [{ id: 'test_grunt', x: 6, y: 6 }], enemyAi: false,
+        objects: DD.getObject('gold_pile') ? [{ x: 3, y: 1, id: 'gold_pile' }] : [] });
+      const m = byDef('test_mage'), k = byDef('test_knight'), g = byDef('test_grunt');
+      m.flags = Object.assign({}, m.flags, { flying: true });
+      DD.HUD.refresh();
+      if (DD.getObject('gold_pile')) {
+        DD.HUD.hover(3, 1);
+        const txt = text('.hud-inspect');
+        t.ok(/🪽 Wizzy McTest flies, but still swoops down for the Gold Pile\./.test(txt), 'the gold pile\'s panel: the flyer still swoops down for it');
+        t.ok(!/none of it applies/.test(txt), 'and never "none of it applies" over loot: ' + txt.slice(0, 200));
+      }
+      DD.HUD.hover(m.x, m.y);
+      t.ok(/Loot is not floor: Wizzy McTest still swoops down for gold\./.test(text('.hud-inspect')), 'the flyer\'s own panel says loot still counts');
+      DD.HUD.hover(k.x, k.y);
+      const kt = text('.hud-inspect');
+      t.ok(!/\bits next turn\b/.test(kt) && /before Sir Testsalot's next turn/.test(kt), 'a hero\'s panel names him: ' + kt.slice(0, 200));
+      DD.HUD.hover(g.x, g.y);
+      const gt = text('.hud-inspect');
+      t.ok(!/\bit can reach\b|\bOn its\b|walking away from it\b|\(it acts next\)/.test(gt), 'a foe\'s panel has no generic "it" templates: ' + gt.slice(0, 260));
+      t.ok(!/it acts on its own initiative turn/.test(DD.HUD.unitTip(k)), 'nor a hero\'s card tooltip: ' + DD.HUD.unitTip(k).replace(/<[^>]+>/g, ' ').slice(0, 200));
+    } finally { leave(); }
+  });
+
+  T.suite('hud: playtest first-hour-1 — a monster\'s ability text shows this fight\'s damage (× the fight multiplier), heroes\' stays as listed', function (t) {
+    if (!ready(t)) return;
+    try {
+      fight({ heroes: [{ id: 'test_knight', x: 1, y: 3 }], enemies: [{ id: 'test_grunt', x: 5, y: 3 }], enemyAi: false });
+      const k = byDef('test_knight'), g = byDef('test_grunt');
+      const def = DD.getSkill('test_grunt_stab');
+      const base = DD.skillLevel(def, 1).dmg;
+      DD.Combat.state.difficulty = Object.assign({}, DD.Combat.state.difficulty, { dmg: 1.4 });
+      const info = DD.UI.skillInfo(def, 1, g);
+      const want = Math.round(base * 1.4);
+      t.ok(info.fightMult === 1.4 && info.desc.indexOf(String(want)) >= 0, 'the grunt\'s Stab reads ' + want + ' (listed ' + base + ' × 1.4): ' + info.desc);
+      t.eq(DD.UI.skillInfo(def, 1, null).desc, DD.skillDesc(def, 1, null), 'outside the fight (no unit) the listed number');
+      const hk = DD.UI.skillInfo('test_slash', 1, k);
+      t.eq(hk.fightMult, 1, 'a hero skill is never scaled');
+      DD.HUD.hover(g.x, g.y);
+      t.ok(q('.hud-inspect .ha-mult') && /×1\.4/.test(text('.hud-inspect .ha-mult')), 'the ability row carries a ×1.4 pill');
+      DD.Combat.state.difficulty = Object.assign({}, DD.Combat.state.difficulty, { dmg: 1 });
+      t.eq(DD.UI.skillInfo(def, 1, g).desc, DD.skillDesc(def, 1, g), 'at ×1 the text is the listed one');
+    } finally { leave(); }
+  });
+
+  T.suite('hud: playtest combat-controls-6 / text-tone-17 / text-tone-18 — why a hovered foe is no target; tooltips follow the rules and DD.Balance', function (t) {
+    if (!ready(t)) return;
+    try {
+      fight({ heroes: [{ id: 'test_mage', x: 1, y: 3 }], enemies: [{ id: 'test_grunt', x: 4, y: 3 }, { id: 'test_grunt', x: 1, y: 6 }], enemyAi: false,
+        terrain: function (tl) { return tl.x === 2 && tl.y === 3 ? { t: 'wall' } : null; } });
+      const near = DD.Combat.state.units.filter(function (u) { return u.defId === 'test_grunt' && u.x === 4; })[0];
+      const far = DD.Combat.state.units.filter(function (u) { return u.defId === 'test_grunt' && u.y === 6; })[0];
+      DD.HUD.key('1');
+      DD.HUD.hover(near.x, near.y);
+      t.ok(/✖ No line of sight/.test(DD.HUD.hint()), 'hovering the foe behind the wall says why before the click: ' + DD.HUD.hint());
+      DD.HUD.rightClick();
+      DD.Act.kill(far, null);
+      DD.HUD.refresh();
+      DD.HUD.key('1');
+      t.ok(/No valid targets/i.test(DD.HUD.hint()) && /Nearest foe, Test Grunt: No line of sight/.test(DD.HUD.hint()), '"No valid targets" names the nearest foe and why: ' + DD.HUD.hint());
+      // the Hype tooltip reads DD.Balance.hype
+      const E = DD.HUD.els();
+      const tip = function (n) { const c = n && n._ddTip && n._ddTip.content; return typeof c === 'function' ? c(n) : c || ''; };
+      if (DD.Balance && DD.Balance.hype) {
+        const k0 = DD.Balance.hype.kill;
+        try {
+          DD.Balance.hype.kill = 9;
+          t.ok(/\+9 per kill/.test(tip(E.hype)), 'the Hype tooltip follows DD.Balance.hype: ' + tip(E.hype).replace(/<[^>]+>/g, ' ').slice(0, 160));
+        } finally { DD.Balance.hype.kill = k0; }
+        t.ok(!/their Signature/.test(tip(E.hype)), 'no "their" for a hero');
+      }
+      t.ok(/Only bosses and a few elites wind up/.test(tip(E.round)), 'the round tooltip: bosses and a few elites wind up');
+    } finally { leave(); }
+  });
+
+  T.suite('hud: playtest combat-controls-1 / -2 — a free hit that stops the move, dice ranges, rider bleed, a web on the path: the hints and the drawn path say so', function (t) {
+    if (!ready(t)) return;
+    try {
+      fight({ heroes: [{ id: 'test_knight', x: 2, y: 3 }, { id: 'test_mage', x: 3, y: 3 }], enemies: [{ id: 'test_grunt', x: 2, y: 4 }], enemyAi: false });
+      const k = byDef('test_knight'), g = byDef('test_grunt');
+      k.block = 0;
+      const C = DD.Combat, real = C.provokes, realSwap = C.swapInfo;
+      // the engine's dry-run shape (Combat.provokes / swapInfo, playtest fix): a stop, a dice range, a rider's Bleed
+      const fake = function (list) {
+        const out = list.map(function (p) { return Object.assign({}, p, { unitId: g.id, name: g.name, skillName: 'Stab', dmg: 4, bleed: 1, stops: 'Rooted', random: true, min: 0, max: 9, skipped: false }); });
+        out.outcome = { end: { x: k.x, y: k.y }, arrived: false, loss: 5, lossMin: 1, lossMax: 10, bleedTick: 1, lethal: false, uncertain: true };
+        return out;
+      };
+      try {
+        C.provokes = function (u, x, y) { const r = real.apply(C, arguments); return r && r.length ? fake(r) : r; };
+        C.swapInfo = function () { const si = realSwap.apply(C, arguments); if (si && si.ok === true && si.provokes && si.provokes.length) { si.provokes = fake(si.provokes); si.outcome = si.provokes.outcome; } return si; };
+        DD.HUD.refresh();
+        DD.HUD.hover(2, 1);
+        const hint = DD.HUD.hint();
+        t.ok(/Test Grunt 0–9 \+🩸1/.test(hint), 'a dice strike shows its range and its Bleed rider: ' + hint);
+        t.ok(/⛔ Stab stops Sir Testsalot \(Rooted\): the move is spent\./.test(hint), 'and that it ends the walk: ' + hint);
+        t.ok(/🩸 Bleeding 1: this move costs 1 HP when it ends\./.test(hint), 'the rider\'s Bleed tick is counted');
+        t.eq(ov().path.length, 0, 'the drawn path stops where the walker does (here: where it stands)');
+        t.ok(ov().previews[k.id] && ov().previews[k.id].dmg === 5, 'the HP preview is the dry run\'s loss (5)');
+        DD.HUD.hover(3, 3);
+        t.ok(/⛔ Stab stops Sir Testsalot \(Rooted\): the move is spent and the swap won't happen\./.test(DD.HUD.hint()), 'a swap: called off: ' + DD.HUD.hint());
+        t.ok(ov().swap && ov().swap.bad && ov().swap.blocked, 'red arrows with a ✖');
+      } finally { C.provokes = real; C.swapInfo = realSwap; }
+    } finally { leave(); }
+    if (!DD.getSurface('web') || !DD.Grid.snagAt) { t.skip('no web snags in the engine'); return; }
+    try {
+      fight({ heroes: [{ id: 'test_knight', x: 1, y: 3 }], enemies: [{ id: 'test_grunt', x: 7, y: 7 }], enemyAi: false,
+        terrain: function (tl) { return tl.y !== 3 ? { t: 'wall' } : null; }, surfaces: [{ x: 2, y: 3, id: 'web', turns: 4 }] });
+      const k = byDef('test_knight');
+      DD.HUD.hover(3, 3);
+      t.ok(/⚠ The path crosses Web: Sir Testsalot is Rooted there and the walk stops short\./.test(DD.HUD.hint()), 'a web on the only path: warned: ' + DD.HUD.hint());
+      t.ok(ov().pathHazard && tiles(ov().path) === '2,3', 'red path, cut at the web (' + tiles(ov().path) + ')');
+      DD.HUD.hover(2, 3);
+      t.ok(/🕸 Ends on Web: Sir Testsalot is Rooted there\./.test(DD.HUD.hint()), 'ending on the web: ' + DD.HUD.hint());
+      t.ok(k.x === 1, '(nobody moved)');
+    } finally { leave(); }
+  });
+
+  T.suite('hud: playtest bosses-objectives-3 — a foe with two turns before the hero\'s next counts twice (card line, hint, shading)', function (t) {
+    if (!ready(t)) return;
+    if (!DD.AI.turnsBefore) { t.skip('no DD.AI.turnsBefore'); return; }
+    try {
+      fight({ w: 9, h: 7, heroes: [{ id: 'test_knight', x: 1, y: 3 }], enemies: [{ id: 'test_grunt', x: 4, y: 3 }], enemyAi: false });
+      const k = byDef('test_knight'), g = byDef('test_grunt');
+      const s = DD.Combat.state;
+      const ge = s.order.filter(function (e) { return e.unitId === g.id; })[0];
+      s.order.push(Object.assign({}, ge));   // a second turn this round, before the knight's next one (a two-turn boss)
+      t.eq(DD.AI.turnsBefore(g, k), 2, 'the engine: two grunt turns before the knight\'s next');
+      k.block = 0;
+      DD.HUD.threat(true);
+      DD.HUD.refresh();
+      const one = num0(DD.AI.reachOf(g).tiles.get(k.x + ',' + k.y));
+      t.ok(one > 0, 'the grunt reaches the knight (' + one + ' a turn)');
+      const card = qa('.hud-card')[0].querySelector('.hc-threat').textContent;
+      t.ok(card.indexOf('up to ' + 2 * one) >= 0, 'the card counts both turns: ' + card);
+      const td = DD.HUD.threatData().tiles.filter(function (x) { return x.x === k.x && x.y === k.y; })[0];
+      t.ok(td && td.reach === 2 * one, 'the shading too (' + (td && td.reach) + ')');
+      const near = DD.Combat.reachable(k);
+      let tile = null;
+      near.forEach(function (e) { if (!tile && DD.AI.reachOf(g).tiles.has(e.x + ',' + e.y)) tile = e; });
+      if (tile) {
+        DD.HUD.hover(tile.x, tile.y);
+        t.ok(/Test Grunt \d+ \(2 turns\)/.test(DD.HUD.hint()), 'the hint says it acts twice first: ' + DD.HUD.hint());
+      }
+      DD.HUD.threat(false);
+    } finally { leave(); }
+    function num0(v) { return +v || 0; }
+  });
+
+  T.suite('hud: playtest heroes-3 — a tile-aimed hit on a crate (Betty\'s Family Hammer) previews the break and the HP bar', function (t) {
+    if (!ready(t)) return;
+    if (!DD.getHero('betty') || !DD.getSkill('bet_family_hammer') || !DD.getObject('crate')) { t.skip('no Betty / crate'); return; }
+    try {
+      fight({ heroes: [{ id: 'betty', x: 3, y: 3 }], enemies: [{ id: 'test_grunt', x: 7, y: 7 }], objects: [{ x: 4, y: 3, id: 'crate' }], enemyAi: false });
+      const b = byDef('betty');
+      const crate = DD.Grid.tile(4, 3).obj;
+      DD.HUD.key('1');
+      DD.HUD.hover(4, 3);
+      const p = DD.Combat.preview(b, b.basic, 4, 3);
+      const e = p && (p.objects || []).filter(function (o) { return o.x === 4 && o.y === 3; })[0];
+      if (!e || !(e.dmg > 0 || e.destroyed)) { t.skip('the engine preview does not hit the crate'); return; }
+      t.ok(/🔨 (\? )?Break: Crate − \d+ damage/.test(DD.HUD.hint()), 'the hint previews the break: ' + DD.HUD.hint());
+      t.ok(ov().objPreview && ov().objPreview.x === 4 && ov().objPreview.dmg > 0, 'and the crate\'s HP bar shows the hit');
+      const hp0 = crate.hp, dmg = ov().objPreview ? ov().objPreview.dmg : 0;
+      DD.HUD.click(4, 3);
+      const after = DD.Grid.tile(4, 3).obj;
+      t.ok(after ? after.hp === hp0 - dmg : dmg >= hp0, 'the hit lands as previewed (' + hp0 + ' − ' + dmg + ' → ' + (after ? after.hp : 'broken') + ')');
+    } finally { leave(); }
+  });
+
+  // ---- finish (Nov 14): lead decisions D1 / D2 on the HUD side ------------------------------------------------------
+  T.suite('hud: finish D1 — the 🔨 / 💥 markers, the aim hint and the tooltip lines follow the engine (any single-target damage skill); opt-outs show none', function (t) {
+    if (!ready(t)) return;
+    const TG = DD.Targeting;
+    if (!TG.aimsAtObjects || !TG.objectDamage || !DD.getObject('crate') || !DD.getObject('barrel_explosive') || !DD.getSkill('test_mark')) { t.skip('no object targeting'); return; }
+    const ZING = 'hudtest_zing';
+    try {
+      DD.registerSkill({ id: ZING, name: 'Zing', owner: 'test_mage', icon: '✴️', kind: 'spell', tags: ['ranged'], ap: 1,
+        levels: [{ dmg: 3 }], target: { type: 'unit', range: [1, 5], filter: 'enemy', los: true },
+        desc: function (L) { return 'Deal ' + L.dmg + ' damage to a foe. Furniture counts, morally.'; },
+        execute: function (ctx) { if (ctx.targetUnit) DD.Act.damage(ctx.user, ctx.targetUnit, ctx.L.dmg); } });
+      fight({ heroes: [{ id: 'test_mage', x: 1, y: 3, skills: [ZING, shyZap(), 'test_mark'] }], enemies: [{ id: 'test_grunt', x: 1, y: 6 }],
+        objects: [{ x: 3, y: 3, id: 'crate' }, { x: 3, y: 5, id: 'barrel_explosive' }], enemyAi: false });
+      const m = byDef('test_mage');
+      t.ok(TG.aimsAtObjects(m, 'test_bolt') && TG.objectDamage(m, 'test_bolt') > 0, 'engine: the basic attack breaks objects (every rule version)');
+      t.ok(!TG.aimsAtObjects(m, SHY), 'engine: a damage spell with target.objects false never aims at objects');
+      // the inspect panel states the rule in D1's words
+      DD.HUD.hover(3, 3);
+      t.ok(/🔨 Breakable \(6\/6 HP\): any single-target damage skill can break it/.test(text('.hud-inspect')), 'the crate: "any single-target damage skill can break it": ' + text('.hud-inspect').slice(0, 260));
+      t.ok(!/single-target attack/.test(text('.hud-inspect')), 'no leftover "single-target attack" wording');
+      DD.HUD.hover(3, 5);
+      t.ok(/💥 Volatile: any single-target damage skill aimed at it/.test(text('.hud-inspect')), 'the barrel too: ' + text('.hud-inspect').slice(0, 260));
+      [['1', 'test_bolt'], ['2', ZING], ['3', SHY], ['4', 'test_mark']].forEach(function (c) {
+        const name = DD.getSkill(c[1]).name;
+        const aims = !!TG.aimsAtObjects(m, c[1]);
+        const breaks = aims && TG.objectDamage(m, c[1]) > 0;
+        DD.HUD.rightClick();
+        DD.HUD.key(c[0]);
+        t.eq((DD.HUD.mode() || {}).kind, 'skill', name + ' is armed');
+        t.eq(has(ov().breakTargets, { x: 3, y: 3 }), breaks, name + ': the 🔨 marker on the crate follows the engine (' + breaks + ')');
+        t.eq(has(ov().objTargets, { x: 3, y: 5 }), aims, name + ': the 💥 marker on the barrel follows the engine (' + aims + ')');
+        t.eq(/🔨 the Crate/.test(DD.HUD.hint()), breaks, name + ': the aim hint offers the crate exactly then: ' + DD.HUD.hint());
+        const tip = DD.UI.skillTooltipHtml(c[1], 1, m);
+        t.eq(/🔨 Can also hit a breakable object in range \(crates, totems…\) for \d+ damage and nothing else/.test(tip), breaks, name + ': the tooltip\'s 🔨 line follows the engine');
+        t.eq(/💥 Can also be aimed at an explosive barrel/.test(tip), aims, name + ': and its 💥 line');
+        if (breaks) return;
+        DD.HUD.click(3, 3);
+        const why = c[1] === SHY ? /Shy Zap is for foes only, not the Crate: another single-target damage skill can break it\./ :
+          new RegExp(name + ' can\'t break the Crate: any single-target damage skill can\\.');
+        t.ok(why.test(DD.HUD.hint()), name + ': the click on the crate says why, in the rule\'s words: ' + DD.HUD.hint());
+        t.eq(DD.Grid.tile(3, 3).obj.hp, 6, name + ': and the crate is untouched');
+      });
+    } finally {
+      leave();
+      delete DD.defs.skills[ZING];
+      dropShyZap();
+    }
+  });
+
+  T.suite('hud: finish D2 — immovable units can start a swap but can\'t be swapped: the refusal names the ally once, the 🗿 pill says the rule, the mover follows the engine', function (t) {
+    if (!ready(t)) return;
+    if (!DD.Combat.swapInfo || !DD.Act.isImmovable) { t.skip('no swaps'); return; }
+    try {
+      fight({ heroes: [{ id: 'test_mage', x: 2, y: 3 }, { id: 'test_knight', x: 3, y: 3 }], enemies: [{ id: 'test_grunt', x: 7, y: 7 }], enemyAi: false });
+      const m = byDef('test_mage'), k = byDef('test_knight');
+      k.flags = Object.assign({}, k.flags, { immovable: true });
+      DD.HUD.refresh();
+      t.eq(DD.HUD.selected().id, m.id, 'the mage acts');
+      const si = DD.Combat.swapInfo(m, k.x, k.y);
+      t.ok(si && si.ok !== true && /immovable/i.test(String(si.ok)), 'engine: nobody swaps an immovable ally (' + (si && si.ok) + ')');
+      t.ok(!has(ov().swapTiles, k), 'no ⇄ ring under the immovable knight');
+      DD.HUD.hover(k.x, k.y);
+      const h = DD.HUD.hint();
+      t.ok(/⇄ Sir Testsalot is immovable/.test(h), 'hovering him gives the engine\'s reason, led by his name: ' + h);
+      t.ok(!/Can't swap with Sir Testsalot: Sir Testsalot/.test(h), 'and never "Can\'t swap with Sir Testsalot: Sir Testsalot …"');
+      const pill = qa('.hud-inspect .pill').filter(function (p) { return /🗿 Immovable/.test(p.textContent); })[0];
+      const tip = pill ? pill.getAttribute('title') || pill.title || '' : '';
+      t.ok(/^Sir Testsalot can't be pushed, pulled or swapped, but can start a swap as the move\.$/.test(tip), 'the 🗿 pill states the rule: ' + tip);
+      DD.HUD.click(k.x, k.y);
+      t.ok(m.x === 2 && k.x === 3, 'the click swapped nobody');
+      t.ok(/⇄ Sir Testsalot is immovable/.test(DD.HUD.hint()) && !/Can't swap with Sir Testsalot: Sir Testsalot/.test(DD.HUD.hint()), 'and the click says why the same way: ' + DD.HUD.hint());
+      // a reason about the mover keeps the "Can't swap with" lead-in (it doesn't name the ally)
+      const ap0 = m.ap;
+      m.ap = 0;
+      DD.HUD.clearHint();
+      DD.HUD.refresh();
+      DD.HUD.hover(k.x, k.y);
+      t.ok(/⇄ Can't swap with Sir Testsalot: Not enough AP\./.test(DD.HUD.hint()), 'a mover-side reason keeps the lead-in: ' + DD.HUD.hint());
+      m.ap = ap0;
+      // a foe that is immovable: no swap words on its pill
+      const g = byDef('test_grunt');
+      g.flags = Object.assign({}, g.flags, { immovable: true });
+      DD.HUD.refresh();
+      DD.HUD.hover(g.x, g.y);
+      const gp = qa('.hud-inspect .pill').filter(function (p) { return /🗿 Immovable/.test(p.textContent); })[0];
+      t.eq(gp ? gp.getAttribute('title') || gp.title : '', 'Test Grunt can\'t be pushed or pulled.', 'a foe\'s 🗿 pill: no swap talk');
+    } finally { leave(); }
+    try {
+      // the immovable knight acts: a swap he starts is his own move (D2); the HUD shows exactly what the engine allows
+      fight({ heroes: [{ id: 'test_knight', x: 2, y: 3 }, { id: 'test_mage', x: 3, y: 3 }], enemies: [{ id: 'test_grunt', x: 7, y: 7 }], enemyAi: false });
+      const k = byDef('test_knight'), m = byDef('test_mage');
+      k.flags = Object.assign({}, k.flags, { immovable: true });
+      DD.HUD.refresh();
+      t.eq(DD.HUD.selected().id, k.id, 'the immovable knight acts');
+      const si = DD.Combat.swapInfo(k, m.x, m.y);
+      const can = !!si && si.ok === true;
+      t.eq(has(ov().swapTiles, m), can, 'the ⇄ ring under the mage follows the engine (' + (si && si.ok) + ')');
+      DD.HUD.hover(m.x, m.y);
+      t.eq(/⇄ Swap with Wizzy McTest/.test(DD.HUD.hint()), can, 'the swap preview follows it: ' + DD.HUD.hint());
+      DD.HUD.click(m.x, m.y);
+      t.eq(k.x === 3 && m.x === 2, can, 'the click swaps exactly when the engine allows it');
+      if (can) { DD.HUD.undo(); t.ok(k.x === 2 && m.x === 3, 'Z undoes it'); }
+      else t.ok(/⇄ /.test(DD.HUD.hint()), 'otherwise the click says why: ' + DD.HUD.hint());
+    } finally { leave(); }
+    if (!DD.getHero('slate')) return;
+    try {
+      // the real one: Slate next to the mage, both ways round
+      fight({ heroes: [{ id: 'slate', x: 2, y: 3 }, { id: 'test_mage', x: 3, y: 3 }], enemies: [{ id: 'test_grunt', x: 7, y: 7 }], enemyAi: false });
+      const sl = byDef('slate'), m = byDef('test_mage');
+      t.eq(DD.HUD.selected().id, sl.id, 'Slate acts');
+      const si = DD.Combat.swapInfo(sl, m.x, m.y);
+      DD.HUD.hover(m.x, m.y);
+      t.eq(/⇄ Swap with Wizzy McTest/.test(DD.HUD.hint()), !!si && si.ok === true, 'Slate\'s own swap previews exactly when the engine allows it (' + (si && si.ok) + '): ' + DD.HUD.hint());
+      DD.HUD.hover(sl.x, sl.y);
+      const pill = qa('.hud-inspect .pill').filter(function (p) { return /🗿 Immovable/.test(p.textContent); })[0];
+      t.eq(pill ? pill.getAttribute('title') || pill.title : '', 'Slate can\'t be pushed, pulled or swapped, but can start a swap as the move.', 'his 🗿 pill states the rule');
+      DD.HUD.endTurn();
+      t.eq(DD.HUD.selected().id, m.id, 'the mage acts');
+      DD.HUD.hover(sl.x, sl.y);
+      t.ok(/⇄ Slate is immovable/.test(DD.HUD.hint()) && !/Can't swap with Slate: Slate/.test(DD.HUD.hint()), 'the mage can\'t swap him; the hint names him once: ' + DD.HUD.hint());
+    } finally { leave(); }
+  });
+
+  T.suite('hud: review (finish) — a refused swap shows a ✖ between its arrows; the 🗿 pill of a unit that never moves promises no swap', function (t) {
+    if (!ready(t)) return;
+    if (!DD.Combat.swapInfo || !DD.Act.isImmovable || !DD.getSummon('test_turret')) { t.skip('no swaps or no turret fixture'); return; }
+    try {
+      // D2 refusal on the board: the knight is immovable, so the mage's hover previews red arrows WITH the ✖ (refused)
+      fight({ heroes: [{ id: 'test_mage', x: 2, y: 3 }, { id: 'test_knight', x: 3, y: 3 }, { id: 'test_summoner', x: 2, y: 4 }],
+        summons: [{ id: 'test_turret', x: 1, y: 4, owner: 'test_summoner' }], enemies: [{ id: 'test_grunt', x: 7, y: 7 }], enemyAi: false });
+      const m = byDef('test_mage'), k = byDef('test_knight'), sm = byDef('test_summoner'), tu = byDef('test_turret');
+      k.flags = Object.assign({}, k.flags, { immovable: true });
+      DD.HUD.refresh();
+      t.eq(DD.HUD.selected().id, m.id, 'the mage acts');
+      DD.HUD.hover(k.x, k.y);
+      t.ok(/⇄ Sir Testsalot is immovable/.test(DD.HUD.hint()), 'the hint refuses: ' + DD.HUD.hint());
+      t.ok(ov().swap && ov().swap.bad && ov().swap.blocked, 'the board says no as well: red arrows with a ✖ (blocked)');
+      // an allowed swap keeps plain arrows (no ✖)
+      DD.HUD.hover(sm.x, sm.y);
+      const si = DD.Combat.swapInfo(m, sm.x, sm.y);
+      t.ok(si && si.ok === true, 'engine: the mage may swap with the summoner (' + (si && si.ok) + ')');
+      t.ok(ov().swap && !ov().swap.blocked && !ov().swap.bad, 'an allowed, safe swap: blue arrows, no ✖');
+      // a mover-side refusal (no AP) is a ✖ too
+      const ap0 = m.ap;
+      m.ap = 0;
+      DD.HUD.refresh();
+      DD.HUD.hover(sm.x, sm.y);
+      t.ok(/⇄ Can't swap with /.test(DD.HUD.hint()) && ov().swap && ov().swap.blocked, 'out of AP: refused, ✖: ' + DD.HUD.hint());
+      m.ap = ap0;
+      DD.HUD.refresh();
+      // the 🗿 pill: an immovable hero-side unit that never moves (move 0) can't start a swap, so the tip doesn't say it can
+      DD.HUD.hover(tu.x, tu.y);
+      const pill = qa('.hud-inspect .pill').filter(function (p) { return /🗿 Immovable/.test(p.textContent); })[0];
+      t.eq(pill ? pill.getAttribute('title') : '', tu.name + ' can\'t be pushed, pulled or swapped.', 'a move-0 turret\'s pill: no "can start a swap"');
+      DD.HUD.hover(k.x, k.y);
+      const kp = qa('.hud-inspect .pill').filter(function (p) { return /🗿 Immovable/.test(p.textContent); })[0];
+      t.eq(kp ? kp.getAttribute('title') : '', 'Sir Testsalot can\'t be pushed, pulled or swapped, but can start a swap as the move.', 'a walking one keeps the D2 rule');
+    } finally { leave(); }
+    if (!DD.getSummon('zar_statue')) return;
+    try {
+      // the real one: Zarathor's Tasteful Statue (move 0, immovable)
+      fight({ heroes: [{ id: 'test_mage', x: 2, y: 3 }], summons: [{ id: 'zar_statue', x: 3, y: 3, owner: 'test_mage' }],
+        enemies: [{ id: 'test_grunt', x: 7, y: 7 }], enemyAi: false });
+      const st = byDef('zar_statue');
+      DD.HUD.hover(st.x, st.y);
+      const pill = qa('.hud-inspect .pill').filter(function (p) { return /🗿 Immovable/.test(p.textContent); })[0];
+      t.eq(pill ? pill.getAttribute('title') : '', st.name + ' can\'t be pushed, pulled or swapped.', 'the statue\'s pill: ' + (pill && pill.getAttribute('title')));
+    } finally { leave(); }
   });
 
   // review: the render / sprite / run / ui / hud suites before this one all turn the map; none may leave it turned,

@@ -1312,4 +1312,15 @@
     t.ok(use(u, mic, 4, 4) && !DD.Grid.tile(4, 4).obj && u.ap === 0 && mic.uses === 1, 'mic dropped on the barrel: KABOOM, 3 AP, the once-per-combat charge spent');
     t.ok(sane(t, 'v2 requests'), 'state sane');
   });
+
+  // ---- finish (Nov 14): playtest desc-sweep-7 ---------------------------------------------------------------------------
+  T.suite('hero_syllamin: finish — with The Electric Lute, Your Mom Joke\'s text says lightning and the water shock (desc-sweep-7)', function (t) {
+    DD.Combat.sandbox({ w: 9, h: 9, seed: 3, enemyAi: false, heroes: [{ id: 'syllamin', x: 1, y: 4 }], enemies: [{ id: 'test_grunt', x: 4, y: 4 }],
+      objective: { type: 'custom', text: 'syl' }, encounter: { id: 'syl_finish', checkObjective: function () { return null; } } });
+    const s = DD.Combat.heroes()[0], d = function () { return DD.skillDesc(DD.getSkill('syl_basic'), 1, s); };
+    t.ok(/psychic/.test(d()) && !/lightning/.test(d()), 'without the Lute: psychic (' + d() + ')');
+    s.items = ['syl_electric_lute'];
+    t.ok(/lightning damage/.test(d()) && !/psychic/.test(d()) && /water/.test(d()), 'with it: lightning, and the water it stands in (' + d() + ')');
+    t.ok(!/lightning/.test(DD.skillDesc(DD.getSkill('syl_basic'), 1, null)), 'a codex card (no holder) keeps psychic');
+  });
 })();

@@ -289,6 +289,26 @@
     c.closePath();
     return this._fs(fill, stroke);
   };
+  /**
+   * Three curved claws out of a hand ({ x, y, angle, r } as in g.hands.front / back), pointing along the arm:
+   * werewolf paws, gauntlet spikes. size scales them (1 = a medium humanoid's hand).
+   */
+  P.claws = function (hand, fill, size) {
+    if (!hand || !isFinite(hand.x) || !isFinite(hand.y)) return this;
+    const a = isFinite(hand.angle) ? hand.angle : Math.PI / 2, k = (size || 1) * Math.max(1.6, hand.r || 2.2) / 2.2;
+    const c = this.ctx, dx = Math.cos(a), dy = Math.sin(a), nx = -dy, ny = dx;
+    for (let i = -1; i <= 1; i++) {
+      const bx = hand.x + dx * 1.6 * k + nx * i * 1.5 * k, by = hand.y + dy * 1.6 * k + ny * i * 1.5 * k;
+      const tx = bx + dx * 3.6 * k + nx * i * 0.9 * k + nx * 1.1 * k, ty = by + dy * 3.6 * k + ny * i * 0.9 * k + ny * 1.1 * k;
+      c.beginPath();
+      c.moveTo(bx - nx * 0.75 * k, by - ny * 0.75 * k);
+      c.quadraticCurveTo(bx + dx * 2.4 * k - nx * 0.4 * k, by + dy * 2.4 * k - ny * 0.4 * k, tx, ty);
+      c.quadraticCurveTo(bx + dx * 1.4 * k + nx * 0.9 * k, by + dy * 1.4 * k + ny * 0.9 * k, bx + nx * 0.75 * k, by + ny * 0.75 * k);
+      c.closePath();
+      this._fs(fill || '#f4ecdc', this.outline, Math.max(0.6, this.lw * 0.45));
+    }
+    return this;
+  };
   /** Music note glyph (head at x, y). */
   P.note = function (x, y, s, fill) {
     this.ellipse(x, y, s * 0.55, s * 0.4, fill, null, -0.4);
@@ -1917,6 +1937,11 @@
     } else if (info.two && n.offhand === 'none') {
       bh = reach(bs, { x: fh.x - Math.sin(R) * 5.5, y: fh.y + Math.cos(R) * 5.5 }, armL * 1.3);
     }
+    // for overlays (rings, claws, glows, held props): where the hands are, in the overlay's (unsheared) local units
+    g.hands = {
+      front: { x: fh.x - sh * fh.y, y: fh.y, angle: fa, r: aw * 0.62 },
+      back: { x: bh.x - sh * bh.y, y: bh.y, angle: ba, r: aw * 0.62 },
+    };
 
     if (n.src.mini) g.ellipse(0, 0.5, w * 0.95, w * 0.42, '#3b3940', g.outline);
     drawAura(g, n.aura, 'back', height, w, t);
@@ -2522,6 +2547,8 @@
       hover: opts.hover,
       zoom: zoom, unit: opts.unit || null, statuses: st, spec: n.src,
       dizzy: !!opts.dizzy,
+      // add-on overlays (unit.overlays): drawn after the look's own overlay, whatever the look is
+      overlays: Array.isArray(opts.overlays) && opts.overlays.length ? opts.overlays : null,
     };
     if (typeof opts.blink === 'boolean') o.blink = opts.blink;
     else o.blink = !still && lying < 0.5 && ((T + phase * 1.7) % 4.3) < 0.11;
@@ -2564,6 +2591,13 @@
     if (sheep) { paintSheep(g, o); return; }
     (BASE_PAINTERS[n.base] || paintHumanoid)(g, n, o);
     if (n.overlay && !brokenOverlays.has(n.overlay) && !runContent('sprite overlay', n.overlay, n, g, o)) brokenOverlays.add(n.overlay);
+    const extra = o.overlays;
+    if (extra) {
+      for (let i = 0; i < extra.length; i++) {
+        const ov = extra[i], fn = typeof ov === 'function' ? ov : ov && typeof ov.draw === 'function' ? ov.draw : null;
+        if (fn && !brokenOverlays.has(fn) && !runContent('unit overlay', fn, n, g, o)) brokenOverlays.add(fn);
+      }
+    }
   }
 
   const bufPool = [];
@@ -2841,13 +2875,19 @@
     return n._m;
   }
 
+  /** A unit hovers when it flies: its def, its own flags (items, Blessings) or a status that grants flight (DD.Grid.isFlying). */
+  function unitFlies(unit, def) {
+    if ((def && def.flags && def.flags.flying) || (unit && unit.flags && unit.flags.flying)) return true;
+    return !!(unit && unit.statuses && unit.statuses.length && DD.Grid && typeof DD.Grid.isFlying === 'function' && DD.Grid.isFlying(unit));
+  }
+
   /** Public metrics in px at zoom 1 (already multiplied by spec scale). Accepts a spec, a unit or a def id. */
   function metrics(x) {
     let spec = x, hover;
     if (typeof x === 'string') { const d = DD.getHero(x) || DD.getEnemy(x) || DD.getSummon(x); spec = d && d.sprite; }
     else if (x && (x.vis || x.defId !== undefined || x.kind === 'hero' || x.kind === 'enemy' || x.kind === 'summon') && !x.base) {
       const r = specFor(x); spec = r.spec;
-      if (r.def && r.def.flags && r.def.flags.flying) hover = true;
+      if (unitFlies(x, r.def)) hover = true;
     }
     const n = normalize(spec);
     const M = metricsN(n), hv = hoverHeight(n, { hover: hover });
@@ -2963,7 +3003,7 @@
       alpha = Math.min(alpha > 0 ? alpha : 1, 1 - smooth((v.deathT - 0.45) / 0.55));
       flash = Math.max(flash, 1 - v.deathT * 5);
     }
-    const flying = !!((def && def.flags && def.flags.flying) || (unit.flags && unit.flags.flying));
+    const flying = unitFlies(unit, def);
     // FX steer facing while they play (walk direction, lunge/shot target, already at the view yaw); otherwise the
     // engine's unit.facing, mirrored for the view
     const facing = fresh && (v.facing === 1 || v.facing === -1) ? v.facing : restFacing(unit);
@@ -2979,6 +3019,7 @@
       dizzy: lying >= 0.6, statuses: statusIds(unit),
       underlay: extra && extra.underlay === false ? false : undefined,
       statusFx: extra && extra.statusFx === false ? false : undefined,
+      overlays: Array.isArray(unit.overlays) ? unit.overlays : null,
     });
   }
 
@@ -3266,6 +3307,10 @@
       g.line(-3.6, -40, 3.6, -41, '#ffe14a', 1.4); g.line(-2, -45, 2, -46, '#ffe14a', 1.4);
       g.circle(-1, -53, 2 + Math.sin(t * 6) * 0.3, '#7af0ff');
     },
+  }));
+  add('custom', 'overlay: claws (g.hands)', mk({
+    outfit: 'rags', head: { ears: 'cat', hair: 'wild', eyes: 'glow', mouth: 'fangs' }, palette: { skin: '#8f8c98', hair: '#5d5a68' },
+    overlay: function (g) { if (g.hands) { g.claws(g.hands.back); g.claws(g.hands.front); } },
   }));
 
   // Hero-ish / enemy-ish showcase (content authors design their own; these show what the painter can do)

@@ -296,3 +296,28 @@ Nothing in his kit misleads AutoPlay (the Mountain Goat candidates it rejects ar
 - **Tests**: `hero_betty: v2 requests — …`: both skills at a barrel (preview = reality on Betty and the grunt, the 4-HP
   snack, no Stun, AP and cooldown paid).
 - **Requests**: none.
+
+## Rules run (Nov 6) — breaking objects (CONTENT SWEEP)
+
+User: "objects should be targetable to break them" (engine rule: `docs/notes/rules.md` "Rules run"). Every attack of his
+that can aim at units can now break an object too (Butt Out on a barrel: it breaks, Eats Anything heals 4 — `onSkillUsed`
+fires for an object-aimed use, so the passive needed nothing). The Family Hammer (tile-aimed, its own targeting) now
+follows the same opt-outs as every aimed attack: no `targetable: false` object (the DM's screen, Rocky) and not the
+protect objective's object (`DD.Targeting.objectTargetable`). Suite "hero_betty: rules run — Butt Out breaks a barrel…".
+
+## Playtest fixes (Nov 12)
+
+- **combat-controls-5 (Betty part, fixed)**: Ramming Speed! runs through allies (`chargePlan`: allies don't stop the run,
+  he never ends on one: trailing ally tiles are trimmed, and when an ally stands right in front of the foe there is no
+  room to ram, so he only dashes). Desc: "Charge up to N tiles in a straight line, through allies. …". Tests: the
+  Ramming Speed! suite (through the knight to ram the grunt behind him; an ally right in front of the foe: stops before
+  the ally, nobody hurt).
+- **text-tone-23 (polish, fixed)**: "Was that important? Oops." (was "That was load-bearing? Oops.").
+- **heroes-v1 (fixed)**: the target-range numbers in his descs follow his real reach (range items, Dazzle) through `reach()` → `DD.Targeting.reach`; details and the cross-hero suite in hero-kiri.md.
+
+## Review (finish, Nov 14) — REVIEWER
+
+- **D1: Head Over Heels opts out by name.** At III it deals 5 damage to the flipped foe, but its 'custom' area (the landing
+  tile) kept it from aiming at objects without saying so. It now has `target.objects: false` with the reason (a throw:
+  the damage is its landing), so the rule "any single-target damage skill can break it" has a listed exception instead of
+  a silent one. No behaviour change. `kit: finish D1` pins the opt-out list (now nine).

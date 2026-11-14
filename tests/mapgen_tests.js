@@ -558,7 +558,13 @@
     const b2 = DD.Encounter.build(SYNTH.elite, ids, { rng: DD.RNG('b2'), difficulty: 'brutal' }).enemies.length;
     t.eq(b2, n2, 'brutal: elites keep their count');
     const bd = DD.Encounter.build(SYNTH.procedural, ids, { rng: DD.RNG('b3'), difficulty: { id: 'brutal' } });
-    t.eq(bd.difficulty.id + ':' + bd.difficulty.hp + ':' + bd.difficulty.dmg, 'brutal:1.25:1.2', 'difficulty info');
+    // [playtest robustness-5] the build passes the fight's whole scaling through (difficulty × act × kind): compare with
+    // DD.Balance.scale, never a literal row (the balance passes keep re-measuring the act rows)
+    const want = DD.Balance && DD.Balance.scale ? DD.Balance.scale('brutal', SYNTH.procedural.act, SYNTH.procedural.kind, { encounter: SYNTH.procedural.id })
+      : { hp: 1.25, dmg: 1.2 };
+    t.eq(bd.difficulty.id + ':' + bd.difficulty.hp + ':' + bd.difficulty.dmg, 'brutal:' + want.hp + ':' + want.dmg, 'difficulty info');
+    const bn = DD.Encounter.build(SYNTH.procedural, ids, { rng: DD.RNG('b3'), difficulty: { id: 'normal' } });
+    t.ok(bd.difficulty.dmg > bn.difficulty.dmg && bd.difficulty.hp > bn.difficulty.hp, 'brutal scales harder than normal (' + bd.difficulty.dmg + ' vs ' + bn.difficulty.dmg + ')');
     // determinism
     const s1 = DD.Encounter.build(SYNTH.procedural, rh, { rng: DD.RNG('det') });
     const s2 = DD.Encounter.build(SYNTH.procedural, rh, { rng: DD.RNG('det') });
@@ -940,5 +946,36 @@
       if (hero.dead || hero.downed) break;
     }
     t.eq(stateProblems(state).join(' | '), '', 'state consistent after 75 random surges');
+  });
+
+  // ---- playtest fixes (Nov 12, fix:engine) -----------------------------------------------------------------------------
+  T.suite('mapgen: playtest fixes — bosses-objectives-9: a protect objective names the placed object by its label', function (t) {
+    const reg = { id: 'mgt_tmp_protect', act: 1, kind: 'normal', name: 'Keg Stand', enemies: [{ id: 'test_grunt', n: 1 }],
+      map: { layout: ['.......', '.e...K.', '.......', '..h.h..', '.......'], legend: { e: { zone: 'enemy' }, h: { zone: 'hero' },
+        K: { obj: { id: 'keg', hp: 30, label: 'The Last Keg' } } } },
+      objective: { type: 'protect', objId: 'keg' } };
+    const s = DD.Encounter.build(reg, ['test_knight', 'test_mage'], { rng: DD.RNG('mgt-protect') });
+    const keg = s.grid.tiles.filter(function (tl) { return tl.obj && tl.obj.id === 'keg'; })[0];
+    t.ok(keg && keg.obj.label === 'The Last Keg' && keg.obj.hp === 30, 'the keg is placed with its label and 30 HP');
+    t.ok(/^Protect The Last Keg and defeat all enemies\./.test(s.objective.text), 'the objective says "Protect The Last Keg": ' + s.objective.text);
+    t.ok(!/\(\d+ HP\)/.test(DD.getObject('keg').desc), 'the keg desc states no HP number (the HUD shows the real one)');
+    const plain = Object.assign({}, reg, { map: { layout: reg.map.layout, legend: { e: reg.map.legend.e, h: reg.map.legend.h, K: { obj: 'keg' } } } });
+    t.ok(/^Protect the Ale Keg/.test(DD.Encounter.build(plain, ['test_knight'], { rng: DD.RNG('mgt-protect2') }).objective.text), 'no label: "Protect the Ale Keg"');
+  });
+
+  // [finish bosses-objectives-9] the LIVE objective bar (Combat.objectiveText, refreshed every action) names it the same way
+  T.suite('mapgen: finish — bosses-objectives-9: the live objective bar says "Protect The Last Keg" too (not the def name)', function (t) {
+    const reg = { id: 'mgt_tmp_protect_live', act: 1, kind: 'normal', name: 'Keg Stand', enemies: [{ id: 'test_grunt', n: 1 }],
+      map: { layout: ['.......', '.e...K.', '.......', '..h.h..', '.......'], legend: { e: { zone: 'enemy' }, h: { zone: 'hero' },
+        K: { obj: { id: 'keg', hp: 30, label: 'The Last Keg' } } } },
+      objective: { type: 'protect', objId: 'keg' } };
+    const setup = DD.Encounter.build(reg, ['test_knight', 'test_mage'], { rng: DD.RNG('mgt-protect-live') });
+    DD.Combat.start(setup, { seed: 5, headless: true, difficulty: 'normal' });
+    DD.Combat.refreshObjective();
+    t.eq(DD.Combat.state.objective.text, 'Protect The Last Keg and defeat all enemies', 'the live bar: ' + DD.Combat.state.objective.text);
+    DD.Combat.sandbox({ w: 6, h: 6, seed: 2, noPlan: true, heroes: [{ id: 'test_knight', x: 0, y: 0 }], enemies: [{ id: 'test_grunt', x: 5, y: 5 }],
+      objects: [{ x: 3, y: 3, id: 'keg' }], objective: { type: 'protect', objId: 'keg' } });
+    DD.Combat.refreshObjective();
+    t.eq(DD.Combat.state.objective.text, 'Protect the Ale Keg and defeat all enemies', 'no label: the def name');
   });
 })();

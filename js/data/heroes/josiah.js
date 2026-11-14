@@ -14,6 +14,16 @@
 (function () {
   'use strict';
   const DD = window.DD;
+  /**
+   * A range number in a desc as targeting resolves it for this user (range items such as the Yardstick of Reach, Dazzle,
+   * modifyRange hooks: what the card's Range pill says; playtest heroes-v1) via DD.Targeting.reach. No user: the number.
+   */
+  function reach(user, id, base) {
+    const d = DD.getSkill(id);
+    if (!user || !d || !DD.Targeting) return base;
+    if (typeof DD.Targeting.reach === 'function') return DD.Targeting.reach(d, null, user, base);
+    return Math.max(0, base + DD.Targeting.range(user, d, 1)[1] - DD.Targeting.range(null, d, 1)[1]);
+  }
   const U = DD.util;
 
   const RAVEN = 'jos_raven';
@@ -286,7 +296,7 @@
     id: 'jos_cane', name: 'House Call', owner: 'josiah', icon: '🩺', kind: 'attack', tags: ['reach'], ap: 1,
     levels: [{ dmg: 4, sick: 6 }],
     target: { type: 'unit', range: [1, 2], filter: 'enemy', los: true },
-    desc: function (L) { return 'Poke a foe up to 2 tiles away with your cane: ' + L.dmg + ' damage, ' + L.sick + ' if it is Poisoned.'; },
+    desc: function (L, user) { return 'Poke a foe up to ' + reach(user, 'jos_cane', 2) + ' tiles away with your cane: ' + L.dmg + ' damage, ' + L.sick + ' if it is Poisoned.'; },
     flavor: 'Plague doctors examined patients with a cane so they never had to touch them. Josiah examines them very, very hard.',
     execute: function (ctx) {
       const u = ctx.targetUnit;
@@ -344,7 +354,7 @@
     id: 'jos_draught', name: 'Mostly Medicine', owner: 'josiah', icon: '🍶', kind: 'heal', tags: ['heal'], ap: 1, cooldown: 1,
     levels: [{ heal: 7 }, { heal: 9 }, { heal: 11 }],
     target: { type: 'unit', range: [0, 3], filter: 'allyOrSelf', los: true },
-    desc: function (L) { return 'Toss a potion to an ally within 3 (or drink it yourself): heal ' + L.heal + ' HP.'; },
+    desc: function (L, user) { return 'Toss a potion to an ally within ' + reach(user, 'jos_draught', 3) + ' (or drink it yourself): heal ' + L.heal + ' HP.'; },
     flavor: 'Ingredients: water, herbs, hope and one (1) mystery ingredient.',
     execute: function (ctx) {
       const u = ctx.targetUnit;
@@ -360,8 +370,8 @@
     id: 'jos_raven_dive', name: 'Raven Dive', owner: 'josiah', icon: '🐦', kind: 'attack', tags: ['ranged', 'raven'], ap: 1, cooldown: 1,
     levels: [{ dmg: 4 }, { dmg: 5 }, { dmg: 6, dazzle: 1 }],
     target: { type: 'unit', range: [1, 5], filter: 'enemy', los: false },
-    desc: function (L) {
-      return 'Onyx (called back if gone) swoops next to a foe within 5 and pecks it for ' + L.dmg + ' damage' +
+    desc: function (L, user) {
+      return 'Onyx (called back if gone) swoops next to a foe within ' + reach(user, 'jos_raven_dive', 5) + ' and pecks it for ' + L.dmg + ' damage' +
         (L.dazzle ? ' and Dazzles it' : '') + '.';
     },
     flavor: 'Ravens go for the eyes. Onyx also goes for the snacks.',
@@ -393,7 +403,7 @@
     ap: 2, cooldown: 2,
     levels: [{ dmg: 6 }, { dmg: 8 }, { dmg: 10 }],
     target: { type: 'unit', range: [1, 3], filter: 'enemy', los: true },
-    desc: function (L) { return 'Deal ' + L.dmg + ' damage to a foe within 3 and heal yourself for the HP it lost.'; },
+    desc: function (L, user) { return 'Deal ' + L.dmg + ' damage to a foe within ' + reach(user, 'jos_leeches', 3) + ' and heal yourself for the HP it lost.'; },
     flavor: 'Medieval medicine: take blood from the bad guy, give it to the doctor. Peer review pending.',
     execute: function (ctx) {
       const user = ctx.user, u = ctx.targetUnit;
@@ -442,8 +452,8 @@
     ap: 1, cooldown: 3,
     levels: [{ root: 1, vuln: 2 }, { root: 1, vuln: 3 }, { root: 2, vuln: 3 }],
     target: { type: 'unit', range: [1, 4], filter: 'enemy', los: true },
-    desc: function (L) {
-      return 'A foe within 4 is Rooted for ' + L.root + ' ' + plural(L.root, 'turn') + ' and Vulnerable (+25% damage taken) for ' +
+    desc: function (L, user) {
+      return 'A foe within ' + reach(user, 'jos_quarantine', 4) + ' is Rooted for ' + L.root + ' ' + plural(L.root, 'turn') + ' and Vulnerable (+25% damage taken) for ' +
         L.vuln + ' turns.';
     },
     flavor: 'Six feet apart. Seven if it is a goblin.',
@@ -462,8 +472,8 @@
     id: 'jos_vaccinate', name: 'Vaccinate', owner: 'josiah', icon: '💉', kind: 'buff', tags: ['cleanse', 'buff'], ap: 1, cooldown: 2,
     levels: [{ turns: 1 }, { turns: 2 }, { turns: 2, block: 5 }],
     target: { type: 'unit', range: [0, 3], filter: 'allyOrSelf', los: true },
-    desc: function (L) {
-      return 'Cure an ally within 3 (or yourself) of all debuffs; it is immune to new ones for ' + L.turns + ' ' + plural(L.turns, 'turn') +
+    desc: function (L, user) {
+      return 'Cure an ally within ' + reach(user, 'jos_vaccinate', 3) + ' (or yourself) of all debuffs; it is immune to new ones for ' + L.turns + ' ' + plural(L.turns, 'turn') +
         (L.block ? ' and gains ' + L.block + ' Block' : '') + '.';
     },
     flavor: 'Mild soreness at the injection site is normal. So is Onyx watching.',
@@ -547,7 +557,7 @@
     id: 'jos_salts', name: 'Smelling Salts', owner: 'josiah', icon: '🧂', kind: 'heal', tags: ['heal', 'revive'], ap: 1, charges: 1,
     levels: [{ pct: 30 }, { pct: 40 }, { pct: 50 }],
     target: { type: 'unit', range: [1, 4], filter: 'downedAlly', los: false },
-    desc: function (L) { return 'Revive a downed ally within 4 at ' + L.pct + '% HP. Once per combat.'; },
+    desc: function (L, user) { return 'Revive a downed ally within ' + reach(user, 'jos_salts', 4) + ' at ' + L.pct + '% HP. Once per combat.'; },
     flavor: 'One sniff and you are back. Two sniffs and you can taste colours.',
     execute: function (ctx) {
       const u = ctx.targetUnit;
@@ -581,7 +591,7 @@
     levels: [{ mark: 3 }, { mark: 4 }, { mark: 5 }],
     target: { type: 'unit', range: [1, 4], filter: 'enemy', los: true },
     // Marked: the next damage of any kind, a Poison tick included (statuses.js), so the desc says "damage", not "hit"
-    desc: function (L) { return 'Caw ominously at a foe within 4: it is Marked, so the next damage it takes is +' + L.mark + '.'; },
+    desc: function (L, user) { return 'Caw ominously at a foe within ' + reach(user, 'jos_omen', 4) + ': it is Marked, so the next damage it takes is +' + L.mark + '.'; },
     flavor: 'Nobody likes it when Onyx stares. Least of all the one he stares at.',
     execute: function (ctx) {
       const u = ctx.targetUnit;
@@ -612,7 +622,7 @@
       hurt: ['SQUAWK!', 'Caw?!'],
       death: ['Nevermore... (for now)', '*one dramatic feather*'],
     },
-    desc: 'Onyx, Josiah\'s raven: flies, acts on his turn, 10 HP (+10% per Josiah level). Pecks eyes, delivers omens and silently ' +
+    desc: 'Onyx, Josiah\'s raven: flies, acts on his turn, 10 HP, +10% per Josiah level after the first. Pecks eyes, delivers omens and silently ' +
       'judges every one of his prescriptions.',
   });
 
@@ -688,11 +698,12 @@
       start: ['Everyone stay back. I am about to practice medicine.', 'Roll for initiative? I roll for infection.',
         'I have diagnosed the problem. It is them.', 'Onyx, take notes. Mostly on their weak spots.', 'Masks on, everyone! Oh, it\'s just me? Typical.',
         'Kiri, if you see a ghost, ask about its symptoms.'],
+      swap: ['Trade places, {ally}. Doctor\'s orders.', 'Let me through, {ally}. I\'m a doctor. Allegedly.'],
       move: ['Making a house call.', 'Keep your distance. Medically.', 'Coming through! Doctor! Mostly!', 'Mind the miasma. It bites.',
         'The cane goes first. Then me.', 'Pebbles, heel! Not through the miasma! You are ON FIRE!'],
       kill: ['Time of death: just now.', 'Patient discharged. Permanently.', 'The treatment worked. The patient didn\'t.',
         'Should have taken the leeches.', 'I\'ll mark that down as "cured".'],
-      hurt: ['Ow! That\'s a billable injury!', 'Not the beak! It\'s load-bearing!', 'I\'ll need a doctor. Oh. Right.',
+      hurt: ['Ow! That\'s a billable injury!', 'Not the beak! It\'s vintage!', 'I\'ll need a doctor. Oh. Right.',
         'That will unbalance my humours.', 'Medically speaking: ow.', 'Ow! Hjalmar, was that one of YOUR traps?!'],
       lowhp: ['I\'m prescribing myself... everything.', 'My humours are... very unbalanced...', 'Onyx! The big bottle! The BIG one!',
         'This is fine. I have seen worse. Mostly on corpses.', 'Somebody pass me a potion. Not that one. That one!',
@@ -703,7 +714,7 @@
         'Death was a second opinion I didn\'t ask for.', 'The doctor is back in. Sorry for the wait.'],
       ally_down: ['Patient down! I repeat, patient down!', 'Nobody touch them! Let a professional poke them.',
         'Marwyn, stop flexing over the body and HELP!', 'Don\'t die! The paperwork is horrendous!', 'Hold still, I\'m coming! Not THAT still!',
-        'Basanos, I am a doctor, not a vet! ...Fine. I am both.'],
+        'Basanos, stop licking the patient! I am a doctor, not a vet!'],
       levelup: ['My medical license would be so proud. If I had one.', 'New techniques! Some of them are even legal!',
         'Level up! Onyx remains unimpressed.', 'I have learned so much from my malpractice.', 'Experience is the best medicine. Then leeches.'],
       victory: ['Take two of these and call me in the morning.', 'Another successful outbreak. Of victory!',

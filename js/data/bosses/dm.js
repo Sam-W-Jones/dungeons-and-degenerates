@@ -4,7 +4,8 @@
  * (engine), he does one thing at once (two in phase 3): a roll, or Get Off My Table when crowded, a Random Encounter
  * now and then, a Plot Hook when he can see nobody. Then he winds up his next big attack (DD.AI.windUp: marked tiles
  * + ⏳, lands at the start of his next turn; a stun interrupts it).
- *   Phase 1 "Session Zero": invulnerable behind a 3-panel DM Screen (smash the panels: the screen falls on him), a
+ *   Phase 1 "Session Zero": invulnerable behind a 3-panel DM Screen (smash the panels: the screen falls on him; the
+ *     panels are `targetable: false`: a Smash from next to one, a blast, a bump or a throw, never a shot from range), a
  *     random House Rule every round (state.rules), Random Encounters (cameo minis of real enemies from every act,
  *     picked at runtime, falling back to the dm_cameo_* minis), Rocks Fall wind-ups (crosses on the heroes).
  *   Phase 2 "The Railroad" (2/3 HP): he winds up a train down a pencilled lane; a Track Switch pulled while it winds
@@ -45,6 +46,18 @@
   function isDM(u) { return !!u && u.defId === DM_ID; }
   function round() { const s = S(); return s ? s.round : 0; }
   function plural(n, w) { return n + ' ' + w + (n === 1 ? '' : 's'); }
+  /** 'a' / 'an' before a die roll or a word (an 8, an 11, an 18, an Owlbear). */
+  function aOrAn(x) { return /^(8|11|18)$/.test(String(x)) || /^[aeiou]/i.test(String(x)) ? 'an' : 'a'; }
+  /** "Gary", "Gary and Brenda", "two Skeletal Backup Dancers and Gary": names counted and joined (playtest text-tone-19). */
+  function listOf(names) {
+    const count = {}, order = [];
+    names.forEach(function (nm) { if (!count[nm]) { count[nm] = 0; order.push(nm); } count[nm]++; });
+    const parts = order.map(function (nm) {
+      const n = count[nm];
+      return n === 1 ? nm : (['', 'one', 'two', 'three', 'four', 'five'][n] || n) + ' ' + (/(s|x|sh|ch)$/.test(nm) ? nm + 'es' : nm + 's');
+    });
+    return parts.length < 2 ? parts.join('') : parts.slice(0, -1).join(', ') + ' and ' + parts[parts.length - 1];
+  }
 
   /** The living DM of the current fight (looked up every time: previews swap DD.Combat.state). */
   function findDM() {
@@ -267,6 +280,46 @@
     DD.Act.touch();
   }
 
+  /**
+   * Hero-side units on the DM's row with no turn of their own left before his next turn (the diverted train lands at its
+   * start): they act after him or already acted this round, or can't walk (Rooted, held, stunned). A summon moves on
+   * its owner's turn. The unit whose turn it is (the switcher, placed where it would stand) can still step off only with
+   * 3+ AP (walk up, 1 AP to switch, one step off; playtest review: 3 of 5 diverted trains in 16 sim fights ran over the
+   * hero who threw the switch).
+   */
+  function stuckOnRow(dm) {
+    const s = S();
+    if (!s || !dm) return [];
+    const order = s.order || [];
+    const cur = typeof s.turnIndex === 'number' ? s.turnIndex : -1;
+    let dmNext = -1;
+    for (let i = cur + 1; i < order.length; i++) if (order[i].unitId === dm.id) { dmNext = i; break; }
+    const sameRound = dmNext >= 0;
+    if (!sameRound) for (let i = 0; i < order.length; i++) if (order[i].unitId === dm.id) { dmNext = i; break; }
+    function getsTurn(u) {
+      if (dmNext < 0) return true;   // no initiative order (a bare sandbox): only the pinned ones count
+      const own = order.some(function (e) { return e.unitId === u.id; }) ? u.id : (u.ownerId || u.id);
+      for (let i = 0; i < order.length; i++) {
+        if (order[i].unitId !== own) continue;
+        if (i === cur && s.current && (u.ap || 0) < 3) continue;   // this turn: too little AP to walk up, switch and step off
+        if (sameRound ? (i >= cur && i < dmNext) : (i >= cur || i < dmNext)) return true;
+      }
+      return false;
+    }
+    return s.units.filter(function (u) {
+      return active(u) && u.side === 'hero' && u.y === dm.y && (!getsTurn(u) || DD.Act.cantMove(u) || stunned(u));
+    });
+  }
+  /**
+   * AutoPlay's Track Switch hint (playtest bosses-objectives-7: it ran the diverted train over team-mates who had no
+   * turn left to step off his row, 5 downs in 16 fights): 34, and 0 while any such hero-side unit is on his row (review:
+   * at 34 − 30 per unit the leftover 4 still sent the train over a stuck ally or the switcher, 7 hits in 16 fights).
+   */
+  function switchValue(dm) {
+    if (!divertable(dm)) return 0;
+    return stuckOnRow(dm).length ? 0 : 34;
+  }
+
   // ---- phase 3 puzzle: Player's Handbooks ---------------------------------------------------------------------
   const PAGES = [
     { n: 143, rule: 'Rocks cannot fall indoors. The table is indoors.' },
@@ -439,7 +492,7 @@
       fudged = true;
     }
     setDie('die_rule', roll);
-    DD.Act.addRule({ id: RULE_ID, name: 'House Rule: ' + rule.name, icon: rule.icon, desc: rule.desc + ' (Rolled a ' + roll + '. Lasts this round.)',
+    DD.Act.addRule({ id: RULE_ID, name: 'House Rule: ' + rule.name, icon: rule.icon, desc: rule.desc + ' (Rolled ' + aOrAn(roll) + ' ' + roll + '. Lasts this round.)',
       hooks: rule.hooks, turns: 1, key: rule.key, roll: roll, telegraphFlat: ruleFlat });
     d.stats.rules++;
     d.lastRule = rule.key;
@@ -549,7 +602,7 @@
     d.cameos += names.length;
     d.stats.cameos += names.length;
     DD.FX.text(dm, '🎲 Random Encounter!', { color: '#ffd34d', size: 17 });
-    DD.Act.log('Random Encounter! The DM digs out ' + names.join(' and ') + ' from his box of minis.', 'enemy');
+    DD.Act.log('Random Encounter! The DM digs out ' + listOf(names) + ' from his box of minis.', 'enemy');
     DD.Act.narrate('dm_cameo', { name: names[0], n: names.length });
     DD.Act.maybeBark(dm, 'cameo', 0.6);
     return names.length;
@@ -577,7 +630,7 @@
       // a crowded table may not fit all three: the ones that did appear are enough
       d.booksNeeded = Math.max(1, Math.min(N.books, placed));
       DD.FX.banner('PHASE 3: ROCKS FALL, EVERYONE DIES', { sub: 'Cite all ' + d.booksNeeded + ' Player\'s Handbooks before the countdown ends!', color: '#ff6b5a', ms: 1300 });
-      DD.Act.log('PHASE 3: Rocks Fall, Everyone Dies. In ' + N.doomTurns + ' of his turns every hero takes ' + doomDmg() + ' damage, unless the party cites all ' +
+      DD.Act.log('PHASE 3: Rocks Fall, Everyone Dies. In ' + N.doomTurns + ' of his turns every hero takes ' + doomDmg(dm) + ' damage, unless the party cites all ' +
         d.booksNeeded + ' Player\'s Handbooks (' + placed + ' just appeared). Each stun pushes it back a turn. Desperate, he rolls two dice a turn now.', 'enemy');
       DD.Act.narrate('dm_phase3', {});
       DD.Act.bark(dm, 'phase3');
@@ -586,7 +639,11 @@
     DD.FX.shake(8, 380);
     updateFlavor(dm);
   }
-  function doomDmg() { return DD.getSkill('dm_tpk').levels[0].dmg; }
+  /** The doom's damage as THIS fight deals it ([playtest desc-sweep-3] the boss row's ×1.6: 60 → 96); raw without a DM. */
+  function doomDmg(dm) {
+    const def = DD.getSkill('dm_tpk');
+    return dm && DD.AI && DD.AI.fightLevel ? DD.AI.fightLevel(def, 1, dm).dmg : def.levels[0].dmg;
+  }
   /** Phase transitions at the HP thresholds (idempotent; phases are never skipped). */
   function syncPhase(dm) {
     const d = boss(dm);
@@ -594,10 +651,35 @@
     while (d.phase < want) enterPhase(dm, d.phase + 1);
   }
 
+  // ---- his mercy (finish FF-5) ------------------------------------------------------------------------------------
+  // His roll lands for 32 at the boss row's ×1.6: a squishy hero at full HP went down to one roll. The DM fudges that
+  // one in the party's favour: a roll of his never takes a hero from full HP to 0 (at worst it leaves 1 HP). A rule
+  // for the whole fight, so the table sees it (a rule chip) and every preview / dry run plays it (modifyFinalDamage).
+  const MERCY_ID = 'dm_mercy';
+  const ROLLS = { dm_fudged_roll: 1, dm_secret_roll: 1 };
+  const MERCY_PCT = 0.75;   // "healthy": at least this share of max HP before the roll
+  const MERCY_DESC = 'A roll of his (Fudged Roll, Roll Behind the Screen) never takes a hero with 75%+ of their HP straight to 0: at worst it leaves 1 HP. ' +
+    '"The die said 19. I am choosing to read it as a 1."';
+  function mercyRule() {
+    return {
+      id: MERCY_ID, name: 'Fudged in Your Favour', icon: '🎲', desc: MERCY_DESC,
+      hooks: {
+        modifyFinalDamage: function (d) {
+          const t = d && d.target;
+          if (!t || t.kind !== 'hero' || !d.source || d.source.defId !== DM_ID || !d.skill || !ROLLS[d.skill.id]) return;
+          if (t.hp < Math.ceil(t.maxHp * MERCY_PCT)) return;
+          const room = t.hp - 1 + (d.ignoreBlock ? 0 : (t.block || 0));
+          if (d.amount > room) d.amount = Math.max(0, room);
+        },
+      },
+    };
+  }
+
   // ---- hooks on the DM ------------------------------------------------------------------------------------------
   const HOOKS = {
     onCombatStart: function (unit) {
       const d = boss(unit);
+      if (!S().rules.some(function (r) { return r.id === MERCY_ID; })) DD.Act.addRule(mercyRule());
       // unshare legend data and name the panels (left to right)
       objTiles(PANEL).sort(function (a, b) { return a.x - b.x || a.y - b.y; }).forEach(function (t, i) {
         t.obj.data = Object.assign({}, t.obj.data, { idx: Math.min(i, PANEL_INFO.length - 1) });
@@ -960,16 +1042,16 @@
   }
   eskill({ id: 'dm_fudged_roll', name: 'Fudged Roll', icon: '🎲', kind: 'attack', tags: ['ranged'], anchor: 'unit',
     levels: [{ dmg: 20 }], target: { type: 'unit', range: [1, 14], filter: 'enemy', los: true },
-    desc: function (L) { return 'Deal ' + L.dmg + ' damage to a target in line of sight. Hide behind soda cans and dice.'; },
+    desc: function (L) { return 'Deal ' + L.dmg + ' damage to a target in line of sight. Hide behind soda cans and dice. A hero with 75%+ of their HP keeps at least 1 (he fudges it).'; },
     flavor: 'He rolled a 3. He says it was a 19. Now that the screen is gone, everyone saw it was a 3.',
     execute: rollExecute });
   eskill({ id: 'dm_secret_roll', name: 'Roll Behind the Screen', icon: '🎲', kind: 'attack', tags: ['ranged'], anchor: 'unit',
     levels: [{ dmg: 20 }], target: { type: 'unit', range: [1, 14], filter: 'enemy', los: false },
-    desc: function (L) { return 'Deal ' + L.dmg + ' damage to a target anywhere on the table: rolled behind the DM Screen, it needs no line of sight.'; },
+    desc: function (L) { return 'Deal ' + L.dmg + ' damage to a target anywhere on the table: rolled behind the DM Screen, it needs no line of sight. A hero with 75%+ of their HP keeps at least 1 (he fudges it).'; },
     flavor: '*clatter* "...Hm. Interesting." *writes something down*',
     execute: rollExecute });
 
-  eskill({ id: 'dm_rocks_fall', name: 'Rocks Fall', icon: '🪨', kind: 'attack', tags: ['aoe'], anchor: 'ground',
+  eskill({ id: 'dm_rocks_fall', name: 'Rocks Fall', icon: '🪨', kind: 'attack', tags: ['aoe'], anchor: 'ground', windupOnly: true,
     levels: [{ dmg: 26 }], target: { type: 'tile', range: [0, 40], filter: 'any', los: false }, area: { shape: 'cross', size: 1 },
     canUse: scripted,
     desc: function (L) { return 'Wind-up: deal ' + L.dmg + ' damage to every unit on the marked tiles (his own minis too) and leave rubble.'; },
@@ -987,7 +1069,7 @@
       cheetoTrail(ctx.tiles);
     } });
 
-  eskill({ id: 'dm_railroad', name: 'The Railroad', icon: '🚂', kind: 'attack', tags: ['aoe', 'push'], anchor: 'ground',
+  eskill({ id: 'dm_railroad', name: 'The Railroad', icon: '🚂', kind: 'attack', tags: ['aoe', 'push'], anchor: 'ground', windupOnly: true,
     levels: [{ dmg: N.train, push: 1 }], target: { type: 'tile', range: [0, 40], filter: 'any', los: false },
     area: { shape: 'custom', fn: function (ctx) { return ctx.target && ctx.state ? rowTiles(ctx.target.y, ctx.state.grid) : []; } },
     canUse: scripted,
@@ -1053,7 +1135,7 @@
       cheetoTrail(ctx.tiles);
     } });
 
-  eskill({ id: 'dm_tpk', name: 'Rocks Fall, Everyone Dies', icon: '☠️', kind: 'attack', tags: ['aoe'], anchor: 'ground',
+  eskill({ id: 'dm_tpk', name: 'Rocks Fall, Everyone Dies', icon: '☠️', kind: 'attack', tags: ['aoe'], anchor: 'ground', windupOnly: true,
     levels: [{ dmg: 60 }], target: { type: 'tile', range: [0, 60], filter: 'any', los: false },
     area: { shape: 'custom', fn: function (ctx) { return allTiles(ctx.state); } },
     canUse: scripted,
@@ -1191,8 +1273,12 @@
     c.restore();
   }
 
+  // rules run (user: "objects should be targetable to break them"): the one breakable object attacks can't be aimed at.
+  // Shot from range the whole screen fell in round 1 and phase 1 was over before it began: you walk up to his table.
   DD.registerObject({ id: PANEL, name: 'DM Screen Panel', blocksMove: true, blocksLos: false, hp: N.panelHp, height: 1.1, color: '#7a1f2b', smashable: true,
-    desc: 'Destructible (' + N.panelHp + ' HP; adjacent heroes can Smash it for 1 AP, 5 damage). While any panel stands the DM can\'t be hurt and ' +
+    targetable: false,
+    desc: 'Destructible (' + N.panelHp + ' HP), but laminated: attacks can\'t be aimed at it. Adjacent heroes can Smash it (1 AP, 5 damage); blasts and anything ' +
+      'shoved or thrown into it hurt it too. While any panel stands the DM can\'t be hurt and ' +
       'rolls without needing line of sight. Drop all three and the screen falls on him: ' + N.screenDrop + ' damage, Stunned, Exposed.',
     autoplay: function (unit, obj) { return panelValue(obj); },
     onDestroyed: function (o, tile, src) { panelFallen(o, tile, src); },
@@ -1230,11 +1316,11 @@
     // declared, not hooked: the engine applies it to all damage, and DD.AI.estimate (AutoPlay's quick score) sees it too
     takenMult: 1.5 });
   DD.registerObject({ id: SWITCH, name: 'Track Switch', blocksMove: true, blocksLos: false, hp: 0, height: 1.2, color: '#c0392b', yawAware: true,
-    desc: 'Interact (1 AP) while the DM winds up a train (red lane): it is diverted onto his own row and runs him over (' + N.train + ' damage to him and anyone on ' +
+    desc: 'Interact (1 AP) while the DM winds up a train (red lane): it is diverted onto his own row and runs him over (the train\'s full damage, as its wind-up shows, to him and anyone on ' +
       'his row; he is Vulnerable). Nothing he does can stop a diverted train.',
     available: function (o) { return !!divertable(findDM()); },
     interact: { ap: 1, label: 'Switch Tracks', fn: function (unit, o, tile) { switchTracks(unit, o, tile); } },
-    autoplay: function () { return divertable(findDM()) ? 34 : 0; },
+    autoplay: function () { return switchValue(findDM()); },
     draw: drawSwitch });
   DD.registerObject({ id: BOOK, name: 'Player\'s Handbook', blocksMove: true, blocksLos: false, hp: 0, height: 0.6, color: '#b0302a', yawAware: true,
     desc: 'Interact (1 AP): cite the rules. Cite all three while "Rocks Fall, Everyone Dies" counts down to cancel it: the rocks fall on the DM instead (' +
@@ -1290,7 +1376,7 @@
     sprite: { base: 'humanoid', mini: true, scale: 0.85, build: 'slim', outfit: 'none', palette: GREY,
       head: { face: 'skull', eyes: 'glow', blush: false }, mainhand: 'club' },
     barks: { spawn: ['Rattle rattle. Where are my instructions?', 'I am missing a piece.'], attack: ['Femur incoming!', 'Catch!'],
-      hurt: ['That was load-bearing!', 'Ow, my spare rib.'], death: ['Pieces everywhere...', 'Choking hazard...'] },
+      hurt: ['Not the funny bone!', 'Ow, my spare rib.'], death: ['Pieces everywhere...', 'Choking hazard...'] },
     desc: 'Came in a bag of thirty. Twenty-nine are still in the bag.' });
   // a flyer: it dives the wounded (skirmisher) instead of trading blows with the tank
   DD.registerEnemy({ id: 'dm_cameo_imp', name: 'Imp Mini (Still in Blister Pack)', act: 3, tier: 'minion', hp: 14, mov: 4, armor: 0, init: 2,
@@ -1404,7 +1490,7 @@
     'Screen down! Behind it: four energy drinks, a cold pizza and a d20 that only rolls 20s.',
   ]);
   DD.registerNarration('dm_rule', [
-    'The DM rolls on his House Rules table. A {n}: {name}.',
+    'The DM rolls on his House Rules table and gets {n}: {name}.',
     '"New house rule," announces the DM. {name}. Nobody agreed to this.',
     'The DM flips to a sticky note in his binder: {name}.',
   ]);
@@ -1426,7 +1512,7 @@
   ]);
 
   // test / debug hooks (no game logic depends on them)
-  DD.BossDM = { N: N, KIT: KIT, HOUSE_RULES: HOUSE_RULES, LAYOUT: LAYOUT, findDM: findDM, boss: boss, lanes: lanes, divertable: divertable,
+  DD.BossDM = { N: N, KIT: KIT, HOUSE_RULES: HOUSE_RULES, LAYOUT: LAYOUT, findDM: findDM, boss: boss, lanes: lanes, divertable: divertable, stuckOnRow: stuckOnRow, switchValue: switchValue, listOf: listOf,
     panelsLeft: panelsLeft, rollHouseRule: rollHouseRule, randomEncounter: randomEncounter, cameoPool: cameoPool, unpainted: unpainted,
     syncPhase: syncPhase, syncShield: syncShield, syncKit: syncKit, kitOf: kitOf, floorHp: floorHp, threshold: threshold,
     windupOf: windupOf, landsThisRound: landsThisRound, windDoom: windDoom, passiveText: passiveText,

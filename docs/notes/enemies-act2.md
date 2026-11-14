@@ -35,7 +35,7 @@ the reach-aware targeting (DESIGN §4.2, §8 "Targeting"; `docs/notes/rules.md` 
 | `a2_owlbear_cub` | normal | 26 / 4 / 0 | +2 | brute | Overexcited Nibble 6 | Cub Charge from where it stands (up to 4 straight, 8 + push 1, cd 2; a dash: provokes nothing), else nibbles |
 | `a2_banshee` | normal | 26 / 4 / 0, flying | +1 | ranged (keep 2-3) | — | screams from where she floats (2-tile cone, 6 + Stun, cd 3, spell), else One-Star Review 7 + Weak (1-5) |
 | `a2_gargoyle` | normal | 28 / 3 / 1 | −1 | **diver** (assassin) | — | Gutter Dive from its perch on the weakest hero within 5 (a leap; 8 to it and every hero next to it), then Stone Form: 75% less damage, its next turn idle |
-| `a2_pixie_swarm` | normal | 24 / 4 / 0, flying | +4 | ranged (keep 2) | Tiny Bites 5 | Glitter Bomb (5 to the target and the foes next to it + Dazzle, lobbed 1-5, cd 1), in between flies in and bites. Swarm: single-target skills deal half |
+| `a2_pixie_swarm` | normal | 24 / 4 / 0, flying | +4 | ranged (keep 2) | Tiny Bites 5 | Fairy Dust-Up (5 to the target and the foes next to it + Dazzle, lobbed 1-5, cd 1), in between flies in and bites. Swarm: single-target skills deal half |
 | `a2_mama_owlbear` | elite | 110 / 4 / 1, large, immovable | +1 | brute | Maul 12 (the walker only) | Maul (3-tile row) or Mama's Coming (leap 1-5, 11 + knockback 2, cd 1); then, with 2+ heroes within 2, ⏳ Earth-Shaking Stomp (13 to every foe within 2 at the start of her next turn, cd 3). Vendetta on a cub's killer |
 | `a2_necro_ta` | elite | 100 / 3 / 0 | 0 | summoner (keep 2) | — | one thing: Raise Dead (2 interns + every Bone Pile, cd 3, 2 charges), Detention (bone walls around the closest hero within 3, cd 3) or Red Pen 11 + Vulnerable (1-6). Piles reassemble the same round while he stands |
 | `a2_gary` | elite | 110 / 3 / 1, large, immovable | −2 | brute | Clobber 13 + knockback 2 (ends the walk) | Clobber, or Gary Throw (an adjacent ally or a spare limb at a foe 2-6 away: 11 to it and the foes next to it, **cd 2**). Lightning heals him; GARY ANGRY below half HP (Inspired for good) |
@@ -220,7 +220,7 @@ instrumented sims), `.tmp/ea2rev/mut.sh "mut=friends|grab|raise&suite=enemies_ac
    nothing** rather than throw at a hero a zombie was fighting; the banshee reviewed instead of screaming (11 of 37
    ready screams skipped in 108 fixture fights); a pixie swarm out of biting range passed; the gargoyle dove a healthy
    hero instead of the wounded one beside an intern. Fix: `sparesFriends(ctx)` (an `aiScore` part that gives the
-   penalty back, through `DD.AI.estimate`) on the scream, Gutter Dive, Glitter Bomb and Gary Throw. After: 26 of 29
+   penalty back, through `DD.AI.estimate`) on the scream, Gutter Dive, Fairy Dust-Up and Gary Throw. After: 26 of 29
    ready screams fire (the rest: no hero worth it), Gary throws, the pixies glitter, the gargoyle dives the wounded mage.
 2. **Zombies yanked heroes through their own coworkers.** Grabby Hands aims through units (LOS ignores them), so with
    friends crowding the hero it could not reach, a zombie pulled the hero straight into an intern: BONK, 3 to the hero and
@@ -237,7 +237,7 @@ instrumented sims), `.tmp/ea2rev/mut.sh "mut=friends|grab|raise&suite=enemies_ac
 
 - **desc == effect** for all 28 skills, 2 statuses, 4 objects and every passive / codex line (read against `execute`;
   damage, riders, ranges, areas, cooldowns). Cooldown cadence on own turns matches the texts: Gary Throw (cd 2) rounds
-  1, 4, 7 ("every third turn"), Glitter Bomb and Coffee Run (cd 1) every other turn, the scream (cd 3) rounds 1, 5, 9,
+  1, 4, 7 ("every third turn"), Fairy Dust-Up and Coffee Run (cd 1) every other turn, the scream (cd 3) rounds 1, 5, 9,
   Cub Charge every third turn, Mama's Stomp lands at the start of her next turn.
 - **Attacks of opportunity**: each enemy's reaction skill (the suite's census), Gary's knockback ending the walk, Mama's
   Maul hitting only the walker, leaps / charges / pulls / throws / blinks never provoking, ranged enemies making none.
@@ -284,6 +284,35 @@ instrumented sims), `.tmp/ea2rev/mut.sh "mut=friends|grab|raise&suite=enemies_ac
 - In It's Alive the Tesla Coils arc the zombies that spawn within 4 of them until those walk off (the "friend or foe"
   gimmick; 5 a turn, heroes profit).
 
+## Docs and content cleanup (Nov 5)
+
+- **Renamed** (Syllamin has a Glitter Bomb): the Pixie Swarm's Glitter Bomb is now **Fairy Dust-Up**
+  (`a2_pixie_glitter`, id unchanged). Its passive line, codex text and the attack bark that quoted it ("Fairy
+  dust-up!") follow, and so do the act 2 suites' labels. The cross-act guard is `enemies_act1: (all acts) no enemy or
+  boss skill shares a display name with a hero-side skill`.
+- DESIGN §8 now names the act's divers (the wisp and the gargoyle) and Mama's Earth-Shaking Stomp as its one elite
+  wind-up (see Deviations: flyers are not divers by default).
+
+## Rules run (Nov 6) — breaking objects (CONTENT SWEEP)
+
+User: "objects should be targetable to break them" (engine rule: `docs/notes/rules.md` "Rules run"). Every act 2 object
+states its decision:
+- `a2_bone_pile` **targetable** (3 HP): the user asked for exactly this, the pile already broke to damage, and act 2 is the
+  campaign's middle wall (v2 digest §4.2), so a ranged answer to Reassembles is welcome. Engine probe: AutoPlay shot
+  113-151 piles per 60 runs. Desc: "(3 HP) … a Smash or 3 damage (any single-target attack can be aimed at it) scatters it
+  for good"; the intern's passive and desc say it too ("3 damage to the pile", "shoot it (3 HP)").
+- `a2_bone_wall` targetable (shoot a boxed-in friend free). Its AutoPlay hint now also pays for freeing a FRIEND (6 when a
+  hero next to the wall is boxed in; 8 for the boxed-in hero itself, as before), so AutoPlay shoots or Smashes Detention
+  walls for others too. `a2_chafing_dish` targetable (destroy objective; desc "hit it with any single-target attack, or
+  Smash it from next to it"; Forbidden Buffet 6.6 → 6.1 rounds).
+- Known issue: the pile's hint is 0 for flyers (it was written for the stomp, and the hint gets no "stomp or shot"
+  context), so AutoPlay's flyers don't shoot piles; humans can. Request (AutoPlay, optional): pass the reason to hints.
+- `a2_coffee_machine` **`targetable: false`** (the protect objective: the engine already refuses it while protected; the
+  flag says it everywhere). Desc: "Your attacks are never aimed at it; your blasts are not so polite."
+Suite "enemies_act2: rules run — bone piles, bone walls and brunch platters are attack targets; the coffee machine never is".
+Nov 10: the Forbidden Buffet intro says how ("Kick over the buffet (shoot the platters, or Smash them up close) before they
+get seconds.").
+
 ## v1 history (condensed)
 
 The v1 roster (DESIGN §8 act 2 plus the Hollandaise Horror and Gary's Tesla Coils), 13 enemies, 28 skills, 2 statuses,
@@ -307,3 +336,32 @@ builds) before v2. Kept from it:
   in the Stomp wind-up's number (`vendettaFlat`, a skill `telegraphFlat`).
 - Sprites: Mama rears up (humanoid `huge`, owl face, pink bow), the cubs stay on all fours with owl tufts; the stone
   gargoyle has a pigeon. Screenshots from v1: `.tmp/enemies-act2/`, `.tmp/enemies-act2-review/`.
+
+## Playtest fixes (Nov 12)
+
+Confirmed playtest findings that live in act2.js (fix:content):
+- **text-tone-19 (act 2 part, polish, fixed)**: "assigns Detention: 1 bone wall rises." / "2 bone walls rise."
+  Asserted in `enemies_act2: Necromancer TA …` (both counts: the usual two walls, and a hero in a corner next to a crate).
+- **text-tone-8 (polish, fixed)**: duplicate death barks rewritten: the Zombie's "Tell HR... I quit..." → "Is this... a
+  sick day... or a personal day...", the Brunch Cultist's "Tell the Benedict... I tried..." → "Cancel... my mimosa...".
+- **text-tone-23 (polish, fixed)**: two of the load-bearing jokes go: the Gargoyle's flavor ("Not sleeping. Just very,
+  very still.") and its hurt bark ("I'm a listed building!").
+
+## Finish (Nov 14) — FIX: CONTENT
+
+- **desc-sweep-4 (fixed)**: the Zombie's, Banshee's and Gargoyle's rule lines are `(unit) => string` and read the
+  fight's numbers (`hitOf`: DD.AI.fightLevel, × the fight's damage row): on casual the zombie "bites the hero next to it
+  (6)", on brutal (8); a codex card (no unit) reads the raw 7 / 6 / 8. The Tesla Coil's codex desc drops its number
+  ("Arcs lightning into …"): a card can't know the difficulty, and the ability row shows the arc. Suite
+  `enemies_act2: finish — rule lines give the hits of THIS fight …`; the registry and targeting suites accept a function
+  desc.
+- **D1**: the Bone Pile, the Detention Pile, the Bottomless Mimosa Bar and the Skeleton Intern's codex line say "any
+  single-target damage skill can break it".
+
+## Review (finish, Nov 14) — REVIEWER
+
+- **D5 was not finished: the Bone Pile hint still said 0 to flyers.** fix:engine's AutoPlay passes the 5th argument `how`
+  ('break' for a shot or a Smash, 'step' for walking over it); the pile now answers 9 to any hero for a break and to
+  walkers only for a step (a stomp stays a floor effect). Suite `enemies_act2: finish review — D5 …`: the real pile, a
+  rooted walking and a flying mage 3 tiles off each shoot it to bits on their own AutoPlay turn (without the
+  change the flyer's two checks fail: its hint is 0 and it passes).

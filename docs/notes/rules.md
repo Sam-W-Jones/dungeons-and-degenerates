@@ -9,6 +9,10 @@ Files: `js/engine/{grid,targeting,hooks,actions,ai,combat,autoplay}.js`, `js/dat
 >
 > **Content authors, read "Attacks of opportunity" and "Targeting" in the last section** (v2 AoO role): walking away
 > from a melee fighter provokes a free basic attack, and enemies stick to the hero next to them.
+>
+> **Engine requests (Nov 5, last section)**: new optional knobs — skill `windupOnly` / `fromStand`, status `takenFlat` /
+> `onRemove`, hooks `estimateDealt` / `estimateTaken` / `onDeathPrevented` / `onStatusRemoved`, `addStatus` `thisTurn`,
+> object `loot` (flyers pick it up), surface `cloud`; tile `onEnter(…, cause, from)`; cones stop at walls.
 
 ## Summary
 
@@ -1041,3 +1045,828 @@ above.
   the tile it would whack from (over-ranks it); the exact pass replays it and drops it. Costs an exact-pass slot only.
 - `isFlying` walks the unit's statuses on every call (hot in pathing): +12% on `reachable` with 6 statuses; a per-
   mutation cache would remove it if it ever matters.
+
+## Engine requests (v2-digest §5 "Engine / rules") — ENGINE / AI role, Nov 5
+
+Files: `js/engine/{ai,actions,grid,combat}.js`, `js/data/{terrain,statuses}.js`, `tests/{engine_tests,content_tests}.js`,
+ARCHITECTURE §5.1-5.6 / §6.5-6.6, this file. Untouched: targeting, hooks, encounter, mapgen (+ their tests).
+Suites: `engine: engine requests — …` (5 suites, ~90 assertions) and `content: engine requests — clouds, loot for flyers,
+wind-up-only skills (advisories for content owners)` (real content). Updated: `engine: v2 requests — flyers ignore
+everything on the floor` (a flyer now pockets a gold pile: the lead's loot call).
+
+### For content authors (new knobs; all optional, all declarative or pure)
+
+- **Skill flags** `windupOnly: true` (or the tag `'windup'`): a skill its planner only ever winds up. The default
+  planner never fires it at once (a planner that names it in `opts.skills` / `api.canUse` still gets it), it is never an
+  attack of opportunity, and reach estimates (threat shading, the inspect "reach") skip it, so bosses can keep wind-up
+  skills in `def.skills` for the Abilities box and the codex. `fromStand: true`: it only goes off from where the unit
+  stands (a pounce, a charge, a scream). The default planner never walks first to use it (not after any walk that
+  turn), and reach estimates don't add the walk.
+- **Status flat damage-taken**: `takenFlat: number | (st, unit, d) => number` on a status def (−2 = 2 less per hit). The
+  engine adds it to `d.flat` for every cause (a function reads `d.cause`) AND `DD.AI.estimate` reads it. Declare it
+  instead of a modifyIncomingDamage flat (drop the hook, or it counts twice).
+- **Estimate hooks** (pure queries, any hook source): `estimateDealt(e)` (the attacker's sources) / `estimateTaken(e)`
+  (the target's own sources), `e = { attacker, target, source, skill, base, element, cause: 'skill', opportunity,
+  mult: 1, flat: 0 }`. Mirror a conditional damage hook so enemy planning, the move preview's provokes numbers and
+  AutoPlay know it ("+2 on your basic attack", "Taunted foes deal 25% less to him"). Thousands of calls per decision.
+- **Per-victim bonuses** need nothing new: reach estimates read the skill's `telegraphFlat(unit, intent)` (and the
+  rules') with an action record aimed at each foe (`anchor: 'unit'`, `unitId` = the foe, `windup: false`), so Pack
+  Tactics and webbed prey already show on the right heroes. A skill whose telegraphFlat cancels flats for wind-ups only
+  (Swelling Ranks, Ill-Gotten Gains) must be windupOnly (they are: tag 'windup').
+- **Hooks** `onDeathPrevented(unit, d)` (right after preventDeath refused it; the HP is already set) and
+  `onStatusRemoved(unit, st, reason)` ('removed' | 'expired' | 'cleansed'; the status is already gone) on the unit's
+  sources; a status def's own `onRemove(unit, st, reason)` runs first. Not on downs / deaths.
+- **"This turn only"**: `addStatus(u, id, { thisTurn: true })` = `{ turns: 1, fresh: false }` (gone at the end of the
+  current own turn; no more clearing `inst.fresh` by hand). `{ fresh: false }` alone: this turn's end counts.
+- **Tile callbacks** get how and from where: terrain `onEnter(unit, tile, cause, from)`, surface `onEnter(unit, tile,
+  cause, from)`, object `onEnter(unit, obj, tile, cause, from)` (cause 'move' | 'push' | 'teleport'; `from` = {x,y}).
+- **Clouds**: `cloud: true` and `airborne: true` are one flag (`DD.Grid.isCloud`); terrain.js gives every cloud both
+  at load, so either works for content and every reader agrees.
+- **Loot**: `loot: true` on an object def or instance: picked up by whoever enters it, flyers too (the lead's call).
+- **Cones stop at walls** like lines: a cone tile needs the user's line of sight and is no wall, sight-blocker or
+  cliff 2+ above the user. Open floors are unchanged.
+- **Log**: re-applying a status that changes nothing (same stacks, no longer duration) is no longer logged or popped
+  ("The Rat King is Wet." once per wade, not per tile). Ignition chains name the surface ("The Oil Slick goes up...").
+- **Barks**: a line naming a hero (any capitalised word of 3+ letters of the hero's name, whole word: "Hjalmar", "Buga",
+  "Mayor") who is not in this fight is never picked; a key with no line left stays silent. Literal-text barks are left
+  alone.
+
+### Summary (by request)
+
+1. **AI estimates.** `opportunityDmg` adds `o.flat` after the multipliers like `Act.damage` (Betty's hammer 5 + 7 on a
+   Vulnerable walker: 13, was 15). `AI.estimate(u, o, dmg, el, noEmpower, skill)` = `round(dmg × mult + flat)`, Marked,
+   armor, and now also statuses' `takenFlat`, the `estimateDealt` / `estimateTaken` hooks (their presence cached per
+   state mutation counter), Frozen ×1.5 physical, a hero attacker's foreign taunt −50% and 0 vs its charmer,
+   `flags.invulnerable`, resist 0 = 0 even with flats. The default planner adds the attacker's status `telegraphFlat`
+   (the public estimate still leaves it to the caller: AutoPlay adds it itself).
+2. **Reach** (`AI.reachOf` / `threatMap`). The walk = the move action's AoO-aware paths minus those whose attacks of
+   opportunity would drop it (or a lethal hazard); ready skills honour content `canUse`; `windupOnly` skipped,
+   `fromStand` from its own tile only; aimed / line / cone reach needs sight past the walk (a BFS through tiles that
+   don't block line of sight; area extents spread freely past the target; `los: false` skills ignore walls);
+   per-victim bonuses on the foe's tile and in the new `units` map; `only` = the active taunter. Wrapped in
+   `Targeting.pure`.
+3. **Approach field.** Hostile units are walls (the targets aside); walled in with no route, only a step that gets
+   closer counts. **Boxed in** (Infinity at its tile) → `squeeze`: a move action with `passDowned` through the bodies
+   of downed foes (never ends on one; log "X squeezes past the fallen. Rude."), from the default turn and after a custom
+   planner that did nothing at all (no state mutation, same tile). `Grid.reachable / path` and `Act.moveAlong` take
+   `passDowned`.
+4. **Mid-turn stun.** `AI.moveTo` / `api.moveTo` refuse a stun-like unit or a sheep (the sheep's own stroll uses the
+   inner walk); `AI.windUp` / `api.windUp` refuse a unit that is stun-like / a sheep during its own turn (unstoppable
+   wind-ups aside).
+5. **Taunt on a charmed enemy.** `AI.activeTaunter(u)`: a taunter that is no foe of u is void (targets, candidates,
+   `bestAttack`, `reachableTargets`, reach `only`); the attack-of-opportunity rule already checked hostility.
+6. **Combat.finish** narrates `objective_failed` when the result is a defeat and a hero still stands; `defeat` for a TPK.
+7. **Log noise, names, barks**: above.
+8. **Hooks and options**: above (`onDeathPrevented`, `onStatusRemoved` + `onRemove`, `thisTurn` / `fresh: false`,
+   `enterTile(unit, tile, cause, from)`, `isCloud`, `isLoot`, cones). A refused instant kill keeps its HP
+   (`zeroHp(target, d, keepHp)`).
+9. **Loot (the lead's call).** `enterTile` fires a ground object's onEnter for a flyer when `Grid.isLoot(obj)`;
+   `gold_pile` is `loot: true` (desc: "Walk or fly a hero (or a hero's summon) over it to pocket 3-6 gold. Flyers swoop
+   down for it: Onyx has never once resisted.").
+
+### Deviations
+
+- `windUp` refuses only during the unit's own turn (a mid-turn stun); outside it (scripted content, tests) a stunned
+  unit's wind-up is still recorded and is interrupted when it would land, as before (`enemies_act3`'s Unshakeable test
+  winds up a stunned dragon by script). `moveTo` refuses a stunned unit at any time.
+- The tag `'windup'` counts as `windupOnly` (the three tagged skills, Grimble's Audit and the Rat King's Gnaw and
+  Surge, are wind-up only already).
+- Reach sight is a BFS through non-blocking tiles from every walk tile: never less than the real line of sight (a
+  supercover line of length d is a 4-connected walk of d steps), a little more round corners; it ignores heights and a
+  skill's minimum range.
+- `takenFlat` applies to every cause (a function decides); content that keeps its modifyIncomingDamage flat and also
+  declares takenFlat counts it twice.
+- `opportunityDmg` does not add the attacker's status `telegraphFlat`: status flats on attacks of opportunity ride on
+  `o.flat` through `modifyOpportunity` (Valdris' Freshly Forged does both; adding telegraphFlat counted it twice).
+- The squeeze needs a downed body on the way; a unit walled in by living foes, walls or cliffs still waits.
+- Barks: a name word shared by two heroes (the fixtures' "McTest") hides a line naming the one present when the other
+  is absent. No real hero shares a name word.
+
+### Requests
+
+- **DESIGN §4.3 (docs agent, this run)**: the loot wording, exactly as built. The docs agent's current bullet already
+  says it; keep it: "**Loot is not a floor effect.** Picking something up is a choice, not the floor happening to you,
+  so a flyer still swoops down for the money: loot objects (gold piles, a dragon's Hoard Piles) are pocketed by whoever
+  enters their tile, flying or not — a hero (or a hero's summon: Onyx has never once resisted a gold pile) flying over
+  one pockets it. Everything else on the floor stays below a flyer." Add to the area rules: "Cones stop at walls like
+  lines (no breath round corners)."
+- **ENEMIES ACT 3** (`act3.js`): `a3_hoard_pile` → `loot: true` (the lead's call: flyers pocket Hoard Piles too), its
+  desc "Flyers can't reach down that far." → e.g. "Flyers swoop down for it too.", and its `autoplay` hint without the
+  `feelsFloor` check (the content advisory lists it until then). `windupOnly: true` on `a3_dragon_breath`,
+  `a3_dk_monologue`, `a3_fiend_audit` (advisory); `fromStand: true` on the Hell Hound's Pounce if it only goes off from
+  where it stands. The custom approach field (review fix 6) can use the default one now.
+- **ENEMIES ACT 1 / 2**: `windupOnly: true` on `a1_mimic_slam` (advisory) and Mama's Stomp; `fromStand: true` on the
+  gargoyle's dive, Mama's pounce, the cub's charge and the banshee's scream (the act 2 request). Act 2's `defaultThen`
+  approach workaround can retire.
+- **BOSSES** (dm.js, lich.js, beholder.js): `windupOnly: true` on `dm_rocks_fall`, `dm_railroad`, `dm_tpk` (advisory)
+  and the Lich / Dr. Iris wind-up skills; they may then go back into `def.skills` (Abilities box, codex) without phantom
+  at-once threats. The Rat King's Scurry stays a boss rule (the engine's squeeze only steps over downed bodies).
+- **HERO MARWYN**: `mrw_rage` → `takenFlat: function (st, unit, d) { return HIT_CAUSES[d.cause] ? -(st.stacks || 1) : 0; }`
+  and drop its modifyIncomingDamage; the Loincloth → `hooks.estimateTaken(e)` mirroring its ×0.75 (estimates then show
+  a raging, loinclothed Marwyn's real hits).
+- **ITEMS** (`items.js`): the Whetstone (and every item with a conditional flat or mult) → `hooks.estimateDealt(e)` /
+  `estimateTaken(e)` mirroring its damage hook (`e.skill`, `e.attacker`, `e.target`).
+- **HERO BASANOS**: Hair Trigger can listen to `onDeathPrevented` (after Plot Armor), the form to `onStatusRemoved`.
+- **KIT**: the Mystery Potion's sheep can use `addStatus(..., { thisTurn: true })` instead of clearing `inst.fresh`.
+- **HERO HJALMAR**: the banana peel's `onEnter(unit, obj, tile, cause, from)` can send a slider on the way it came.
+- **AUTOPLAY** (`autoplay.js`, `autoplay_tests.js`): `readySkills` should skip `DD.AI.windupOnly(def)` skills and treat
+  `DD.AI.fromStand(def)` ones as no-walk; `DD.AI.reachOf` is now honest about walls, attacks of opportunity, canUse and
+  per-victim bonuses (`units`) if you want to use it. The suite "an archer's reach respects walls…" asserted as a
+  *premise* that `AI.reachOf` ignores sight past the walk: it no longer does (the engine agrees with AutoPlay now).
+- **HUD** (`combat_hud.js`): `AI.reachOf(u).units` (foe id → number with per-victim bonuses) if the inspect panel lists
+  who it can reach; `only` is null for a void taunt. Threat shading needs no change.
+
+### Known issues
+
+- Final full run (900 suites, 120,110 assertions): one failure, `hero_marwyn: AutoPlay battles, act 1` ("Marwyn takes
+  turns in every fight — expected 5, got 4": the totems fight now ends in round 1), from the AutoPlay agent's
+  in-progress `autoplay.js`: with that same autoplay.js and the PRE-change engine files (scratch copy
+  `.tmp/eng5/proj_b`) it fails identically. Earlier runs of this pass also caught other AutoPlay suites mid-edit (the
+  wind-up step-out, "steps out of the reach…"); they pass now. The new suites fail on the pre-change engine (41
+  failures), so they test the change.
+
+### Balance (sims: `tools/sim.sh "seeds=60&from=1000|2000&diff=normal"`, before = the pre-change engine files with the
+same autoplay.js, scratch copies `.tmp/eng5/proj_b` / `.tmp/eng5/proj`; reports `.tmp/eng5/simAB*_*.txt`)
+
+| 120 runs (2 × 60) | before | after |
+|---|---|---|
+| campaign wins | 55 (46%) | 52 (43%) |
+| act 1 cleared | 83 (69%) | 83 (69%) |
+| Rat King / Grimble | 45/68 (66%) / 38/49 (78%) | 45/68 (66%) / 38/50 (76%) |
+| act 2 cleared (of entered) | 67/83 (81%) | 63/83 (76%) |
+| act 3 cleared (of entered) | 55/67 (82%) | 52/63 (83%) |
+| normal fights: downs / fight | 0.72 · 0.80 | 0.64 · 0.70 |
+| elite fights: win · downs / fight | 96% 1.00 · 95% 0.74 | 91% 1.06 · 95% 0.94 |
+| boss fights: win · downs / fight | 85% 1.54 · 84% 1.61 | 82% 1.51 · 85% 1.69 |
+
+Noise-level overall (the 95% intervals are ±12%); the first boss and act 1 are unchanged (identical runs up to the
+act-1 boss in both batches). What moves difficulty, and which way: harder — enemies no longer park behind a downed
+hero (unit-aware approach field + the squeeze) and estimate attacks of opportunity / Frozen / flats correctly; easier —
+a hero's Taunt no longer wastes a Charm, a unit that slips mid-turn stops walking and winding up, enemy breath cones
+stop at walls (the heroes' cones too). Normal fights lost ~10% of their downs, elites gained a few. No content declares
+`windupOnly`, `fromStand`, `takenFlat` or the estimate hooks yet: when the owners adopt them (Requests), AI estimates
+and threat shading get more honest (Ginger Rage, Whetstone), not the fights' numbers. Threat shading (reachOf) is HUD
+only: AutoPlay doesn't read it, so humans see less false red (behind walls, past a lethal stab).
+- `AI.describe` still lists "polymorph" / "sleep" for bosses immune to them (digest item, not in this pass).
+- A Hell Hound standing in lava with only hazards around still idles (`positionScore` vs doing nothing; act 3 request).
+- The estimate-hook cache keys on `state.mutations`: content that edits `unit.hooks` / items by hand mid-fight should
+  call `DD.Act.touch()`.
+
+## Review (balance run) — adversarial review of the engine / AI requests (REVIEWER role, Nov 6)
+
+Scope: the "Engine requests" pass above (`ai.js`, `actions.js`, `combat.js`, `grid.js`, `statuses.js`, `terrain.js`)
+and how AutoPlay reads it (AutoPlay itself: `docs/notes/autoplay.md` "Review (balance run)"). Checked by running code:
+the suites, scratch probes in `.tmp/rv11/` and whole-campaign sims (normal 2 × 100, act 1 150, casual 60).
+
+### Verified (held)
+
+- **Every new hook / flag has a suite that exercises it for real** (estimate flats after multipliers, `takenFlat`,
+  `estimateDealt` / `estimateTaken`, Frozen, charm / taunt; reach vs walls, lethal attacks of opportunity, `canUse`,
+  `windupOnly` (flag and tag), `fromStand`, per-victim bonuses; the unit-aware approach field, the squeeze, refusals
+  after a mid-turn stun; void taunts, `objective_failed`, log noise, `partyLines`; `onDeathPrevented`,
+  `onStatusRemoved` / `onRemove`, `thisTurn` / `fresh: false`, `enterTile` cause + from, clouds, cones, loot).
+- **Determinism**: identical per-fight records for the same seeds; the estimate-hook cache (keyed on the state and its
+  mutation counter) and `reachOf` / `threatMap` (pure) can't change a later AI decision.
+- **Flyers vs the floor** in real campaigns: every object / terrain / non-cloud surface `onEnter` wrapped — never fired
+  for a flying unit in 3,000+ fights; loot pocketed by flyers 17-33 times per 100 runs.
+- **Enemies don't refuse to engage or kite forever**: 0 timeouts; idle enemy turns 3.3% (3.7-3.9% with the HEAD
+  `ai.js`), mostly by design; squeezes 3-10 per 100 runs (act 2 mostly; never by a statue now).
+- **Speed**: `DD.AI.threatMap` 0.9 ms on a 16×14 map with 10 enemies; 0.21 s per campaign fight.
+
+### Fixed
+
+- **A gargoyle in Stone Form walked.** The boxed-in squeeze also ran after any custom planner that "did nothing at all"
+  — including one that returns at once on purpose: the gargoyle's planner returns in Stone Form ("that turn it does
+  nothing", its passive), and boxed into a pocket by a downed hero it squeezed 3 tiles past the body (gargoyle squeezes
+  per 100 normal runs, seeds 1000+: 5 before, 3 after — the rest are awake gargoyles whose own walk found nothing).
+  Now the squeeze follows a planner only if it looked for
+  something to do (called the api's `foes`, `reachable`, `reachableTargets`, `engaged`, `moveTo`, `bestAttack`,
+  `defaultPlan` / `defaultTurn`, `approach` or `canUse`) and then did nothing. Suites: `engine: engine requests — the
+  approach field, the boxed-in squeeze …` (a planner that looks: squeezed; one that returns at once: stays — new
+  assertions) and `content: review (balance run) — a gargoyle in Stone Form does nothing, even boxed in by a downed
+  hero` (the real gargoyle; control: out of Stone Form it squeezes). Both fail with the old rule (mutation-checked).
+
+### Deviations
+
+- ARCHITECTURE §5.6: the squeeze after a custom planner needs the planner to have asked the api for something (list
+  above). A content planner that reads `DD.AI.*` directly instead of its `api` gets no squeeze (the safe side).
+
+### Requests
+
+- **HUD + engine** (later): `AI.describe` still offers "Stun, sleep, freeze or polymorph" to bosses immune to the
+  sheep; dropping the counters a unit is immune to (`DD.Act.immuneTo`) would break `hud_tests.js`' regex on
+  `test_boss` ("Stun, sleep, freeze or polymorph"): the HUD owner can loosen it to `/Stun, sleep, freeze/` first.
+- Content requests from the pass above still stand (no content declares `windupOnly`, `fromStand`, `takenFlat` or the
+  estimate hooks yet; the Hoard Pile still lacks `loot: true`).
+
+### Could not verify
+
+- A human game: everything here was driven headless (tests, sims); threat shading itself is the HUD's area.
+- The Hell Hound idling in lava (act 3) and `Combat.provokes` not naming walk-ending riders are still open (listed by
+  the pass above, not regressions).
+
+## Rules run — moving through allies, swapping places, breaking objects (ENGINE + AUTOPLAY role, Nov 6)
+
+User (via the lead, `.tmp/wf11/user-decisions.md`): "player characters should be able to move through spaces of other
+player characetrs…" → "i'm ok with both being able to move if that is truly the case. I find heroes get congersted when
+terrain is around." · "Yes, add swap" · "Also, objects should be tragettable to break them". Suites: `engine: rules run —
+…` (6), `autoplay: rules run — …` (3), `content: rules run — …` (1). The rules: ARCHITECTURE §6.2 (moving through allies,
+the swap), §6.6 (breakable objects), §5.2 / §5.4 / §5.5 / §5.7 (APIs).
+
+### For content authors (the rules as built)
+
+**Moving through allies (symmetric, unchanged engine rule, now proven).** Heroes, their summons and enemies walk through
+their own side and never end on a unit: corridors, doorways, a friend on a step one level up (two up is a cliff with or
+without the friend), a friend on a plate (the walker presses it) or bones, a friend standing in fire (the walker burns
+crossing it; in the open the path goes round), a web under the friend (the walker is rooted there and moved to the
+nearest free tile), an attack of opportunity on the way (aimed at the walker, never the friend), flyers. Nobody walks
+through a foe. AutoPlay's walks (`Combat.reachable`, `walkFrom`) pass allies the same way. No engine or AutoPlay change
+was needed for this: what made heroes feel blocked is the HUD (requests below).
+
+**Swap places (`DD.Combat.swap`, `swapInfo`, `swapTargets`, `canSwap`; `DD.Act.swapMove`).** A hero or hero-side summon,
+on its turn, swaps with an ADJACENT hero-side ally as its move: `moveApCost` AP (a Confused hero pays 2), the ally pays
+nothing and keeps its own turn. Both must be able to stand on each other's tile (terrain and objects — a walker never
+takes a flyer's place over a pit —, the height rule both ways, the step within the mover's move). Refused with a reason:
+a downed ally ("… is down: Help Up instead."), a stunned / asleep / frozen ally ("… is out cold and won't budge."), a
+rooted / held ally ("… is stuck in place."), an immovable one (the turret), a rooted or stunned mover, no AP, not its
+turn. Enemies never swap (`swapInfo` is null for them). The mover provokes attacks of opportunity as if it walked the
+step (an interrupting one — down, stun, root, push, stop, or an ally no longer there / up / free — cancels the swap; the
+move is spent); the displaced ally provokes nothing. Both feel their new tiles (the mover with cause `'move'`, the ally
+`'teleport'` like `Act.swap`; flyers skip the floor). Bleed and `onMove` (path = the one tile) for the mover only. Log
+"X swaps places with Y. <quip>", FX: both slide at once and "⇄ Swap!". Undo (Z) works like a move's (both go back, the
+AP comes back) when the swap provoked nothing and its tile effects changed nothing. `Combat.provokes(unit, x, y)` on an
+adjacent ally's tile gives the swap's attacks of opportunity. In deployment, a swap rolls initiative first (like a
+move); the free deployment swaps (`deployMove`) are unchanged.
+
+**Breaking objects.** Every object with HP left (`maxHp > 0`) is a target for the same single-target attacks that can aim
+at barrels (`aimsAtObjects`: a `'unit'` target with the `'enemy'` filter that is `kind: 'attack'`, the basic attack, or a
+consumable without a kind; `target.objects: true / false` opts in / out), in range and line of sight, on a tile no unit
+stands on — unless the def or instance says `targetable: false`, or it is the protect objective's object (the party
+never shoots what it guards; area hits still hurt it). validTargets entries: `{ x, y, obj, dmg, hp, breaks }` (a volatile
+one: `{ x, y, obj, detonates: true }`). The use pays its costs, runs no `execute` (no riders) and hits the object for
+`DD.Targeting.objectDamage`: the def's `objectDmg` (number | (L, user) => n) or L.dmg, × Weak 0.75, Inspired 1.25 and
+1 + dmgBonus (items), rounded — nothing else (no damage hooks: an object is no foe; Empowered is neither used nor
+consumed; no high ground). `DD.Act.breakObject` logs "Wizzy McTest takes a shot at the crate: 4 damage (2 HP left)." /
+"… whacks the crate: 6 damage. <quip>" and calls `damageObject(attacker, …)`: at 0 HP the object breaks — its
+`onDestroyed(obj, tile, src)` (src = the attacker; blasts, splashes, loot credited to it), the puzzle hint read before the
+blow (boss fights: a puzzle step), the destroy objective's count (and its victory). Volatile objects still detonate
+outright. The AI never aims at objects. Previews: `breaks: { x, y, id, name, dmg, hp, left, destroyed, text }`, text
+"Break: Crate − 4 damage, 2 HP left" / "Break: Crate − 2 damage — breaks!", `tiles` = the object + any blast. **Content**:
+a skill whose damage is not its L.dmg (a consumable without levels: the Thunder Jar) needs `objectDmg`; a breakable puzzle
+object that must be interacted with (or scenery that makes no sense to shoot) says `targetable: false`.
+
+### Summary (implementation)
+
+- `targeting.js`: `objectTargetable`, `breakable`, `breakableAt`, `objectDamage`; `volatileAt` respects `targetable`
+  and the protect objective; validTargets lists breakables (`dmg`, `hp`, `breaks`) and marks barrels `detonates: true`;
+  `buildCtx` sets `ctx.targetObj` + `ctx.objectDmg` for a breakable; `preview` → `breaks` (`breakInfo`).
+- `actions.js`: `Act.breakObject` (FX, log, `damageObject`); `Act.swapMove` (attacks of opportunity via the walk's
+  `provokeLeaving`, the trade without bump, enterTile for both, never two on a tile, onMove + Bleed for the mover).
+- `combat.js`: `resolveSkill` → `breakObject` when `ctx.objectDmg` is set; `swapInfo` / `swapTargets` / `canSwap` /
+  `swap`; `canUndo` / `undo` handle a swap record (`kind: 'swap'`); `provokes` falls back to the swap's.
+- `autoplay.js`: `breakValue` (objective / hint value + a dry run of a break that does something: foes, allies,
+  surfaces, loot at `GOLD` 0.4 a gold piece; plain cover 0), the exact pass adds the loot of an object-aimed use;
+  `bestSwap` (+ `swapLog` against ping-pong), executed by `Combat.swap`; switch `AP.swap = false`.
+- `terrain.js`: every core object keeps its HP; all stay targetable (`targetable: true` written out on the totem — a
+  destroy-objective target, shooting it is the point — and the brazier — shooting it spills fire all around, kicking it
+  over spills 3 tiles away: two tools); descs say the HP ("Destructible cover (6 HP): any single-target attack can break
+  it…") and the header documents `targetable`.
+
+### Deviations
+
+- **What an object takes**: the skill's listed damage (`objectDmg`, else L.dmg) with the user's Weak / Inspired / item
+  damage bonus only. Damage hooks (`modifyOutgoingDamage`, the Whetstone's flat) are not asked — they are written for a
+  unit target and an object is none; Empowered is neither used nor consumed (it waits for a foe, like on an attack of
+  opportunity); no high ground. So the number is the one on the skill card, and the preview is always exact.
+- `targetable: false` opts an object out of both uses (a volatile one is then no target either). The protect objective's
+  object is never a target (not asked by the lead; the party never wants to shoot what it guards). Objects with HP placed
+  as instances (Rocky the Pet Rock, 10 HP) are targets unless their instance says otherwise (request below).
+- Swap: the ally enters its new tile with cause `'teleport'` (as in `Act.swap`); only the mover gets `onMove` and Bleed
+  (the ally took no move action). An immovable MOVER can't swap either (symmetry). "A large unit that doesn't fit": every
+  unit is one tile (`flags.large` is only its look), so no extra rule. A sheep ally can be swapped and a sheep can swap
+  (sheep can move). A swap during deployment rolls initiative first, like a move (the free deployment swaps stay).
+- Swap preview: like a move's, no dry run — `swapInfo` gives the attacks of opportunity (names, skills, estimated damage)
+  and both arrival hazards / edges.
+
+### Requests
+
+- **HUD (`js/ui/combat_hud.js`, `js/render/renderer.js` / `input.js`)** — rule A, from the decisions file: in move mode a
+  click on a reachable tile moves there even when a friendly sprite covers it (`Combat.reachable(u)` under the cursor wins
+  over `DD.Render.unitAtScreen` for allies); ally sprites ghost while a move is aimed; the range reads continuous (an
+  ally's tile drawn as pass-through, not a hole); the path preview runs through allies (`reachable` entries' `path`).
+  **Swap**: while a move is aimed, hovering an adjacent ally → `Combat.swapInfo(u, x, y)`: `ok === true` → "⇄ Swap with
+  <name>" with its `provokes` ("⚔ provokes N", as for a move) and the arrival warnings for both (`hazard`, `allyHazard`,
+  `edge`, `allyEdge`); a string → that reason, greyed. Click → `Combat.swap(u, x, y)`; mark `Combat.swapTargets(u)` (⇄).
+  Outside move aiming a click on an ally still selects it. Undo (Z) needs nothing (`Combat.canUndo` / `undo`).
+  **Breaking**: validTargets entries `{ obj, dmg, hp, breaks }` (breakable) vs `{ obj, detonates: true }` (volatile): the
+  💥 marker / "things that go boom" only for `detonates`, another marker (🔨) for breakables; hover shows
+  `preview.breaks.text` ("Break: Crate − 4 damage, 2 HP left" / "… — breaks!"); the object inspect panel says its HP and
+  whether the party can target it (`DD.Targeting.breakable` / `objectTargetable`). `tests/hud_tests.js` "hud: v2 requests —
+  attacks aimed at an explosive barrel…" fails 3 assertions until then: "a plain barrel is no target" (it is a breakable
+  now), the renderer's 💥 list (`overlay.objTargets` must keep only `detonates`) and the aim hint ("💥 2 things that go
+  boom" counts a crate).
+- **UI (`js/ui/ui.js` `UI.aimNotes`)**: add "🔨 Can also hit a breakable object in range (crates, totems…) for N damage;
+  it breaks at 0 HP." when `DD.Targeting.objectDamage(user, def) > 0`.
+- **Content tests**: `tests/content/hero_marbles.js` "Doddering Jab and Walking Stick Whack" — "whack: only the adjacent
+  foe is a target" now also lists the adjacent crate (filter `!q.obj`); `tests/content/kit.js` "kit: v2 requests…" —
+  "Throw Chair: a plain barrel does not explode, so it is no target": it is a breakable target now (assert `!q.detonates`,
+  or that it is hit for Throw Chair's damage).
+- **Object decisions (content owners)** — every breakable def and what I recommend:
+  - `js/data/bosses/dm.js` `dm_screen_panel`: **`targetable: false`** (walk up and Smash it, or hit it with an area).
+    Shot from range the screen drops in round 1: `boss_dm: AutoPlay sims with the real heroes … hard but fair` went from
+    13/16 to 16/16 and fails "not always"; campaign DM fights 7.0 → 6.3 rounds. The desc can say so.
+  - `js/data/bosses/lich.js` `lich_shelf`: keep it targetable (its desc already says "or break it (8 HP)"; a mimic shelf
+    still bites when broken); write `targetable: true`. Lich sims unchanged (7/12 → 6/12, noise).
+  - `js/data/bosses/grimble.js` `grim_cabinet`: targetable (cover that bursts into smoke: a fair trade); optional
+    `targetable: true` and "(6 HP, any single-target attack)" in the desc.
+  - `js/data/enemies/act1.js` `a1_strike_fund`: targetable (a destroy objective: shooting it is the point; union meeting
+    5.3 → 4.8 rounds); desc "Destructible (8 HP): hit it with any single-target attack, or Smash it from next to it".
+  - `js/data/enemies/act2.js`: `a2_bone_pile` — decide: keep (its desc already says "3+ damage scatters it"; AutoPlay shot
+    151 piles in 60 runs, a new counter to Unpaid Internship) or `targetable: false` to keep "stomp or Smash";
+    `a2_bone_wall` targetable (free a boxed-in ally from range); `a2_chafing_dish` targetable (destroy objective;
+    Forbidden Buffet 6.6 → 6.1 rounds); `a2_coffee_machine` is a protect objective (never a target while protected).
+  - `js/data/enemies/act3.js` `a3_snack_bowl`: a protect objective (never a target). Totems (`a3_kobold_pep_rally`,
+    destroy): 7.0 → 5.5 rounds.
+  - `js/data/heroes/slate.js` `sla_boulder` (5 HP): targetable is fine (clear your own boulder); optional explicit flag.
+  - `js/data/passives.js` Pet Rock (a `rock` instance with 10 HP): add `targetable: false` to `ROCKY` (the party's pet;
+    area hits still chip him).
+  - `js/data/consumables.js` Thunder Jar: **`objectDmg: 8`** (its 8 lives in `execute`; without it, it only sets off
+    barrels — the content suite's advisory).
+- **Narrative (`js/data/narrator.js` tips)**: e.g. "Stuck behind the wizard in a corridor? Click them while moving to swap
+  places. It costs a move. The wizard pretends not to mind." · "Anything with HP can be hit: a crate, a totem, that Spore
+  Pod next to three goblins. Property damage is still damage."
+- **Docs (lead)**: DESIGN §4.2 / §4.3 rule text (moving through allies is symmetric; the swap; breakable objects, the
+  listed damage, `targetable: false`, volatile unchanged) and a tip; ARCHITECTURE §3.2 (the "what single-target skills can
+  be aimed at" paragraph: objects, `objectDmg`) and §3.7 (`targetable`); README "How it plays"; the v2 digest.
+
+### Known issues
+
+- Until the requests above land, the full run fails in other owners' files: `hud_tests` (3 assertions), `hero_marbles`
+  (1), `kit` (1), `boss_dm` (1). `hero_marwyn` "AutoPlay battles, act 1" fails as before this run (not mine).
+- AutoPlay's swap prices the ally's danger, not the attack spot it gives up (`SWAP_COST` stands in): a ranged ally loses
+  little, a melee ally pushed off a foe can walk back. Measured swaps: below.
+- Enemies never swap (the user's rule); the enemy AI is unchanged.
+
+### Balance
+
+Sims, normal. "Before" = the pre-run engine files (`.tmp/wf11/eng/before/`: `js/engine/*`, `statuses.js`,
+`terrain.js`) with today's content, loaded by `.tmp/wf11/eng/sim_before_c.html`; "after" = the live files; counters for
+swaps and object hits: `.tmp/wf11/eng/counters.js`. Same seeds both ways.
+
+| | before | after |
+|---|---|---|
+| Act 1 only, 200 runs (seeds 1000+): act 1 cleared | 121 (61%) | 122 (61%) |
+| … act-1 boss (Grimble / Rat King) | 62% (59% / 65%) | 62% (58% / 66%) |
+| … boss downs a fight · elite downs a fight | 2.67 · 0.57 | 2.64 · 0.48 |
+| Act 1 only, 100 runs (seeds 5000+): act-1 boss | 78% (downs 2.19) | 77% (downs 1.95) |
+| Campaign, 2 × 60 runs (seeds 1000+, 2000+): wins | 51 (42.5%) | 39 (32.5%) |
+| … act 1 cleared · act 2 cleared (of entered) · act 3 | 79 (66%) · 60/79 · 51/60 | 68 (57%) · 48/68 · 39/48 |
+| … boss fights won | 83% / 81% | 77% / 72% |
+| Act-1 boss, all 353 fights pooled | 235 (66.6%) | 230 (65.2%) |
+
+- **The first boss doesn't move**: 66.6% → 65.2% over 353 fights (noise; act-1-only batch of 200: identical). The two
+  60-run campaign batches lost act-1 clears (−11 in all) to one changed decision re-rolling the rest of a run: the same
+  seeds 1000-1059 are inside the 200-run batch that came out even. Act 2 / 3 conversion is unchanged (76% / 71% of the
+  runs that entered act 2 cleared it, 85% / 81% act 3). Campaign wins read −10 points, inside the batches' ±12%.
+- **A/B of the parts** (act 1, 200 runs): with everything 62% boss / 61% cleared; without swaps (`AP.swap = false`) 64% /
+  61%; without object hits (objectDamage → 0) 65% / 64%; before 62% / 61%. All within noise.
+- **What happens**: swaps 0.28-0.41 a fight (a quarter by summons); aimed object hits 0.47 (act 1) to 0.80 a fight, 70% of
+  them break the object — Strike Funds (destroy objective), bone piles (act 2: a pile shot is a skeleton that never
+  stands up), chafing dishes, totems, DM screen panels, braziers, spore pods. Barrel detonations unchanged (~0.15).
+- **Faster objective fights**: Union Meeting 5.8 → 5.0 rounds (act 1, 200 runs), Forbidden Buffet 6.6 → 6.1, Kobold Pep
+  Rally 7.0 → 5.5; the DM 7.0 → 6.3 rounds (screen panels shot down; request: opt them out). Boss and elite downs a little
+  lower (swaps put the tank in front).
+- Wall clock: 200 act-1 runs 4:47 vs 4:43 (+1-4%; the machine was shared).
+
+## Review (balance run) — adversarial review of the rules run (moving through allies, swaps, breaking objects; REVIEWER role, Nov 10)
+
+Verified by running code: the authors' suites, reviewer probes (`.tmp/wf10/rv/eng.js`, `audit*.js` via
+`.tmp/wf10/rv/t.sh`), the real game page with synthetic pointer events (`.tmp/wf10/rv/rv.js`, see `docs/notes/hud-v2.md`
+"Review (balance run)") and a 100-run campaign sim with counters (`docs/notes/autoplay.md` "Review (balance run)").
+
+### Verified (held)
+
+- **Walking through allies**: both sides walk through their own side, never through a foe, never end on a unit — the
+  sim's turn-end check found 0 shared tiles in 935 fights; on 12 real maps every reachable tile is clickable at yaw 0.
+- **Swaps**: refusals (downed → Help Up, stunned / asleep, rooted / engulfed (`noMove`), immovable, cliffs, pits, AP,
+  turn), the mover's attacks of opportunity, the ally's none, both arrival effects, Undo only when clean, swap → Undo →
+  swap again, and "there and straight back" costs two moves (no free shuffle). A strike that **shoves the ally away** or
+  **downs it** calls the swap off (the mover stays, the move is spent; nobody shares a tile); one that shoves the mover
+  likewise. Enemies never swap (sim: 0). No hero "moved this turn" flags exist that a swap could dodge.
+- **Breaking**: every breakable def (25, from crates to Lich-tenstein's shelves) is a target from 1 and 3 tiles exactly
+  when `objectTargetable` says so — including the ones that block sight (bookshelf, soda tower, bush, filing cabinet,
+  shelf, bone wall) — and a killing hit with units around it previews exactly the HP each unit loses and the break
+  (blasts of the barrel / Pork Barrel, the Strike Fund's 3 gold). Opt-outs: the DM's panels, the Coffee Machine, the Snack
+  Bowl, Rocky; the protect objective's object. Enemies never aimed at one in the sim (0 of 577 aimed hits).
+- **Who can aim** (audit of every def): the hero, summon and generic attacks, basics and consumables that can, with their object damage per
+  level; the opt-outs (Fetch!, Pounce, Veinglory, Bling Throw, Slate's grapples, Kiri's lobbed arrow) read right. Damaging
+  single-target SPELLS (Heckle, Collect, Hemoglobin, Juice Box, Get Over Here, Anvil) can't break objects — the rule as
+  specified ("the attacks that can aim at barrels"); the object descs' "any single-target attack" means kind attack.
+- **Boss puzzles** (campaign sim, 100 runs): Grimble 23 / 42, Rat King 38 / 58 (valves: 0 HP, untouched), Lich-tenstein
+  14 / 15 (shelves 8 HP: AutoPlay only shoots revealed ones; a mimic shelf broken from range spawns its mimic without the
+  surprise bite), Dr. Iris 24 / 25 (mirrors: 0 HP), the DM 32 / 34 in 7.4 rounds (panels opted out; Smash / blasts only).
+
+### Fixed
+
+- HUD: the acting hero's own sprite over an adjacent ally's tile was a dead click (no swap, no Help Up) — fixed in
+  `js/ui/combat_hud.js` (`pierce`, `hoveredSwap`); suite `hud: rules run review — …` (details in hud-v2.md).
+- Regression coverage added for what held but wasn't pinned: `engine: rules run review — a strike of opportunity that
+  shoves or downs the ALLY calls the swap off` (mutation-checked: dropping the ally re-check in `Act.swapMove` fails it)
+  and `engine: rules run review — every breakable object def: a target from 1 and 3 tiles unless opted out; a killing hit
+  previews exactly what happens`.
+
+### Could not verify
+
+- A human playing in the browser pane (silence rule): everything was driven headless with synthetic pointer events.
+- Minor, left as is: a Stealthed hero who breaks a crate stays Stealthed (stealth breaks on damage to a unit); the
+  Electric Lute's water shock (previewed) and Echo Chamber's random echo (a second hit) still fire on an object hit (onSkillUsed
+  hooks). Slate never swaps (immovable) — the content owner's open design question for the lead.
+
+## Playtest fixes (Nov 12) — fix:engine (engine, run, statuses, terrain)
+
+Source: `.tmp/wf12/confirmed-findings.json` (the six-lens playtest), lead decisions `.tmp/wf12/lead-decisions.md`.
+Each fix: reproduced on the current files first (a failing regression test), fixed, re-run. Status per finding id is
+kept in the table below AS WE GO (a re-run continues from it). Suites: `engine: playtest fixes — …`.
+
+| id | sev | status | what (engine side) |
+|---|---|---|---|
+| combat-controls-v1 | major | fixed | rooted pass-through slides into lava (Act.moveAlong / swapMove nearestFree) |
+| combat-controls-2 | major | fixed (engine; HUD warning done by fix:ui) | walks route through webs on a tie (Grid tie-break `stops`) |
+| combat-controls-1 | major | fixed (engine; HUD lines done by fix:ui) | AoO previews: dry-run the strike (stops, bleed rider, random) |
+| combat-controls-4 | major | fixed (engine half: `Combat.swapInfo().outcome` bleedTick / lethal; the swap hint is fix:ui's, done) | swap hint never mentions Bleed |
+| robustness-1 | major | fixed | downed body left on a tile that becomes a pit |
+| bosses-objectives-2 | major | fixed (engine; renderer "?" done by fix:ui) | Dazzle / Confuse on a pending wind-up: honest landing tiles |
+| bosses-objectives-3 | major | fixed (AI.threatMap opts.hero + AI.turnsBefore; HUD by fix:ui, Rat King +1 by fix:content: both done) | threat counts a unit's every turn before the hero's next |
+| bosses-objectives-7 | major | skipped here (fix:content's dm.js switchValue covers it; a 0 hint drops the offer in AutoPlay) | AutoPlay prices diverted wind-ups onto allies who can't move |
+| first-hour-1 | major | fixed (wind-up text + AI.skillDesc / fightLevel; UI.skillInfo done by fix:ui) | wind-up text in AI.describe at the fight's damage factor |
+| first-hour-3 | minor | fixed (stats.combats counts victories only) | 'Fights won' counts the lost fight |
+| bosses-objectives-8 | minor | fixed (stall breaker ignores adds while a boss is up) | AutoPlay hides from Dr. Iris after the mirrors |
+| bosses-objectives-9 | minor | fixed (ai.js whole-table line; keg desc; objective label) | doom 'Get out of the red'; keg desc 6 HP; objective name |
+| bosses-objectives-10 / text-tone-5 | minor | fixed (engine picks hero_downed_self / _friendly; lines are fix:ui's, done) | hero_downed credit is the hero himself / an ally |
+| robustness-5 | minor | fixed (test compares DD.Balance.scale) | mapgen test hard-codes brutal multipliers |
+| heroes-3 | minor | fixed (Targeting.preview: breaks / detonates for tile-aimed hits) | tile-aimed object hits: no breaks preview |
+| heroes-v1 | minor | partly (DD.Targeting.reach helper; fix:content swept its 11 heroes; the 5 deferred hero files remain) | +range items vs 'within N' descs |
+| text-tone-2 | minor | partly (engine: named helpers must be up, {downed} token; Marwyn's line is deferred) | ally_down barks name the wrong hero |
+| text-tone-3 | minor | fixed (ai.js templates; HUD / act3 / narrator halves are others') | ai.js 'its' templates for named bosses |
+| text-tone-9 | minor | fixed (engine: case kept, are/is, no double line; lich.js line is content's) | object names lower-cased, 'is' for plurals |
+| text-tone-10 | minor | fixed (statusVerb: is / gains / logVerb; stop() punctuation) | 'Betty is Thief!.' status log |
+| text-tone-11 | minor | fixed (terrain.js chest; events / act3 / dm / zarathor / passives are fix:content's) | chest 'a Antidote' (terrain.js) |
+| text-tone-20 | polish | fixed (minion / normal death barks 40%) | minion death barks every death |
+| text-tone-23 | polish | fixed (terrain.js stone floor + pillar; the rest is content's) | stone floor 'load-bearing' |
+
+Deferred (files held by the sustain builders / docs owner during this run; the post-balance finish run takes them):
+heroes-4 (basanos.js Step In: canTarget like Human Shield, drop `force`), heroes-6 (slate.js Short Fuse wording),
+heroes-5 (DESIGN "Wet → lightning"; marwyn / ellaria kits), heroes-10 (v2-digest §2 Campaign Promise cost), the
+heroes-v1 desc sweep in the five deferred hero files, Marwyn's `ally_down` line "Basanos, get up! …" (text-tone-2: it
+names a hero, so it now only fires while Basanos STANDS — write it as "{downed}, get up! …" or as a helper call).
+
+### For content authors (new knobs, all optional)
+
+- **Snags** (combat-controls-2): a surface / terrain / object def may declare `stops: true | (unit, tile) => bool` (entering
+  ends the walk: the Web) or `hinders: …` (a nuisance: Cheeto Dust), with `snagStatus` (the status it applies; a unit
+  immune to it ignores the snag; default 'root' / 'slow'). Flyers feel only clouds' snags. `DD.Grid.snagAt(x, y, unit)`
+  → `{ id, name, stops }`; equal-cost paths avoid snags like hazards; `Grid.reachable` entries carry `stop` (the first
+  tile on the path whose floor ends the walk, the destination included: `{ x, y, id, name }`) and `hinder`;
+  `Combat.swapInfo` carries `snag` / `allySnag` (the landing tiles). Content with a root-on-enter tile (Ellaria's
+  Brambles already is a hazard for foes) can add `stops: true`.
+- **AoO dry runs** (combat-controls-1): `Combat.provokes(unit, x, y)` entries now add `at`, `bleed` (Bleed stacks the
+  strike adds — they tick when the move ends), `stops` (null or what ends the move there: 'Downed', 'Pushed', 'Stopped' or
+  the holding status' name, e.g. 'Engulfed', 'Rooted', 'Stunned'), `random`, `min` / `max`, `skipped` (an earlier strike
+  ended the move); `dmg` is the dry run's HP + Block lost (riders, high ground, Block included). The array carries
+  `.outcome`; `Combat.moveOutcome(unit, x, y)` gives it for a walk or a swap: `{ strikes, end, arrived (a swap: it
+  happens), loss, lossMin, lossMax, bleedTick, lethal (in ANY sampled roll), uncertain }`. Random strikes show the most
+  common of 8 other rolls, never the real one. `Combat.swapInfo(...).outcome` the same for swaps. Hooks fire in the dry
+  run (DD.Act.simulating is true there): hooks with side effects outside the state check it.
+- **Wind-up skew** (bosses-objectives-2): Dazzle / Confuse still move an attack 1 tile off / a quarter turn, but the roll
+  happens when the status lands on a unit with wind-ups pending (or when a wind-up starts on a Dazzled / Confused unit),
+  stored as `intent.skew = { off, turn }`; `AI.intentTiles` draws the skewed tiles while the status lasts, `executeIntent`
+  lands exactly there (`AI.rollSkew(unit, intent)`). `AI.describe` says "✨ Dazzled: it lands 1 tile off, on the tiles
+  marked now" and is no longer `uncertain`. Actions used at once roll at execution, as before.
+- **Fight numbers** (first-hour-1): `AI.fightLevel(def, level, unit)` (an enemy's damage numbers × the fight's
+  `state.difficulty.dmg`) and `AI.skillDesc(def, level, unit)` (the desc with them). `AI.describe` uses it.
+- **Turns before a hero** (bosses-objectives-3): `AI.turnsBefore(unit, hero)` (0 / 1 / 2…), `AI.threatMap(side, { hero })`
+  multiplies each unit's tile values by it (entries get `turns: { unitId: n }`; without `hero` nothing changes).
+- **Desc ranges** (heroes-v1): `DD.Targeting.reach(def, L, user, base)` — base + the user's range changes (item +range,
+  Dazzle, modifyRange): `desc: function (L, user) { … 'within ' + DD.Targeting.reach(this, L, user, 4) … }`.
+- **Barks** (text-tone-2): `Act.bark(unit, key, { about: unit })` / `Act.maybeBark(unit, key, chance, opts)`; the engine's
+  `ally_down` passes the downed hero: a line naming a hero is a helper call (that hero must be up), `{downed}` is filled
+  with the downed hero's name. Death barks of minion / normal enemies fire 40% of the time (elites, bosses always).
+- **Logs** (text-tone-9 / -10): `Act.objName(o)` ("the Crate", "The Last Keg": own case, no double article); a destroyed
+  object gets "The X is / are destroyed." only when its own onDestroyed logged nothing; plural by `def.plural` or the head
+  noun. Status lines: `def.logVerb` ('turns into a' for Sheep), else 'is' for adjectives (the core statuses, -ed / -ing /
+  -y / -ble / -ous / -ive names) and 'gains' for nouns ("Betty gains Thief!"); no '.' after ! ? . …
+- **Narration** (text-tone-5): the engine narrates `hero_downed_self` ({hero}) when the credit is the downed hero and
+  `hero_downed_friendly` ({hero}, {enemy} = the ally) when it is a unit on the hero's side (lines in narrator.js, fix:ui).
+- **Objectives** (bosses-objectives-9): a protect objective names the placed object's label ("Protect The Last Keg…").
+
+### Summary of the engine behaviour changes
+
+- A walker left on a friend's tile (rooted there, downed there) steps back to the newest tile of its walk it can stand on
+  (hazard-free first), never sideways into lava; failing that the nearest free safe tile, felt as an entry (cause 'push').
+  Swaps use the same settle. A downed body on a tile that becomes a pit / deep water / wall is moved to a safe spot (no
+  fall damage at 0 HP); `Act.revive` stands nobody up over a drop or in a wall.
+- `stats.combats` ("Fights won") counts victories only (TPKs and lost objectives no longer count).
+- AutoPlay's stalemate breaker counts only the bosses (and objects) while a boss is up.
+- Text: the stone floor and pillar tooltips lose "load-bearing"; the keg desc states no HP number; the chest says "an
+  Antidote"; the Dazzled / Confused descs say a pending wind-up's marked tiles move.
+
+### Deviations
+
+- bosses-objectives-2: kept the contract (ARCHITECTURE §5.6 "dazzle shifts it 1 tile, confuse turns it") and made the
+  board honest (option b) instead of exempting wind-ups (option a). The roll moved from landing time to status time, so
+  the combat RNG sequence differs from before in fights with Dazzle / Confuse on a boss.
+- text-tone-2: no per-line tags (lines are plain strings everywhere); the rule is "a named hero is a helper", which fits
+  every current line except Marwyn's (deferred file).
+- bosses-objectives-7: no AutoPlay change: fix:content's `switchValue` (dm.js) prices the stuck allies, and a hint of 0
+  never makes an offer (hintedTiles needs ≥ 0.01).
+
+### Requests
+
+- **fix:ui** (combat_hud.js / renderer.js / ui.js):
+  - combat-controls-1: read the new `Combat.provokes` fields — the stop line ("⛔ Engulf stops Professor Marbles here: the
+    move is spent, the swap won't happen"; `p.stops`, `outcome.arrived`), cut the drawn path at `outcome.end`, ✖ on the
+    swap arrows when `si.outcome.arrived === false`, '9?' / '0–18' from `random` / `min` / `max`, the lethal check on
+    `outcome.lethal` / `lossMax`, the rider Bleed (`p.bleed`, `outcome.bleedTick`) in the bleed line.
+  - combat-controls-2: warn from `e.stop` ("⚠ The path crosses a Web: Rooted there, the walk stops" when it is before
+    the destination, "Ends on a Web: Rooted 1 turn" on it) and `e.hinder`; swapHint from `si.snag` / `si.allySnag`.
+  - bosses-objectives-2: renderer.js ~4018 marks a wind-up '?' when the unit is Dazzled / Confused; read
+    `desc.uncertain` only (false once the skew is rolled — the tiles already moved).
+  - bosses-objectives-3: pass the hero to `DD.AI.threatMap('hero', { hero })` for the shading / card / inspect lines
+    (or use `DD.AI.turnsBefore`); `max` stays one hit, `dmg` sums the turns.
+  - first-hour-1: `UI.skillInfo` for an enemy unit in a live fight: `DD.AI.skillDesc(def, lv, unit)` instead of
+    `DD.skillDesc` (the numbers this fight uses).
+- **fix:content**: bosses-objectives-3 — the Rat King's numbers for his turns in the NEXT round need the coming Swelling
+  Ranks stack (+1): content-side (e.g. a `telegraphFlat` / reach bonus when `DD.AI.turnsBefore` spans a round start).
+  heroes-v1 — use `DD.Targeting.reach` in "within N" descs (11 heroes not deferred). text-tone-3 — act3 UNSHAKEABLE_LINE.
+  text-tone-9 — lich.js:471 "a phylactery hides…" capitalised. Optional: `stops: true` on root-on-enter tiles.
+- **post-balance finish run** (deferred files): see "Deferred" above; DESIGN §4 can state the wind-up skew rule ("Dazzle /
+  Confuse a boss mid-wind-up and its marked tiles move to where it will land").
+
+### Balance impact (these land before the refits; the sims measure them)
+
+- bosses-objectives-2 (Dazzle / Confuse skew drawn): heroes and AutoPlay now dodge the real landing tiles. In 24 Lich
+  fights (fight3 harness, seeds 500-523, level 3) 0 wind-up hits landed outside the board's marks (the playtest's batch:
+  10, every one with the Lich Dazzled; 21/24 won). Easier for parties that Dazzle / Confuse bosses (Lich, Dr. Iris most).
+- bosses-objectives-8 (stall breaker): Dr. Iris's longest quiet streak 5 → 3 rounds (24 fights, seeds 600-623; wins 18 →
+  17/24, noise). A/B on Rat King / Grimble / Lich (24 each, seeds 900-923, level 2): 14 → 15, 11 → 11, 19 → 19 wins: neutral.
+- combat-controls-2 (snag tie-break): both sides take the web-free route on a tie; the AI too. Tiny, slightly easier on
+  web maps (a1_web_of_lies) for both players and AutoPlay.
+- combat-controls-v1 / robustness-1: rare edge cases (rooted on a friend's tile; Gnaw under a downed hero): slightly
+  easier (no lava slide), slightly harder (no free pit-stand after Help Up).
+- combat-controls-1 / bosses-objectives-3 / first-hour-1 / heroes-3: previews and texts only; AutoPlay's swap pricing
+  reads the dry-run numbers (riders included): marginally more careful swaps. No measurable change expected.
+- first-hour-3 and the texts: none.
+
+### Tests
+
+`engine: playtest fixes — …` (12 suites in tests/engine_tests.js), `autoplay: playtest fixes — bosses-objectives-8 …`,
+`mapgen: playtest fixes — bosses-objectives-9 …`, and assertions added to `run: v2 leveling …` (first-hour-3) and
+`mapgen: encounter build (synthetic encounters)` (robustness-5). Each was run failing on the pre-fix code (combat-controls
+-v1 / -2 and bosses-objectives-8 also mutation-checked). Updated for the new contracts: the old "a dazzled wind-up is
+marked uncertain" (now: drawn where it lands), the AoO hook tests (dry runs strike copies: compare ids / skip
+`DD.Act.simulating`), and the log texts ("the Crate", "the Explosive Barrel").
+
+### Re-check after the restart (Nov 12, ~20:00)
+
+The app closed at ~19:29, right after the table and the suites above landed. The re-run read every owned file (git diff)
+and found the fixes complete: the 14 playtest-fix suites pass (100 assertions), and so do the engine / autoplay / mapgen /
+run suites (323 suites), except for one failure that is not in this area:
+
+- **Known issue (deferred file)**: `hero_marwyn: AutoPlay battles, acts 2-3` fails "many different skills used": Marwyn
+  uses 5 skills besides Ginger Snap and the bar is 6. The bar is a coin flip. The same eight fixture fights over harness
+  seeds 1-8 give 5, 6, 5, 6, 5, 8, 6, 6 (scratch probe `.tmp/fe/probe2.js`). Any change to a fight's dice moves the
+  default seed 12345 between 5 and 6, and this run made several (the wind-up skew rolls when Dazzle / Confuse lands,
+  AutoPlay pricing, content numbers). I found no AutoPlay bug behind it: the dry runs restore the combat RNG
+  (Targeting.simulate), switching the snag tie-break off changes no pick (probe), and every other hero's AutoPlay battle
+  suite passes. The marwyn owner made the same call (hero-marwyn.md "Known issue").
+  **Request (marwyn owner / post-balance finish run)**: lower the bar to `>= 5`, or add a ninth fixture fight.
+
+Full `bash tools/test.sh` (Nov 12, ~20:20): 991 suites, 122813 assertions ok, 2 failing sections, neither from this
+area and no "Error in" warnings. One is the Marwyn bar above. The other is `balance: acts 2-3 levers (pass 2)`
+(tests/balance_tests.js expects act 2-3 boss rows that js/data/balance.js does not carry yet; both files are held by the
+balance owner during this run).
+
+## Review (playtest fixes) — adversarial review of fix:engine / fix:content / fix:ui (REVIEWER role, Nov 12 ~20:45)
+
+Re-ran the repros on the current files with a real-fight harness (`.tmp/rev-pt/fight.js`, AutoPlay boss fights with
+fairness tallies; it adds a "board lied" count — a wind-up hit on a tile that was NOT marked at the victim's last turn
+end while it stood still — and optional forced Dazzles / Confuses on the boss, `dz=` / `cf=`). Chrome one run at a time.
+
+### Verified (held)
+
+- combat-controls-v1 / robustness-1 (settleOff, downed bodies off new pits, revive on solid floor), combat-controls-2
+  (web tie-break; a1_web_of_lies 20/20 won), combat-controls-1 / -4 (dry-run previews restore the combat RNG), heroes-3,
+  first-hour-1, first-hour-3 (the failed-objective branch returns before `stats.combats++`), bosses-objectives-3 / -9 /
+  -10, text-tone-2 / -5 / -9 / -10 / -20 / -23: code read + their suites.
+- bosses-objectives-8: Dr. Iris (24 fights, s600, L3) 17/24 won, longest quiet streak 3 rounds (4 fights), most 1.
+- bosses-objectives-1 / -v1 / -5: Grimble and the Rat King (24 each, s900, L2): 0 trapped wind-up hits; longest Injunction
+  lock 2 turns.
+
+### Fixed (regressions: `engine: playtest review — bosses-objectives-2 …`, `autoplay: playtest review — …`)
+
+- **bosses-objectives-2 was only half honest.** The skew was drawn whenever the status was on, but it only applies if the
+  status is still on when the wind-up LANDS. A 1-turn Dazzle / Confuse on Grimble's or the Rat King's one-round wind-up
+  (two turns a round) wears off at the end of their in-between turn, so the board showed moved tiles, the describe said
+  "it lands 1 tile off, on the tiles marked now", and it landed on the original ones. Probe: 7 such "board lied" hits in
+  24 Grimble fights (s900, heroes Dazzling the boss 12% of turns), 3 in 24 Rat King fights; 0 / 0 after. New
+  `AI.lastsToLanding(unit, intent, id)` walks the initiative order the way DD.Combat plays it (hero window, the owner's
+  count-down, 'turnEnd' ticks, fresh statuses) and `landing()` applies a skew only while it will hold; the describe says
+  "✨ Dazzled, but it wears off before this lands: it hits the tiles marked now" (same for Confused), and a Silenced
+  spell's "this spell will fizzle" line uses the same test. The contract (§5.6: the status at resolution) is unchanged.
+- **AutoPlay still priced a Dazzled / Confused unit's wind-up tiles at 50%** (`addWindups` fuzzy), though they are now
+  exact: only an intent whose skew is not rolled yet counts as a coin flip (autoplay.js).
+
+### Deviations / corrections
+
+- The balance-impact line above ("AutoPlay's swap pricing reads the dry-run numbers") is not what the code does: AutoPlay
+  prices a swap with `DD.AI.aooCost` estimates of who provokes (as fix:engine's own report says). No change made.
+
+### Balance (what the behaviour fixes do in sims; harness numbers, not the campaign sim)
+
+- Grimble (s900 + s1000, 48 fights, L2): 27/48 won, 0 trapped and 0 dragged-in Audit hits (the review's Stamp guard,
+  bosses-act1.md); Rat King (s900, L2): 15/24, 0 wind-up hits on heroes; DM (s700, L5): 13/16, diverted-train hits on
+  heroes 7 → 3, 0 downs (boss-dm.md); Iris 17/24; Lich with heavy Dazzle / Confuse injected 24/24, 0 lies.
+- The skew fix makes Dazzle on a two-turn boss's wind-up do what it did before the playtest fix (nothing, if it wears off
+  first) while the board stays honest; the AutoPlay pricing fix makes AutoPlay dodge Dazzled wind-ups fully.
+
+## Finish (Nov 14) — fix:engine (engine, run layer, AutoPlay; the last run before release)
+
+Sources: `.tmp/wf12/lead-decisions.md` (D1-D11; D1-D5 and D7 have engine parts), `.tmp/wf11/user-decisions.md`, the nine
+findings routed to this role. Each finding was reproduced on the current files first (D8: probes and sims in
+`.tmp/wf14/eng/`, one headless Chrome at a time). Suites: `engine: finish — …` (9), `autoplay: finish — …` (4),
+`content: finish — …` (2), `mapgen: finish — …` (1), `run: finish — …` (1). Every new engine / AutoPlay suite was
+mutation-checked: with its fix reverted it fails (engine: 31 assertions in 8 sections; AutoPlay: 6 in 4), then the files
+were restored.
+
+### Lead decisions (engine side)
+
+| decision | status | what |
+|---|---|---|
+| D1 | built (it was not: desc-sweep-1) | `DD.Targeting.aimsAtObjects` also accepts any skill that is single-target at its level (no area, `'single'`, or a circle / square / ring / cross / row of size 0) and lists damage (`objectDmg` / `L.dmg` > 0): spells and utilities. Kind attack, the basic, kind-less consumables as before; `target.objects: false` opts out, `true` in. Newly aimable in the content: Heckle, Collect, Hemoglobin, Juice Box, Get Over Here, Anvil Drop, Sand in Your Eye (I-II only: at III its circle grows). The content's opt-outs (unchanged): Bling Throw, Fetch!, Veinglory, Hold Still, Rock Bottom, Stress Ball, Beyond, Pounce. Damage only (execute never runs on an object); previews, AutoPlay's dry runs and the HUD markers read the same predicate. A non-weapon skill's log line: "Syllamin turns Heckle on the Crate: 4 damage (2 HP left)." / "… 2 damage. Structural integrity: roasted." The core object descs (crate, explosive barrel, totem) say "any single-target damage skill can break it". |
+| D2 | built | `swapProblem` no longer refuses an immovable MOVER; an immovable ally is refused with "Slate is immovable: he can start a swap, you can't move him." (`DD.Act.pronouns(u)`: a unit / def `pronoun`, else Ellaria, Sparrow and Kiri she, the other heroes he, anything else it). |
+| D3 | built | `DD.Act.damageObject(src, x, y, n, { cause, reflect })`: src's own hit on an object (cause 'skill' by default) ends its Stealth like a hit on a unit ("Revealed!"); an aimed detonation does too; environmental causes (explosion, bump, status, surface, terrain, fall) and reflections don't. The engine's own callers pass their causes (blasts 'explosion', bumps 'bump', `damageTiles` its opts). |
+| D4 | built | `Combat.resolveSkill`: on an object hit (a break or a detonation) `onSkillUsed` still fires — the use counts (Hype, cooldowns, use counters, Pay-to-Win) — with `ctx.objectHit = { x, y, id }` and `ctx.target = null` while the hooks run, so target riders (the Electric Lute's water shock, Echo Chamber's echo) have nothing to ride on. On-hit statuses, lifesteal and rider Hype never fired on objects (no `Act.damage`). |
+| D5 | built (engine side) | AutoPlay asks object hints with a 5th argument `how`: 'break' (pricing a hit: an aimed hit, a Smash, an area), 'interact', 'step'. Request to the act 2 owner: the Bone Pile's hint returns 9 for `how === 'break'` whoever asks (today it says 0 to flyers). |
+| D7 | built | A swap narrates `swap` ({hero} = the mover, {ally}) 25% of the time, after its own log line; the mover says one of its own `swap` barks ({ally} filled in) 25% of the time when its def has them, else the old 6% move bark. The content owner is adding the lines (narrator.js, hero barks). |
+
+### Findings
+
+| id | sev | status | what |
+|---|---|---|---|
+| audit-1 | major | fixed | `engine: damage pipeline` reads `DD.Balance.difficulty.brutal` (and checks it raises both); the engine's fallback rows (combat.js `FALLBACK_DIFFICULTY`, encounter.js `DIFFICULTY`, used only without DD.Balance) are 1.15 / 1.05; ARCHITECTURE §6.10 says ×1.15 / ×1.05. Suite `engine: finish — audit-1`. |
+| desc-sweep-1 | major | fixed | D1 above. Suites `engine: finish — D1` and `content: finish — D1` (the seven named skills aim, hit a 40-HP crate for exactly their number, nobody else changes, the user only pays its costs). |
+| bosses-objectives-9 | minor | fixed (the part still there) | Reproduced: (a) the doom text and the keg desc were already right ("Hits the whole table: there is nowhere to stand clear.", "Destructible."), but (b) the LIVE objective bar (`Combat.objectiveText`, refreshed every action) still said "Protect the Ale Keg": only the encounter's build text had the label. It now names the placed object's label ("Protect The Last Keg and defeat all enemies"). Suite `mapgen: finish — bosses-objectives-9`. |
+| audit-3 | minor | fixed | Reproduced seed 43220 (r31 cap). The cause was not the King's targeting: Syllamin dodged his gavel every round (Ultra Instinct), and the party never hit him again because his next point of damage crossed his 66% split: two Rat Lawyers, and AutoPlay's spawn penalty (−(6 + 0.2 × max HP) each) beat every attack; so Buga, helped up each round with full AP, passed and was re-downed. Fix: while the stalemate breaker is on (caution 0) foes a hit calls in weigh 0.25 (`STALL_SPAWN`). Also, generic AI targeting: +30 for a kill that ends the fight (`AI.endsFight`: the last hero standing), in `AI.targetBonus` too so AutoPlay's model agrees. Seed 43220 now ends (an act 1 loss, as it should), 0 timeouts. Suites `autoplay: finish — audit-3` (a splitter that calls in a minion: left alone at round 1, hit in the stalemate) and `engine: finish — audit-3`. |
+| audit-7 | minor | fixed (engine); Slate's hook requested | `DD.Act.cantMoveNext(u)`: Rooted / held at the start of its NEXT turn. A noMove status may answer with `heldThrough(st, unit) => bool`; otherwise its decay decides (a 1-turn turnEnd status during the unit's own turn, or a 1-turn turnStart one, is gone by then). `AI.reachOf` (threat shading) and AutoPlay's danger model (`src.mov`) use it. Slate's Grappled counts SLATE's turns (decay 'never'), so it needs its own `heldThrough` (request below); until then it is predicted as before. Suites `engine: finish — audit-7`, `autoplay: finish — audit-7`. |
+| FF-3 | minor | fixed | Reproduced seed 80183 (r31 cap, Web of Lies). The cause was not the webs: Pebbles and Marwyn stood in a pocket shut by crates, kegs and 2-high ledges (grid dump, round 15), so no walk reached a tile to attack from; the approach field was Infinity and every move was worth −0.5. Fix: `breakOut(unit)` — a unit sealed off floods the approach field with the breakable blockers the party may aim at as dearer tiles (2 + HP / 4), walks toward the cheapest way out and values hitting a GATE (a blocker on the rim of its area, on that way) at 2 + half the damage (+4 when it breaks). With a way out, cover stays worth 0. Seed 80183: the Web of Lies ends in 12 rounds (Marwyn whacks the crate in round 9), 0 timeouts. Suite `autoplay: finish — FF-3`. |
+| text-tone-2 | minor | not reproduced | Probe (`.tmp/wf14/eng/verify.js`, 40 seeds, Kiri down in Kiri / Syllamin / Basanos / Marwyn): 0 barks call a standing hero to get up; Marwyn's line now reads "{downed}, get up! …" (content). Hardened anyway: a line that OPENS by telling a named hero to get up ("Basanos, get up! …") fires only when that hero is the one down (`Act.aboutLines`); the old suite's "never named outright" assertion now expects exactly that. |
+| desc-sweep-9 | polish | fixed | `DD.Run.goldPreview(n)`: what `Run.addGold(n)` would add now (gold Blessings and the carried fraction; pure). The gold card reads "Gain 38 gold (35 + 10% from Blessings)." with Trust Fund I, "Gain 42 gold (35 + 20% from Blessings)." at III, "Gain 35 gold." without. Suite `run: finish — desc-sweep-9`. Event hints are content's (request). |
+| FF-6 | polish | fixed | `Act.immuneTo` (and so `addStatus`): a status whose def has an `element` (Burning fire, Poisoned poison) never lands on a unit with `resist[element] === 0`: no stacks, no "is Burning (9)" log lines, no "vs Burning" riders on a Hell Hound. Resistant (not immune) units still burn. Suite `engine: finish — FF-6`. |
+
+### For content authors (new knobs, all optional)
+
+- Status defs: `heldThrough(st, unit) => bool` (pure) for a hold that doesn't tick on the held unit's own turns.
+- Object hints (`autoplay`): 5th argument `how` ('break' | 'interact' | 'step').
+- `DD.AI.endsFight(o)` for custom planners (the Rat King's `rangedTarget` scores knockouts without it).
+- Barks: `{ally}` in a 'swap' bark; `{downed}` and `{ally}` both become `opts.about`'s name.
+- `DD.Act.pronouns(u)`; a def or unit may set `pronoun`.
+- `DD.Act.damageObject(src, x, y, n, { cause })`: pass an environmental cause when it is not src's own hit.
+- `onSkillUsed`: `ctx.objectHit` on an object hit (no `ctx.target` then).
+- `DD.Run.goldPreview(n)` for texts that promise gold.
+
+### Requests
+
+- **HERO-SLATE (slate.js, audit-7)**: give `sla_grappled` a `heldThrough(st, v)`, e.g. `const h = byId(st.source); if
+  (!holdOk(h, v)) return false; return (DD.Act.isOwnTurn(h) ? 1 : 0) + DD.AI.turnsBefore(h, v) < (st.turns > 0 ?
+  st.turns : 1) + (st.data && st.data.slaFresh ? 1 : 0);` (false = the hold ends before the victim's next turn).
+- **ENEMIES-ACT2 (act2.js, D5)**: Bone Pile hint `function (unit, obj, tile, s, how) { return unit && unit.side === 'hero'
+  && (how === 'break' || G().feelsFloor(unit)) ? 9 : 0; }`.
+- **BOSSES-ACT1 (ratking.js, audit-3, optional)**: `rangedTarget` could add +30 when the hit knocks out a hero for whom
+  `DD.AI.endsFight(f)` holds (the default AI does).
+- **CONTENT (D1 wording)**: object descs that still say "any single-target attack" (a1_strike_fund, a2_bone_pile,
+  grim_cabinet, lich_shelf, …) and their tests (`integration: rules run — …`, `enemies_act1 / act2`, `bosses_act1 / act2`,
+  `hero_slate`); `kit: v2 requests` (Sand in Your Eye is a barrel target at I-II now); narrator.js tips 483 / 489 and their
+  checks in `narrative: tips` (and the 140-character cap).
+- **CONTENT (desc-sweep-9)**: events.js hints that promise gold ("Gain 50 gold") can print `DD.Run.goldPreview(50)`.
+- **DOCS**: ARCHITECTURE §9.2 `goldPreview(n)`; §3 status defs `heldThrough`; DESIGN §4.2 rule text for D1-D4 ("any
+  single-target damage skill can break it", "Immovable units can start a swap but can't be swapped", attacking an object
+  ends Stealth, no riders on object hits).
+
+### Deviations
+
+- D1 "single-target" = target type 'unit' AND, for skills that are not kind attack, no area at that level (or a
+  point-like one of size 0). Attack-kind skills with an area (Throw Chair, Rune Bolt) aim at objects as before; area
+  spells (Chain Zap) don't (their areas reach objects their own way).
+- D4 nulls `ctx.target` only while `onSkillUsed` runs (it is restored after) instead of asking every rider to check; a hook
+  that needs the tile reads `ctx.objectHit`.
+- audit-3 was not a targeting loop as the audit described it (the King went for the last hero standing on his first turn
+  each round; Ultra Instinct dodged it). The AI bonus is added for the general case anyway.
+- FF-3: the stall was a sealed pocket, not the webs; webs need nothing new (a web step already gives progress at caution 0).
+
+### Balance (no number moved; behaviour only)
+
+Paired against the audit's RK batch (`.tmp/audit/runs/a1_rk90_33000.txt`, the same 400 act-1 runs on seeds 33000+; the
+files then had the Rat King row, now they also carry this run's other owners' changes):
+`tools/sim.sh "seeds=400&from=33000&stop=1&verbose=1"` → `.tmp/wf14/eng/sim/a1_33000.txt`.
+
+| | audit (RK) | finish |
+|---|---|---|
+| act 1 cleared | 65% (261) | 66% (263) |
+| Grimble · without / with a starting healer | 69% (130/188) · 58% / 80% | 68% (129/189) · 57% / 79% |
+| Rat King · without / with | 69% (131/190) · 57% / 83% | 71% (134/189) · 59% / 84% |
+| regular fights: won · a down in · HP lost net (gross) | 98% · 27% · 17% (27%) | 98% · 28% · 17% (28%) |
+| round-cap timeouts | 0 | 0 |
+
+All inside the batch spread (±4 points a boss). What changes: spells now break crates and set off barrels (D1), whole
+stalemates end (audit-3, FF-3: seeds 43220 and 80183 no longer reach the round cap), Hell Hounds collect no Burning (FF-6:
+`a3_hellhound_walkies` seed 60027 logs 0 "is Burning" lines, 20 before), poison-immune units take no Poisoned stacks. No
+campaign batch was run (the user asked to keep the PC load light); nothing here touches the late bosses' numbers.
+
+### Tests
+
+New suites (all pass): `engine: finish — D1 / D2 / D3 / D4 / D7 / audit-1 / audit-3 / audit-7 / FF-6`, `autoplay: finish —
+D5 / audit-3 / audit-7 / FF-3`, `content: finish — D1 / D2` (real Heckle, Collect, Hemoglobin, Juice Box, Get Over Here,
+Anvil Drop, Sand in Your Eye; the real Slate), `mapgen: finish — bosses-objectives-9`, `run: finish — desc-sweep-9`.
+Updated: `engine: damage pipeline` (brutal from DD.Balance) and `engine: playtest fixes — text-tone-2` (a "Name, get up!"
+line now fires exactly when Name is the one down).
+
+Full `bash tools/test.sh` (Nov 14, one headless Chrome, 2:40): 1036 suites, 123,579 assertions ok, 9 failures in 5 sections,
+none in this role's files and no "Error in" warnings: `hero_marwyn` (a Basanos bark), `hero_betty` (bark keys: the new
+optional `swap` key), `enemies_act2` x2 (enemy passives / the gargoyle text) and `narrative: narration` (the new `swap`
+key and two D1 tips over 140 characters) — the content owners' in-progress D1 / D7 work in their own files and tests.
+
+## Review (finish) — adversarial review of the finish fixes (REVIEWER role, Nov 14)
+
+Lens: D1-D5 and D7 end to end on REAL content, desc == execute for what the owners touched, determinism, and a fresh
+normal batch against the audit. Probes in `.tmp/wf14/rev/` (one headless Chrome at a time).
+
+### The lead's decisions, re-played
+
+| decision | verdict | how it was checked |
+|---|---|---|
+| D1 | holds; one silent opt-out fixed | `d1.js`: all 562 player-side single-target skill-levels (16 heroes' pools at every level, generic skills, summon skills, consumables) used on a dummy foe; every one that damages its target aims at objects, except the nine listed opt-outs and **Head Over Heels III** (Betty: 5 damage, a utility with a 'custom' landing-tile area, so `singleTargetAt` said no without the skill saying so). It now says `target.objects: false` (a throw), kit.md lists nine. On a 40-HP crate (119 aimable skill-levels) each took exactly its `objectDamage`, which is the tooltip's 🔨 number and `validTargets`' `dmg`; nothing else moved. `d1b.js`: the same 114 aimable skill-levels each set off an explosive barrel, hit a Bone Pile for exactly `objectDamage`, and never listed the DM's panel, the coffee machine or a protect-objective keg as a target (342 checks, 0 bad). Generic props (terrain.js) now say the rule in its words (the keg excepted: as The Last Keg it can't be aimed at). |
+| D2 | holds | the real Slate starts a swap with Kiri; Kiri gets "Slate is immovable: he can start a swap, you can't move him."; Human Shield and Step In list no Slate. A swap while he holds a foe frees it ("Test Grunt is free.": the tile it would be dragged into is the ally's) — consistent with Grappled's "free once they are apart"; the swap preview doesn't say so (HUD polish). |
+| D3 | holds | the real Kiri: Fade Out, then Ghost Arrow at a crate → revealed; at an explosive barrel → revealed. |
+| D4 | holds | `d4.js`: every hero with every item it can hold and every table Blessing (max level), procs forced (rng 0.01), hits a crate standing in a puddle with a foe and an ally in the same water: 2,682 hits, the crate took `objectDamage` each time, no other unit, status, surface or gold changed, no Hype moved, no swallowed error. The only side effect is the Chaos Crystal's wild surge, which fires on any skill use (a use hook, which D4 keeps). |
+| D5 | was half built; finished | the Bone Pile's hint still said 0 to flyers (the content request was open). It now answers 9 for `how === 'break'` (any hero) and for a step only to walkers. Suite `enemies_act2: finish review — D5 …` (real pile; rooted walker and flyer each shoot it to bits on their own AutoPlay turn). |
+| D7 | holds; its test was blind | narration and barks fire with {hero} / {ally}; but `kit: finish D7`'s "no hero named" checks used `new RegExp('\b' + w + '\b')` (a backspace, never a word boundary), so they could not fail. Fixed (`'\\b'`); the lines pass. |
+
+### Owners' findings, re-played
+
+- fix:engine — audit-1, audit-3 (43220), FF-3 (80183), FF-6, bosses-objectives-9, desc-sweep-9: see the seed checks
+  below; the suites fail with their fixes reverted (the owner's mutation run; spot-checked here). audit-7 needed Slate's
+  hook: `sla_grappled.heldThrough` landed (hero-slate.md), suite `hero_slate: finish review — Grappled tells …`.
+  text-tone-2 "not reproduced" holds (Marwyn's line is `{downed}`; `Act.aboutLines` gates "Name, get up!").
+- fix:content — FF-1 (fees stop at 12 via `addFees`, the only writer; the status says "up to 12"), FF-2 (Ultra Instinct
+  `estimateTaken`), FF-4 (Iris closing 10; her texts read `N.closing`), FF-5 (the DM's mercy is a whole-fight rule chip;
+  his two roll descs say it; only his rolls on heroes), audit-8 (Slate move 4): code read, suites pass. Skipped
+  review-open-16 (a per-turn telegraph value needs a contract change; polish) and FF-2's optional part: both hold.
+- desc-sweep-9's event half (a content request) done in run.js (`goldHint`): event hints print the gold the party gets
+  while a gold Blessing is held. Suite `run: finish — desc-sweep-9 …` extended.
+
+### Requests and leftovers
+
+- UI (combat_hud.js `tileInspect`): an object instance's own text should win over its def's — Rocky (the Pet Rock
+  Blessing, a `rock` with `blocksMove: false`) shows the rock's "Blocks movement and line of sight." under his name. Polish.
+- UI (polish): the swap preview could say a held foe goes free when Slate swaps away from it.
+- DOCS: DESIGN §4.2's opt-out list gains Betty's Head Over Heels (a throw; `docs: …` logs it as unlisted, no failure). Still open from fix:content: DESIGN §6 Slate "move 4" and Short Fuse "hits him, heals him or gives him a buff status (Block doesn't count)" (line ~489 still says "buffs him"); the DM's mercy rule in his section.
+- ratking.js (optional request, left alone on purpose): the Rat King's `rangedTarget` +30 for a fight-ending knockout — no loop needs it,
+  and it would move act 1 numbers in a run that must not.
+
+### Determinism, seeds and the batch
+
+- Same seed, same fight: the same 8 whole runs twice (`tools/sim.sh "seeds=8&from=53600&verbose=1"`, 83 fights): the
+  two reports are identical. All of this run's cosmetic randomness (swap narration and barks, break quips) uses DD.rng.
+- Seeds 43220 (audit-3) and 80183 (FF-3) on the current files: no round cap (80183's two Webs of Lies: 12 and 8 rounds).
+- Normal campaign, 200 runs on fresh seeds 53000+: 33.0% (the audit's 32.8%); the full comparison, the act 1 boss check
+  and the one stall (a long DM grind, not a loop) are in docs/notes/balance.md "Finish (Nov 14)" → "Review (finish)".
+
+### Tests
+
+New: `enemies_act2: finish review — D5 …`, `hero_slate: finish review — Grappled tells predictions …`; extended: `kit:
+finish D1` (Head Over Heels opts out by name; terrain.js props state the rule), `kit: finish D7` (the name checks now
+work), `run: finish — desc-sweep-9` (event hints). Each fails with its fix reverted (mutation runs: act2 hint 2
+failures, Grappled 1, Head Over Heels + props 3, `goldHint` 2), then the files were restored.
+
+### The UI reviewer's two RULES requests (docs/notes/hud-v2.md "Review (finish)"), done
+
+- `swapProblem` (combat.js, D2): an immovable ally that never moves (Zarathor's statue, move 0) is refused with
+  "<name> is immovable: you can't move it." — no "it can start a swap" it could never keep; Slate, Ellaria's giant corgi
+  and any other walking immovable unit keep the lead's sentence ("Slate is immovable: he can start a swap, you can't move
+  him."), as the HUD's 🗿 pill already did.
+- statuses.js Stealth: "Breaks when it deals damage or attacks an object." (D3; the behaviour already matched).
+- Suite `engine: finish review — a statue that never moves …` (the real statue next to a mage; the Stealth tooltip).
+
+### Full run (review)
+
+`bash tools/test.sh` (Nov 14, 18:38-18:43, one headless Chrome; the PC was in use, hence 4:52): **PASS — 1051 suites,
+123,865 assertions ok, 0 failures, 0 failing sections**; no swallowed "Error in" warnings (the `warnings:` lines are the
+suites' deliberate ones). The statue / Stealth suite was not mutation-run (its checks are exact strings that the old code
+cannot produce); every other new or extended suite was.
+
+### Not verified
+
+- Casual and brutal with this run's changes (light PC load); acts 2-3 on paired seeds.
+- The HUD side of the review's changes (the statue's refusal and the Stealth tooltip are shown as the engine words them;
+  the UI reviewer covers the HUD).
+- A human playtest of Slate's tempo (move 4) and of AutoPlay-free Bone Pile play.

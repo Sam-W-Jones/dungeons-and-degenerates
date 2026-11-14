@@ -45,11 +45,13 @@
   const NAMED_LEVEL_UPS = ['ev_mrw_mirror', 'ev_jos_rat_union', 'ev_bas_somebody_ate_dolly'];
   const ROTATION_HINT = 'One hero levels up (the DM rolls among the lowest-level heroes).';
   // ARCHITECTURE §3.10 + the v2 engine key (combat.js / combat_hud.js narrate 'initiative' with { hero }) + 'objective_failed'
-  // (a lost objective while heroes stand: requested from combat.js, whose 'defeat' lines are about a TPK)
+  // (a lost objective while heroes stand: requested from combat.js, whose 'defeat' lines are about a TPK) + 'opportunity' (an
+  // attack of opportunity: token-free, requested from the engine; nothing narrates it yet, so it is not in the in-practice list)
   const NARRATION_KEYS = ['combat_start', 'elite_start', 'boss_start', 'victory', 'defeat', 'kill', 'env_kill', 'overkill', 'multi_kill',
-    'hero_downed', 'hero_revived', 'hero_death', 'level_up', 'signature', 'round_start', 'enemy_turn', 'shop_greet', 'shop_buy', 'shop_broke',
+    'hero_downed', 'hero_downed_self', 'hero_downed_friendly', 'hero_revived', 'hero_death', 'level_up', 'signature', 'round_start', 'enemy_turn', 'shop_greet', 'shop_buy', 'shop_broke',
     'shop_leave', 'tavern_greet', 'rest', 'recruit', 'map_enter', 'act_intro_1', 'act_intro_2', 'act_intro_3', 'act_clear', 'treasure', 'tips',
-    'gameover_title', 'victory_title', 'run_start', 'idle_dm', 'initiative', 'objective_failed'];
+    'gameover_title', 'victory_title', 'run_start', 'idle_dm', 'initiative', 'objective_failed', 'opportunity',
+    'swap'];   // [finish D7] the engine narrates a swap now and then ({hero} the mover, {ally} the ally)
   const POCKET_GOLD = 15;
   const CONSOLATION_GOLD = 30;
   const DEBT_SCAR = 'scar_owes_the_dm';   // Corelos' fine print
@@ -1213,7 +1215,7 @@
   T.suite('narrative: narration — every key, line counts, tokens (static)', function (t) {
     const N = DD.Narrator;
     if (!t.ok(N && N.TOKENS && N.LINES, 'DD.Narrator')) return;
-    t.eq(N.KEYS.slice().sort().join(','), NARRATION_KEYS.slice().sort().join(','), 'the token table covers exactly the §3.10 keys + initiative + objective_failed');
+    t.eq(N.KEYS.slice().sort().join(','), NARRATION_KEYS.slice().sort().join(','), 'the token table covers exactly the §3.10 keys + initiative + objective_failed + opportunity + swap');
     // a lost objective is not a TPK: its lines never say everybody is down, and the TPK key keeps its punchlines
     (N.LINES.objective_failed || []).forEach(function (l) {
       t.ok(!/total party kill|\bTPK\b|everybody is down|campaign ended|spare character sheets/i.test(l), 'objective_failed: the party still stands in "' + l + '"');
@@ -1255,7 +1257,7 @@
         });
       });
       // every line fills cleanly with its callers' vars
-      const vars = { hero: 'Zarathor', enemy: 'Goblin Grunt', n: 12, gold: 30, name: 'Sparrow' };
+      const vars = { hero: 'Zarathor', enemy: 'Goblin Grunt', n: 12, gold: 30, name: 'Sparrow', ally: 'Kiri' };
       const some = {};
       (N.TOKENS[k] || []).forEach(function (tk) { some[tk] = vars[tk]; });
       mine.forEach(function (l) { t.ok(!/\{\w+\}/.test(DD.util.fmt(l, some)), k + ': fills "' + l + '"'); });
@@ -1714,7 +1716,7 @@
         t.ok(C.move(m2, 1, 3) && C.canUndo() && C.undo() && m2.y === 1, 'an ordinary move can be undone');
       });
       section('what never provokes', function () {
-        tip(/^Pushes, pulls, teleports, swaps, jumps and dashing skills never provoke attacks of opportunity\. Only walking does/);
+        tip(/^Pushes, pulls, teleports, jumps, dashes and swapping skills never provoke attacks of opportunity\. Only walking \(or a swap move\) does/);
         sb({ heroes: [H(3, 4, 'test_mage'), H(1, 1)], enemies: [E(4, 4)] });
         const mg = hero(0), kn = hero(1), gr = foe();
         const aoo = count('opportunity:attack');
@@ -1729,6 +1731,60 @@
         t.eq(aoo.n(), 0, 'push, teleports, swaps and a dash past the grunt: no attack of opportunity');
         aoo.off();
         t.ok(gr && !gr.dead, 'the grunt is still there');
+        // rules run: the swap MOVE is a step, so leaving the grunt's reach that way provokes like walking
+        if (!C.swap) return;
+        sb({ heroes: [H(3, 4, 'test_mage'), H(2, 4)], enemies: [E(4, 4)] });
+        const m2 = hero(0), k2 = hero(1);
+        const aoo2 = count('opportunity:attack', function (e) { return e.mover === m2; });
+        const hp = m2.hp;
+        t.ok(C.current() === m2 && C.swap(m2, 2, 4) && m2.x === 2 && k2.x === 3, 'the mage swaps away from the grunt with the knight');
+        t.ok(aoo2.n() === 1 && m2.hp < hp, 'the swap move provokes like a step (' + hp + ' -> ' + m2.hp + ')');
+        aoo2.off();
+      });
+      // ---- rules run (user requests): moving through allies, swapping places ----
+      section('moving through allies', function () {
+        tip(/^Heroes walk straight through each other, and monsters through theirs\. Nobody can stop on an occupied tile/);
+        const corridor = function (tl) { return tl.y === 2 ? null : { t: 'wall' }; };
+        sb({ w: 9, h: 5, terrain: corridor, heroes: [H(1, 2, 'test_mage'), H(2, 2)], enemies: [E(7, 2), E(6, 2)] });
+        const m = hero(0), k = hero(1);
+        const r = C.reachable(m), e = r.get('4,2');
+        t.ok(!!e && e.path.some(function (p) { return p.x === 2 && p.y === 2; }) && !r.has('2,2'), 'corridor: the way to 4,2 runs through the knight, never onto him');
+        t.ok(C.current() === m && C.move(m, 4, 2) && m.x === 4 && k.x === 2 && k.y === 2, 'the mage walks through the knight');
+        const rear = C.enemies().filter(function (u) { return u.x === 7; })[0];
+        const re = rear && DD.Grid.reachable(rear, rear.mov, { aoo: true });
+        const ee = re && re.get('5,2');
+        t.ok(!!ee && ee.path.some(function (p) { return p.x === 6 && p.y === 2; }) && !re.has('6,2'), 'the rear grunt walks through its friend the same way');
+        t.ok(!C.reachable(m).has('8,2'), 'and nobody walks through a foe (8,2 lies past both grunts, 4 steps away)');
+      });
+      section('swapping places', function () {
+        tip(/^Stuck behind the wizard in a corridor\? Click them while moving to swap places\. It costs a move\. The wizard pretends not to mind/);
+        if (!C.swap) { t.fail('no Combat.swap'); return; }
+        const corridor = function (tl) { return tl.y === 2 ? null : { t: 'wall' }; };
+        sb({ w: 9, h: 5, terrain: corridor, heroes: [H(2, 2), H(3, 2, 'test_mage')], enemies: [E(8, 2)] });
+        const k = hero(0), m = hero(1);
+        const ap0 = k.ap, map0 = m.ap;
+        t.ok(C.current() === k && C.swapInfo(k, 3, 2).ok === true, 'the knight can swap with the wizard next to him');
+        t.ok(C.swap(k, 3, 2) && k.x === 3 && m.x === 2, 'they trade places');
+        t.ok(ap0 - k.ap === C.moveApCost(k) && m.ap === map0, 'it costs the knight a move (' + (ap0 - k.ap) + ' AP); the wizard pays nothing');
+        t.ok(C.canUndo() && C.undo() && k.x === 2 && m.x === 3 && k.ap === ap0, 'and it undoes like a move');
+        A.damage(null, m, 999, { cause: 'other' });
+        t.ok(typeof C.canSwap(k, 3, 2) === 'string', 'a downed ally is no swap (Help Up instead): "' + C.canSwap(k, 3, 2) + '"');
+        sb({ heroes: [H(2, 2), H(6, 6)], enemies: [E(2, 3)] });
+        t.ok(!C.swapInfo(hero(0), 2, 3), 'and nobody swaps with a foe');
+      });
+      // [finish D2] immovable units can start a swap but can't be swapped
+      section('Slate and the swap', function () {
+        tip(/^Slate is immovable: he can start a swap with an ally next to him, but nobody can swap with him\. Walk around the golem/);
+        if (!DD.getHero('slate')) { t.log('(Slate not loaded)'); return; }
+        sb({ heroes: [H(2, 2, 'slate'), H(3, 2, 'test_mage')], enemies: [E(8, 8)] });
+        const sl = hero(0), mg = hero(1);
+        t.ok(sl.flags && sl.flags.immovable, 'Slate is immovable');
+        t.ok(C.current() === sl && C.swapInfo(sl, 3, 2) && C.swapInfo(sl, 3, 2).ok === true, 'Slate can start a swap with the mage next to him');
+        t.ok(C.swap(sl, 3, 2) && sl.x === 3 && mg.x === 2, 'they trade places');
+        C.endTurn();
+        t.ok(C.current() === mg, 'the mage\'s turn');
+        const why = C.canSwap(mg, sl.x, sl.y);
+        t.ok(typeof why === 'string' && sl.x === 3, 'the mage can\'t swap with Slate: "' + why + '"');
       });
       section('melee holds the line', function () {
         tip(/^Melee heroes hold the line: an enemy next to one would rather keep swinging than walk past/);
@@ -1896,6 +1952,8 @@
         A.placeObject(3, 2, 'totem');
         const sm = C.interactions(hero()).filter(function (o) { return o.kind === 'smash'; })[0];
         t.ok(sm && sm.ap === 1 && sm.dmg === 5, 'Smash: 1 AP, 5 damage');
+        const tq = DD.Targeting.validTargets(hero(), hero().basic).filter(function (q) { return q.x === 3 && q.y === 2; })[0];
+        t.ok(!!tq && tq.obj === 'totem' && tq.dmg === 5, 'or hit it with an attack (the knight\'s basic: 5 damage)');
         tip(/^Fountains heal 10 HP for 1 AP/);
         sb({ heroes: [H(2, 2)], enemies: [E(7, 7)] });
         A.placeObject(3, 2, 'fountain');
@@ -1904,6 +1962,40 @@
         C.interact(hero(), 3, 2);
         t.ok(hero().hp === 15 && hero().ap === 2, 'fountain: +10 HP for 1 AP');
         t.ok(!C.interactions(hero()).some(function (o) { return o.x === 3 && o.y === 2 && o.kind !== 'smash'; }), 'one sip per fight');
+      });
+      section('property damage (rules run)', function () {
+        tip(/^Most things with HP are fair game: hit the crate, the totem, the Spore Pod next to three goblins\. Property damage is still damage/);
+        sb({ heroes: [H(1, 3, 'test_mage')], enemies: [E(5, 2), E(5, 4), E(6, 3)] });
+        A.placeObject(5, 3, 'mushroom');
+        A.placeObject(2, 5, 'crate');
+        const m = hero();
+        const vt = DD.Targeting.validTargets(m, m.basic);
+        t.ok(vt.some(function (q) { return q.obj === 'crate'; }) && vt.some(function (q) { return q.obj === 'mushroom'; }), 'the crate and the Spore Pod are targets for a plain attack');
+        t.ok(C.useSkill(m, m.basic, 5, 3) && !DD.Grid.tile(5, 3).obj, 'the bolt pops the Spore Pod (3 HP)');
+        t.ok([[5, 2], [5, 4], [6, 3]].every(function (p) { const s = DD.Grid.tile(p[0], p[1]).surface; return s && s.id === 'poison'; }), 'poison spores under all three goblins');
+      });
+      section('what won\'t break on command (rules run)', function () {
+        tip(/^No attack can be aimed at the DM's laminated screen \(Smash it up close, or blast it\) or at what you swore to protect\. Even the snacks/);
+        sb({ heroes: [H(1, 3, 'test_mage')], enemies: [E(8, 8)] });
+        const m = hero();
+        const at = function (x, y) { return DD.Targeting.validTargets(m, m.basic).some(function (q) { return q.x === x && q.y === y; }); };
+        if (DD.getObject('dm_screen_panel')) {
+          A.placeObject(2, 3, 'dm_screen_panel');
+          t.ok(!at(2, 3), 'the laminated screen panel is no target, not even from next to it');
+          t.ok(C.interactions(m).some(function (o) { return o.kind === 'smash' && o.x === 2 && o.y === 3; }), 'but the hero next to it can Smash it');
+          const hp = DD.Grid.tile(2, 3).obj.hp;
+          C._action(function () { A.explode(null, 3, 3, { radius: 1, dmg: 3, element: null }); });
+          t.ok(DD.Grid.tile(2, 3).obj && DD.Grid.tile(2, 3).obj.hp < hp, 'and a blast next to it hurts it (' + hp + ' -> ' + DD.Grid.tile(2, 3).obj.hp + ')');
+        } else t.log('dm.js not loaded (isolated run): the screen part is checked in boss_dm');
+        if (DD.getObject('a3_snack_bowl')) {
+          A.placeObject(4, 3, 'a3_snack_bowl');
+          t.ok(!at(4, 3), 'the DM\'s Snack Bowl is no target');
+        }
+        A.placeObject(1, 6, 'keg');
+        t.ok(at(1, 6), 'a keg is a target in an ordinary fight');
+        const ob = C.state.objective;
+        C.state.objective = { type: 'protect', objId: 'keg' };
+        try { t.ok(!at(1, 6), 'but not while it is the keg the party protects'); } finally { C.state.objective = ob; }
       });
       // ---- damage & Hype ----
       section('Hype', function () {
@@ -1960,9 +2052,17 @@
         t.eq(hp1 - foe().hp, 2, 'poison ignores armor');
       });
       section('difficulty', function () {
-        tip(/^Brutal: enemies get 25% more HP and 20% more damage/);
+        // [finish audit-2] the tip's numbers come from DD.Balance (the balance passes move the row; the tip must follow)
+        const BR = DD.Balance.difficulty.brutal, pct = function (m) { return Math.round((m - 1) * 100); };
+        const extra = DD.Balance.extraOf('brutal', 'normal');
+        tip(new RegExp('^Brutal: enemies get ' + pct(BR.hp) + '% more HP and ' + pct(BR.dmg) + '% more damage' +
+          (extra >= 1 ? ', and normal fights bring an extra enemy\\.' : '')));
         const D = C.DIFFICULTY;
-        t.ok(D && D.brutal.hp === 1.25 && D.brutal.dmg === 1.2, 'brutal multipliers');
+        t.ok(D && D.brutal.hp === BR.hp && D.brutal.dmg === BR.dmg, 'brutal multipliers: the engine reads DD.Balance (' + BR.hp + ' / ' + BR.dmg + ')');
+        // the extra enemy is real: a brutal regular fight brings one more grunt than normal
+        const nb = DD.Encounter.build('a1_rats_in_the_cellar', ['zarathor', 'syllamin', 'marbles', 'marwyn'], { seed: 'tip-brutal', difficulty: 'normal', act: 1 });
+        const bb = DD.Encounter.build('a1_rats_in_the_cellar', ['zarathor', 'syllamin', 'marbles', 'marwyn'], { seed: 'tip-brutal', difficulty: 'brutal', act: 1 });
+        t.eq(bb.enemies.length - nb.enemies.length, extra, 'brutal adds ' + extra + ' enemy to a regular fight');
       });
       // ---- downs ----
       section('Help Up', function () {
@@ -1990,7 +2090,7 @@
         t.ok(!down.downed && down.hp === 7, 'the mage is up with the healed HP (7)');
       });
       section('shoot the barrel', function () {
-        tip(/^Shoot the barrel: aim any single-target attack at an explosive barrel in range and it goes off\. Blast kills are environmental: \+20 Hype/);
+        tip(/^Shoot the barrel: aim any single-target damage skill at an explosive barrel and it goes off\. Blast kills are environmental: \+20 Hype/);
         sb({ heroes: [H(1, 3, 'test_mage')], enemies: [E(4, 4), E(8, 8)] });
         A.placeObject(4, 3, 'barrel_explosive');
         const m = hero(), g = foe(0), hype0 = C.state.hype;
@@ -2000,7 +2100,8 @@
         t.eq(C.state.hype - hype0, 20, 'a blast kill is environmental: +20 Hype');
       });
       section('flyers ignore the floor', function () {
-        tip(/^Flyers ignore everything on the floor, good and bad: fire, puddles, traps, plates, holy ground\. Clouds and explosions still get them/);
+        // fix:ui's reword (playtest text-tone-v1): flyers still pocket gold (gold piles and Hoard Piles are loot)
+        tip(/^Flyers ignore the floor, good and bad: fire, puddles, traps, plates, holy ground\. Clouds and blasts still hit them\. They still pocket gold\./);
         sb({ heroes: [H(1, 3)], enemies: [E(7, 7)] });
         const f = hero();
         f.flags.flying = true;
@@ -2020,6 +2121,14 @@
         A.placeObject(6, 3, 'barrel_explosive');
         A.damageObject(null, 6, 3, 99);
         t.ok(f.hp < 10, 'and so does an explosion');
+        // ...and they still pocket gold: a gold pile and a dragon's Hoard Pile
+        const g0 = A.gold();
+        A.placeObject(1, 4, 'gold_pile');
+        if (DD.getObject('a3_hoard_pile')) A.placeObject(1, 5, 'a3_hoard_pile', { data: { gold: 4 } });
+        f.hp = f.maxHp;
+        A.teleport(f, 2, 4, { fx: false, noEnter: true });
+        A.moveAlong(f, [{ x: 1, y: 4 }].concat(DD.getObject('a3_hoard_pile') ? [{ x: 1, y: 5 }] : []));
+        t.ok(A.gold() > g0 && !DD.Grid.tile(1, 4).obj && (!DD.getObject('a3_hoard_pile') || !DD.Grid.tile(1, 5).obj), 'a flyer still pockets gold (' + (A.gold() - g0) + ')');
       });
       // ---- pockets & heroes (real content when loaded) ----
       section('pockets', function () {
@@ -2103,5 +2212,48 @@
     // every tip is checked above, or against the source
     tips.forEach(function (x) { t.ok(checked[x] || SOURCE_ONLY.some(function (re) { return re.test(x); }), 'tip checked: "' + x + '"'); });
     t.log(Object.keys(checked).length + ' of ' + tips.length + ' tips checked in-engine');
+  });
+
+  // ---- playtest fixes (Nov 12) ------------------------------------------------------------------------------------------
+  T.suite('narrative: playtest fixes (Nov 12) — "an 8", the bling only goes on when it fits, plural pockets', function (t) {
+    runLab(t, function () {
+      // text-tone-11: the Dice Goblin's articles
+      const db = baseRun(companions(null).slice(0, 4), 1, 'narr:pt:dice:' + t.seed);
+      const bad = [], seen = {};
+      for (let k = 0; k < 60; k++) {
+        fromBase(db, 'ptdice:' + k);
+        DD.Run.openEvent('ev_dice_goblin', null, { noShow: true });
+        const out = DD.Run.chooseEventOption(0);
+        const m = out && /You roll (an?) (\d+)\./.exec(out.text);
+        if (!m) continue;
+        seen[m[2]] = m[1];
+        if ((/^(8|11|18)$/.test(m[2]) ? 'an' : 'a') !== m[1]) bad.push(m[0]);
+      }
+      t.ok(bad.length === 0 && Object.keys(seen).length >= 5, 'the right article on every roll (' + Object.keys(seen).length + ' rolls seen): ' + bad.join(' | '));
+      // text-tone-12: Zarathor puts the ring on only when it went onto him
+      if (DD.getHero('zarathor')) {
+        const zb = baseRun(['zarathor'].concat(companions('zarathor').slice(0, 3)), 1, 'narr:pt:bling:' + t.seed);
+        let worn = 0, bagged = 0, wrong = [];
+        for (let k = 0; k < 16; k++) {
+          const s = fromBase(zb, 'ptbling:' + k);
+          if (k % 2) SLOTS_FILL(s.party[0]);
+          const before = JSON.stringify(s.party[0].items || {});
+          DD.Run.openEvent('ev_zar_bling_merchant', null, { noShow: true });
+          const out = DD.Run.chooseEventOption(0);
+          if (!out) continue;
+          const onHim = JSON.stringify(s.party[0].items || {}) !== before;
+          const says = /puts it on immediately/.test(out.text);
+          if (onHim) worn++; else bagged++;
+          if (onHim !== says) wrong.push(out.text);
+        }
+        t.ok(wrong.length === 0 && worn > 0 && bagged > 0, 'he puts it on exactly when it went onto him (' + worn + ' worn, ' + bagged + ' not): ' + wrong.join(' | '));
+        t.ok(DD.getEvent('ev_zar_bling_merchant').choices[0].label === 'Buy the shiniest thing on the cart.', 'the label does not promise a chain');
+      }
+    });
+    function SLOTS_FILL(rh) {
+      // fill his weapon / armor / trinket with any items of the matching slots so a new one goes into the bag
+      rh.items = rh.items || {};
+      Object.keys(DD.defs.items).forEach(function (id) { const d = DD.getItem(id); if (d && !d.hero && !rh.items[d.slot]) rh.items[d.slot] = id; });
+    }
   });
 })();

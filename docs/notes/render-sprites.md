@@ -55,7 +55,9 @@ Files: `js/render/sprites.js`, `js/render/fx_render.js`, `js/render/audio.js`, `
   `DD.Iso.screenFacing(unit.facing, unit.lastDir, last shown)` (= `unit.facing` at yaw 0). `def.flags.flying` → hover.
   Sprite override: `unit.sprite` or `unit.vis.sprite` = a SpriteSpec or a hero/enemy/summon id (e.g. Wild Shape).
 - `metrics(specOrUnitOrId)` → `{ height, width, headY, hover, scale }` in px at zoom 1 (spec scale applied, `vis.scale`
-  not) — for HP bars, barks, intent icons.
+  not) — for HP bars, barks, intent icons. A unit hovers when its def / flags fly or a status grants flight.
+- Overlays: humanoids also get `g.hands { front, back }` (`{ x, y, angle, r }`) and every painter has `g.claws(hand,
+  fill?, size?)`; `unit.overlays` = add-ons drawn over any look (see "Polish (Nov 5)").
 - `facingOf(unit)` → the mirror (±1) `drawUnit` showed for that unit last, `undefined` before its first draw (the
   rotation hysteresis memory; a WeakMap, so it never keeps a unit alive).
 - `drawShadow(ctx, specOrUnit, sx, sy, zoom, alpha)`, `specFor(unit)`, `portraitURL(...)` (cached PNG data URL),
@@ -123,8 +125,56 @@ world renderer's `gallery` scene only while the screen is not mounted), `resolve
   - T11 cannot spy on `DD.Sprites.draw` (drawUnit calls the module's own `draw`): it compares pixels with the yaw-0
     mirror picture and reads `DD.Sprites.facingOf` instead.
 
+## Polish (Nov 5, render / HUD polish pass)
+
+- **Flight from a status hovers** (`unitFlies(unit, def)`): `drawUnit` and `metrics(unit)` hover a unit whose def or own
+  flags fly (`unit.flags.flying` was drawn but not measured before: HP bars now sit right on Party Balloons holders too)
+  or that has a status `DD.Grid.isFlying` counts (`flying: true | fn`). Suite in render_tests.js.
+- **`g.hands` for overlays**: humanoids set `g.hands = { front, back }` (`{ x, y, angle, r }`: where each hand is drawn
+  this frame, the arm angle, the hand's size) in the overlay's local units, unsheared (a hunched werewolf's hands are
+  where they show). Other bases have none. **`g.claws(hand, fill?, size?)`**: three curved claws out of a hand along the
+  arm (a werewolf's paws, gauntlet spikes). New spec-sheet sample "overlay: claws (g.hands)".
+- **`unit.overlays`**: `[fn(g, t, o) | { id, draw }]` add-ons drawn after the look's own overlay, whatever the look is
+  (the def's sprite, `unit.sprite`, the pinned `vis.sprite`), so they survive form changes (Transform, Wild Shape,
+  cameos). Portraits never draw them. A throwing one warns once and is skipped after that (like `spec.overlay`).
+- **Portraits follow forms**: `DD.Sprites.portrait(unit)` already resolved the look (`specFor`); `DD.UI.portrait(defId,
+  size, { unit })` now passes the unit, and the HUD redraws a portrait when its unit's look changes (`hud-v2.md`).
+- Tests: `sprites: overlays get g.hands (claws, rings, held props) and unit.overlays survive any look` (hands present,
+  finite, front ahead of back, moving with the attack pose, on hunched bodies, none on quadrupeds; claws paint, a bad
+  hand is ignored; add-ons drawn over the def look, `unit.sprite` and `vis.sprite`; a broken add-on warns once and the
+  next still draws; portraits skip add-ons).
+- Yaw-0 identity: none of this draws anything for content that does not use it (`.tmp/rot/run.sh ident_v.html`
+  `nothreat=1`: 0 px on the four bosses).
+
 ## Requests
 
+- **ITEMS (`js/data/items.js` `balloonSprite`), Party Balloons vs Basanos' Transform / Hair Trigger:** the balloons
+  wrap the logical `unit.sprite`, so any look swap that happens without a skill use or a turn boundary (Hair Trigger
+  turning him into the werewolf on a hit; Wild Shape ending; a dispel) shows the new look bare until the next hook. The
+  render side now has add-on overlays that survive every look: instead of wrapping `unit.sprite`, push one overlay once
+  (at combat start) and drop the re-wrapping hooks:
+  ```js
+  function balloonOverlay(unit) {
+    if (!unit || unit.dead) return;
+    const list = unit.overlays = (unit.overlays || []).filter(function (o) { return !o || o.id !== 'party_balloons'; });
+    list.push({ id: 'party_balloons', draw: function (g, t) {
+      // `this` is the current look (spec): size and height follow whatever form the unit is in
+      const m = DD.Sprites.metrics(this) || {}, sc = this.scale || 1, k = 1 / Math.max(0.5, sc), top = -((m.height || 40) / sc);
+      const B = [{ x: -13 * k, y: top - 10 * k, c: '#ff4d6d' }, { x: 1 * k, y: top - 18 * k, c: '#ffd23f' }, { x: 14 * k, y: top - 9 * k, c: '#4fc3ff' }];
+      const hand = g.hands ? g.hands.front : { x: 6, y: top * 0.45 };
+      B.forEach(function (b, i) {
+        const sway = Math.sin((t || 0) * 2 + i * 1.7) * 1.2 * k;
+        g.line(hand.x, hand.y, b.x + sway, b.y + 5 * k, '#f2ecdf', 0.8 * k);
+        g.ellipse(b.x + sway, b.y, 4.2 * k, 5.2 * k, b.c);
+        g.ellipse(b.x + sway - 1.4 * k, b.y - 2 * k, 1.1 * k, 1.7 * k, 'rgba(255,255,255,0.75)', null);
+      });
+    } });
+  }
+  ```
+  (the strings now tie to the real front hand via `g.hands`). Portraits stop showing balloons (add-ons are board-only).
+- **HERO-BASANOS (`js/data/heroes/basanos.js` `wolfOverlay`), the werewolf's claws (DESIGN brief):** one line at the
+  end of `wolfOverlay(g)`: `if (g.hands) { g.claws(g.hands.back, pale); g.claws(g.hands.front, pale); }` (`pale` is the
+  muzzle colour already in scope; `g.claws(hand, fill, 1.2)` for bigger ones on the Blood Moon dire wolf).
 - **RULES** (`actions.js`): units start with `facing: side === 'hero' ? 1 : -1` regardless of map orientation, so on
   maps where the hero zone is screen-right the party faces away from the enemy until it moves. Setting the initial
   facing toward the nearest foe (screen dx) would read better.
@@ -227,3 +277,16 @@ Plan: `.tmp/wf7/rotation-design.md` §3.4 (FX + sprites), test T11. World side: 
   yaw 0 instead (what `ident_sf.js` does).
 - FX `tick` only advances when `view.t` changes; `renderTo` uses the renderer's clock (constant without `frame()`), so
   harnesses drive extra ticks through `DD.FXRender.drawWorld` on a scratch view with their own `t`.
+
+## Review (balance run)
+
+- `sprites.js` polish (status flight hover in `drawUnit` / `metrics`, `g.hands`, `g.claws`, `unit.overlays` add-ons)
+  reviewed; the sprite suites pass. One fallout, fixed on the content side: portraits now follow the unit's look, so the
+  wrapped Party Balloons look drew three strings across the holder's portrait; the balloon overlay now draws only when
+  `o.unit` is set (on the board), `items.md` "Review (balance run)". The `unit.overlays` request to ITEMS stays open
+  (needs `tests/content/hero_basanos.js` updated with it); the werewolf claws request to HERO-BASANOS stays open.
+
+## Review (finish) — REVIEWER (Nov 14)
+
+Nothing in this area changed in the finish run or its review (sprites, FX, audio and these screens were re-shot at
+1280x720 and 1920x1080 and are fine). The review's findings, fixes and requests: docs/notes/hud-v2.md "Review (finish)".

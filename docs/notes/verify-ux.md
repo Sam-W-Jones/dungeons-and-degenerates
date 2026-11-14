@@ -105,3 +105,8 @@ its owner, gone a minute later).
 7. Keyboard-only: on non-combat screens a Tab-focused card + Enter triggers the screen's Enter hotkey (e.g. Continue),
    not the focused control.
 8. Hover tooltips cannot be captured by `tools/shot.sh` (the capture's resize hides them); they were checked via DOM.
+
+## Review (finish) — REVIEWER (Nov 14)
+
+Nothing in this area changed in the finish run or its review (sprites, FX, audio and these screens were re-shot at
+1280x720 and 1920x1080 and are fine). The review's findings, fixes and requests: docs/notes/hud-v2.md "Review (finish)".

@@ -1,6 +1,6 @@
 /* Dungeons and Degenerates — tests/content/kit.js
  * Suites "kit: …" for js/data/skills_generic.js (12 generic skills gen_*, owner 'generic') and js/data/consumables.js
- * (14 consumables con_* + the con_d4s surface) under the v2 rules: initiative turns, durations per own turn, no Guard,
+ * (15 consumables con_* + the con_d4s surface) under the v2 rules: initiative turns, durations per own turn, no Guard,
  * no telegraphs, no free Block, attacks of opportunity. Registry and text rules (short exact descs, no v1 wording, no
  * intent tools), every skill at every level and every consumable in DD.Combat.sandbox fights (effect == desc, v2
  * durations), the v2 combos (Dazzle → Sucker Punch and a walk away, Taunt, pushes and skill moves that provoke
@@ -19,7 +19,7 @@
     'gen_pocket_sand', 'gen_taunt', 'gen_sucker_punch', 'gen_barrel_toss', 'gen_power_nap', 'gen_tactical_retreat'];
   const CON = ['con_red_drink', 'con_big_red_drink', 'con_bad_decisions', 'con_smoke_bomb', 'con_energy_drink', 'con_antidote',
     'con_liquid_courage', 'con_scroll_of_yeet', 'con_bag_of_d4s', 'con_holy_water', 'con_frost_flask', 'con_thunder_jar',
-    'con_pocket_sand', 'con_mystery_potion'];
+    'con_pocket_sand', 'con_mystery_potion', 'con_ice_bucket'];
   const USER = 'test_knight';   // neutral passive (3 Block at his round-1 turn start, cleared by fight()), no items
   const KINDS = ['attack', 'buff', 'heal', 'summon', 'move', 'utility'];
   const TARGET_TYPES = ['unit', 'tile', 'self', 'dir'];
@@ -187,9 +187,9 @@
   }
 
   // ---- 1. registry and text ------------------------------------------------------------------------------
-  T.suite('kit: registry — 12 generic skills and 14 consumables, short exact v2 text, no name clashes', function (t) {
+  T.suite('kit: registry — 12 generic skills and 15 consumables, short exact v2 text, no name clashes', function (t) {
     t.eq(GEN.length, 12, '12 generic skills planned');
-    t.eq(CON.length, 14, '14 consumables planned');
+    t.eq(CON.length, 15, '15 consumables planned (balance pass: + the Bucket of Ice Water)');
     t.ok(!!DD.Kit, 'DD.Kit helpers exist');
     if (!DD.Kit) return;
     t.eq(JSON.stringify(DD.Kit.GENERIC_IDS), JSON.stringify(GEN), 'DD.Kit.GENERIC_IDS lists the generic skills');
@@ -198,7 +198,7 @@
     const owned = Object.keys(DD.defs.skills).filter(function (k) { return DD.defs.skills[k].owner === 'generic'; }).sort();
     t.eq(owned.join(','), GEN.slice().sort().join(','), 'every owner:generic skill is one of the 12 (gen_ prefix)');
     const conIds = Object.keys(DD.defs.consumables).filter(function (k) { return /^con_/.test(k); }).sort();
-    t.eq(conIds.join(','), CON.slice().sort().join(','), 'every con_ consumable is one of the 14');
+    t.eq(conIds.join(','), CON.slice().sort().join(','), 'every con_ consumable is one of the ' + CON.length);
     const probe = { id: 'x', name: 'Probe', hp: 10, maxHp: 20, ap: 3, statuses: [], items: [], flags: {}, x: 0, y: 0, side: 'hero', kind: 'hero', data: {}, rangeBonus: 0 };
     const aps = {};
     GEN.forEach(function (id) {
@@ -247,8 +247,10 @@
       t.ok(typeof c.price === 'number' && c.price >= 20 && c.price <= 35 && c.price === Math.round(c.price), id + ': price 20-35 (' + c.price + ')');
       t.ok(c.rarity === 'rare' ? c.price >= 30 : c.price <= 25, id + ': rares cost more than commons');
       t.eq(c.ap, 1, id + ': 1 AP');
-      t.ok(typeof c.desc === 'string' && !badText(c.desc) && c.desc.length >= 20 && c.desc.length <= 210, id + ': exact desc, short (' + c.desc.length + ' chars ≤ 210)');
-      t.ok(!V1_WORDS.test(c.desc) && !V1_WORDS.test(c.flavor) && !/Block/.test(c.desc), id + ': no v1 words, no Block (nobody gets a free shield)');
+      // a desc may be a function of (L, user) (playtest heroes-v1: the holder's range items): judged as shown without a holder
+      const cdesc = DD.skillDesc(c, 1, null);
+      t.ok((typeof c.desc === 'string' || typeof c.desc === 'function') && !badText(cdesc) && cdesc.length >= 20 && cdesc.length <= 210, id + ': exact desc, short (' + cdesc.length + ' chars ≤ 210)');
+      t.ok(!V1_WORDS.test(cdesc) && !V1_WORDS.test(c.flavor) && !/Block/.test(cdesc), id + ': no v1 words, no Block (nobody gets a free shield)');
       t.ok(!/intents|telegraph/.test(sources(c)), id + ': no code reads enemy intents or telegraphs');
       t.ok(typeof c.flavor === 'string' && c.flavor.length > 10 && c.flavor.length <= 120, id + ': flavor ≤ 120');
       t.ok(typeof c.icon === 'string' && c.icon.length >= 1 && c.icon.length <= 4, id + ': icon');
@@ -260,7 +262,7 @@
     // names: unique, and no clash with anybody else's skills, consumables or items
     const mine = GEN.map(function (id) { return sk(id).name; }).concat(CON.map(function (id) { return DD.getConsumable(id).name; }));
     const low = mine.map(function (n) { return n.toLowerCase(); });
-    t.eq(new Set(low).size, mine.length, 'my 26 names are unique');
+    t.eq(new Set(low).size, mine.length, 'my ' + mine.length + ' names are unique');
     const others = [];
     Object.keys(DD.defs.skills).forEach(function (k) { if (GEN.indexOf(k) < 0) others.push(['skill ' + k, DD.defs.skills[k].name]); });
     Object.keys(DD.defs.consumables).forEach(function (k) { if (CON.indexOf(k) < 0) others.push(['consumable ' + k, DD.defs.consumables[k].name]); });
@@ -1183,12 +1185,29 @@
     fight({ heroes: [{ id: USER, x: 1, y: 4 }], enemies: [{ id: 'test_grunt', x: 8, y: 8 }],
       objects: [{ x: 3, y: 4, id: 'barrel_explosive' }, { x: 2, y: 5, id: 'barrel' }] });
     u = me();
-    ['gen_pocket_sand', 'gen_taunt'].forEach(function (id) {
-      t.ok(!valid(u, give(u, id, 1), 3, 4), sk(id).name + ': not an attack, so no barrel target');
-    });
+    // [finish D1] any single-target damage skill sets a barrel off: Sand in Your Eye at I-II (a point, 2-3 damage) is one;
+    // at III it splashes the foes next to the target (an area skill), and Come At Me, Bro deals no damage
+    t.ok(valid(u, give(u, 'gen_pocket_sand', 1), 3, 4), 'Sand in Your Eye I: a single-target damage skill, so the barrel is a target');
+    t.ok(!valid(u, give(u, 'gen_pocket_sand', 3), 3, 4), 'Sand in Your Eye III: an area skill, so no barrel target');
+    t.ok(!valid(u, give(u, 'gen_taunt', 1), 3, 4), 'Come At Me, Bro: no damage, so no barrel target');
     S().consumables = ['con_scroll_of_yeet'];
     t.ok(!valid(u, DD.getConsumable('con_scroll_of_yeet'), 3, 4), 'Scroll of Yeet: reads at units only');
-    t.ok(!valid(u, give(u, 'gen_throw_chair', 1), 2, 5), 'Throw Chair: a plain barrel does not explode, so it is no target');
+    // rules run: a plain barrel does not explode, but it breaks: a target hit for the chair's listed damage, no blast
+    const chair = give(u, 'gen_throw_chair', 1), cq = DD.Targeting.validTargets(u, chair).filter(function (q) { return q.x === 2 && q.y === 5; })[0];
+    t.ok(!!cq && cq.obj === 'barrel' && !cq.detonates && cq.dmg === Lv('gen_throw_chair', 1).dmg,
+      'Throw Chair: a plain barrel is a breakable target, not a detonation (' + JSON.stringify(cq) + ')');
+    const cpv = DD.Combat.preview(u, chair, 2, 5);
+    t.ok(cpv && cpv.breaks && cpv.breaks.destroyed && /breaks!/.test(cpv.breaks.text), 'Throw Chair: the preview says the barrel (5 HP) breaks (' + (cpv && cpv.breaks && cpv.breaks.text) + ')');
+    t.ok(use(t, u, chair, 2, 5, 'Throw Chair at a plain barrel') && !tile(2, 5).obj && tile(3, 4).obj && tile(3, 4).obj.id === 'barrel_explosive',
+      'Throw Chair: the barrel breaks; the explosive one next to it stays put (no blast)');
+    // the Thunder Jar breaks things for its first strike's 8 (objectDmg; its chain has nothing to jump to)
+    fight({ heroes: [{ id: USER, x: 1, y: 4 }], enemies: [{ id: 'test_grunt', x: 4, y: 5 }], objects: [{ x: 4, y: 4, id: 'totem' }] });
+    S().consumables = ['con_thunder_jar'];
+    const jq = entryAt(DD.Targeting.validTargets(me(), DD.getConsumable('con_thunder_jar')), 4, 4);
+    t.ok(!!jq && jq.obj === 'totem' && jq.dmg === 8, 'Thunder Jar: a totem is a breakable target for 8 (' + JSON.stringify(jq) + ')');
+    const jg = at(4, 5);
+    checkConsPreview(t, me(), 'con_thunder_jar', 4, 4, 'Thunder Jar at a totem');
+    t.ok(tile(4, 4).obj && tile(4, 4).obj.hp === 2 && jg.hp === jg.maxHp, 'Thunder Jar at a totem: 10 → 2 HP; the grunt next to it is untouched (no chain)');
 
     // flyers: Holy Water's ground does nothing for a flyer; a walking ally heals 3
     fight({ heroes: [{ id: USER, x: 2, y: 4 }, { id: 'test_mage', x: 3, y: 4 }], enemies: [{ id: 'test_grunt', x: 8, y: 8 }] });
@@ -1214,6 +1233,55 @@
     t.ok(fl.y === 5 && tile(4, 5).surface && tile(4, 5).surface.id === 'fire' && !has(fl, 'burn'), 'Flask: a flyer pushed over its fire is not Burned');
     t.ok(wk.x === 5 && has(wk, 'burn'), 'Flask: a walker pushed into its fire is');
     sane(t, 'kit v2 requests');
+  });
+
+  // ---- 9b. balance pass: the Bucket of Ice Water (every party starts with one, DD.Balance.start) --------------------
+  T.suite('kit: balance pass — the Bucket of Ice Water gets a downed ally within 2 back up at half HP, and nothing else', function (t) {
+    const ID = 'con_ice_bucket', def = DD.getConsumable(ID), pct = DD.Kit.BUCKET_PCT;
+    t.ok(!!def && pct === 50, 'registered, 50% (DD.Kit.BUCKET_PCT)');
+    if (!def) return;
+    const bdesc = DD.skillDesc(def, 1, null);
+    t.ok(/within 2/.test(bdesc) && new RegExp(pct + '% of their max HP').test(bdesc) && /downed ally/.test(bdesc), 'the desc says who, how far and how much: ' + bdesc);
+    t.ok(def.target.filter === 'downedAlly' && def.target.range[0] === 1 && def.target.range[1] === 2, 'only a downed ally 1-2 tiles away is a target');
+    /** The knight at (4,4); a downed cleric next to him, a downed mage 2 tiles away, a downed rogue 3 away, a standing
+     *  hurt ally next to him and a grunt in the corner. */
+    function arena() {
+      fight({ heroes: [{ id: USER, x: 4, y: 4 }, { id: 'test_cleric', x: 3, y: 4 }, { id: 'test_mage', x: 4, y: 6 }, { id: 'test_rogue', x: 4, y: 1 }, { id: 'test_summoner', x: 5, y: 4 }],
+        enemies: [{ id: 'test_grunt', x: 8, y: 8 }] });
+      ['test_cleric', 'test_mage', 'test_rogue'].forEach(function (id) { A().kill(hero(id), null); });
+      hero('test_summoner').hp = 3;
+      S().consumables = [ID];
+      return me();
+    }
+    let u = arena();
+    const keysOf = function (list) { return list.map(function (p) { return p.x + ',' + p.y; }).sort().join(' '); };
+    t.eq(keysOf(DD.Targeting.validTargets(u, def)), '3,4 4,6', 'targets: the downed ally next to you and the one 2 tiles away (not 3 away, not the hurt one standing, not you, not foes)');
+    t.ok(!valid(u, def, 5, 4) && !valid(u, def, 4, 4) && !valid(u, def, 8, 8), 'a standing ally, yourself and a foe are no targets');
+    [[3, 4, 'test_cleric'], [4, 6, 'test_mage']].forEach(function (c) {
+      u = arena();
+      const v = hero(c[2]), ap0 = u.ap, want = Math.round(v.maxHp * pct / 100);
+      const ok = DD.Combat.canUseConsumable(u, 0) === true && DD.Combat.useConsumable(u, 0, c[0], c[1]);
+      t.ok(ok, 'splashed ' + v.name + ' at ' + c[0] + ',' + c[1]);
+      t.ok(!v.downed && !v.dead && v.hp === want, v.name + ' is back up with half their max HP (' + v.hp + ' of ' + v.maxHp + ', want ' + want + ')');
+      t.eq(ap0 - u.ap, 1, '1 AP');
+      t.eq(DD.Combat.consumables().length, 0, 'the bucket is used up');
+      t.ok(S().order.some(function (o) { return o.unitId === v.id; }), v.name + ' keeps its initiative slot');
+      t.eq(v.statuses.length, 0, 'nothing rides along (no Wet, no stray status)');
+    });
+    // nobody down: the bucket has no target, so AutoPlay keeps it; somebody down within reach: AutoPlay splashes them
+    fight({ heroes: [{ id: USER, x: 1, y: 1 }, { id: 'test_mage', x: 1, y: 2 }], enemies: [{ id: 'test_grunt', x: 8, y: 8 }], consumables: [ID] });
+    hero('test_mage').hp = 4;
+    t.eq(DD.Targeting.validTargets(me(), def).length, 0, 'a hurt but standing ally is no target');
+    takeTurn();
+    t.eq(DD.Combat.consumables().join(','), ID, 'AutoPlay keeps the bucket while nobody is down');
+    // (rooted, so a walk + Help Up is off the table: with a free Help Up in reach AutoPlay rightly keeps the bucket)
+    fight({ heroes: [{ id: USER, x: 1, y: 1 }, { id: 'test_mage', x: 1, y: 3 }], enemies: [{ id: 'test_grunt', x: 8, y: 8 }], consumables: [ID] });
+    A().kill(hero('test_mage'), null);
+    A().addStatus(me(), 'root', { turns: 1 }, null);
+    const mg = hero('test_mage');
+    takeTurn();
+    t.ok(!mg.downed && mg.hp === Math.round(mg.maxHp * pct / 100) && DD.Combat.consumables().length === 0, 'AutoPlay splashes a downed ally 2 tiles away (' + mg.hp + ' HP)');
+    sane(t, 'ice bucket');
   });
 
   // ---- 10. edge cases ---------------------------------------------------------------------------------------
@@ -1553,7 +1621,7 @@
       t.ok(avg('common') > avg('rare') * 1.5, 'commons drop more than rares (' + avg('common').toFixed(1) + ' vs ' + avg('rare').toFixed(1) + ')');
       CON.forEach(function (id) {
         const r = DD.Rewards.consumableReward(id);
-        t.ok(r && r.type === 'consumable' && r.label === DD.getConsumable(id).name && r.desc === DD.getConsumable(id).desc && DD.Rewards.consumablePrice(id) === DD.getConsumable(id).price, id + ': reward card + price');
+        t.ok(r && r.type === 'consumable' && r.label === DD.getConsumable(id).name && r.desc === DD.skillDesc(DD.getConsumable(id), 1, null) && typeof r.desc === 'string' && DD.Rewards.consumablePrice(id) === DD.getConsumable(id).price, id + ': reward card + price');
       });
       // shop stock uses the real prices
       const sr = DD.RNG('kit-shop');
@@ -1598,5 +1666,183 @@
       if (savedMeta) { DD.Meta.data = savedMeta; DD.Meta.save(); }
       if (DD.FX && DD.FX.reset) DD.FX.reset();
     }
+  });
+})();
+
+// ---- playtest fixes (Nov 12) ----------------------------------------------------------------------------------------
+(function () {
+  'use strict';
+  const T = window.DD_TEST, DD = window.DD;
+  if (!T || !DD) return;
+  /**
+   * heroes-v1: a +range item (the Yardstick of Reach, the Longbow of Long-Distance Relationships, Kiri's Ghostwood
+   * Longbow) adds 1 to every skill that reaches 2+ tiles; the descs of all sixteen heroes (Slate, Basanos, Sparrow, Marwyn
+   * and Hjalmar since the finish run, Nov 14) and the generic skills print the range the card's Range pill shows.
+   */
+  T.suite('kit: playtest fixes (Nov 12) — descs give the range a +range item really gives (heroes-v1)', function (t) {
+    // finish (Nov 14): all sixteen (Slate, Basanos, Sparrow, Marwyn and Hjalmar joined after the sustain build)
+    const HEROES = Object.keys(DD.defs.heroes).filter(function (id) { return !/^test_/.test(id); });
+    t.ok(HEROES.length >= 16, HEROES.length + ' heroes');
+    const skills = [];
+    HEROES.forEach(function (hid) {
+      const h = DD.getHero(hid);
+      if (!h) return;
+      (h.skillPool || []).concat(h.basic ? [h.basic] : [], h.signature ? [h.signature] : []).forEach(function (id) { if (skills.indexOf(id) < 0) skills.push(id); });
+    });
+    Object.keys(DD.defs.skills).forEach(function (id) { if (/^gen_/.test(id) && skills.indexOf(id) < 0) skills.push(id); });
+    DD.Combat.sandbox({ w: 9, h: 9, seed: 3, enemyAi: false, heroes: [{ id: 'test_mage', x: 1, y: 4, level: 1 }], enemies: [{ id: 'test_grunt', x: 7, y: 4 }],
+      objective: { type: 'custom', text: 'Testing' }, encounter: { id: 'kit_pt', checkObjective: function () { return null; } } });
+    const u = DD.Combat.heroes()[0];
+    let checked = 0;
+    const bad = [];
+    skills.forEach(function (id) {
+      const d = DD.getSkill(id);
+      if (!d || !d.target || typeof d.desc !== 'function') return;
+      const nLv = (d.levels && d.levels.length) || 1;
+      for (let lv = 1; lv <= nLv; lv++) {
+        u.rangeBonus = 0;
+        const max = DD.Targeting.range(u, d, lv)[1];
+        if (!(max >= 2) || max >= 30) continue;
+        const plain = DD.skillDesc(d, lv, u);
+        const re = new RegExp('(within|up to|2-|line of) ' + max + '(?![0-9])');
+        if (!re.test(plain)) continue;
+        u.rangeBonus = 1;
+        const boosted = DD.skillDesc(d, lv, u);
+        checked++;
+        if (DD.Targeting.range(u, d, lv)[1] !== max + 1 || !new RegExp('(within|up to|2-|line of) ' + (max + 1) + '(?![0-9])').test(boosted)) bad.push(id + ' L' + lv + ': ' + boosted);
+      }
+    });
+    u.rangeBonus = 0;
+    t.log('    ' + skills.length + ' skills, e.g. ' + skills.slice(0, 4).join(', ') + ' — ' + (skills[0] ? DD.skillDesc(DD.getSkill(skills[0]), 1, u) + ' / range ' + DD.Targeting.range(u, DD.getSkill(skills[0]), 1) : ''));
+    t.ok(checked >= 40, checked + ' skill levels print their target range');
+    t.eq(bad.length, 0, 'with +1 range every one of them prints the new range: ' + bad.join(' | '));
+  });
+})();
+
+// ---- review of the playtest fixes (Nov 12): consumable texts follow the holder's range items (heroes-v1, fix:ui request) ----
+(function () {
+  'use strict';
+  const T = window.DD_TEST;
+  const DD = window.DD;
+  T.suite('kit: playtest review — consumable texts give the range the holder really has (heroes-v1; UI.consumableDesc passes the unit)', function (t) {
+    DD.Combat.sandbox({ w: 9, h: 9, seed: 3, enemyAi: false, heroes: [{ id: 'test_mage', x: 1, y: 4, level: 1 }], enemies: [{ id: 'test_grunt', x: 7, y: 4 }],
+      objective: { type: 'custom', text: 'Testing' }, encounter: { id: 'kit_ptc', checkObjective: function () { return null; } } });
+    const u = DD.Combat.heroes()[0];
+    let checked = 0;
+    const bad = [];
+    Object.keys(DD.defs.consumables).forEach(function (id) {
+      const d = DD.getConsumable(id);
+      if (!d || !d.target || /^test_/.test(id)) return;
+      u.rangeBonus = 0;
+      const max = DD.Targeting.range(u, d, 1)[1];
+      if (!(max >= 2) || max >= 30) return;
+      const plain = DD.skillDesc(d, 1, u);
+      if (!new RegExp('within ' + max + '(?![0-9])').test(plain)) { bad.push(id + ' (no "within ' + max + '"): ' + plain); return; }
+      t.eq(DD.skillDesc(d, 1, null), plain, id + ': the same text without a holder (shop, rewards)');
+      u.rangeBonus = 1;
+      const boosted = DD.skillDesc(d, 1, u);
+      checked++;
+      if (DD.Targeting.range(u, d, 1)[1] !== max + 1 || !new RegExp('within ' + (max + 1) + '(?![0-9])').test(boosted)) bad.push(id + ': ' + boosted);
+    });
+    u.rangeBonus = 0;
+    t.ok(checked >= 7, checked + ' ranged consumables print their target range');
+    t.eq(bad.length, 0, 'with +1 range every one of them prints the new range: ' + bad.join(' | '));
+    t.ok(DD.UI && DD.UI.consumableDesc ? /within 5/.test((u.rangeBonus = 1, DD.UI.consumableDesc(DD.getConsumable('con_thunder_jar'), u))) : true, 'the HUD pocket text (UI.consumableDesc with the unit) says within 5');
+    u.rangeBonus = 0;
+  });
+})();
+
+// ---- finish (Nov 14): lead decisions D1 / D7 on the content side -------------------------------------------------------
+(function () {
+  'use strict';
+  const T = window.DD_TEST;
+  const DD = window.DD;
+  if (!T || !DD) return;
+  const RULE = /any single-target damage skill/;
+  /** Every registered object the party can aim at (it has HP, not targetable: false), test fixtures aside. */
+  function aimable() {
+    return Object.keys(DD.defs.objects).map(DD.getObject).filter(function (o) {
+      return o && !/^test_/.test(o.id) && (o.hp || 0) > 0 && o.targetable !== false;
+    });
+  }
+  /**
+   * D1: an object a skill can break says so in the rule's own words ("any single-target damage skill can break it"),
+   * as do the tips about breaking and shooting things; no text says "any single-target attack" any more.
+   */
+  T.suite('kit: finish D1 — object texts and tips say "any single-target damage skill" (the rule the engine plays)', function (t) {
+    const objs = aimable();
+    // the content files' objects (a prefix per act / boss / hero); js/data/terrain.js's generic props are its owner's
+    // (the HUD's 🔨 line states the rule for them; request in docs/notes/kit.md)
+    const OWN = /^(a[1-3]|grim|rat|lich|dm|bh|iris|beh|sla|buga|bas|bet|cor|ell|hja|jos|kir|mar|mrw|peb|spa|syl|val|zar)_/;
+    const missing = objs.filter(function (o) { return !RULE.test(String(DD.resolve(o.desc, null, null, ''))); }).map(function (o) { return o.id; });
+    const off = missing.filter(function (id) { return OWN.test(id); });
+    // [finish review] terrain.js's generic props say it too; the Ale Keg alone doesn't (as The Last Keg it is a protect
+    // objective, and nobody may aim at that), nor do volatile props (they explode: "aim any single-target damage skill at it")
+    const generic = missing.filter(function (id) { return !OWN.test(id) && id !== 'keg'; });
+    t.eq(generic.length, 0, 'terrain.js props name the rule too (the keg excepted): ' + generic.join(', '));
+    t.ok(objs.filter(function (o) { return OWN.test(o.id); }).length >= 6, objs.length + ' aimable objects: ' + objs.map(function (o) { return o.id; }).join(', '));
+    t.eq(off.length, 0, 'each one names the rule: ' + off.join(', '));
+    const old = [];
+    Object.keys(DD.defs.objects).forEach(function (id) { if (/single-target attack/.test(String(DD.resolve(DD.getObject(id).desc, null, null, '')))) old.push(id); });
+    Object.keys(DD.defs.enemies).forEach(function (id) { if (/single-target attack/.test(String(DD.getEnemy(id).desc || ''))) old.push(id); });
+    (DD.defs.narration.tips || []).forEach(function (l) { if (/single-target attack/.test(l)) old.push('tip: ' + l); });
+    t.eq(old.length, 0, 'no text says "any single-target attack": ' + old.join(' | '));
+    const tips = (DD.defs.narration.tips || []).filter(function (l) { return /barrel|Smash objective|break/i.test(l) && /any single-target damage skill/i.test(l); });
+    t.ok(tips.length >= 2, 'the shoot-the-barrel and break-things tips say it too: ' + tips.join(' | '));
+    // what the texts promise: a non-attack single-target damage skill (Sand in Your Eye I, a utility) breaks a totem for
+    // its listed damage and nothing else (no Dazzle on an object)
+    DD.Combat.sandbox({ w: 7, h: 7, seed: 5, enemyAi: false, heroes: [{ id: 'test_knight', x: 1, y: 3 }], enemies: [{ id: 'test_grunt', x: 6, y: 6 }],
+      objects: [{ x: 3, y: 3, id: 'totem' }], objective: { type: 'custom', text: 'd1' }, encounter: { id: 'kit_d1', checkObjective: function () { return null; } } });
+    const k = DD.Combat.heroes()[0], sand = DD.Act.makeSlot('gen_pocket_sand', 1);
+    k.skills = [sand];
+    const tot = DD.Grid.tile(3, 3).obj, hp0 = tot.hp;
+    t.ok(DD.Targeting.isValidTarget(k, sand, 3, 3) && DD.Combat.useSkill(k, sand, 3, 3), 'Sand in Your Eye I can be aimed at a totem');
+    t.eq(hp0 - tot.hp, DD.skillLevel(DD.getSkill('gen_pocket_sand'), 1).dmg, 'it takes the listed ' + DD.skillLevel(DD.getSkill('gen_pocket_sand'), 1).dmg + ' damage');
+    // the opt-outs are the listed few, each with its reason (docs/notes/kit.md "Finish (Nov 14)")
+    const OPT_OUT = ['bas_pounce', 'bet_horn_toss', 'ell_fetch', 'kir_beyond', 'sla_hold_still', 'sla_rock_bottom', 'sla_stress_ball', 'spa_veinglory', 'zar_bling_throw'];
+    // [finish review] Head Over Heels (a throw; 5 damage at III only) was a SILENT opt-out (a 'custom' area on a utility):
+    // now it says objects: false, so every damaging single-target skill either aims at objects or is on this list
+    const hoh = DD.getSkill('bet_horn_toss');
+    t.ok(hoh.target.objects === false && DD.skillLevel(hoh, 3).dmg > 0, 'Head Over Heels III deals damage and opts out by name (docs/notes/kit.md)');
+    const outs = Object.keys(DD.defs.skills).filter(function (id) { const d = DD.getSkill(id); return d && d.target && d.target.objects === false && !/^test_/.test(id); }).sort();
+    t.eq(outs.join(','), OPT_OUT.slice().sort().join(','), 'the D1 opt-outs (target.objects: false) are exactly the reasoned few');
+    // text-tone-v1: the flyer item says loot still counts (gold piles and Hoard Piles are no floor effect)
+    const bal = DD.getItem('party_balloons');
+    t.ok(!!bal && /still swoop down for gold/.test(bal.desc) && bal.desc.length <= 150, 'the Party Balloons say flyers still pocket gold: ' + (bal && bal.desc));
+  });
+
+  /** D7: the 'swap' narration key and the heroes' own swap barks ({ally}); no line names a hero. */
+  T.suite('kit: finish D7 — swap narration and swap barks: tokens filled, no hero named, every hero has a couple', function (t) {
+    const lines = DD.defs.narration.swap || [];
+    t.ok(lines.length >= 6, lines.length + ' swap narration lines');
+    t.ok(DD.Narrator && DD.Narrator.TOKENS.swap && DD.Narrator.TOKENS.swap.join() === 'hero,ally', 'TOKENS.swap = hero, ally (the engine fills both)');
+    t.eq(DD.Narrator.badTokens('swap').length, 0, 'every token is one the caller fills');
+    const names = [];
+    Object.keys(DD.defs.heroes).forEach(function (id) {
+      if (/^test_/.test(id)) return;
+      String(DD.getHero(id).name).split(/[^A-Za-z]+/).forEach(function (w) { if (w.length >= 3 && /^[A-Z]/.test(w) && w !== 'The') names.push(w); });
+    });
+    // [finish review] '\\b' (a word boundary): a bare '\b' in a string is a backspace, and the check could never fire
+    const named = lines.filter(function (l) { return names.some(function (w) { return new RegExp('\\b' + w + '\\b').test(l); }); });
+    t.eq(named.length, 0, 'no narration line names a hero (party filter): ' + named.join(' | '));
+    const heroes = Object.keys(DD.defs.heroes).filter(function (id) { return !/^test_/.test(id); });
+    const bad = [];
+    heroes.forEach(function (id) {
+      const b = (DD.getHero(id).barks || {}).swap || [];
+      if (b.length < 2) bad.push(id + ': ' + b.length + ' swap barks');
+      b.forEach(function (l) {
+        if (!/\{ally\}/.test(l)) bad.push(id + ' (no {ally}): ' + l);
+        if (/\{(?!ally\})/.test(l)) bad.push(id + ' (unknown token): ' + l);
+        const own = String(DD.getHero(id).name);
+        names.forEach(function (w) { if (own.indexOf(w) < 0 && new RegExp('\\b' + w + '\\b').test(l)) bad.push(id + ' names ' + w + ': ' + l); });
+      });
+    });
+    t.eq(bad.length, 0, 'every hero has 2+ swap barks with {ally} and no other hero named: ' + bad.join(' | '));
+    // in a real swap the mover's bark names the ally it swapped with (the engine fills {ally})
+    DD.Combat.sandbox({ w: 7, h: 7, seed: 5, enemyAi: false, heroes: [{ id: 'marwyn', x: 2, y: 3 }, { id: 'kiri', x: 3, y: 3 }], enemies: [{ id: 'test_grunt', x: 6, y: 6 }],
+      objective: { type: 'custom', text: 'swap' }, encounter: { id: 'kit_swap', checkObjective: function () { return null; } } });
+    const m = DD.Combat.heroes()[0], k = DD.Combat.heroes()[1];
+    const said = DD.Act.bark(m, 'swap', { about: k });
+    t.ok(said.indexOf(k.name) >= 0 && said.indexOf('{ally}') < 0, 'Marwyn\'s swap bark names Kiri: ' + said);
   });
 })();

@@ -10,7 +10,7 @@
  * in his skill list (his rotation drives them), so the HUD's threat shading and AutoPlay only count what he can do at once.
  * A first wave of Bookfall that lands is always followed by its Second Printing (the rotation waits a turn if needed).
  * Late Fees (a stacking buff): +N.feeRate at the end of each of his turns (N.feeRate2 in phase 2, +1 per living skeleton),
- * +1 damage per fee on his attacks, no cap (his clock: shredding a phylactery resets it).
+ * +1 damage per fee on his attacks, at most N.feeCap (his clock: it fills in two turns; shredding a phylactery resets it).
  * Puzzle: 3 of the 8 Restricted Section Shelves hide phylacteries (always among the 6 deepest), 2 are mimics. A Card
  * Catalog (once a round each) makes the nearest hidden phylactery's shelf glow; searching (or breaking) it shreds it:
  * 25 damage, fees waived, Stunned (not while Speed-Reading). None left: Mortal Again (no more reforming). While one is
@@ -25,8 +25,11 @@
   // ---- numbers (DESIGN §5 act 2 boss; v2 level band: a party of about level 3-4) -----------------------------------
   const N = {
     hp: 320, notice: 12, noticeRange: 30, bookfall: 11, shhh: 9, shhhR: 2, quiet: 12, quietR: 3, final: 20, phylactery: 25,
-    reformPct: 0.25, feeRate: 4, feeRate2: 5, focus: 3, internCap: 3, internHp: 12, internDmg: 5, internMark: 2,
+    reformPct: 0.25, feeRate: 6, feeRate2: 7, focus: 3, internCap: 3, internHp: 12, internDmg: 5, internMark: 2,
     mimicHp: 20, mimicDmg: 6, mimicSurprise: 5, boon: 5, mortal: 0, noticeNearest: 1,
+    // [finish FF-1] the fees stop at feeCap: uncapped, every Overdue Notice downed a full-HP hero once the phylacteries
+    // were gone (95 of 570 notices on heroes at 90%+ HP in 200 fights); they reach the cap faster now (4/5 -> 6/7 a turn)
+    feeCap: 12,
   };
   const LICH = 'lichtenstein';
   // his rotation, one step a turn (after the Overdue Notice); 'reprint' = the Second Printing of the Bookfall that landed
@@ -53,6 +56,16 @@
   /** Stun-likes (stun, frozen, any stunLike status) and charm: what Speed-Reading shrugs off. */
   function incapacitates(id) { return id === 'charmed' || (DD.Act.isStunLike ? DD.Act.isStunLike(id) : id === 'stun' || id === 'frozen'); }
   function pending(u, skillId) { return (u.intents || []).some(function (i) { return i.skillId === skillId; }); }
+  /** 'x,y' → 1 for the tiles under Lich-tenstein's pending wind-ups (where a Root would pin a hero under the books). */
+  function lichMarked() {
+    const l = findLich(), out = {};
+    if (!l || !DD.AI || !DD.AI.intentTiles) return out;
+    (l.intents || []).forEach(function (it) {
+      if (WINDUPS.indexOf(it.skillId) < 0) return;
+      DD.AI.intentTiles(l, it).forEach(function (q) { out[key(q.x, q.y)] = 1; });
+    });
+    return out;
+  }
 
   // minor DM asides: logged like Act.narrate (narrator line, cosmetic RNG, never during previews) but kept local
   const QUIPS = {
@@ -112,12 +125,13 @@
 
   // ---- statuses ------------------------------------------------------------------------------------------------
   DD.registerStatus({
-    id: 'lich_late_fees', name: 'Late Fees', icon: '💸', color: '#9be36b', type: 'buff', stacking: 'stack', maxStacks: 99,
+    id: 'lich_late_fees', name: 'Late Fees', icon: '💸', color: '#9be36b', type: 'buff', stacking: 'stack', maxStacks: 99,   // addFees stops at N.feeCap (a knob the sims may override)
     decay: 'never', defaultTurns: -1,
     desc: function (st) {
       const n = (st && st.stacks) || 1;
       return 'His attacks deal +' + n + ' damage. He gains ' + N.feeRate + ' more at the end of each of his turns (' + N.feeRate2 +
-        ' below half HP), +1 per living Work-Study Skeleton. Shredding a phylactery waives them all.';
+        ' below half HP), +1 per living Work-Study Skeleton' + (N.feeCap > 0 ? ', up to ' + N.feeCap + ' (the fine print has a ceiling)' : '') +
+        '. Shredding a phylactery waives them all.';
     },
     hooks: {
       modifyOutgoingDamage: function (d, st) { if (d.cause === 'skill') d.flat += st.stacks; },
@@ -335,14 +349,20 @@
   eskill({
     id: 'lich_mimic_chomp', name: 'Paperback Chomp', icon: '📕', kind: 'attack', tags: ['melee'], anchor: 'self',
     levels: [{ dmg: N.mimicDmg }], target: { type: 'unit', range: [1, 1], filter: 'enemy' },
-    desc: function (L) { return 'Deal ' + L.dmg + ' damage to an adjacent foe and Root it for 1 turn (stuck between the pages).'; },
+    // [finish review-open-15] no Root on a tile under one of Lich-tenstein's pending wind-ups: a hero pinned there could
+    // not step out before it lands (the bosses' rule: a wind-up never lands on someone who had no way out)
+    desc: function (L) {
+      return 'Deal ' + L.dmg + ' damage to an adjacent foe and Root it for 1 turn (stuck between the pages), unless it stands where ' +
+        'Lich-tenstein\'s books are about to land.';
+    },
     flavor: 'It has been waiting three hundred years to be checked out.',
     execute: function (ctx) {
       if (ctx.target) DD.FX.lunge(ctx.user, ctx.target);
+      const marked = lichMarked();
       ctx.foes.forEach(function (f) {
         if (!active(f)) return;
         A().damage(ctx.user, f, ctx.L.dmg);
-        if (active(f)) A().addStatus(f, 'root', { turns: 1 }, ctx.user);
+        if (active(f) && !marked[key(f.x, f.y)]) A().addStatus(f, 'root', { turns: 1 }, ctx.user);
       });
     },
   });
@@ -377,10 +397,12 @@
   }
 
   // ---- Late Fees -----------------------------------------------------------------------------------------------------
-  /** Add n Late Fees (no cap: the fees are his clock; shredding a phylactery resets them). Returns how many. */
+  /** Add n Late Fees, up to N.feeCap in all (the fees are his clock; shredding a phylactery resets them). Returns how many. */
   function addFees(u, n) {
     if (!active(u) || !(n > 0)) return 0;
     const before = feesOf(u);
+    if (N.feeCap > 0) n = Math.min(n, Math.max(0, N.feeCap - before));
+    if (!(n > 0)) return 0;
     A().addStatus(u, 'lich_late_fees', { stacks: n, turns: -1, silent: true }, u);
     DD.FX.text(u, '💸 Late Fees +' + n, { color: '#b8f28a', size: 14 });
     A().log('Late Fees compound: Lich-tenstein\'s attacks now deal +' + (before + n) + ' damage.', 'enemy');
@@ -449,11 +471,11 @@
     }
     const glowing = list.some(function (t) { return t.obj.data.revealed; });
     if (lich && isBones(lich)) {
-      return head + 'He is a Pile of Bones and reforms on his next turn: ' + (glowing ? 'Search the glowing shelf now' +
-        (left === 1 ? ' (the last one finishes him)!' : '!') : 'Look Up a Card Catalog and Search the shelf it lights up!');
+      return head + 'He is a Pile of Bones and reforms on his next turn: ' + (glowing ? 'Search the glowing shelf (or break it) now' +
+        (left === 1 ? ' (the last one finishes him)!' : '!') : 'Look Up a Card Catalog and Search (or break) the shelf it lights up!');
     }
-    return head + (glowing ? 'Search the glowing shelf (1 AP) to shred it: 25 damage, fees waived, Stun.' :
-      'Look Up a Card Catalog (1 AP), then Search the shelf that glows.');
+    return head + (glowing ? 'Search the glowing shelf (1 AP), or break it, to shred it: ' + N.phylactery + ' damage, fees waived, Stun.' :
+      'Look Up a Card Catalog (1 AP), then Search (or break) the shelf that glows.');
   }
   function updateFlavor() { const s = S(); if (s && s.objective) s.objective.flavor = flavorText(); }
 
@@ -468,7 +490,7 @@
     DD.FX.tile(t.x, t.y, 'glow', { color: '#7dff8a' });
     DD.FX.particles(t, { kind: 'runes', count: 14, color: '#7dff8a' });
     A().touch();
-    A().log((who ? who + ': ' : '') + 'a phylactery hides in the shelf at ' + t.x + ',' + t.y + ' (it glows green).', 'system');
+    A().log((who ? who + ': a' : 'A') + ' phylactery hides in the shelf at ' + t.x + ',' + t.y + ' (it glows green).', 'system');
     updateFlavor();
     return t;
   }
@@ -1037,7 +1059,9 @@
 
   DD.registerObject({
     id: 'lich_shelf', name: 'Restricted Section Shelf', blocksMove: true, blocksLos: true, hp: 8, height: 1.7, color: '#5a3a5e', yawAware: true,
-    desc: 'Search (1 AP) or break it (8 HP). Three shelves hide Lich-tenstein\'s phylacteries: shredding one deals ' + N.phylactery +
+    // rules run: breaking it from range is part of the puzzle (8 HP of attacks for a shelf; a mimic still climbs out)
+    targetable: true,
+    desc: 'Search it from next to it (1 AP), or break it (8 HP): any single-target damage skill can break it. Three shelves hide Lich-tenstein\'s phylacteries: shredding one deals ' + N.phylactery +
       ' damage to him, waives his Late Fees and Stuns him (not while he is Speed-Reading). Two are mimics; the rest hold a good ' +
       'book (+' + N.boon + ' HP). A Card Catalog makes the right ones glow green.',
     available: function (o) { return !(o.data && o.data.searched); },
@@ -1218,7 +1242,7 @@
 
   // ---- enemies -------------------------------------------------------------------------------------------------------
   DD.registerEnemy({
-    id: LICH, name: 'Lich-tenstein', act: 2, tier: 'boss', hp: N.hp, mov: 2, armor: 0,
+    id: LICH, name: 'Lich-tenstein', act: 2, tier: 'boss', hp: N.hp, mov: 2, armor: 0, init: 2,
     tags: ['undead', 'boss', 'lich'], flags: { flying: true, large: true, immune: ['sleep'] }, resist: { poison: 0, frost: 0.5, holy: 1.5 },
     sprite: {
       base: 'custom', scale: 2.1, height: 52, width: 30, headY: -40, hover: 6,
@@ -1252,7 +1276,11 @@
         collapse(unit);
         return true;
       },
-      onDeath: function () { A().narrate('lich_victory', {}); },
+      onDeath: function () {
+        const s = S();
+        const slate = !!s && s.units.some(function (u) { return u.defId === 'slate' && !u.dead; });
+        A().narrate(slate ? 'lich_victory_slate' : 'lich_victory', {});
+      },
       onStatusApplied: function (unit, st) {
         // a boss is not stun-locked: every incapacitation (a shredded phylactery's too) buys him Speed-Reading: the turn
         // he loses plus his next 2
@@ -1281,7 +1309,7 @@
   });
 
   DD.registerEnemy({
-    id: 'lich_intern', name: 'Work-Study Skeleton', act: 2, tier: 'minion', hp: N.internHp, mov: 4, armor: 0,
+    id: 'lich_intern', name: 'Work-Study Skeleton', act: 2, tier: 'minion', hp: N.internHp, mov: 4, armor: 0, init: 1,
     tags: ['undead', 'skeleton'], resist: { poison: 0, holy: 1.5 },
     sprite: {
       base: 'humanoid', scale: 0.85, build: 'slim', outfit: 'tunic',
@@ -1293,14 +1321,14 @@
       spawn: ['Is this a paid position?', 'Day one! So excited to be exploited!', 'Do we get dental? We have so many teeth.'],
       attack: ['Stamped!', 'OVERDUE!', 'Sorry! Boss says I have to!'],
       hurt: ['Worker\'s comp?!', 'My femur! I was using that!'],
-      death: ['At least it counts as experience...', 'Tell HR...', 'I quit. Again.'],
+      death: ['At least it counts as experience...', 'Does this count... for credit...?', 'I quit. Again.'],
     },
     desc: 'A work-study student (unpaid: technically an internship) working toward a degree in Applied Necromancy. Stamps everything OVERDUE, including people, and files the ' +
       'paperwork: every living Work-Study Skeleton adds 1 to the Late Fees each round. Hours: all of them.',
   });
 
   DD.registerEnemy({
-    id: 'lich_mimic', name: 'Bookshelf Mimic', act: 2, tier: 'normal', hp: N.mimicHp, mov: 3, armor: 0,
+    id: 'lich_mimic', name: 'Bookshelf Mimic', act: 2, tier: 'normal', hp: N.mimicHp, mov: 3, armor: 0, init: 0,
     tags: ['mimic', 'construct'], resist: { fire: 1.5 },
     sprite: { base: 'custom', scale: 1.1, height: 34, width: 26, headY: -22, palette: { cloth: '#5a3a5e', accent: '#e05a7a', outline: '#1a1014' }, draw: drawMimic },
     skills: ['lich_mimic_chomp'], ai: { style: 'melee' }, xp: 6, gold: [3, 6],
@@ -1350,7 +1378,7 @@
       },
     },
     enemies: [{ id: LICH, n: 1 }, { id: 'lich_intern', n: 2 }],
-    objective: { type: 'boss', flavor: 'Look Up a Card Catalog (1 AP), then Search the shelf that glows to shred a phylactery.' },
+    objective: { type: 'boss', flavor: 'Look Up a Card Catalog (1 AP), then Search (or break) the shelf that glows to shred a phylactery.' },
     onStart: function (state) { setupLibrary(state); A().narrate('lich_start', {}); },
     reward: { goldMult: 1, itemRarity: 'legendary' },
   });
@@ -1377,8 +1405,13 @@
     'FINAL NOTICE. The DM reads it aloud in a library whisper, which is somehow worse.',
   ]);
   DD.registerNarration('lich_victory', [
-    'Lich-tenstein is returned. Permanently. Somewhere in the stacks, an old stone golem quietly packs up its desk.',
-    'The lich is dust. A pale blue golem in the corner peels off its name badge, its runes flaring, grumbles "I QUIT," and follows you out.',
+    'Lich-tenstein is returned. Permanently. Somewhere in the stacks, an old stone golem quietly packs up his desk.',
+    'The lich is dust. A pale blue golem in the corner peels off his name badge, his runes flaring, grumbles "I QUIT," and waves you off.',
+  ]);
+  // Slate (the retired library golem) in the party: he already quit (playtest text-tone-13)
+  DD.registerNarration('lich_victory_slate', [
+    'Lich-tenstein is returned. Permanently. Slate gives his old desk one long look and does not go back.',
+    'The lich is dust. Slate peels off his old name badge, grumbles "I QUIT. AGAIN," and drops it in the returns slot.',
   ]);
 
   // ---- public helpers (tests, other content) -------------------------------------------------------------------------------
