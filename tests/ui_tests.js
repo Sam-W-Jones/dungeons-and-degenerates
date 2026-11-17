@@ -3,6 +3,9 @@
  * edge-aware tooltips), shared cards and tooltips over ALL registered content, and every screen mounted / unmounted
  * headlessly — without a run, and with a run built from whatever heroes are registered (fixtures or real) — plus the
  * main interactive flows (map travel, rewards pick, level-up, event choice, shop buy, tavern, party equip).
+ * V3 ("ui: V3 —"): act IV's screens (Svammiel's floor map and its fit, the Twist panel, the four-act end screens,
+ * the Hall behind the spoiler gate, the cameo setting, the act-4 shop and tavern, the League's long name, the V3 debug
+ * params).
  */
 (function () {
   'use strict';
@@ -1399,9 +1402,36 @@
     });
   });
 
-  // ---- v2: sixteen heroes, all available; the real game page in a frame of an exact size ------------------------------
+  // ---- v2: every hero available; the real game page in a frame of an exact size ---------------------------------------
+  // V3: the hero count is the registry's (UI.heroIds(): the registered non-test heroes), never a literal, so a 17th (or
+  // an 18th) hero breaks nothing here
   const NEW_HEROES = ['kiri', 'betty', 'basanos', 'valdris', 'hjalmar', 'pebbles'];
+  // V3: the 17th hero joins after the v2 six (plan §4.12: "he arrives last, obviously")
+  const V3_HEROES = ['benedick'];
   const SIZES = [[1024, 640], [1280, 720], [1600, 900], [1920, 1080]];
+
+  /**
+   * V3 (plan §4.12, §8.4): until Benedick registers (and for an 18th hero after him), the fit suite pads the frame's
+   * roster with cloned heroes up to `n`: the clone carries the longest role, name, race, class and epithet of the
+   * roster, the worst case for a card (the V3 review added race / class / epithet: Benedick's two-line "Snail (Dragon,
+   * Allegedly) Knight of the Margins" overflowed the Hall at 1600×900 while the role-only clones fit). Returns the ids
+   * added (unpadHeroes removes them).
+   */
+  function padHeroes(W, n) {
+    const ids = W.DD.UI.heroIds();
+    const defs = ids.map(function (id) { return W.DD.getHero(id); });
+    const byLen = function (k) { return defs.slice().sort(function (a, b) { return String(b[k] || '').length - String(a[k] || '').length; })[0]; };
+    const role = byLen('role');
+    const worst = { name: byLen('name').name, race: byLen('race').race, cls: byLen('cls').cls, epithet: byLen('epithet').epithet };
+    const added = [];
+    for (let k = 0; W.DD.UI.heroIds().length < n && k < 8; k++) {
+      const id = 'zzpad' + k;
+      W.DD.registerHero(Object.assign({}, role, worst, { id: id, unlock: null }));
+      added.push(id);
+    }
+    return added;
+  }
+  function unpadHeroes(W, ids) { ids.forEach(function (id) { delete W.DD.defs.heroes[id]; }); }
 
   /** The real game (index.html — js/main.js boots there, debug URL params work) in an iframe of exactly w × h px. */
   function gameFrame(query, w, h) {
@@ -1451,25 +1481,34 @@
     return bad;
   }
 
-  T.suite('ui: v2 — 16 heroes in UI.HERO_ORDER, all available: party select and the hall roster list everyone, no lock UI', function (t) {
+  T.suite('ui: v2 — every registered hero is in UI.HERO_ORDER, all available: party select and the hall roster list everyone, no lock UI', function (t) {
     const UI = DD.UI;
     UI.init();
     reset();
-    t.eq(UI.HERO_ORDER.length, 16, 'sixteen heroes in the display order');
     t.ok(NEW_HEROES.every(function (id) { return UI.HERO_ORDER.indexOf(id) >= 10; }), 'Kiri, Betty, Basanos, Valdris, Hjalmar and Pebbles join after the original ten');
+    const lastV2 = Math.max.apply(null, NEW_HEROES.map(function (id) { return UI.HERO_ORDER.indexOf(id); }));
+    t.ok(V3_HEROES.every(function (id) { return UI.HERO_ORDER.indexOf(id) > lastV2; }) && UI.HERO_ORDER[UI.HERO_ORDER.length - 1] === V3_HEROES[V3_HEROES.length - 1],
+      'V3: Benedick joins after the v2 six, last in UI.HERO_ORDER');
+    // the registered real heroes, in the display order (an id in HERO_ORDER that is not registered is ignored)
     const real = UI.HERO_ORDER.filter(function (id) { return !!DD.getHero(id); });
-    if (real.length < 16) { t.skip('real hero content not loaded (' + real.length + ' of 16)'); return; }
-    t.eq(UI.heroIds().slice(0, 16).join(','), UI.HERO_ORDER.join(','), 'UI.heroIds() follows the order');
-    t.ok(real.every(function (id) { return UI.isUnlocked(id) && !DD.getHero(id).unlock; }), 'every hero is available (unlock: null)');
+    const registered = Object.keys(DD.defs.heroes).filter(function (id) { return id.indexOf('test_') !== 0; });
+    if (real.length < 4 || !NEW_HEROES.every(function (id) { return !!DD.getHero(id); })) { t.skip('real hero content not loaded (' + real.length + ' heroes)'); return; }
+    const N = registered.length;
+    t.ok(registered.every(function (id) { return UI.HERO_ORDER.indexOf(id) >= 0; }), 'every registered hero is in UI.HERO_ORDER (' + N + ' heroes)' +
+      (real.length < N ? ': missing ' + registered.filter(function (id) { return UI.HERO_ORDER.indexOf(id) < 0; }).join(', ') : ''));
+    // UI.heroIds(): HERO_ORDER first, then (sorted last) any registered hero the order does not list yet
+    const order = UI.heroIds();
+    t.ok(order.length === N && order.slice(0, real.length).join(',') === real.join(','), 'UI.heroIds() lists the ' + N + ' heroes in the display order (' + order.length + ')');
+    t.ok(order.every(function (id) { return UI.isUnlocked(id) && !DD.getHero(id).unlock; }), 'every hero is available (unlock: null)');
     t.tryRun('party select', function () { UI.show('partySelect', {}); });
     const cards = qa('.ps-roster .hero-card');
-    t.eq(cards.length, 16, 'sixteen hero cards');
-    t.eq(cards.map(function (c) { return c.dataset.id; }).join(','), UI.HERO_ORDER.join(','), 'in the display order');
+    t.eq(cards.length, N, N + ' hero cards');
+    t.eq(cards.map(function (c) { return c.dataset.id; }).join(','), order.join(','), 'in the display order');
     t.ok(!qa('.hero-card.locked').length && !/\?\?\?|🔒|to unlock/i.test(q('.ps-roster').textContent), 'no locked cards, "???" or unlock hints');
     t.ok(cards.every(function (c) { const d = DD.getHero(c.dataset.id); return c.querySelector('.hc-name').textContent === d.name && c.querySelector('.hc-role').textContent.length > 3; }), 'each card shows the name and the role');
     t.tryRun('hall roster', function () { UI.show('hall', { tab: 'heroes' }); });
     const hh = qa('.hall-heroes .hh-card');
-    t.eq(hh.length, 16, 'the hall roster lists all sixteen');
+    t.eq(hh.length, N, 'the hall roster lists all ' + N);
     t.ok(!qa('.hh-card.locked').length && !/\?\?\?|unlock/i.test(q('.hall-body').textContent), 'no lock grid, no unlock hints');
     t.ok(hh.every(function (c) { return /Never played|campaign/.test(c.querySelector('.hh-rec').textContent); }), 'each card has a campaign record line');
     t.tryRun('records', function () { UI.show('hall', { tab: 'records' }); });
@@ -1505,10 +1544,11 @@
       t.ok(/1 campaign · 💀 7 · best Lv 2 · ⚰️ 1/.test(rec('pebbles')), 'Pebbles: written out once: ' + rec('pebbles'));
       t.ok(/Never played/.test(rec('valdris')) && card('valdris').classList.contains('fresh'), 'Valdris: never played');
       t.eq(rec('hjalmar'), '1 campaign · ⚰️ 1', 'Hjalmar (fallen, replaced by a recruit) still has his campaign, no crown');
-      t.ok(/4 of 16 heroes have braved a campaign/.test(q('.hall-roster .narration').textContent), 'the DM counts who has played');
-      DD.Meta.data.history = [{ result: 'defeat', act: 1, party: UI.HERO_ORDER.map(function (id) { return { id: id, level: 1 }; }) }];
+      const N = UI.heroIds().length;   // V3: the registry's count, never a literal
+      t.ok(new RegExp('4 of ' + N + ' heroes have braved a campaign').test(q('.hall-roster .narration').textContent), 'the DM counts who has played (4 of ' + N + ')');
+      DD.Meta.data.history = [{ result: 'defeat', act: 1, party: UI.heroIds().map(function (id) { return { id: id, level: 1 }; }) }];
       UI.show('hall', { tab: 'heroes' });
-      t.ok(/All 16 heroes have braved a campaign/.test(q('.hall-roster .narration').textContent) && !/The rest/.test(q('.hall-roster .narration').textContent), 'everyone played: no "the rest" line');
+      t.ok(new RegExp('All ' + N + ' heroes have braved a campaign').test(q('.hall-roster .narration').textContent) && !/The rest/.test(q('.hall-roster .narration').textContent), 'everyone played: no "the rest" line');
     } finally {
       DD.Meta.data.history = hist;
       reset();
@@ -1542,52 +1582,88 @@
     }
   });
 
-  T.suite('ui: v2 — party select and the hall roster fit all 16 heroes at 1024×640, 1280×720, 1600×900 and 1920×1080 (real page)', async function (t) {
+  T.suite('ui: v2 — party select and the hall roster fit every registered hero at 1024×640, 1280×720, 1600×900 and 1920×1080 (real page)', async function (t) {
     if (!DD.getHero('kiri')) { t.skip('real hero content not loaded'); return; }
     for (let i = 0; i < SIZES.length; i++) {
       const w = SIZES[i][0], h = SIZES[i][1];
       const f = await gameFrame('debug=1&screen=partySelect', w, h);
       try {
         const W = f.contentWindow;
-        const ok = await frameUntil(function () { return W.DD && W.DD.UI && W.DD.UI.current === 'partySelect' && W.document.querySelectorAll('.hero-card').length >= 16; }, 15000);
+        // N: the game page's registered heroes (V3: never a literal count)
+        const heroN = function () { return W.DD && W.DD.UI && typeof W.DD.UI.heroIds === 'function' ? W.DD.UI.heroIds().length : 0; };
+        const ok = await frameUntil(function () { return W.DD && W.DD.UI && W.DD.UI.current === 'partySelect' && heroN() >= 4 && W.document.querySelectorAll('.hero-card').length >= heroN(); }, 15000);
         t.ok(ok, w + '×' + h + ': the party select is up');
         if (!ok) continue;
         await tick(80);
-        const doc = W.document;
-        const cards = Array.prototype.slice.call(doc.querySelectorAll('.ps-roster .hero-card'));
-        const bad = cardProblems(W, cards, '.hc-name, .hc-role');
-        t.eq(bad.length, 0, w + '×' + h + ': 16 hero cards, nothing clipped or off screen' + (bad.length ? ' — ' + bad.slice(0, 4).join(' | ') : ''));
-        const roster = doc.querySelector('.ps-roster');
-        t.ok(roster.scrollHeight <= roster.clientHeight + 1, w + '×' + h + ': the roster needs no scrolling');
-        const start = doc.querySelector('.ps-actions .btn.primary').getBoundingClientRect();
-        t.ok(start.bottom <= h && start.right <= w, w + '×' + h + ': Start Campaign is on screen');
-        W.DD.UI.show('hall', { tab: 'heroes' });
-        await tick(80);
-        const hh = Array.prototype.slice.call(doc.querySelectorAll('.hall-heroes .hh-card'));
-        const body = doc.querySelector('.hall-body');
-        t.eq(hh.length, 16, w + '×' + h + ': the hall roster has 16 cards');
-        const bad2 = cardProblems(W, hh, '.hh-name, .hh-sub, .hh-role, .hh-rec');
-        t.eq(bad2.length, 0, w + '×' + h + ': hall cards: nothing clipped or off screen' + (bad2.length ? ' — ' + bad2.slice(0, 4).join(' | ') : ''));
-        t.ok(body && body.scrollHeight <= body.clientHeight + 2, w + '×' + h + ': all sixteen fit without scrolling (' + (body && body.scrollHeight) + ' / ' + (body && body.clientHeight) + ')');
-        // the tavern's "who joins?" pick: the twelve heroes outside the party (UI.choice, compact columns)
-        if (W.DD.Main && typeof W.DD.Main.debugRun === 'function' && W.DD.Main.debugRun()) {
-          W.DD.UI.show('tavern', { debug: true });
-          await tick(60);
-          const rb = doc.querySelector('.tav-option.k-recruit .to-actions .btn');
-          if (rb) rb.click();
-          const leave = doc.querySelector('.modal .choice-option');
-          if (leave) leave.click();
-          await tick(60);
-          const opts = Array.prototype.slice.call(doc.querySelectorAll('.modal .choice-list.many .choice-option'));
-          const mb = doc.querySelector('.modal .modal-body');
-          t.eq(opts.length, 12, w + '×' + h + ': the recruit pick lists the 12 heroes outside the party');
-          const bad3 = cardProblems(W, opts, '.ro-name, .ro-role');
-          t.eq(bad3.length, 0, w + '×' + h + ': recruit cards: nothing clipped' + (bad3.length ? ' — ' + bad3.slice(0, 4).join(' | ') : ''));
-          t.ok(mb && mb.scrollHeight <= mb.clientHeight + 2, w + '×' + h + ': the pick needs no scrolling (' + (mb && mb.scrollHeight) + ' / ' + (mb && mb.clientHeight) + ')');
+        // V3 (plan §4.12): the registered roster, then (padded with cloned worst-case cards) 17 until Benedick has
+        // landed, and 18 for the next hero after him
+        const real = heroN();
+        const counts = [real];
+        if (real < 17) counts.push(17);
+        if (real < 18) counts.push(18);
+        for (let c = 0; c < counts.length; c++) {
+          const pad = counts[c] > real ? padHeroes(W, counts[c]) : [];
+          try {
+            if (pad.length) { W.DD.UI.show('title'); W.DD.UI.show('partySelect', {}); await tick(80); }
+            await fitRoster(t, W, w, h, pad.length ? ' (padded to ' + counts[c] + ')' : '');
+          } finally { unpadHeroes(W, pad); }
         }
       } finally { f.remove(); }
     }
   });
+  /** The fit checks of one roster (party select, hall roster, the tavern's recruit pick) in frame W at w × h. */
+  async function fitRoster(t, W, w, h, tag) {
+    const N = W.DD.UI.heroIds().length;
+    const doc = W.document;
+    const at = w + '×' + h + tag;
+    const cards = Array.prototype.slice.call(doc.querySelectorAll('.ps-roster .hero-card'));
+    t.eq(cards.length, N, at + ': ' + N + ' hero cards');
+    const bad = cardProblems(W, cards, '.hc-name, .hc-role');
+    t.eq(bad.length, 0, at + ': ' + N + ' hero cards, nothing clipped or off screen' + (bad.length ? ' — ' + bad.slice(0, 4).join(' | ') : ''));
+    const roster = doc.querySelector('.ps-roster');
+    t.ok(roster.scrollHeight <= roster.clientHeight + 1, at + ': the roster needs no scrolling');
+    const start = doc.querySelector('.ps-actions .btn.primary').getBoundingClientRect();
+    t.ok(start.bottom <= h && start.right <= w, at + ': Start Campaign is on screen');
+    // [V3 review] the `.many` grid narrows the details panel below 1280 px: its four stat boxes and the Init chip stay
+    // inside it (0 ARMOR poked out at 1024×640 and 1024×768 once Benedick made 17)
+    const panel = doc.querySelector('.ps-details');
+    if (panel) {
+      const pr = panel.getBoundingClientRect();
+      const out = Array.prototype.slice.call(doc.querySelectorAll('.psd-stats .stat-box, .ps-details .psd-init'))
+        .filter(function (b) { const r = b.getBoundingClientRect(); return r.right > pr.right - 2 || r.left < pr.left; });
+      t.eq(out.length, 0, at + ': the details panel\'s stat boxes and Init chip stay inside it' + (out.length ? ' — ' + out.map(function (b) { return b.textContent; }).join(' | ') : ''));
+    }
+    W.DD.UI.show('hall', { tab: 'heroes' });
+    await tick(80);
+    const hh = Array.prototype.slice.call(doc.querySelectorAll('.hall-heroes .hh-card'));
+    const body = doc.querySelector('.hall-body');
+    t.eq(hh.length, N, at + ': the hall roster has ' + N + ' cards');
+    const bad2 = cardProblems(W, hh, '.hh-name, .hh-sub, .hh-role, .hh-rec');
+    t.eq(bad2.length, 0, at + ': hall cards: nothing clipped or off screen' + (bad2.length ? ' — ' + bad2.slice(0, 4).join(' | ') : ''));
+    t.ok(body && body.scrollHeight <= body.clientHeight + 2, at + ': all ' + N + ' fit without scrolling (' + (body && body.scrollHeight) + ' / ' + (body && body.clientHeight) + ')');
+    t.ok(new RegExp('(All ' + N + ' heroes|of ' + N + ' heroes|whole table)').test(doc.querySelector('.hall-roster .narration').textContent), at + ': the DM\'s count reads the registry (' + N + ')');
+    // the tavern's "who joins?" pick: every hero outside the party (UI.choice, compact columns)
+    if (W.DD.Main && typeof W.DD.Main.debugRun === 'function' && W.DD.Main.debugRun()) {
+      W.DD.UI.show('tavern', { debug: true });
+      await tick(60);
+      const rb = doc.querySelector('.tav-option.k-recruit .to-actions .btn');
+      if (rb) rb.click();
+      const leave = doc.querySelector('.modal .choice-option');
+      if (leave) leave.click();
+      await tick(60);
+      const opts = Array.prototype.slice.call(doc.querySelectorAll('.modal .choice-list.many .choice-option'));
+      const mb = doc.querySelector('.modal .modal-body');
+      const outside = N - ((W.DD.Run.state && W.DD.Run.state.party) || []).length;
+      t.eq(opts.length, outside, at + ': the recruit pick lists the ' + outside + ' heroes outside the party');
+      const bad3 = cardProblems(W, opts, '.ro-name, .ro-role');
+      t.eq(bad3.length, 0, at + ': recruit cards: nothing clipped' + (bad3.length ? ' — ' + bad3.slice(0, 4).join(' | ') : ''));
+      t.ok(mb && mb.scrollHeight <= mb.clientHeight + 2, at + ': the pick needs no scrolling (' + (mb && mb.scrollHeight) + ' / ' + (mb && mb.clientHeight) + ')');
+      W.DD.UI.closeAllModals('test');
+      // a fresh run for the next roster size (its tavern rolls the recruits again)
+      if (W.DD.Run && typeof W.DD.Run.clear === 'function') W.DD.Run.clear();
+      W.DD.Run.state = null;
+    }
+  }
 
   /**
    * [release gate, Nov 14] The act-1 start map's intro box (the DM's line + the Session Zero quirks) covered a
@@ -1941,5 +2017,758 @@
       const out = Array.prototype.slice.call(doc.querySelectorAll('.psd-stats .stat-box')).concat(init ? [init] : []).filter(function (b) { const r = b.getBoundingClientRect(); return r.right > pr.right - 2 || r.left < pr.left; });
       t.eq(out.length, 0, 'nothing pokes out of the panel at 1024×768' + (out.length ? ': ' + out.map(function (b) { return b.textContent; }).join(' | ') : ''));
     } finally { f.remove(); }
+  });
+
+  // ==== V3: act IV "Under the Table" (plan §2.1-2.6, §4.10, §8.4 META-UI) =============================================
+  // Every count here is read from the registry or the run (map.lanes.length, summary.gauntletLanes, UI.heroIds()),
+  // never a literal number of doors or heroes. Act IV ships dark: these suites set the knob themselves (withActs).
+  const TWIST_LINE = 'You thought this was over? I, SVAMMIEL, CONTROL ALL.';
+  const GOATS_TEASER = '🐐 The Rapping Goats — three goats, one mic, a verse about each of you. (feat. ???)';
+  // the League's full name (plan V19: 56 letters in the word, 72 characters in all) when league.js is not loaded
+  const LEAGUE_FULL = 'The ' + 'l'.repeat(10) + 'e'.repeat(11) + 'a'.repeat(12) + 'g' + 'u'.repeat(13) + 'e'.repeat(9) + ' of Villainy';
+
+  /** Run fn with the campaign knob at n acts (every Balance knob restored after). */
+  async function withActs(n, fn) {
+    const snap = DD.Balance.snapshot();
+    try {
+      DD.Balance.campaign.acts = n;
+      return await fn();
+    } finally { DD.Balance.restore(snap); }
+  }
+  /** Run fn with the spoiler gate (DD.Meta seen.bosses.svammiel) open or shut; the meta data is restored after. */
+  async function withGate(open, fn) {
+    const saved = DD.util.deepClone(DD.Meta.data);
+    try {
+      const bag = DD.Meta.data.seen.bosses;
+      if (open) bag.svammiel = Date.now(); else delete bag.svammiel;
+      return await fn();
+    } finally {
+      DD.Meta.data = saved;
+      DD.Meta.save();
+    }
+  }
+  /** A run on Svammiel's floor: makeRun, then DD.Run.startAtAct(4, opts) (the knob must say 4). → run | null. */
+  function gauntletRun(t, opts) {
+    if (!DD.RunMap || typeof DD.RunMap.isGauntlet !== 'function' || !DD.RunMap.isGauntlet(4) || typeof DD.Run.startAtAct !== 'function') {
+      t.skip('no act-4 gauntlet content (or DD.Run.startAtAct) loaded');
+      return null;
+    }
+    const run = makeRun(t);
+    if (!run) return null;
+    t.tryRun('Run.startAtAct(4)', function () { DD.Run.startAtAct(4, Object.assign({ gear: 'none', noShow: true }, opts || {})); });
+    const r = DD.UI.run();
+    if (!r || r.act !== 4 || !r.map || r.map.shape !== 'gauntlet') { t.fail('DD.Run.startAtAct(4) built no gauntlet'); return null; }
+    return r;
+  }
+  function textOf(sel) { const n = q(sel); return n ? n.textContent : ''; }
+  function nodeRow(run, el) { const n = run.map.nodes[el.dataset.id]; return n ? n.row || 0 : -1; }
+  /** Hover a node (its tooltip shows after UI.tooltip's delay) → the tooltip's text. */
+  async function hoverText(node) {
+    node.dispatchEvent(new MouseEvent('mouseenter'));
+    await tick(160);
+    const tt = document.querySelector('.ui-tooltip');
+    const s = tt && tt.style.display !== 'none' ? tt.textContent : '';
+    node.dispatchEvent(new MouseEvent('mouseleave'));
+    DD.UI.hideTooltip();
+    return s;
+  }
+  function poolOf(key, fallback) { const p = DD.defs.narration && DD.defs.narration[key]; return Array.isArray(p) && p.length ? p : fallback; }
+
+  T.suite('ui: V3 — Svammiel\'s floor: a door per lane on every door row, only open and travelled links, sealed lanes, the legend, "Act IV"', function (t) {
+    return uiSandbox(t, function () { return withActs(4, function () { return gauntletBoard(t); }); });
+  });
+  async function gauntletBoard(t) {
+    const UI = DD.UI;
+    UI.init();
+    reset();
+    const run = gauntletRun(t);
+    if (!run) { endRun(t); return; }
+    try {
+      const map = run.map, L = map.lanes.length;
+      t.ok(L >= 1, 'the run\'s gauntlet has ' + L + ' lanes (read from the registry)');
+      t.tryRun('show the map', function () { UI.show('map', { act: 4 }); });
+      t.ok(q('.map-board.gauntlet'), 'the gauntlet board (Svammiel\'s floor plan)');
+      t.ok(root().classList.contains('act-4'), 'the act-4 look');
+      t.eq(textOf('.mc-act'), 'Act IV', 'the cartouche says Act IV');
+      t.eq(textOf('.mc-name'), 'Under the Table', 'and names the act');
+      t.eq(textOf('.mc-sub'), UI.ACTS[4].sub, 'with its count-free sub');
+      const doors = qa('.map-node.t-miniboss');
+      t.eq(doors.length, L * L, 'a door per lane on each of the ' + L + ' door rows (' + doors.length + ')');
+      map.lanes.forEach(function (lane) {
+        const li = UI.laneInfo(lane);
+        const mine = doors.filter(function (d) { return d.dataset.lane === lane.id; });
+        t.eq(mine.length, L, lane.id + ': one door per door row');
+        t.ok(mine.every(function (d) { return d.querySelector('.mn-lane').textContent === li.shortName && d.querySelector('.mn-badge').textContent === li.icon; }),
+          lane.id + ': every door shows the lane\'s shortName and icon (' + li.icon + ' ' + li.shortName + ')');
+        t.ok(mine.every(function (d) { return !!d.querySelector(li.portrait ? '.mn-portrait' : '.mn-icon'); }), lane.id + ': ' + (li.portrait ? 'the mini-boss portrait (' + li.portrait + ')' : 'its icon'));
+      });
+      // the door rows hold the lanes in lane order (track by track)
+      const row1 = doors.filter(function (d) { return nodeRow(run, d) === 1; }).sort(function (a, b) { return parseFloat(a.style.top) - parseFloat(b.style.top); });
+      t.eq(row1.map(function (d) { return d.dataset.lane; }).join(','), map.lanes.map(function (l) { return l.id; }).join(','), 'door row 1 lists the lanes top to bottom in lane order');
+      const boss = q('.map-node.t-boss');
+      t.ok(boss && /Floor Boss/.test(boss.textContent) && boss.classList.contains('door'), 'the floor boss is the last node, labelled Floor Boss');
+      t.ok(q('.g-doodle-svam') && q('.g-doodle-dm'), 'the doodles: smug Svammiel over his node, the DM in the margin asking for help');
+      // only the lobby's links (complete rows would be a hairball)
+      t.eq(qa('.map-links .link.open').length, map.start.length, 'only the open links are drawn: the lobby\'s ' + map.start.length);
+      t.eq(qa('.map-links .link.done').length, 0, 'nothing travelled yet');
+      t.eq(qa('.map-node.s-reachable').length, map.start.length, 'the lobby stops are reachable');
+      const legend = textOf('.map-legend');
+      t.ok(/Mini-boss/.test(legend) && /Floor Boss/.test(legend) && !/Combat|Elite|Treasure/.test(legend), 'the legend lists what the board shows: ' + legend);
+      // a door's tooltip: its full name, the teaser (when the lane has one), the hint, the state
+      const d0 = row1[0];
+      const li0 = UI.laneInfo(map.lanes[0]);
+      const tip = await hoverText(d0);
+      t.ok(tip.indexOf(li0.name) >= 0 && (!li0.hint || tip.indexOf(li0.hint) >= 0) && (!li0.teaser || tip.indexOf(li0.teaser) >= 0), 'the door tooltip: name, teaser and hint: ' + tip.slice(0, 160));
+      t.ok(/Mini-boss/.test(tip) && /sealed/.test(tip), 'it says a mini-boss, and that a win seals the lane');
+      const btip = await hoverText(boss);
+      t.ok(/Floor Boss/.test(btip), 'the floor boss\'s tooltip: ' + btip.slice(0, 120));
+      // the goats' door (the fifth lane in the full build): 🐐, the teaser, Billy Bleatz's portrait (the bear stays a surprise)
+      t.eq(UI.laneInfo({ id: 'goats' }).teaser, GOATS_TEASER, 'the goats\' teaser, exactly');
+      t.eq(UI.laneInfo({ id: 'goats' }).castNote, '(feat. ???)', 'and their cast-card aside');
+      const goats = map.lanes.filter(function (l) { return l.id === 'goats'; })[0];
+      if (goats) {
+        const gi = UI.laneInfo(goats);
+        t.eq(gi.icon, '🐐', 'the goats\' door icon');
+        t.eq(gi.portrait, DD.getEncounter(goats.encounterId).objective.bossIds[0], 'the goats\' door portrait is the first squad def (Billy Bleatz)');
+        t.ok(gi.shortName.length <= 24, 'the goats\' label is a shortName (' + gi.shortName + ')');
+      } else t.log('goats.js not loaded: the goats\' door is checked from the teaser table only');
+
+      // a lane beaten: every door of it sealed, the party at the door it beat, the next door row offers the others
+      const first = map.lanes[0].id;
+      t.tryRun('startAtAct(4, beaten: ' + first + ')', function () { DD.Run.startAtAct(4, { gear: 'none', noShow: true, beaten: first }); });
+      const run2 = UI.run();
+      // the path a party really walks: a lobby stop, then the door (startAtAct puts it at the door directly)
+      run2.visited = [run2.map.start[0], run2.nodeId];
+      t.tryRun('show the map', function () { UI.show('map', { act: 4 }); });
+      const laneDoors = qa('.map-node.t-miniboss').filter(function (d) { return d.dataset.lane === first; });
+      const cur = q('.map-node.s-current');
+      t.ok(cur && cur.dataset.id === run2.nodeId && cur.dataset.lane === first && cur.classList.contains('fought'), 'the party stands at the door it beat');
+      t.eq(cur ? cur.querySelector('.mn-lane').textContent : '', '✓ ' + UI.laneInfo(map.lanes[0]).shortName, 'that door reads "✓ ' + UI.laneInfo(map.lanes[0]).shortName + '"');
+      const sealed = laneDoors.filter(function (d) { return d !== cur; });
+      t.ok(laneDoors.length === L && sealed.every(function (d) { return d.classList.contains('s-sealed'); }), 'every other door of the beaten lane is sealed (' + sealed.length + ')');
+      t.eq(qa('.map-node.t-miniboss.s-sealed').filter(function (d) { return d.dataset.lane !== first; }).length, 0, 'and only that lane\'s');
+      t.ok(sealed.every(function (d) { return d.querySelector('.mn-lane').textContent === '✓ Beaten'; }), 'its other doors read "✓ Beaten"');
+      if (sealed.length) t.ok(/Beaten/.test(await hoverText(sealed[0])), 'a sealed door\'s tooltip says it is beaten');
+      const row3 = qa('.map-node.t-miniboss').filter(function (d) { return nodeRow(run2, d) === 3; });
+      t.eq(row3.filter(function (d) { return !d.classList.contains('s-sealed'); }).length, L - 1, 'the next door row offers the ' + (L - 1) + ' unbeaten lanes');
+      const avail = qa('.map-node.s-reachable');
+      t.ok(avail.length > 0 && avail.every(function (d) { return nodeRow(run2, d) === 2; }), 'the intermission after the door is reachable');
+      t.eq(qa('.map-links .link.done').length, 2, 'the travelled links are drawn: camp → lobby → door');
+      t.eq(qa('.map-links .link.open').length, avail.length, 'plus the open ones, nothing else');
+    } finally {
+      endRun(t);
+    }
+  }
+
+  T.suite('ui: V3 — the Twist panel: the user\'s line, the cast card built from the lanes, the heal with his blessing, Space completes it, "Descend to Act IV" goes down', function (t) {
+    return uiSandbox(t, function () { return withActs(4, function () { return twistPanelFlow(t); }); });
+  });
+  async function twistPanelFlow(t) {
+    const UI = DD.UI;
+    UI.init();
+    reset();
+    const run = gauntletRun(t);
+    if (!run) { endRun(t); return; }
+    try {
+      const L = run.map.lanes.length;
+      // the rewards screen's Continue after the act-3 boss: actClear.twist → the Twist panel
+      t.tryRun('rewards with a twist act clear', function () {
+        UI.show('rewards', { kind: 'boss', boss: true, choices: [], gold: 0, encounterName: 'Behind the DM Screen', actClear: { act: 3, nextAct: 4, twist: true, healed: 0.5, unlocked: [], text: '' } });
+      });
+      const cont = qa('.btn.primary').filter(function (b) { return /Continue/.test(b.textContent); })[0];
+      t.ok(cont, 'the rewards screen has Continue');
+      if (cont) cont.click();
+      t.eq(UI.current, 'victory', 'Continue opens the victory screen');
+      t.ok(root().classList.contains('twist'), 'as the Twist panel');
+      t.ok(root().classList.contains('tw-done'), 'headless: mounted fully drawn');
+      t.eq(textOf('.tw-headline'), 'YOU THOUGHT THIS WAS OVER?', 'the typed headline');
+      t.eq(textOf('.tw-control'), 'I, SVAMMIEL, CONTROL ALL.', 'then his name in gold');
+      const pool = poolOf('svam_twist', [TWIST_LINE]);
+      t.eq((textOf('.tw-headline') + ' ' + textOf('.tw-control')).toLowerCase(), pool[0].toLowerCase(), 'together: the user\'s line (svam_twist)');
+      t.eq(pool[0], TWIST_LINE, 'svam_twist is exactly the user\'s words');
+      t.ok(/Act III Cleared/.test(textOf('.tw-clear')), 'it starts as the act-3 clear');
+      t.ok(/Fine\. FINE\. You win\. Same time next week\?/.test(textOf('.tw-dm-yield')), 'with the DM yielding');
+      const chips = qa('.twc-lane');
+      t.eq(chips.length, L, 'the cast card lists the ' + L + ' lanes of his floor');
+      t.eq(chips.map(function (c) { return c.querySelector('.twc-lname').textContent; }).join(' | '), run.map.lanes.map(function (l) { return UI.laneInfo(l).shortName; }).join(' | '), 'by shortName, in lane order');
+      const gchip = chips.filter(function (c) { return /Rapping Goats/.test(c.textContent); })[0];
+      if (gchip) t.ok(/🐐/.test(gchip.textContent) && /\(feat\. \?\?\?\)/.test(gchip.textContent), 'the goats: 🐐 "(feat. ???)" (the bear stays a surprise)');
+      t.ok(/SVAMMIEL/.test(textOf('.twc-name')) && /The Floor Boss/.test(textOf('.twc-title')) && /Dungeon Master of Dungeon Masters/.test(textOf('.twc-epithet')), 'the cast card: SVAMMIEL · The Floor Boss · Dungeon Master of Dungeon Masters');
+      const sv = q('.tw-svam-line');
+      t.ok(sv && sv.querySelector('.speaker-badge') && sv.querySelector('.speaker-badge').textContent === '😈', 'his line wears his 😈 badge, not the DM\'s');
+      t.ok(sv && poolOf('svam_twist_panel', []).concat(['Did you think HE ran this game? Adorable. He\'s my player.']).indexOf(sv.querySelector('.narr-text').textContent) >= 0, 'his line is from svam_twist_panel');
+      t.ok(/heals 50% of their max HP\./.test(textOf('.tw-heal')) && /\(Svammiel allowed it\. Healthy players last longer\.\)/.test(textOf('.tw-heal')), 'the heal line, with his blessing');
+      const go = q('.tw-go');
+      t.ok(go && /Descend to Act IV/.test(go.textContent), 'the button: Descend to Act IV');
+      const n = UI.numberWord(L);
+      t.eq(textOf('.end-next'), 'Next: Under the Table — Svammiel\'s floor. ' + DD.util.capitalize(n) + ' mini-boss' + (L === 1 ? '' : 'es') + ' in any order, then him.', 'the next line counts the lanes in words (' + n + ')');
+      t.ok(!q('.confetti'), 'no confetti: nobody celebrates for long');
+      // off headless: the reveal plays; Space completes it, then Enter descends
+      const head = DD.headless, snd = UI.sound;
+      UI.sound = function () {};
+      try {
+        DD.headless = false;
+        try {
+          t.tryRun('show the panel (animated)', function () { UI.show('victory', { act: 3, nextAct: 4, twist: true, healed: 0.5, unlocked: [] }); });
+        } finally { DD.headless = head; }
+        t.ok(!root().classList.contains('tw-done') && textOf('.tw-headline') === '', 'animated: the headline is not typed yet');
+        key(' ');
+        t.ok(root().classList.contains('tw-done') && textOf('.tw-headline') === 'YOU THOUGHT THIS WAS OVER?', 'Space completes every step at once');
+        t.eq(UI.current, 'victory', 'and does not go on yet');
+        key('Enter');
+      } finally { UI.sound = snd; }
+      t.eq(UI.current, 'map', 'Enter descends: the map');
+      t.ok(q('.map-board.gauntlet') && UI.run().act === 4, 'Svammiel\'s floor, act IV');
+    } finally {
+      endRun(t);
+    }
+  }
+
+  T.suite('ui: V3 — the four-act victory (campaign_won, his last word, floor bosses N / M and the order) vs a classic win; game over in act IV (floor bosses beaten, "(he cheated)")', function (t) {
+    return uiSandbox(t, function () { return withActs(4, function () { return endScreens4(t); }); });
+  });
+  async function endScreens4(t) {
+    const UI = DD.UI;
+    UI.init();
+    reset();
+    if (DD.Run && typeof DD.Run.clear === 'function') DD.Run.clear();
+    DD.Run.state = null;
+    const lanes = DD.RunMap && DD.RunMap.gauntletLanes ? DD.RunMap.gauntletLanes(4) : [];
+    const ids = lanes.map(function (l) { return l.id; });
+    const M = Math.max(ids.length, 2);
+    while (ids.length < M) ids.push('lane' + ids.length);
+    const fin = DD.RunMap && DD.RunMap.finaleOf ? DD.RunMap.finaleOf(4) : null;
+    const party = UI.heroIds().slice(0, 4).map(function (id) { return { id: id, level: 6 }; });
+    const base = { act: 4, acts: 4, party: party, stats: { combats: 20, kills: 90, bosses: 4, miniBosses: ids.length }, difficulty: 'normal' };
+    // the four-act win
+    t.tryRun('the four-act victory', function () { UI.show('victory', { final: true, summary: Object.assign({}, base, { result: 'victory', gauntlet: ids.slice(), gauntletLanes: M, floorBoss: true }) }); });
+    t.eq(textOf('.end-kicker'), 'The Campaign Is Over (For Real This Time)', 'the kicker');
+    t.ok(root().classList.contains('four-act'), 'the four-act look');
+    const narr = qa('.narration .narr-text').map(function (n) { return n.textContent; });
+    t.ok(narr.some(function (s) { return poolOf('campaign_won', ['The DM picks up his screen, dusts it off and grins. "So. Who wants to play again?"']).indexOf(s) >= 0; }), 'the DM\'s line is campaign_won');
+    t.ok(narr.indexOf('Fine. FINE. You win. Same time next week?') < 0, 'not the old hard-coded DM line');
+    const last = q('.narration.by-speaker');
+    t.ok(last && last.querySelector('.speaker-badge').textContent === '😈' && poolOf('victory_final', ['Svammiel, from somewhere far below: "Fine. FINE. ...Same time next week?"']).indexOf(last.querySelector('.narr-text').textContent) >= 0,
+      'then Svammiel\'s last word from below (victory_final, 😈)');
+    const floor = qa('.end-stat').filter(function (s) { return /Floor bosses/.test(s.textContent); })[0];
+    t.ok(floor && floor.querySelector('.es-val').textContent === ids.length + ' / ' + M, 'the stat grid: floor bosses ' + ids.length + ' / ' + M + ' (that run\'s own lane count)');
+    t.eq(qa('.end-order .lo-lane').length, ids.length + 1, 'the order: every lane beaten, then him');
+    // a classic (v2: no `acts`) win
+    t.tryRun('a classic victory', function () { UI.show('victory', { final: true, summary: { result: 'victory', act: 3, party: party, stats: { combats: 15 } } }); });
+    t.eq(textOf('.end-kicker'), 'The Campaign Is Over', 'a classic win keeps its kicker');
+    t.ok(qa('.narration .narr-text').some(function (n) { return n.textContent === 'Fine. FINE. You win. Same time next week?'; }), 'and the DM\'s line');
+    t.ok(!q('.end-order') && !qa('.end-stat').some(function (s) { return /Floor bosses/.test(s.textContent); }), 'no floor bosses on a classic win');
+    // game over in act IV: the floor boss (he cheated), floor bosses beaten N / M with their names
+    const sub = ids.slice(0, 2);
+    if (fin) {
+      t.tryRun('game over to the floor boss', function () {
+        UI.show('gameover', { summary: Object.assign({}, base, { result: 'defeat', gauntlet: sub, gauntletLanes: M, killedBy: fin.shortName || fin.name, killedByEncounter: fin.id }) });
+      });
+      const k = UI.killerOf({ killedBy: fin.shortName, killedByEncounter: fin.id });
+      t.eq(textOf('.end-killer'), 'Felled by ' + k.name + ' in Act IV (he cheated).', 'the killer: ' + textOf('.end-killer'));
+      t.ok(!/\bthey\b/.test(textOf('.end-killer')), 'never "they"');
+      t.eq(textOf('.end-floor'), '😈 Floor bosses beaten: ' + sub.length + ' / ' + M + ' (' + sub.map(function (id) { return UI.laneShort(id); }).join(', ') + ')', 'floor bosses beaten, by name');
+    } else t.log('no act-4 finale loaded: the floor boss\'s game over is not checked');
+    if (lanes.length) {
+      const enc = DD.getEncounter(lanes[0].encounterId);
+      t.tryRun('game over at a door', function () {
+        UI.show('gameover', { summary: Object.assign({}, base, { result: 'defeat', gauntlet: [], gauntletLanes: M, killedBy: enc.shortName || enc.name, killedByEncounter: enc.id }) });
+      });
+      t.eq(textOf('.end-killer'), 'Felled by ' + (enc.shortName || enc.name) + ' in Act IV.', 'a door\'s killer: its shortName, no cheating claimed');
+      t.eq(textOf('.end-floor'), '😈 Floor bosses beaten: 0 / ' + M, '0 / ' + M);
+    }
+    t.tryRun('a v2 game over', function () { UI.show('gameover', { summary: { result: 'defeat', act: 2, party: party, killedBy: 'Grimble', stats: {} } }); });
+    t.eq(textOf('.end-killer'), 'Felled by Grimble in Act II.', 'a v2 summary: as before');
+    t.ok(!q('.end-floor'), 'and no floor bosses');
+    t.tryRun('title', function () { UI.show('title'); });
+  }
+
+  T.suite('ui: V3 — the Hall: the codex hides Act IV and act-4 defs (groups, Miscellaneous Horrors, counts) until Svammiel is met; then records, history and the classic label', function (t) {
+    return withActs(4, function () { return hallGate(t); });
+  });
+  async function hallGate(t) {
+    const UI = DD.UI;
+    UI.init();
+    reset();
+    if (DD.Run && typeof DD.Run.clear === 'function') DD.Run.clear();
+    DD.Run.state = null;
+    const real = Object.keys(DD.defs.enemies).filter(function (id) { return id.indexOf('test_') !== 0; }).map(function (id) { return DD.defs.enemies[id]; });
+    const act4 = real.filter(function (e) { return +e.act === 4; });
+    const party = UI.heroIds().slice(0, 4).map(function (id) { return { id: id, level: 5 }; });
+    const fin = DD.RunMap.finaleOf(4);
+    const lanes = DD.RunMap.gauntletLanes(4);
+    const history = [
+      { result: 'victory', act: 3, party: party, stats: {}, endedAt: 1000 },                                                   // v2: classic
+      { result: 'victory', act: 4, acts: 4, party: party, stats: {}, gauntlet: lanes.map(function (l) { return l.id; }), gauntletLanes: lanes.length, floorBoss: true, endedAt: 3000 },
+      { result: 'defeat', act: 4, acts: 4, party: party, stats: {}, gauntlet: lanes.slice(0, 2).map(function (l) { return l.id; }), gauntletLanes: 7,
+        killedBy: fin ? fin.shortName : 'Svammiel', killedByEncounter: fin ? fin.id : null, endedAt: 2000 },
+    ];
+    await withGate(false, async function () {
+      DD.Meta.data.history = history.slice();
+      Object.assign(DD.Meta.data.stats, { runs: 3, wins: 2, dmDefeated: 2, miniBosses: 9 });
+      act4.forEach(function (e) { DD.Meta.data.seen.enemies[e.id] = 1; });   // even seen, they stay hidden before the gate
+      t.tryRun('codex (gate shut)', function () { UI.show('hall', { tab: 'codex' }); });
+      const heads = qa('.codex-h').map(function (h) { return h.textContent; });
+      t.ok(!heads.some(function (h) { return /Act IV|Under the Table/.test(h); }), 'no Act IV group: ' + heads.join(' | '));
+      t.eq(qa('.hall-codex .cx-card').length, real.length - act4.length, 'every non-act-4 enemy has a card, no act-4 one (' + (real.length - act4.length) + ')');
+      t.ok(!/Svammiel/.test(q('.hall-body').textContent), 'nothing names Svammiel');
+      t.tryRun('records (gate shut)', function () { UI.show('hall', { tab: 'records' }); });
+      const rec = q('.hall-body').textContent;
+      t.ok(!/The DM defeated|Floor bosses|classic/.test(rec), 'records: no act-IV cards');
+      const prog = qa('.prog-h').filter(function (p) { return /Codex entries/.test(p.textContent); })[0];
+      t.ok(prog && new RegExp('/ ' + (real.length - act4.length) + '$').test(prog.textContent), 'the codex count leaves act-4 defs out: ' + (prog && prog.textContent));
+      t.tryRun('history (gate shut)', function () { UI.show('hall', { tab: 'history' }); });
+      t.ok(qa('.hist-title').some(function (h) { return /^Victory!/.test(h.textContent); }) && !/classic/.test(q('.hall-body').textContent), 'a classic win is just "Victory!" while act IV is a secret');
+    });
+    await withGate(true, async function () {
+      DD.Meta.data.history = history.slice();
+      Object.assign(DD.Meta.data.stats, { runs: 3, wins: 2, dmDefeated: 2, miniBosses: 9 });
+      t.tryRun('records (gate open)', function () { UI.show('hall', { tab: 'records' }); });
+      const card = function (re) { return qa('.rec-card').filter(function (c) { return re.test(c.querySelector('.rc-label').textContent); })[0]; };
+      t.ok(card(/^The DM defeated$/) && card(/^The DM defeated$/).querySelector('.rc-val').textContent === '2', 'records: the DM defeated');
+      t.ok(card(/^Floor bosses beaten$/) && card(/^Floor bosses beaten$/).querySelector('.rc-val').textContent === '9', 'records: floor bosses beaten (the lifetime sum)');
+      t.ok(card(/Campaigns won \(of which classic: 1\)/), 'records: campaigns won, of which classic');
+      t.tryRun('history (gate open)', function () { UI.show('hall', { tab: 'history' }); });
+      const rows = qa('.hist-row');
+      const titles = rows.map(function (r) { return r.querySelector('.hist-title').textContent; });
+      t.ok(titles.some(function (s) { return /^Won \(classic, 3 acts\)/.test(s); }), 'the v2 win: "Won (classic, 3 acts)"');
+      t.ok(titles.some(function (s) { return /^Victory! The floor boss, floored/.test(s); }), 'the four-act win');
+      if (fin) {
+        const k = UI.killerOf({ killedBy: fin.shortName, killedByEncounter: fin.id });
+        t.ok(titles.some(function (s) { return s === 'Fell in Act IV to ' + k.name + ' (he cheated)'; }), 'the floor boss\'s kill: "Fell in Act IV to ' + k.name + ' (he cheated)"');
+      }
+      const floors = qa('.hist-floor').map(function (f) { return f.textContent; });
+      t.ok(floors.some(function (s) { return s.indexOf('Act IV · 2 / 7 floor bosses') === 0; }), 'a run\'s own lane count: "Act IV · 2 / 7 floor bosses" (' + floors.join(' | ') + ')');
+      t.ok(floors.some(function (s) { return s.indexOf('Act IV · ' + lanes.length + ' / ' + lanes.length + ' floor bosses') === 0; }), 'the won run: every lane');
+      t.eq(qa('.hist-row')[1] ? qa('.hist-row')[1].querySelectorAll('.hist-lanes span').length : -1, Math.min(2, lanes.length), 'the lanes beaten as icons');
+      t.tryRun('codex (gate open)', function () { UI.show('hall', { tab: 'codex' }); });
+      const h4 = q('.codex-h.act-4');
+      if (act4.length) {
+        t.ok(h4 && /^Act IV — Under the Table/.test(h4.textContent), 'the Act IV group: ' + (h4 && h4.textContent));
+        t.eq(qa('.hall-codex .cx-card:not(.cx-thing)').length, real.length, 'every real enemy has a card now (' + real.length + ')');
+        const subs = qa('.codex-sub').map(function (s) { return s.textContent; });
+        t.ok(subs.length >= 1, 'one sub-group per lane, then the floor boss: ' + subs.join(' | '));
+        const goats = lanes.filter(function (l) { return l.id === 'goats'; })[0];
+        if (goats) {
+          const head = qa('.codex-sub').filter(function (s) { return /The Rapping Goats \(Herd Mentality, feat\. Ursa Verse\)/.test(s.textContent); })[0];
+          t.ok(head, 'the goats\' group: "The Rapping Goats (Herd Mentality, feat. Ursa Verse)"');
+          const grid = head && head.nextElementSibling;
+          t.eq(grid ? grid.querySelectorAll('.cx-card').length : 0, 8, 'with its 8 entries (4 units, the Mic Stand, the Golden Mic, the Speaker Stack, the Hay Bale)');
+        } else t.log('goats.js not loaded: the goats\' codex group is not checked');
+      } else {
+        t.ok(!h4, 'no real act-4 enemy loaded: no Act IV group');
+        t.log('no real act-4 content loaded: the Act IV group itself is not checked');
+      }
+    });
+    t.tryRun('title', function () { UI.show('title'); });
+  }
+
+  T.suite('ui: V3 — settings: "Svammiel\'s cameos" (Full / Short / Log only) shows only after the gate and persists', function (t) {
+    return withGate(false, async function () {
+      const UI = DD.UI;
+      UI.init();
+      reset();
+      const before = DD.Meta.data.settings.cameos;
+      t.tryRun('settings (gate shut)', function () { UI.show('settings', {}); });
+      t.ok(!/Svammiel|cameo/i.test(root().textContent), 'gate shut: Settings names no Svammiel and no cameos');
+      DD.Meta.data.seen.bosses.svammiel = Date.now();
+      try {
+        t.tryRun('settings (gate open)', function () { UI.show('settings', {}); });
+        const row = qa('.set-row').filter(function (r) { return /Svammiel's cameos/.test(r.querySelector('.set-label').textContent); })[0];
+        t.ok(row, 'gate open: the "Svammiel\'s cameos" row');
+        const segs = row ? Array.prototype.slice.call(row.querySelectorAll('.seg')) : [];
+        const choices = DD.Meta.CAMEO_SETTINGS || ['full', 'short', 'log'];
+        t.eq(segs.map(function (s) { return s.textContent.trim(); }).join(' / '), 'Full / Short / Log only', 'Full / Short / Log only');
+        t.eq(segs.map(function (s) { return s.dataset.v; }).join(','), choices.join(','), 'from DD.Meta.CAMEO_SETTINGS');
+        const short = segs.filter(function (s) { return s.dataset.v === 'short'; })[0];
+        if (short) short.click();
+        t.eq(DD.Meta.data.settings.cameos, 'short', 'a click sets settings.cameos');
+        t.eq((DD.Storage.get(DD.Meta.KEY || 'meta', {}) || {}).settings.cameos, 'short', 'and it is saved');
+        t.tryRun('settings again', function () { UI.show('settings', {}); });
+        const act = qa('.cameo-seg .seg.active');
+        t.ok(act.length === 1 && act[0].dataset.v === 'short', 'it persists: Short is selected');
+      } finally {
+        DD.Meta.data.settings.cameos = before;
+        UI.show('title');
+      }
+    });
+  });
+
+  T.suite('ui: V3 — spoilers and counts: act IV unnamed before the gate (act-1 map legend, act-3 clear with a 3-act knob, title tagline and tips); UI.ACTS[4].sub names no number', function (t) {
+    return uiSandbox(t, function () { return spoilers(t); });
+  });
+  async function spoilers(t) {
+    const UI = DD.UI;
+    UI.init();
+    reset();
+    const a4 = UI.ACTS[4];
+    t.ok(a4 && a4.roman === 'IV' && a4.name === 'Under the Table', 'UI.ACTS[4]: Act IV, Under the Table');
+    t.ok(a4 && !/\d|\b(one|two|three|four|five|six|seven)\b/i.test(a4.sub), 'its sub is count-free: ' + (a4 && a4.sub));
+    await withGate(false, async function () {
+      for (const acts of [3, 4]) {
+        await withActs(acts, async function () {
+          const run = makeRun(t);
+          if (!run) return;
+          try {
+            UI.show('map', {});
+            t.ok(!/Mini-boss/.test(textOf('.map-legend')), 'acts=' + acts + ': an act-1 map\'s legend has no Mini-boss entry');
+            t.ok(!/Svammiel|Act IV|Under the Table/.test(root().textContent), 'acts=' + acts + ': the act-1 map names neither Svammiel nor act IV');
+          } finally { endRun(t); }
+        });
+      }
+      await withActs(3, async function () {
+        t.tryRun('the act-3 clear (3-act knob)', function () { UI.show('victory', { act: 3 }); });
+        t.ok(!/Act IV|Under the Table|Svammiel/.test(root().textContent), 'a 3-act knob: the act-3 clear names no act IV');
+      });
+      // the title: a forced pick of the last tagline and of an act-4 tip (when the pool exists) shows neither
+      const rnd = Math.random, next = DD.rng.next;
+      const tips4 = poolOf('tips_act4', []);
+      try {
+        Math.random = function () { return 0.9999; };
+        DD.rng.next = function () { return 0; };
+        UI.show('title');
+        t.ok(textOf('.tagline').indexOf('Now with a fourth act') < 0, 'gate shut: the title tagline never says "a fourth act"');
+        t.ok(tips4.indexOf(textOf('.title-tip span:last-child')) < 0, 'gate shut: no tips_act4 line');
+        DD.Meta.data.seen.bosses.svammiel = Date.now();
+        UI.show('title');
+        t.eq(textOf('.tagline'), '“Now with a fourth act. Allegedly.”', 'gate open: the tagline joins the rotation');
+        if (tips4.length) t.ok(tips4.indexOf(textOf('.title-tip span:last-child')) >= 0, 'gate open: tips_act4 join the loading tips');
+      } finally {
+        Math.random = rnd;
+        DD.rng.next = next;
+        UI.show('title');
+      }
+    });
+  }
+
+  T.suite('ui: V3 — the shop under new management (the demoted DM, the Bribe) and the tavern rug, only under the table', function (t) {
+    return uiSandbox(t, function () { return withActs(4, function () { return shopTavern4(t); }); });
+  });
+  async function shopTavern4(t) {
+    const UI = DD.UI;
+    UI.init();
+    reset();
+    const run = gauntletRun(t);
+    if (!run) { endRun(t); return; }
+    try {
+      run.gold = 900;
+      t.tryRun('the act-4 shop', function () { UI.show('shop', { debug: true }); });
+      t.eq(textOf('.keeper-sign'), 'Ye Olde Overpriced Shoppe (Under New Management)', 'the sign');
+      t.eq(textOf('.keeper-name'), 'The DM (Demoted)', 'the DM works the counter');
+      const bribe = qa('.keeper .ks-row').filter(function (r) { return /Bribe/.test(r.textContent); })[0];
+      t.ok(bribe, 'the Bribe is at the counter while a door is left');
+      const btn = bribe && bribe.querySelector('.btn.buy');
+      t.ok(btn && !btn.classList.contains('is-disabled'), 'and buyable');
+      if (btn) btn.click();
+      t.eq(UI.run().flags.cameo && UI.run().flags.cameo.bribe, 1, 'buying it sets run.flags.cameo.bribe');
+      t.tryRun('the act-4 tavern', function () { UI.show('tavern', { debug: true }); });
+      t.ok(/NO DEMONS PAST THE RUG/.test(textOf('.tav-rug-sign')) && root().classList.contains('under-table'), 'the tavern: the rug and its sign');
+    } finally { endRun(t); }
+    const run1 = makeRun(t);
+    if (!run1) return;
+    try {
+      run1.gold = 900;
+      UI.show('shop', { debug: true });
+      t.ok(!/Under New Management|Demoted|Bribe/.test(root().textContent), 'an act-1 shop: Gregor, no Bribe');
+      UI.show('tavern', { debug: true });
+      t.ok(!q('.tav-rug-sign') && !root().classList.contains('under-table'), 'an act-1 tavern: no rug');
+    } finally { endRun(t); }
+  }
+
+  /** In a game frame: the run's map rebuilt as a gauntlet of exactly L lanes (the registry's, then stand-ins that
+   *  reuse a real lane's encounter under a new lane id — the worst-case label — when fewer are loaded). */
+  function frameGauntlet(W, L) {
+    const D = W.DD;
+    const lanes = D.RunMap.gauntletLanes(4).slice(0, L);
+    const long = lanes.slice().sort(function (a, b) { return String((D.getEncounter(b.encounterId) || {}).shortName || '').length - String((D.getEncounter(a.encounterId) || {}).shortName || '').length; })[0];
+    for (let k = 0; lanes.length < L && long; k++) lanes.push({ id: 'test_ui_pad' + k, encounterId: long.encounterId, order: 90 + k });
+    const run = D.Run.state;
+    run.map = D.RunMap.generate(4, D.RNG('ui:gauntlet:' + L), { run: run, lanes: lanes, shape: 'gauntlet' });
+    run.nodeId = null;
+    run.visited = [];
+    D.UI.show('map', { act: 4 });
+    return run.map;
+  }
+  function overlaps(a, b, pad) { pad = pad || 0; return a.left < b.right - pad && b.left < a.right - pad && a.top < b.bottom - pad && b.top < a.bottom - pad; }
+
+  T.suite('ui: V3 — Svammiel\'s floor fits five and six doors a row (12 and 14 rows) at 1280×720 and 1024×640: no overlap, no scrolling, no cut label (real page)', async function (t) {
+    const sizes = [[1280, 720], [1024, 640]];
+    for (let i = 0; i < sizes.length; i++) {
+      const w = sizes[i][0], h = sizes[i][1];
+      const f = await gameFrame('debug=1&acts=4&screen=map&act=4&seed=7', w, h);
+      try {
+        const W = f.contentWindow;
+        const ok = await frameUntil(function () { return W.DD && W.DD.UI && W.DD.UI.current === 'map' && W.document.querySelector('.map-board.gauntlet'); }, 15000);
+        t.ok(ok, w + '×' + h + ': debug act=4 opens Svammiel\'s floor');
+        if (!ok) continue;
+        t.log(w + '×' + h + ': the registry has ' + W.DD.RunMap.gauntletLanes(4).length + ' lanes');
+        for (let L = 5; L <= 6; L++) {
+          const map = frameGauntlet(W, L);
+          await tick(120);
+          const at = w + '×' + h + ' L=' + L;
+          t.eq(map.lanes.length, L, at + ': ' + L + ' lanes, ' + map.rows + ' rows');
+          const doc = W.document;
+          const board = doc.querySelector('.map-board.gauntlet');
+          const br = board.getBoundingClientRect();
+          const nodes = Array.prototype.slice.call(doc.querySelectorAll('.map-board .map-node'));
+          t.eq(nodes.length, Object.keys(map.nodes).length, at + ': every node drawn (' + nodes.length + ')');
+          const xs = {};
+          nodes.forEach(function (n) { xs[Math.round(n.getBoundingClientRect().left + n.getBoundingClientRect().width / 2)] = 1; });
+          t.eq(Object.keys(xs).length, map.rows, at + ': one column per row (' + map.rows + ')');
+          const nr = nodes.map(function (n) { return n.getBoundingClientRect(); });
+          const outside = nr.filter(function (r) { return r.left < br.left - 1 || r.right > br.right + 1 || r.top < br.top - 1 || r.bottom > br.bottom + 1; });
+          t.eq(outside.length, 0, at + ': every node on the board');
+          let hit = 0;
+          for (let a = 0; a < nr.length; a++) for (let b = a + 1; b < nr.length; b++) if (overlaps(nr[a], nr[b], 1)) hit++;
+          t.eq(hit, 0, at + ': no two nodes overlap');
+          const labels = Array.prototype.slice.call(doc.querySelectorAll('.map-board .mn-lane, .map-board .mn-label'));
+          const lr = labels.map(function (l) { return l.getBoundingClientRect(); });
+          const cut = labels.filter(function (l) { return l.scrollHeight > l.clientHeight + 1 || l.scrollWidth > l.clientWidth + 1; }).map(function (l) { return l.textContent; });
+          t.eq(cut.length, 0, at + ': no label is cut' + (cut.length ? ': ' + cut.slice(0, 3).join(' | ') : ''));
+          let lhit = 0, lnode = 0;
+          const bad = [];
+          for (let a = 0; a < lr.length; a++) {
+            for (let b = a + 1; b < lr.length; b++) if (overlaps(lr[a], lr[b], 1)) { lhit++; bad.push(labels[a].textContent + ' × ' + labels[b].textContent); }
+            const own = labels[a].closest('.map-node');
+            nodes.forEach(function (n, k) { if (n !== own && overlaps(lr[a], nr[k], 1)) { lnode++; bad.push(labels[a].textContent + ' × node ' + n.dataset.id); } });
+            if (lr[a].left < br.left - 1 || lr[a].right > br.right + 1 || lr[a].bottom > br.bottom + 1) { lnode++; bad.push(labels[a].textContent + ' off the board'); }
+          }
+          t.eq(lhit + lnode, 0, at + ': labels clear of each other, of other nodes and of the board edge' + (bad.length ? ': ' + bad.slice(0, 3).join(' | ') : ''));
+          const others = ['.map-narration', '.map-legend', '.g-doodle-svam', '.g-doodle-dm'].map(function (s) { return doc.querySelector('.map-board ' + s); })
+            .filter(function (e) { return e && W.getComputedStyle(e).display !== 'none'; });
+          const clash = [];
+          others.forEach(function (e) {
+            const r = e.getBoundingClientRect();
+            nodes.forEach(function (n, k) { if (!(e.classList.contains('g-doodle-svam') && n.classList.contains('t-boss')) && overlaps(r, nr[k], 1)) clash.push(e.className + ' × ' + n.dataset.id); });
+            lr.forEach(function (l, k) { if (overlaps(r, l, 1)) clash.push(e.className + ' × ' + labels[k].textContent); });
+          });
+          t.eq(clash.length, 0, at + ': the narration box, the legend and the doodles cover no node or label' + (clash.length ? ': ' + clash.slice(0, 3).join(' | ') : ''));
+          t.ok(board.scrollHeight <= board.clientHeight + 1 && board.scrollWidth <= board.clientWidth + 1, at + ': the board needs no scrolling');
+        }
+      } finally { f.remove(); }
+    }
+  });
+
+  T.suite('ui: V3 — the act-4 counter (heal, scar, re-roll and the Bribe) fits 1024×640 and 1280×720: every service and both buttons on screen, nothing cut (real page)', async function (t) {
+    const sizes = [[1024, 640], [1280, 720]];
+    for (let i = 0; i < sizes.length; i++) {
+      const w = sizes[i][0], h = sizes[i][1];
+      const f = await gameFrame('debug=1&acts=4&screen=shop&act=4&seed=7&gold=500', w, h);
+      try {
+        const W = f.contentWindow;
+        const ok = await frameUntil(function () { return W.DD && W.DD.UI && W.DD.UI.current === 'shop' && W.document.querySelector('.keeper .ks-row'); }, 15000);
+        t.ok(ok, w + '×' + h + ': the act-4 shop is up');
+        if (!ok) continue;
+        await tick(80);
+        const doc = W.document;
+        const keeper = doc.querySelector('.keeper');
+        const kr = keeper.getBoundingClientRect();
+        const rows = Array.prototype.slice.call(doc.querySelectorAll('.keeper .ks-row'));
+        t.ok(rows.some(function (r) { return /Bribe/.test(r.textContent); }) && keeper.classList.contains('svc-4'), w + '×' + h + ': four services, the Bribe among them (' + rows.length + ')');
+        const parts = rows.concat(Array.prototype.slice.call(doc.querySelectorAll('.keeper-actions .btn')));
+        const off = parts.filter(function (n) { const r = n.getBoundingClientRect(); return r.bottom > kr.bottom + 1 || r.right > kr.right + 1 || r.left < kr.left - 1 || r.bottom > h; });
+        t.eq(off.length, 0, w + '×' + h + ': every service row and both buttons inside the keeper column' + (off.length ? ': ' + off.map(function (n) { return n.textContent.trim().slice(0, 20); }).join(' | ') : ''));
+        const cut = Array.prototype.slice.call(doc.querySelectorAll('.keeper .btn-label, .keeper .ks-name, .keeper-sign, .keeper-name')).filter(function (n) {
+          return W.getComputedStyle(n).display !== 'none' && (n.scrollWidth > n.clientWidth + 1 || n.getBoundingClientRect().right > n.closest('.btn, .ks-row, .keeper').getBoundingClientRect().right + 1);
+        });
+        t.eq(cut.length, 0, w + '×' + h + ': no label is cut' + (cut.length ? ': ' + cut.map(function (n) { return n.textContent; }).join(' | ') : ''));
+        t.eq(doc.querySelector('.keeper-sign').textContent, 'Ye Olde Overpriced Shoppe (Under New Management)', w + '×' + h + ': under new management');
+      } finally { f.remove(); }
+    }
+  });
+
+  T.suite('ui: V3 — the League\'s full name never overflows: map tooltip, rewards banner, game-over killer, Hall history (real page)', async function (t) {
+    const w = 1024, h = 640;
+    const f = await gameFrame('debug=1&acts=4&screen=map&act=4&seed=7', w, h);
+    try {
+      const W = f.contentWindow;
+      const ok = await frameUntil(function () { return W.DD && W.DD.UI && W.DD.UI.current === 'map' && W.document.querySelector('.map-board.gauntlet'); }, 15000);
+      t.ok(ok, 'Svammiel\'s floor is up');
+      if (!ok) return;
+      const D = W.DD, doc = W.document;
+      D.Meta.save = function () { return true; };   // this frame never writes the shared meta save
+      const FULL = (D.League && D.League.FULL) || LEAGUE_FULL;
+      t.eq(FULL.length, 72, 'the full name: 72 characters');
+      const fits = function (sel, label) {
+        const n = doc.querySelector(sel);
+        if (!n) { t.fail(label + ': ' + sel + ' missing'); return; }
+        const r = n.getBoundingClientRect();
+        t.ok(n.scrollWidth <= n.clientWidth + 1 && r.left >= -1 && r.right <= w + 1, label + ': it wraps inside its box (' + n.scrollWidth + ' / ' + n.clientWidth + ', right ' + Math.round(r.right) + ')');
+      };
+      const run = D.Run.state;
+      const lane = run.map.lanes.filter(function (l) { return (D.getEncounter(l.encounterId) || {}).name === FULL; })[0];
+      if (lane) {
+        const door = Array.prototype.slice.call(doc.querySelectorAll('.map-node.t-miniboss')).filter(function (n) { return n.dataset.lane === lane.id && n.classList.contains('s-reachable'); })[0] ||
+          doc.querySelector('.map-node.t-miniboss[data-lane="' + lane.id + '"]');
+        door.dispatchEvent(new W.MouseEvent('mouseenter'));
+        await tick(200);
+        const tt = doc.querySelector('.ui-tooltip');
+        t.ok(tt && tt.style.display !== 'none' && tt.textContent.indexOf(FULL) >= 0, 'the door tooltip names the League in full');
+        if (tt) {
+          const r = tt.getBoundingClientRect();
+          t.ok(r.left >= 0 && r.right <= w && r.top >= 0 && r.bottom <= h, 'the tooltip stays on screen');
+          const wide = Array.prototype.slice.call(tt.querySelectorAll('.tt-title, .tt-desc, .tt-target')).filter(function (n) { return n.scrollWidth > n.clientWidth + 1; });
+          t.eq(wide.length, 0, 'map tooltip: every line wraps inside it');
+        }
+        door.dispatchEvent(new W.MouseEvent('mouseleave'));
+        D.UI.hideTooltip();
+      } else t.log('league.js not loaded: the map tooltip is not checked');
+      D.UI.show('rewards', { title: 'Mini-boss Defeated!', encounterName: FULL, kind: 'boss', boss: true, choices: [], gold: 0 });
+      await tick(60);
+      fits('.rw-banner-sub', 'rewards banner');
+      const party = D.UI.heroIds().slice(0, 4).map(function (id) { return { id: id, level: 5 }; });
+      D.UI.show('gameover', { summary: { result: 'defeat', act: 4, acts: 4, party: party, killedBy: FULL, gauntlet: [], gauntletLanes: 5, stats: {} } });
+      await tick(60);
+      fits('.end-killer', 'game-over killer');
+      D.Meta.data.history = [{ result: 'defeat', act: 4, acts: 4, party: party, killedBy: FULL, gauntlet: ['league'], gauntletLanes: 5, stats: {}, endedAt: Date.now() }];
+      D.Meta.data.seen.bosses.svammiel = Date.now();
+      D.UI.show('hall', { tab: 'history' });
+      await tick(60);
+      fits('.hist-title', 'Hall history');
+      fits('.hist-row', 'Hall history row');
+    } finally { f.remove(); }
+  });
+
+  T.suite('ui: V3 — debug params: acts, act=4, beaten, twist=1, final=1, game over in act IV, cameo, bosshp (real page)', async function (t) {
+    async function open(query, until) {
+      const f = await gameFrame(query, 1280, 720);
+      const W = f.contentWindow;
+      const ok = await frameUntil(function () { return W.DD && W.DD.UI && until(W); }, 15000);
+      t.ok(ok, query + ': up');
+      return { f: f, W: W, ok: ok };
+    }
+    let p = await open('debug=1&acts=4&screen=map&act=4&seed=7', function (W) { return W.DD.UI.current === 'map'; });
+    let ids = [];
+    try {
+      if (p.ok) {
+        const D = p.W.DD;
+        t.eq(D.finalAct(), 4, 'acts=4 sets the knob for the page');
+        t.ok(D.Run.state.act === 4 && D.Run.state.map.shape === 'gauntlet', 'act=4: the run is on Svammiel\'s floor');
+        t.ok(D.Run.state.party.every(function (h) { return h.level >= 4; }), 'with a party at the act\'s level');
+        t.ok(D.UI.act4Seen(), 'a debug run below the table has met him: the spoiler gate is open for the page');
+        ids = D.Run.state.map.lanes.map(function (l) { return l.id; });
+      }
+    } finally { p.f.remove(); }
+    if (ids.length >= 2) {
+      const beaten = [ids[1], ids[0]];
+      p = await open('debug=1&acts=4&screen=map&act=4&seed=7&beaten=' + beaten.join(','), function (W) { return W.DD.UI.current === 'map'; });
+      try {
+        if (p.ok) {
+          const S = p.W.DD.Run.state;
+          t.eq((S.map.beaten || []).join(','), beaten.join(','), 'beaten= seals the lanes in that order');
+          const both = Array.prototype.slice.call(p.W.document.querySelectorAll('.map-node.t-miniboss')).filter(function (n) { return beaten.indexOf(n.dataset.lane) >= 0; });
+          t.ok(both.length === 2 * ids.length && both.every(function (n) { return n.classList.contains('s-sealed') || n.classList.contains('s-current'); }), 'every door of both lanes is sealed (the party stands on one)');
+          t.eq(S.map.nodes[S.nodeId].lane, beaten[1], 'the party stands at the last door beaten');
+        }
+      } finally { p.f.remove(); }
+    }
+    p = await open('debug=1&acts=4&screen=map&start=4&seed=7', function (W) { return W.DD.UI.current === 'map'; });
+    try {
+      if (p.ok) t.ok(p.W.DD.Run.state.act === 4 && p.W.DD.Run.state.map.shape === 'gauntlet', 'start=4 (the sims\' name) works like act=4');
+    } finally { p.f.remove(); }
+    p = await open('debug=1&acts=3&screen=map&act=4&seed=7', function (W) { return W.DD.UI.current === 'map'; });
+    try {
+      if (p.ok) t.ok(p.W.DD.finalAct() === 3 && p.W.DD.Run.state.act === 3 && p.W.DD.Run.state.map.shape !== 'gauntlet', 'acts=3: act=4 clamps to act 3 (no act IV without the knob)');
+    } finally { p.f.remove(); }
+    p = await open('debug=1&acts=4&screen=victory&act=3&twist=1&seed=7', function (W) { return W.DD.UI.current === 'victory' && W.document.querySelector('.tw-go'); });
+    try {
+      if (p.ok) {
+        const doc = p.W.document;
+        t.ok(/YOU THOUGHT THIS WAS OVER\?/.test(doc.querySelector('.tw-headline').textContent) && /Descend to Act IV/.test(doc.querySelector('.tw-go').textContent), 'twist=1: the Twist panel');
+        t.eq(doc.querySelectorAll('.twc-lane').length, ids.length || doc.querySelectorAll('.twc-lane').length, 'its cast card lists the lanes');
+        const sc = doc.querySelector('.end-scroll');
+        t.ok(sc && sc.scrollHeight <= sc.clientHeight + 2, 'the panel fits 1280×720 without scrolling (' + (sc && sc.scrollHeight) + ' / ' + (sc && sc.clientHeight) + ')');
+      }
+    } finally { p.f.remove(); }
+    p = await open('debug=1&acts=4&screen=victory&final=1&act=4&seed=7', function (W) { return W.DD.UI.current === 'victory'; });
+    try {
+      if (p.ok) {
+        const doc = p.W.document;
+        t.ok(doc.querySelector('.screen.four-act, .four-act') && /For Real This Time/.test(doc.querySelector('.end-kicker').textContent), 'final=1&act=4: the four-act victory');
+        const floor = Array.prototype.slice.call(doc.querySelectorAll('.end-stat')).filter(function (s) { return /Floor bosses/.test(s.textContent); })[0];
+        t.ok(floor && floor.querySelector('.es-val').textContent === ids.length + ' / ' + ids.length, 'every lane beaten: ' + (floor && floor.querySelector('.es-val').textContent));
+        const stats = Array.prototype.slice.call(doc.querySelectorAll('.end-stat')).map(function (s) { return Math.round(s.getBoundingClientRect().top); });
+        t.ok(stats.every(function (y) { return y === stats[0]; }), 'the stat grid stays one row at 1280×720 (' + stats.length + ' stats)');
+      }
+    } finally { p.f.remove(); }
+    p = await open('debug=1&acts=4&screen=gameover&act=4&seed=7', function (W) { return W.DD.UI.current === 'gameover'; });
+    try {
+      if (p.ok) {
+        const k = p.W.document.querySelector('.end-killer');
+        t.ok(k && / in Act IV \(he cheated\)\.$/.test(k.textContent), 'gameover in act 4: ' + (k && k.textContent));
+        t.ok(/Floor bosses beaten: 0 \/ \d+/.test(p.W.document.querySelector('.end-floor').textContent), 'with the floor bosses beaten');
+      }
+    } finally { p.f.remove(); }
+    p = await open('debug=1&screen=hall&tab=codex', function (W) { return W.DD.UI.current === 'hall' && W.document.querySelector('.hall-codex'); });
+    try {
+      if (p.ok) t.ok(!p.W.document.querySelector('.codex-h.act-4') && !/Svammiel/.test(p.W.document.querySelector('.hall-body').textContent), 'screen=hall&tab=codex: no Act IV before the gate');
+    } finally { p.f.remove(); }
+    p = await open('debug=1&gate=1&screen=hall&tab=codex', function (W) { return W.DD.UI.current === 'hall' && W.document.querySelector('.hall-codex'); });
+    try {
+      if (p.ok) {
+        const doc = p.W.document;
+        const h4 = doc.querySelector('.codex-h.act-4');
+        t.ok(h4 && /Act IV — Under the Table/.test(h4.textContent), 'gate=1: the codex shows Act IV');
+        const subs = Array.prototype.slice.call(doc.querySelectorAll('.codex-sub'));
+        t.ok(subs.length >= ids.length, 'a sub-group per lane, then the floor boss (' + subs.map(function (s) { return s.textContent; }).join(' | ') + ')');
+        const wide = subs.concat(Array.prototype.slice.call(doc.querySelectorAll('.codex-h, .cx-name'))).filter(function (n) { return n.scrollWidth > n.clientWidth + 1; });
+        t.eq(wide.length, 0, 'no codex header or name overflows at 1280×720');
+      }
+    } finally { p.f.remove(); }
+    p = await open('debug=1&cameo=short&screen=title', function (W) { return W.DD.UI.current === 'title'; });
+    try { if (p.ok) t.eq(p.W.DD.Meta.data.settings.cameos, 'short', 'cameo=short sets the page\'s cameo setting'); } finally { p.f.remove(); }
+    p = await open('debug=1&cameo=0&screen=title', function (W) { return W.DD.UI.current === 'title'; });
+    try { if (p.ok) t.eq(p.W.DD.Balance.cameo.off, 1, 'cameo=0 switches every cameo off (DD.Balance.cameo.off)'); } finally { p.f.remove(); }
+    p = await open('debug=1&fixtures=1&acts=4&screen=combat&encounter=test_a4_lane_c&seed=3&bosshp=0.5', function (W) { return W.DD.UI.current === 'combat' && W.DD.Combat.state && W.DD.Combat.state.units; });
+    try {
+      if (p.ok) {
+        const bosses = p.W.DD.Combat.state.units.filter(function (u) { return u.side === 'enemy' && (u.defId === 'test_boss' || u.defId === 'test_brute'); });
+        t.ok(bosses.length === 2 && bosses.every(function (u) { return u.hp === Math.max(1, Math.round(u.maxHp * 0.5)); }), 'bosshp=0.5: the squad starts at half HP (' + bosses.map(function (u) { return u.hp + '/' + u.maxHp; }).join(', ') + ')');
+      }
+    } finally { p.f.remove(); }
+  });
+
+  // ---- V3 QA fixes (render-ui cluster) -------------------------------------------------------------------------------
+  T.suite('ui: QA HERO-8 — a tile skill open to anything targets "a tile" in its tooltip, not "any unit"', function (t) {
+    const UI = DD.UI;
+    const tileAny = Object.keys(DD.defs.skills).map(function (id) { return DD.defs.skills[id]; }).filter(function (d) {
+      return d && d.target && d.target.type === 'tile' && (!d.target.filter || d.target.filter === 'any');
+    });
+    if (!tileAny.length) { t.skip('no tile skill open to anything is registered'); return; }
+    const bad = tileAny.filter(function (d) { return UI.skillInfo(d.id, 1).target !== 'a tile'; });
+    t.eq(bad.map(function (d) { return d.id; }).join(', '), '', 'every one of the ' + tileAny.length + ' says "a tile"');
+    const id = DD.getSkill('ben_mail') ? 'ben_mail' : tileAny[0].id;
+    const tip = UI.skillTooltipHtml(id, 1, null);
+    t.ok(/Targets a tile/.test(tip) && !/Targets any unit/.test(tip), id + '\'s tooltip: "Targets a tile"');
+    // the other labels stay as they were
+    const enemy = Object.keys(DD.defs.skills).map(function (k) { return DD.defs.skills[k]; }).filter(function (d) { return d && d.target && d.target.type === 'unit' && d.target.filter === 'enemy'; })[0];
+    if (enemy) t.eq(UI.skillInfo(enemy.id, 1).target, 'an enemy', enemy.id + ': "an enemy"');
+    const empty = Object.keys(DD.defs.skills).map(function (k) { return DD.defs.skills[k]; }).filter(function (d) { return d && d.target && d.target.type === 'tile' && d.target.filter === 'empty'; })[0];
+    if (empty) t.eq(UI.skillInfo(empty.id, 1).target, 'an empty tile', empty.id + ': "an empty tile"');
+  });
+
+  T.suite('ui: QA HERO-5 — a timed form that opts in (status def showTurns) shows its turns left on its chip; others show stacks only', function (t) {
+    const UI = DD.UI;
+    const id = DD.getStatus('ben_dragon') ? 'ben_dragon' : DD.getStatus('inspired') ? 'inspired' : null;
+    if (!id) { t.skip('no status to try'); return; }
+    const d = DD.getStatus(id);
+    const had = Object.prototype.hasOwnProperty.call(d, 'showTurns'), was = d.showTurns;
+    try {
+      d.showTurns = false;
+      let chip = UI.statusChip({ id: id, stacks: 1, turns: 2 });
+      t.ok(!chip.querySelector('.st-turns'), 'without the flag: no turns badge');
+      d.showTurns = true;
+      chip = UI.statusChip({ id: id, stacks: 1, turns: 2 });
+      const b = chip.querySelector('.st-turns');
+      t.ok(b && b.textContent === '2' && /2 turns left/.test(b.title), id + ' with showTurns: "2" (' + (b && b.title) + ')');
+      chip = UI.statusChip({ id: id, stacks: 1, turns: 1 });
+      t.ok(chip.querySelector('.st-turns') && chip.querySelector('.st-turns').textContent === '1', 'then "1"');
+      chip = UI.statusChip({ id: id, stacks: 1, turns: -1 });
+      t.ok(!chip.querySelector('.st-turns'), 'a permanent one shows none');
+      t.ok(/turns? left/.test(UI.statusTooltipHtml({ id: id, stacks: 1, turns: 2 })), 'the tooltip still says it in words');
+      if (id === 'ben_dragon' && !had) t.log('ben_dragon does not set showTurns yet (a request to HERO-BENEDICK): the chip shows the turns once it does');
+    } finally {
+      if (had) d.showTurns = was; else delete d.showTurns;
+    }
   });
 })();

@@ -21,6 +21,8 @@
       mainhand: 'none', offhand: 'lantern', bling: ['chain', 'rings'], extras: ['pouches'],
     },
   };
+  // V3: under the table the shop is "Under New Management" and the demoted DM works the counter in a paper hat (V §5.3)
+  const KEEPER_A4 = { name: 'The DM (Demoted)', title: 'Counter Staff. Paid in dice. Ones only.', sign: 'Ye Olde Overpriced Shoppe (Under New Management)', portrait: 'dungeon_master' };
   const QUIPS = {
     shop_greet: ['Welcome, welcome! Everything is 100% authentic and 300% marked up.', 'Browse all you like. Touching costs extra.', 'Ah, adventurers! My favorite kind of wallet.'],
     shop_buy: ['A wise purchase. Probably.', 'No refunds. No returns. No eye contact.', 'Pleasure doing business. Mostly mine.'],
@@ -206,19 +208,27 @@
     const hasScars = (run.party || []).some(function (h) { return !h.dead && (h.scars || []).length; });
     const hurt = (run.party || []).some(function (h) { return !h.dead && num(h.hp) < UI.heroStats(h).maxHp; });
     const blessed = (run.party || []).some(function (h) { return !h.dead && (h.passives || []).length; });
-    if (box.parentNode) box.parentNode.classList.toggle('svc-3', services.length >= 3); // Gregor shrinks to make room
+    if (box.parentNode) {
+      box.parentNode.classList.toggle('svc-3', services.length >= 3); // Gregor shrinks to make room
+      box.parentNode.classList.toggle('svc-4', services.length >= 4); // V3: the Bribe makes four
+    }
     box.appendChild(el('div.ks-h', null, 'At the Counter', el('span.ks-sub', null, 'one of each per visit')));
+    // V3 (act-4 shops): the Bribe — refused while one is unspent or once no door is left (DD.Run.shopService)
+    const mem = run.flags && run.flags.cameo;
+    const doorsLeft = DD.Run && typeof DD.Run.unbeatenLanes === 'function' ? (DD.safe('Run.unbeatenLanes', DD.Run.unbeatenLanes, DD.Run) || []).length : 1;
     services.forEach(function (v, i) {
       const isHeal = v.id === 'heal';
       const isReroll = v.id === 'reroll';
+      const isBribe = v.id === 'bribe';
       const price = num(v.price);
       const sold = !!v.sold;
       const afford = num(run.gold) >= price;
       const reason = sold ? 'Already used this visit.' : !afford ? 'You need ' + (price - num(run.gold)) + ' more gold.' :
         isHeal ? (hurt ? null : 'Everyone is already at full HP.') : isReroll ? (blessed ? null : 'Nobody has a Blessing to toss.') :
-          (hasScars ? null : 'Nobody has any scars.');
+          isBribe ? (mem && mem.bribe ? 'Svammiel already has your money. He will honour it. Probably.' : doorsLeft ? null : 'No floor boss left to bribe for.') :
+            (hasScars ? null : 'Nobody has any scars.');
       const btn = UI.button(sold ? 'Done' : 'Buy', function () {
-        if (isHeal) buy('services', i, {}, v.icon);
+        if (isHeal || isBribe) buy('services', i, {}, v.icon);
         else if (isReroll) buyReroll(i, v);
         else buyScar(i, v);
       }, {
@@ -269,15 +279,18 @@
         root.appendChild(st.refs.bar);
         st.refs.bubble = el('div.speech');
         st.refs.services = el('div.keeper-services');
-        const keeper = el('aside.keeper.panel', null,
-          el('div.keeper-sign', null, 'Ye Olde Overpriced Shoppe'),
-          el('div.keeper-art', null, UI.portrait(KEEPER.sprite, 150, { frame: false, fallback: '🧙‍♂️' })),
-          el('div.keeper-name', null, KEEPER.name),
-          el('div.keeper-title', null, KEEPER.title),
+        const under = UI.inGauntlet(run);
+        const dmArt = under && DD.getEnemy(KEEPER_A4.portrait) ? UI.portrait(KEEPER_A4.portrait, 150, { frame: false, fallback: '🎲' }) : null;
+        if (under) root.classList.add('under-table');
+        const keeper = el('aside.keeper.panel', { class: under ? 'demoted' : null },
+          el('div.keeper-sign', null, under ? KEEPER_A4.sign : 'Ye Olde Overpriced Shoppe'),
+          el('div.keeper-art', { class: dmArt ? 'paper-hat' : null }, dmArt || UI.portrait(KEEPER.sprite, 150, { frame: false, fallback: '🧙‍♂️' })),
+          el('div.keeper-name', null, under ? KEEPER_A4.name : KEEPER.name),
+          el('div.keeper-title', null, under ? KEEPER_A4.title : KEEPER.title),
           st.refs.bubble,
           st.refs.services,
           el('div.keeper-actions', null,
-            UI.button('Party', function () { UI.show('party', { back: 'shop' }); }, { icon: '🎒', cls: 'small ghost', hotkey: 'p' }),
+            UI.button('Party', function () { UI.show('party', { back: 'shop' }); }, { icon: '🎒', cls: 'small ghost', hotkey: 'p', title: 'Party & Loadout (P)' }),
             UI.button('Leave Shop', leave, { icon: '🚪', cls: 'primary', hotkey: 'Escape', showKey: false })));
         st.refs.wares = el('main.wares.panel.scroll');
         root.appendChild(el('div.shop-layout', null, keeper, st.refs.wares));

@@ -1772,4 +1772,51 @@
       },
     ],
   });
+
+  // V3: the 17th hero's event (NARRATIVE; the Benedick addendum §19.1). A classic-acts event like the others: Benedick
+  // is not an act-4 secret, and nothing here mentions the fourth act.
+  DD.registerEvent({
+    id: 'ev_ben_bistro', acts: [1, 2, 3], weight: HERO_WEIGHT, icon: '🍽️', hero: 'benedick',
+    title: 'Le Bistro Escargot',
+    requires: withHero('benedick'),
+    text: 'A candlelit bistro has opened in the dungeon wall, and the chef\'s eyes light up the moment Benedick slides in. The menu ' +
+      'has one dish on it, in very large letters. Benedick has gone very still, which for him is saying something. The chef ' +
+      'sharpens a butter knife and asks if monsieur would like to see the kitchen.',
+    choices: [
+      {
+        label: 'Order everything except the special.',
+        hint: 'Every hero heals 30% of their max HP.',
+        resolve: function (api) {
+          const s = star(api, 'benedick');
+          api.heal(0.3);
+          return standIn(s) + 'Bread, soup and a salad that ' + s.name + ' insists on finishing personally. The chef glares through the ' +
+            'whole meal. The party tips generously, out of fear.';
+        },
+      },
+      {
+        label: 'Let Benedick write a review.',
+        hint: 'Gain 40 gold.',
+        resolve: function (api) {
+          const s = star(api, 'benedick');
+          const g = api.gold(40);
+          return standIn(s) + s.name + ' writes a review so devastating (one star: "too salty") that the chef pays ' + g + ' gold to have ' +
+            'it taken down. ' + s.name + ' takes it down. He keeps a copy.';
+        },
+      },
+      {
+        label: 'Raid the kitchen.',
+        hint: '50%: Benedick finds a rare item. 50%: he slides into the salt cellar: Benedick loses 30% of his max HP.',
+        resolve: function (api) {
+          const s = star(api, 'benedick');
+          if (api.rng.chance(0.5)) {
+            return standIn(s) + 'Behind the stoves ' + s.name + ' finds a locked cabinet and, inside it, ' + heroItem(api, s.idx, 'rare') +
+              '. He leaves one perfect line of slime across the chopping board.';
+          }
+          if (s.idx >= 0) api.damage(0.3, s.idx);
+          return standIn(s) + s.name + ' takes a wrong turn into the salt cellar. Nobody will talk about the noise he made. He is fine. ' +
+            'He is not fine. He is, eventually, fine.';
+        },
+      },
+    ],
+  });
 })();

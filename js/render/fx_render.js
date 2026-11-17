@@ -18,6 +18,9 @@
  * start(evt) → ms } (the HUD's dice tray). While a host wants it, the marker blocks playback for those ms (the host
  * may finish it early: evt.elapsed = evt.ms) and the engine's "Roll for initiative!" banner right before it is folded
  * into the moment instead of being drawn.
+ *
+ * V3: the 'cameo' FX (Svammiel: entrance / swoop / shadow / bubble, hosted as DD.FXRender.moments.cameo), banner
+ * options fit / frames (the League's stretching name), a boss def's boss.sting with its banner, goats bleat.
  */
 (function () {
   'use strict';
@@ -904,36 +907,109 @@
   }
 
   // ---- banner + full-screen flash -------------------------------------------------------------------------------------
+  // V3 options (ARCHITECTURE §7.4): fit (shrink the title until it fits 92% of the width, ≥ 18 px, then squeeze it
+  // sideways if even that is too wide; a banner that would overflow is fitted unless fit === false) and frames (text
+  // frames over the first 60% of its life, ending on the widest of the title / frames that fits: the League's name).
+  const BANNER_FIT = 0.92, BANNER_MIN = 18, SUB_FIT = 0.94, SUB_MIN = 12;
+  function displayFont(size) { return 'bold ' + Math.round(size) + 'px ' + DISPLAY_FONT; }
+  function subFont(size) { return 'italic bold ' + Math.round(size) + 'px Georgia, serif'; }
+  /** Font size and horizontal squeeze (1 = none) that fit `text` into maxW: shrink to ≥ min px, then squeeze. */
+  function fitText(c, text, size, maxW, min, fontOf) {
+    c.font = fontOf(size);
+    let w = c.measureText(text).width, s = size;
+    for (let i = 0; i < 4 && w > maxW && s > min; i++) {
+      s = Math.max(min, Math.floor(s * maxW / w));
+      c.font = fontOf(s);
+      w = c.measureText(text).width;
+    }
+    return { size: s, sx: w > maxW && w > 0 ? maxW / w : 1, w: w };
+  }
+  /** Outlined text, squeezed sideways by sx (< 1) around its centre. */
+  function fittedText(c, str, x, y, size, sx, fill, stroke, font, weight) {
+    if (!(sx < 1)) { outlinedText(c, str, x, y, size, fill, stroke, font, weight); return; }
+    c.save(); c.translate(x, y); c.scale(sx, 1);
+    outlinedText(c, str, 0, 0, size, fill, stroke, font, weight);
+    c.restore();
+  }
+  function bannerSpec(o, color) {
+    const fr = Array.isArray(o.frames) ? o.frames.filter(function (s) { return typeof s === 'string' && s; }).slice(0, 40) : [];
+    return { text: String(o.text || o.title || ''), sub: o.sub ? String(o.sub) : '', color: col(o.color, color || '#ffd76a'),
+      fit: o.fit === false ? false : o.fit ? true : undefined, frames: fr.length ? fr : null };
+  }
+  /** The title shown at progress p: frames over the first 60%, then the final text (cached per width). */
+  function bannerTitle(c, b, p, maxW) {
+    const fr = b.frames;
+    if (!fr) return b.text;
+    if (p < 0.6) return fr[Math.min(fr.length - 1, Math.floor(p / 0.6 * fr.length))];
+    if (b._finalW !== maxW) {
+      const cands = [b.text || fr[fr.length - 1]].concat(fr.slice().reverse());
+      b._final = cands[0];
+      if (b.fit !== false) {
+        c.font = displayFont(BANNER_MIN);
+        for (let i = 0; i < cands.length; i++) if (cands[i] && c.measureText(cands[i]).width <= maxW) { b._final = cands[i]; break; }
+      }
+      b._finalW = maxW;
+    }
+    return b._final;
+  }
+  /** Draw a banner spec at progress p (0..1): the band slides in, the title pops, everything fades out over the last 20%. */
+  function drawBanner(c, view, b, p) {
+    const W = num(view.width, 800), H = num(view.height, 600), cy = H * 0.38;
+    const inK = easeOutBack(clamp(p / 0.16, 0, 1)), outK = clamp((p - 0.8) / 0.2, 0, 1);
+    const a = clamp(p / 0.08, 0, 1) * (1 - outK);
+    const bandH = (b.sub ? 118 : 96) * clamp(W / 1280, 0.7, 1.2);
+    c.save();
+    c.globalAlpha = a;
+    const g = c.createLinearGradient(0, cy - bandH / 2, 0, cy + bandH / 2);
+    g.addColorStop(0, 'rgba(12,6,10,0)'); g.addColorStop(0.18, 'rgba(12,6,10,0.78)'); g.addColorStop(0.82, 'rgba(12,6,10,0.78)'); g.addColorStop(1, 'rgba(12,6,10,0)');
+    const bw = W * clamp(inK, 0, 1.05);
+    c.fillStyle = g; c.fillRect(W / 2 - bw / 2, cy - bandH / 2, bw, bandH);
+    c.fillStyle = rgba(b.color, 0.85);
+    c.fillRect(W / 2 - bw * 0.42, cy - bandH * 0.36, bw * 0.84, Math.max(1, 2 * (W / 1280)));
+    c.fillRect(W / 2 - bw * 0.42, cy + bandH * 0.34, bw * 0.84, Math.max(1, 2 * (W / 1280)));
+    const base = clamp(W / 22, 26, 60) * (1 + (1 - clamp(p / 0.16, 0, 1)) * 0.35);
+    const slide = (1 - inK) * -60 + outK * 40;
+    // a fitted banner fits the stretch of the board area the HUD's panels leave free at its height (they would hide the
+    // ends) and centres on it
+    let span = null;
+    if (b.fit !== false) {
+      const area = boardArea(view);
+      span = { x0: area.x0, x1: area.x1 };
+      const fs = freeSpan(hudBoxes(view), area.x0, area.x1, cy - bandH / 2, cy + bandH / 2);
+      if (fs.x1 - fs.x0 >= area.w * 0.4) span = fs;
+    }
+    const maxW = span ? Math.min(W * BANNER_FIT, (span.x1 - span.x0) * 0.96) : W * BANNER_FIT;
+    const text = bannerTitle(c, b, p, maxW);
+    let size = base, sx = 1, mid = W / 2;
+    if (span) {
+      const f = fitText(c, text, base, maxW, BANNER_MIN, displayFont);
+      size = f.size; sx = f.sx;
+      if (b.fit || b.frames || f.size < base || f.sx < 1) mid = (span.x0 + span.x1) / 2;
+    }
+    const tx = mid + slide, ty = cy - (b.sub ? bandH * 0.1 : 0);
+    // soft glow from a wide translucent stroke (shadowBlur is far too slow on software canvases)
+    c.save();
+    c.translate(tx, ty);
+    if (sx < 1) c.scale(sx, 1);
+    c.font = displayFont(size);
+    c.textAlign = 'center'; c.textBaseline = 'middle'; c.lineJoin = 'round';
+    c.strokeStyle = rgba(b.color, 0.18); c.lineWidth = size * 0.55; c.strokeText(text, 0, 0);
+    c.strokeStyle = rgba(b.color, 0.28); c.lineWidth = size * 0.36; c.strokeText(text, 0, 0);
+    outlinedText(c, text, 0, 0, size, b.color, 'rgba(26,12,10,0.95)', DISPLAY_FONT, 'bold');
+    c.restore();
+    if (b.sub) {
+      let ss = base * 0.38, ssx = 1;
+      if (span) { const f = fitText(c, b.sub, ss, Math.min(W * SUB_FIT, (span.x1 - span.x0) * 0.98), SUB_MIN, subFont); ss = f.size; ssx = f.sx; }
+      fittedText(c, b.sub, mid - slide * 0.5, cy + bandH * 0.22, ss, ssx, '#f4e6c8', 'rgba(26,12,10,0.9)', 'Georgia, serif', 'italic bold');
+    }
+    c.restore();
+  }
   function addBanner(evt) {
     return addEffect({
-      layer: 'screen', evt: evt, text: String(evt.text || ''), sub: evt.sub ? String(evt.sub) : '', color: col(evt.color, '#ffd76a'),
-      life: Math.max(200, num(evt.ms, 950)), banner: true,
+      layer: 'screen', evt: evt, b: bannerSpec(evt), life: Math.max(200, num(evt.ms, 950)), banner: true,
       draw: function (c, e, view) {
         const p = e.evt && e.evt.ms > 0 && !e.evt.done ? clamp(num(e.evt.elapsed, 0) / e.evt.ms, 0, 1) : clamp(e.age / e.life, 0, 1);
-        const W = num(view.width, 800), H = num(view.height, 600), cy = H * 0.38;
-        const inK = easeOutBack(clamp(p / 0.16, 0, 1)), outK = clamp((p - 0.8) / 0.2, 0, 1);
-        const a = clamp(p / 0.08, 0, 1) * (1 - outK);
-        const bandH = (e.sub ? 118 : 96) * clamp(W / 1280, 0.7, 1.2);
-        c.save();
-        c.globalAlpha = a;
-        const g = c.createLinearGradient(0, cy - bandH / 2, 0, cy + bandH / 2);
-        g.addColorStop(0, 'rgba(12,6,10,0)'); g.addColorStop(0.18, 'rgba(12,6,10,0.78)'); g.addColorStop(0.82, 'rgba(12,6,10,0.78)'); g.addColorStop(1, 'rgba(12,6,10,0)');
-        const bw = W * clamp(inK, 0, 1.05);
-        c.fillStyle = g; c.fillRect(W / 2 - bw / 2, cy - bandH / 2, bw, bandH);
-        c.fillStyle = rgba(e.color, 0.85);
-        c.fillRect(W / 2 - bw * 0.42, cy - bandH * 0.36, bw * 0.84, Math.max(1, 2 * (W / 1280)));
-        c.fillRect(W / 2 - bw * 0.42, cy + bandH * 0.34, bw * 0.84, Math.max(1, 2 * (W / 1280)));
-        const size = clamp(W / 22, 26, 60) * (1 + (1 - clamp(p / 0.16, 0, 1)) * 0.35);
-        const slide = (1 - inK) * -60 + outK * 40;
-        const tx = W / 2 + slide, ty = cy - (e.sub ? bandH * 0.1 : 0);
-        // soft glow from a wide translucent stroke (shadowBlur is far too slow on software canvases)
-        c.font = 'bold ' + Math.round(size) + 'px ' + DISPLAY_FONT;
-        c.textAlign = 'center'; c.textBaseline = 'middle'; c.lineJoin = 'round';
-        c.strokeStyle = rgba(e.color, 0.18); c.lineWidth = size * 0.55; c.strokeText(e.text, tx, ty);
-        c.strokeStyle = rgba(e.color, 0.28); c.lineWidth = size * 0.36; c.strokeText(e.text, tx, ty);
-        outlinedText(c, e.text, tx, ty, size, e.color, 'rgba(26,12,10,0.95)', DISPLAY_FONT, 'bold');
-        if (e.sub) outlinedText(c, e.sub, W / 2 - slide * 0.5, cy + bandH * 0.22, size * 0.38, '#f4e6c8', 'rgba(26,12,10,0.9)', 'Georgia, serif', 'italic bold');
-        c.restore();
+        drawBanner(c, view, e.b, p);
       },
     });
   }
@@ -1028,7 +1104,23 @@
     const tags = ((def && def.tags) || []).concat((u && u.tags) || []).join(' ') + ' ' + String(u && u.defId);
     if (/corgi|dog|hound|pup/i.test(tags)) return 'corgi';
     if (/raven|crow|bird|owl/i.test(tags)) return 'caw';
+    // V3: the Rapping Goats bleat (their bear lyricist, and Betty, a hero, keep the plain voice)
+    if (u && u.side === 'enemy' && /(^|\s)goats?(\s|$)/i.test(tags) && !/bear|ursa/i.test(tags)) return 'bleat';
     return 'bark';
+  }
+  /** V3: the stinger a boss banner plays (ARCHITECTURE §3.6 boss.sting): the event's own `sting`, else the def of the
+   *  boss unit the banner names. */
+  function bossSting(evt) {
+    if (typeof evt.sting === 'string' && evt.sting) return evt.sting;
+    const st = DD.Combat && DD.Combat.state;
+    if (!st || !Array.isArray(st.units) || !evt.text) return null;
+    for (let i = 0; i < st.units.length; i++) {
+      const u = st.units[i];
+      if (!u || u.name !== evt.text) continue;
+      const def = DD.getEnemy ? DD.getEnemy(u.defId) : null;
+      if (def && def.boss && typeof def.boss.sting === 'string' && def.boss.sting) return def.boss.sting;
+    }
+    return null;
   }
   function isBoss(u) { return !!u && (u.tier === 'boss' || !!(DD.getEnemy && DD.getEnemy(u.defId) && DD.getEnemy(u.defId).boss)); }
 
@@ -1052,6 +1144,586 @@
       if (e.type !== 'text' && e.type !== 'sound') return false;
     }
     return false;
+  }
+
+  // ---- V3: cameos (Svammiel; ARCHITECTURE §7.4, §5.11) ---------------------------------------------------------------
+  // One `cameo` FX event per cameo (DD.Cameo pushes it): entrance (the twist), swoop (the start cameo), shadow (the DM's
+  // phase 3) and bubble (an interjection, non-blocking). Everything is screen space inside the board area, anchored on a
+  // tile's projected point (view.toScreen), so it reads at every yaw; the figure is a billboard. Blocking styles run on
+  // the event's clock (evt.elapsed / evt.ms: a hosted moment sets ms and skips with elapsed = ms); a bubble runs on its
+  // own life. Times are fractions of the whole, so Short and AutoPlay's shortened moments keep the same choreography.
+  const CAMEO_CHARS = 44, CAMEO_LINES = 3;
+  const CAMEO_TIMES = {
+    swoop: { dive: [0, 0.2], banner: [0.06, 0.46], bubble: [0.36, 0.92], bubbleCard: [0.33, 0.9], card: [0.47, 0.97], sink: [0.85, 1] },
+    entrance: { cue: 0.111, hole: [0.13, 0.2], rise: [0.178, 0.333], banner: [0.333, 0.622], bubble: [0.622, 0.97], sink: [0.889, 1] },
+    shadow: { cross: [0, 1] },
+    bubble: { bubble: [0.04, 0.95], card: [0.12, 0.97] },
+  };
+  const CAMEO_LIFE = { bubble: 2600, bubbleCard: 3600 };
+  // the mini-boss stinger the start cameo's banner plays, by lane (V §12), when neither the encounter (`sting`) nor a
+  // boss def (`boss.sting`) names one
+  const LANE_STINGS = { gardener: 'clockwork', league: 'evil_chord', galbraith: 'grand_spell', coven: 'cackle', goats: 'scratch' };
+
+  function win(p, w) { return clamp((p - w[0]) / Math.max(1e-6, w[1] - w[0]), 0, 1); }
+  function inWin(p, w) { return p >= w[0] && p <= w[1]; }
+  /** 0 → 1 → 0 over a window: fades in and out over `edge` of it. */
+  function fadeWin(k, edge) { edge = edge || 0.12; return clamp(k / edge, 0, 1) * clamp((1 - k) / edge, 0, 1); }
+  function safeClamp(v, lo, hi) { return lo > hi ? (lo + hi) / 2 : clamp(v, lo, hi); }
+
+  /** Bubble text: words wrapped at ~44 characters, at most 3 lines (an over-long tail ends in "…"). */
+  function wrapChars(text, max, maxLines) {
+    max = Math.max(8, num(max, CAMEO_CHARS)); maxLines = Math.max(1, num(maxLines, CAMEO_LINES));
+    const words = String(text === undefined || text === null ? '' : text).trim().split(/\s+/).filter(Boolean);
+    const lines = [];
+    let line = '';
+    for (let i = 0; i < words.length; i++) {
+      let w = words[i];
+      while (w.length > max) { // a word longer than a line (the League's full name) is hyphenated
+        if (line) { lines.push(line); line = ''; }
+        lines.push(w.slice(0, max - 1) + '-');
+        w = w.slice(max - 1);
+      }
+      const test = line ? line + ' ' + w : w;
+      if (test.length > max && line) { lines.push(line); line = w; } else line = test;
+    }
+    if (line) lines.push(line);
+    if (lines.length <= maxLines) return lines;
+    const keep = lines.slice(0, maxLines);
+    keep[maxLines - 1] = keep[maxLines - 1].slice(0, max - 1).replace(/[\s.,;:!?-]+$/, '') + '…';
+    return keep;
+  }
+
+  /** The board area (screen px) the HUD leaves free (DD.Render.margins()); the whole view if that leaves too little. */
+  function boardArea(view) {
+    const W = num(view.width, 800), H = num(view.height, 600);
+    let m = null;
+    try { m = DD.Render && typeof DD.Render.margins === 'function' ? DD.Render.margins() : null; } catch (e) { m = null; }
+    const g = function (k) { const v = m ? +m[k] : 0; return isFinite(v) && v > 0 ? v : 0; };
+    let x0 = g('left'), x1 = W - g('right'), y0 = g('top'), y1 = H - g('bottom');
+    if (x1 - x0 < W * 0.4 || y1 - y0 < H * 0.4) { x0 = 0; x1 = W; y0 = 0; y1 = H; }
+    return { x0: x0, y0: y0, x1: x1, y1: y1, w: x1 - x0, h: y1 - y0, cx: (x0 + x1) / 2, cy: (y0 + y1) / 2 };
+  }
+
+  /**
+   * The HUD's panels over the live canvas (the `avoid` boxes of DD.Render.hudMargins, ARCHITECTURE §7.2), so a cameo or a
+   * fitted banner isn't drawn under them. None for an offscreen frame (a view smaller than the window) or without a HUD.
+   */
+  let boxMemo = { t: null, w: 0, h: 0, boxes: [] };
+  function hudBoxes(view) {
+    const W = num(view.width, 0), H = num(view.height, 0);
+    if (boxMemo.t === view.t && boxMemo.w === W && boxMemo.h === H && view.t !== undefined) return boxMemo.boxes;
+    let o = DD.Render ? DD.Render.hudMargins : null;
+    const out = [];
+    const live = typeof window !== 'undefined' && Math.abs(W - window.innerWidth) <= 2 && Math.abs(H - window.innerHeight) <= 2;
+    if (live && o) {
+      if (typeof o === 'function') { try { o = o(W, H, { live: true }); } catch (e) { o = null; } }
+      (o && Array.isArray(o.avoid) ? o.avoid : []).forEach(function (r) {
+        if (r && isFinite(r.x0) && isFinite(r.y0) && isFinite(r.x1) && isFinite(r.y1) && r.x1 - r.x0 >= 2 && r.y1 - r.y0 >= 2) out.push({ x0: +r.x0, y0: +r.y0, x1: +r.x1, y1: +r.y1 });
+      });
+    }
+    boxMemo = { t: view.t, w: W, h: H, boxes: out };
+    return out;
+  }
+  /** The widest stretch of [x0, x1] that no panel overlapping the rows y0..y1 covers: { x0, x1 }. */
+  function freeSpan(boxes, x0, x1, y0, y1) {
+    const cuts = boxes.filter(function (b) { return b.y0 < y1 && b.y1 > y0 && b.x1 > x0 && b.x0 < x1; })
+      .map(function (b) { return [Math.max(x0, b.x0), Math.min(x1, b.x1)]; }).sort(function (a, b) { return a[0] - b[0]; });
+    let best = { x0: x0, x1: x0 }, at = x0;
+    cuts.forEach(function (cu) { if (cu[0] - at > best.x1 - best.x0) best = { x0: at, x1: cu[0] }; at = Math.max(at, cu[1]); });
+    if (x1 - at > best.x1 - best.x0) best = { x0: at, x1: x1 };
+    return best;
+  }
+  function overlapOf(r, boxes) {
+    let a = 0;
+    boxes.forEach(function (b) {
+      const w = Math.min(r.x + r.w, b.x1) - Math.max(r.x, b.x0), h = Math.min(r.y + r.h, b.y1) - Math.max(r.y, b.y0);
+      if (w > 0 && h > 0) a += w * h;
+    });
+    return a;
+  }
+  function clampRect(r, area) {
+    return { x: safeClamp(r.x, area.x0 + 4, area.x1 - 4 - r.w), y: safeClamp(r.y, area.y0 + 4, area.y1 - 4 - r.h), w: r.w, h: r.h };
+  }
+  /** Nudge a rect (inside the area) clear of the HUD's panels: the least-covered of it and its moves past each panel. */
+  function dodge(r, boxes, area) {
+    let best = clampRect(r, area);
+    if (!boxes.length) return best;
+    for (let pass = 0; pass < 2; pass++) {
+      const base = best, cands = [base];
+      boxes.forEach(function (b) {
+        if (overlapOf(base, [b]) <= 0) return;
+        cands.push({ x: base.x, y: b.y1 + 6, w: base.w, h: base.h }, { x: base.x, y: b.y0 - 6 - base.h, w: base.w, h: base.h },
+          { x: b.x1 + 6, y: base.y, w: base.w, h: base.h }, { x: b.x0 - 6 - base.w, y: base.y, w: base.w, h: base.h });
+      });
+      let score = Infinity;
+      cands.forEach(function (cnd) {
+        const q = clampRect(cnd, area), s = overlapOf(q, boxes) * 1000 + Math.abs(q.x - r.x) + Math.abs(q.y - r.y);
+        if (s < score) { score = s; best = q; }
+      });
+    }
+    return best;
+  }
+
+  /**
+   * The tile a cameo plays over (grid coords): the twist rises at the DM's tile (the fight's boss, fallen or not); the
+   * other styles use the enemy deployment zone's centre (the free tile nearest it), else the enemies' centre, else the
+   * board's centre. null without a board.
+   */
+  function cameoAnchor(evt, st) {
+    if (!st || !st.grid) return null;
+    const units = Array.isArray(st.units) ? st.units : [];
+    if (evt.style === 'entrance') {
+      for (let i = 0; i < units.length; i++) if (units[i] && units[i].side === 'enemy' && isBoss(units[i])) return { x: units[i].x, y: units[i].y };
+    }
+    const tiles = Array.isArray(st.grid.tiles) ? st.grid.tiles : [];
+    let zone = tiles.filter(function (t) { return t && t.zone === 'enemy'; });
+    if (!zone.length && Array.isArray(st.enemyZone)) zone = st.enemyZone.filter(function (p) { return p && isFinite(p.x) && isFinite(p.y); });
+    const pts = zone.length ? zone : units.filter(function (u) { return u && u.side === 'enemy' && !u.dead; });
+    if (!pts.length) return { x: Math.round((num(st.grid.w, 1) - 1) / 2), y: Math.round((num(st.grid.h, 1) - 1) / 2) };
+    let cx = 0, cy = 0;
+    pts.forEach(function (p) { cx += p.x; cy += p.y; });
+    cx /= pts.length; cy /= pts.length;
+    const taken = {};
+    units.forEach(function (u) { if (u && !u.dead) taken[u.x + ',' + u.y] = 1; });
+    let best = null, bd = Infinity;
+    pts.forEach(function (p) {
+      const d = (p.x - cx) * (p.x - cx) + (p.y - cy) * (p.y - cy) + (zone.length && taken[p.x + ',' + p.y] ? 1000 : 0);
+      if (d < bd) { bd = d; best = p; }
+    });
+    return { x: best.x, y: best.y };
+  }
+
+  function cameoSpec(evt) {
+    const def = evt.enemy && DD.getEnemy ? DD.getEnemy(evt.enemy) : null;
+    return def && def.sprite ? def.sprite : null;
+  }
+  /** Zoom-1 height / width of the cameo figure (no hover). */
+  function figureSize(spec) {
+    let m = null;
+    if (spec && DD.Sprites && DD.Sprites.metrics) { try { m = DD.Sprites.metrics(spec); } catch (e) { m = null; } }
+    const h = m && m.height > 0 ? m.height : 60, w = m && m.width > 0 ? m.width : 46;
+    return { h: h, w: w };
+  }
+  /** The cameo actor's figure: its enemy sprite (a billboard; only the facing mirrors), or its icon in a medallion. */
+  function drawFigure(c, evt, spec, x, y, z, o) {
+    if (spec && DD.Sprites && DD.Sprites.draw) {
+      DD.Sprites.draw(c, spec, x, y, z, { t: o.t, facing: o.facing, pose: o.pose || 'idle', lean: o.lean || 0, alpha: num(o.alpha, 1), hover: 0, underlay: false });
+      return;
+    }
+    const r = 22 * z, cy = y - 30 * z;
+    c.save();
+    c.globalAlpha = clamp(num(o.alpha, 1), 0, 1);
+    c.beginPath(); c.arc(x, cy, r, 0, TAU);
+    c.fillStyle = col(evt.color, '#c0213a'); c.fill();
+    c.lineWidth = Math.max(1.5, 2 * z); c.strokeStyle = '#d4af37'; c.stroke();
+    c.font = Math.round(26 * z) + 'px ' + TEXT_FONT; c.textAlign = 'center'; c.textBaseline = 'middle';
+    c.fillStyle = '#ffffff'; c.fillText(String(evt.icon || '🎭'), x, cy + 1);
+    c.restore();
+  }
+  let silCanvas = null;
+  /** A black silhouette of the figure (the winged shadow), through a scratch canvas. */
+  function drawSilhouette(c, evt, spec, x, y, z, o) {
+    const sz = figureSize(spec), w = Math.ceil(sz.w * z * 2.4 + 60), h = Math.ceil(sz.h * z * 1.5 + 60);
+    if (!silCanvas) silCanvas = document.createElement('canvas');
+    if (silCanvas.width < w) silCanvas.width = w;
+    if (silCanvas.height < h) silCanvas.height = h;
+    const s = silCanvas.getContext('2d');
+    s.setTransform(1, 0, 0, 1, 0, 0);
+    s.globalCompositeOperation = 'source-over';
+    s.globalAlpha = 1;
+    s.clearRect(0, 0, silCanvas.width, silCanvas.height);
+    drawFigure(s, evt, spec, w / 2, h - 30, z, { t: o.t, facing: o.facing, pose: 'idle', lean: o.lean });
+    s.globalCompositeOperation = 'source-in';
+    s.fillStyle = '#0a0406';
+    s.fillRect(0, 0, w, h);
+    s.globalCompositeOperation = 'source-over';
+    c.save();
+    c.globalAlpha = clamp(num(o.alpha, 1), 0, 1);
+    c.drawImage(silCanvas, 0, 0, w, h, x - w / 2, y - (h - 30), w, h);
+    c.restore();
+  }
+
+  /** Where the figure stands this frame: { x, y (the tile's screen point), hover, figH, figW, z, facing }. */
+  function figureLayout(e, view, area) {
+    if (e.anchor === undefined) e.anchor = cameoAnchor(e.evt, view.state || (DD.Combat && DD.Combat.state)) || null;
+    const sz = e.size || (e.size = figureSize(e.spec));
+    let z = clamp(num(view.zoom, 1), 0.75, 1.25);
+    if (sz.h * z > area.h * 0.34) z = Math.max(0.3, area.h * 0.34 / sz.h);
+    let x = area.cx, y = area.cy + area.h * 0.1;
+    if (e.anchor) {
+      const p = view.toScreen(e.anchor.x, e.anchor.y);
+      if (p && isFinite(p.x) && isFinite(p.y)) { x = p.x; y = p.y; }
+    }
+    const hover = 16 * z, figH = sz.h * z, figW = sz.w * z;
+    x = safeClamp(x, area.x0 + figW * 0.6 + 8, area.x1 - figW * 0.6 - 8);
+    y = safeClamp(y, area.y0 + figH + hover + 16, area.y1 - 8);
+    const boxes = hudBoxes(view);
+    if (boxes.length) { // he hovers: clear of the HUD's panels (the hole follows him)
+      const r = dodge({ x: x - figW / 2, y: y - hover - figH, w: figW, h: figH + hover }, boxes, area);
+      x = r.x + figW / 2; y = r.y + figH + hover;
+    }
+    return { x: x, y: y, hover: hover, figH: figH, figW: figW, z: z, facing: x > area.cx + 1 ? -1 : 1, boxes: boxes };
+  }
+
+  // the floor hole he rises from / sinks into: a circle on the ground (the same ellipse at every yaw)
+  function holeShape(x, y, z, k) { const rx = 38 * z * clamp(k, 0, 1); return { x: x, y: y, rx: rx, ry: rx * 0.5 }; }
+  function drawHoleBack(c, h, color, k) {
+    if (!(h.rx > 0.5)) return;
+    c.save();
+    const g = c.createRadialGradient(h.x, h.y, 0, h.x, h.y, h.rx);
+    g.addColorStop(0, '#000000'); g.addColorStop(0.68, '#16060a'); g.addColorStop(1, rgba(col(color, '#c0213a'), 0.95));
+    c.fillStyle = g;
+    c.beginPath(); c.ellipse(h.x, h.y, h.rx, h.ry, 0, 0, TAU); c.fill();
+    c.globalCompositeOperation = 'lighter';
+    const glow = c.createRadialGradient(h.x, h.y - h.ry, 0, h.x, h.y - h.ry, h.rx * 1.6);
+    glow.addColorStop(0, rgba('#ff4a1a', 0.32 * clamp(k, 0, 1))); glow.addColorStop(1, 'rgba(255,74,26,0)');
+    c.fillStyle = glow;
+    c.fillRect(h.x - h.rx * 1.6, h.y - h.ry - h.rx * 1.6, h.rx * 3.2, h.rx * 3.2);
+    c.restore();
+  }
+  function drawHoleFront(c, h) {
+    if (!(h.rx > 0.5)) return;
+    c.save();
+    c.beginPath(); c.ellipse(h.x, h.y, h.rx, h.ry, 0, 0, Math.PI);
+    c.lineWidth = Math.max(1.5, h.rx * 0.08); c.strokeStyle = 'rgba(255,122,26,0.85)'; c.lineCap = 'round'; c.stroke();
+    c.restore();
+  }
+  /** Clip to everything above the hole's centre line, plus the hole itself (the figure vanishes into it). */
+  function clipAboveHole(c, area, h) {
+    c.beginPath();
+    c.rect(area.x0 - 2000, h.y - 4000, area.w + 4000, 4000);
+    c.ellipse(h.x, h.y, Math.max(0.5, h.rx), Math.max(0.5, h.ry), 0, 0, TAU);
+    c.clip();
+  }
+
+  // ---- speech bubbles and the cheat card ----
+  function tagText(evt) { return (evt.icon || '😈') + ' ' + String(evt.speaker || evt.name || '').toUpperCase(); }
+  /** Measured bubble: { w, h, fs, lh, pad, tagW, tagH } for the wrapped lines at zoom zs. */
+  function bubbleGeom(c, lines, zs, big, tag) {
+    const fs = Math.round((big ? 16 : 13) * zs), pad = 8 * zs, lh = fs * 1.25;
+    c.font = 'bold ' + fs + 'px ' + TEXT_FONT;
+    let tw = 0;
+    for (let i = 0; i < lines.length; i++) tw = Math.max(tw, c.measureText(lines[i]).width);
+    const tfs = Math.round(10 * zs);
+    c.font = 'bold ' + tfs + 'px ' + TEXT_FONT;
+    const tagW = tag ? c.measureText(tag).width + 10 * zs : 0, tagH = tag ? tfs + 6 * zs : 0;
+    // lead: how far the tag pokes above the box (layouts reserve it, so the tag never slides under a HUD panel)
+    return { w: Math.max(tw + pad * 2, tagW + 14 * zs), h: lines.length * lh + pad * 1.5 + tagH * 0.45, fs: fs, lh: lh, pad: pad, tfs: tfs, tagW: tagW, tagH: tagH,
+      lead: tagH * 0.6 };
+  }
+  /** Draw a bubble box at (x, y) with a tail toward (tx, ty) (null: none) and the speaker tag on its top edge. */
+  function drawBubbleBox(c, x, y, G, lines, o) {
+    const zs = o.zs, r = 9 * zs, color = col(o.color, '#c0213a');
+    c.save();
+    c.globalAlpha = clamp(num(o.alpha, 1), 0, 1);
+    if (o.scale && o.scale !== 1) { c.translate(x + G.w / 2, y + G.h / 2); c.scale(o.scale, o.scale); c.translate(-(x + G.w / 2), -(y + G.h / 2)); }
+    // tail first (the box covers its base)
+    if (o.tail) {
+      const tx = o.tail.x, ty = o.tail.y, bw = 7 * zs, len = 16 * zs;
+      let bx, by, ax, ay;
+      if (ty > y + G.h) { bx = safeClamp(tx, x + r + bw, x + G.w - r - bw); by = y + G.h - 1; ax = bx + clamp(tx - bx, -len, len) * 0.5; ay = by + len; c.beginPath(); c.moveTo(bx - bw, by); c.lineTo(ax, ay); c.lineTo(bx + bw, by); }
+      else if (ty < y) { bx = safeClamp(tx, x + r + bw, x + G.w - r - bw); by = y + 1; ax = bx + clamp(tx - bx, -len, len) * 0.5; ay = by - len; c.beginPath(); c.moveTo(bx - bw, by); c.lineTo(ax, ay); c.lineTo(bx + bw, by); }
+      else if (tx < x) { by = safeClamp(ty, y + r + bw, y + G.h - r - bw); bx = x + 1; ax = bx - len; ay = by; c.beginPath(); c.moveTo(bx, by - bw); c.lineTo(ax, ay); c.lineTo(bx, by + bw); }
+      else { by = safeClamp(ty, y + r + bw, y + G.h - r - bw); bx = x + G.w - 1; ax = bx + len; ay = by; c.beginPath(); c.moveTo(bx, by - bw); c.lineTo(ax, ay); c.lineTo(bx, by + bw); }
+      c.closePath();
+      c.fillStyle = '#fff8e7'; c.fill();
+      c.lineWidth = Math.max(1.5, 2 * zs); c.lineJoin = 'round'; c.strokeStyle = color; c.stroke();
+    }
+    c.beginPath(); roundRect(c, x + 2 * zs, y + 3 * zs, G.w, G.h, r); c.fillStyle = 'rgba(0,0,0,0.28)'; c.fill();
+    c.beginPath(); roundRect(c, x, y, G.w, G.h, r);
+    c.fillStyle = '#fff8e7'; c.fill();
+    c.lineWidth = Math.max(1.5, 2.2 * zs); c.strokeStyle = color; c.stroke();
+    if (o.tag) { // the speaker's name tag, sitting on the top edge
+      const th = G.tagH, tw = G.tagW, tx0 = x + 10 * zs, ty0 = y - th * 0.55;
+      c.beginPath(); roundRect(c, tx0, ty0, tw, th, th / 2);
+      c.fillStyle = color; c.fill(); c.lineWidth = Math.max(1, 1.2 * zs); c.strokeStyle = '#d4af37'; c.stroke();
+      c.font = 'bold ' + G.tfs + 'px ' + TEXT_FONT; c.textAlign = 'center'; c.textBaseline = 'middle';
+      c.fillStyle = '#ffd34d'; c.fillText(o.tag, tx0 + tw / 2, ty0 + th / 2 + 0.5);
+    }
+    c.font = 'bold ' + G.fs + 'px ' + TEXT_FONT; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillStyle = '#2a1a12';
+    const top = y + G.tagH * 0.45 + G.pad * 0.75;
+    for (let i = 0; i < lines.length; i++) c.fillText(lines[i], x + G.w / 2, top + G.lh * (i + 0.5));
+    c.restore();
+  }
+  /** The cheat card (or the Bribe's), laid out once: { kind, header, title, desc lines, quip lines }. */
+  function cardOf(evt) {
+    if (evt.cheat && typeof evt.cheat === 'object') {
+      const ch = evt.cheat;
+      return { kind: 'cheat', header: String(evt.name || 'Svammiel').toUpperCase() + '\'S RULE', title: ((ch.icon || '😈') + ' ' + (ch.name || '')).trim(),
+        desc: wrapChars(ch.desc || '', 40, 3), quip: ch.quip ? wrapChars('"' + ch.quip + '"', 46, 2) : [] };
+    }
+    if (typeof evt.bribe === 'string' && evt.bribe) {
+      return { kind: 'bribe', header: 'BRIBED', title: '💰 No rule this time', desc: [], quip: wrapChars('"' + evt.bribe + '"', 46, 2) };
+    }
+    return null;
+  }
+  function cardGeom(c, card, zs) {
+    const pad = 9 * zs, hfs = Math.round(10 * zs), tfs = Math.round(15 * zs), dfs = Math.round(12 * zs), qfs = Math.round(11 * zs);
+    let w = 0;
+    c.font = 'bold ' + tfs + 'px ' + TEXT_FONT; w = Math.max(w, c.measureText(card.title).width);
+    c.font = 'bold ' + dfs + 'px ' + TEXT_FONT; card.desc.forEach(function (l) { w = Math.max(w, c.measureText(l).width); });
+    c.font = 'italic ' + qfs + 'px ' + TEXT_FONT; card.quip.forEach(function (l) { w = Math.max(w, c.measureText(l).width); });
+    const headH = hfs + 8 * zs;
+    const h = headH + pad * 0.8 + tfs * 1.3 + card.desc.length * dfs * 1.3 + (card.quip.length ? 4 * zs + card.quip.length * qfs * 1.3 : 0) + pad;
+    return { w: Math.max(150 * zs, w + pad * 2), h: h, pad: pad, hfs: hfs, tfs: tfs, dfs: dfs, qfs: qfs, headH: headH };
+  }
+  function drawCard(c, x, y, G, card, o) {
+    const zs = o.zs, color = col(o.color, '#c0213a');
+    c.save();
+    c.globalAlpha = clamp(num(o.alpha, 1), 0, 1);
+    c.translate(x + G.w / 2, y + G.h / 2); c.rotate(num(o.rot, 0)); c.translate(-G.w / 2, -G.h / 2);
+    c.beginPath(); roundRect(c, 3 * zs, 4 * zs, G.w, G.h, 7 * zs); c.fillStyle = 'rgba(0,0,0,0.32)'; c.fill();
+    c.beginPath(); roundRect(c, 0, 0, G.w, G.h, 7 * zs); c.fillStyle = card.kind === 'bribe' ? '#f4ffe8' : '#fff4dc'; c.fill();
+    c.save(); c.clip();
+    c.fillStyle = card.kind === 'bribe' ? '#2f7a3a' : color; c.fillRect(0, 0, G.w, G.headH);
+    c.restore();
+    c.lineWidth = Math.max(1.5, 2.4 * zs); c.strokeStyle = card.kind === 'bribe' ? '#2f7a3a' : color; c.stroke();
+    c.textAlign = 'center'; c.textBaseline = 'middle';
+    c.font = 'bold ' + G.hfs + 'px ' + TEXT_FONT; c.fillStyle = '#ffd34d'; c.fillText(card.header, G.w / 2, G.headH / 2 + 0.5);
+    let yy = G.headH + G.pad * 0.8 + G.tfs * 0.65;
+    c.font = 'bold ' + G.tfs + 'px ' + TEXT_FONT; c.fillStyle = '#2a1a12'; c.fillText(card.title, G.w / 2, yy);
+    yy += G.tfs * 0.65;
+    c.font = 'bold ' + G.dfs + 'px ' + TEXT_FONT; c.fillStyle = '#5a1a14';
+    card.desc.forEach(function (l) { yy += G.dfs * 0.65; c.fillText(l, G.w / 2, yy); yy += G.dfs * 0.65; });
+    if (card.quip.length) {
+      yy += 4 * zs;
+      c.font = 'italic ' + G.qfs + 'px ' + TEXT_FONT; c.fillStyle = '#6a5a4a';
+      card.quip.forEach(function (l) { yy += G.qfs * 0.65; c.fillText(l, G.w / 2, yy); yy += G.qfs * 0.65; });
+    }
+    c.restore();
+  }
+
+  /**
+   * Bubble (+ card) next to a figure: above its head (no card), else a column on its right or left; the one that stays in
+   * the board area, off the figure and clear of the HUD's panels wins, then it is nudged clear of the panels.
+   * → { bx, by, cx, cy, side } (the card's spot only with a card).
+   */
+  function columnBeside(area, L, fx, fy, B, C) {
+    const gap = 10 * L.z, lead = B.lead || 0, colW = Math.max(B.w, C ? C.w : 0), colH = lead + B.h + (C ? gap + C.h : 0);
+    const fig = [{ x0: fx - L.figW / 2, y0: fy - L.figH, x1: fx + L.figW / 2, y1: fy }], boxes = L.boxes || [];
+    const cands = [];
+    if (!C) cands.push({ x: fx - colW / 2, y: fy - L.figH - 14 * L.z - colH, w: colW, h: colH });
+    cands.push({ x: fx + L.figW * 0.55 + 18, y: fy - L.figH * 0.95, w: colW, h: colH });
+    cands.push({ x: fx - L.figW * 0.55 - 18 - colW, y: fy - L.figH * 0.95, w: colW, h: colH });
+    let best = null, bs = Infinity;
+    cands.forEach(function (r, i) {
+      const q = clampRect(r, area);
+      const s = overlapOf(q, boxes) * 1000 + overlapOf(q, fig) * 10 + Math.abs(q.x - r.x) + Math.abs(q.y - r.y) + i;
+      if (s < bs) { bs = s; best = q; }
+    });
+    best = dodge(best, boxes, area);
+    const x = best.x, y = best.y;
+    return { bx: x + (colW - B.w) / 2, by: y + lead, cx: x + (colW - (C ? C.w : 0)) / 2, cy: y + lead + B.h + gap, side: x + colW / 2 > fx ? 1 : -1 };
+  }
+
+  function cameoP(e) {
+    const ev = e.evt;
+    if (e.cameo !== 'bubble' && ev.ms > 0) return ev.done ? 1 : clamp(num(ev.elapsed, 0) / ev.ms, 0, 1);
+    return clamp(e.age / e.life, 0, 1);
+  }
+  function stingOf(evt) {
+    if (typeof evt.sting === 'string' && evt.sting) return evt.sting;
+    const st = DD.Combat && DD.Combat.state, enc = st && st.encounter;
+    if (enc && typeof enc.sting === 'string' && enc.sting) return enc.sting;
+    if (enc && enc.cameo && typeof enc.cameo.sting === 'string' && enc.cameo.sting) return enc.cameo.sting;
+    const units = st && Array.isArray(st.units) ? st.units : [];
+    for (let i = 0; i < units.length; i++) {
+      const def = units[i] && units[i].side === 'enemy' && DD.getEnemy ? DD.getEnemy(units[i].defId) : null;
+      if (def && def.boss && typeof def.boss.sting === 'string' && def.boss.sting && def.id !== evt.enemy) return def.boss.sting;
+    }
+    const lane = enc && enc.gauntlet && enc.gauntlet.lane;
+    return lane && LANE_STINGS[lane] ? LANE_STINGS[lane] : null;
+  }
+  /** Cue the one-off sounds, shakes and puffs of a style at their times (played once each, as the clock passes them). */
+  function cameoCues(e) {
+    const evt = e.evt, cues = [];
+    const add = function (at, fn) { cues.push({ at: at, fn: fn, done: false }); };
+    const puff = function (kind, n, color, oy) {
+      return function () { if (e.anchor) burst({ x: e.anchor.x, y: e.anchor.y, h: DD.FX.tileH(e.anchor.x, e.anchor.y) }, kind, n, color, oy, 1.6); };
+    };
+    const T = CAMEO_TIMES[e.cameo];
+    if (e.cameo === 'swoop') {
+      add(0, function () { audio('swoop', { vol: 0.8 }); });
+      if (evt.banner) add(T.banner[0], function () { const s = stingOf(evt); if (s) audio(s, { vol: 0.8 }); });
+      add(T.dive[1], function () { addShake(3, 200); });
+      add(T.dive[1], puff('smoke', 10, '#3a1a14', -4));
+      add(T.dive[1], puff('sparks', 9, '#ff4a3a', -8));
+      if (e.card) add(T.card[0], function () { audio(e.card.kind === 'bribe' ? 'coin' : 'cheat'); });
+      add(T.sink[0], function () { audio('swoop', { vol: 0.5, pitch: 0.8 }); });
+    } else if (e.cameo === 'entrance') {
+      add(T.cue, function () { addShake(6, 700); addFlash('#ff2a1a', 260); audio('svam_sting'); });
+      add(T.rise[0], puff('sparks', 16, '#ff7a1a', -6));
+      add(T.rise[0], puff('fire', 12, '#ff4a1a', -2));
+      add(T.sink[0], function () { audio('swoop', { vol: 0.5, pitch: 0.8 }); });
+    } else if (e.cameo === 'shadow') {
+      add(0, function () { audio('swoop', { vol: 0.35, pitch: 0.7 }); });
+    } else if (e.cameo === 'bubble') {
+      add(0, function () { audio('bark', { vol: 0.5, pitch: 0.8 }); });
+      if (e.card) add(T.card[0], function () { audio(e.card.kind === 'bribe' ? 'coin' : 'cheat'); });
+    }
+    return cues;
+  }
+  function cameoTick(e) {
+    if (e.cameo !== 'bubble' && e.evt.done) { e.dead = true; return; }
+    const p = cameoP(e);
+    for (let i = 0; i < e.cues.length; i++) {
+      const q = e.cues[i];
+      if (!q.done && p >= q.at) { q.done = true; DD.safe('FX cameo cue', q.fn); }
+    }
+  }
+
+  function drawSwoop(c, e, view, p) {
+    const T = CAMEO_TIMES.swoop, evt = e.evt, area = boardArea(view), L = figureLayout(e, view, area);
+    const t = num(view.t, 0), kDive = win(p, T.dive), kSink = win(p, T.sink);
+    let fx = L.x, fy = L.y - L.hover, lean = 0;
+    if (p < T.dive[1]) { // dive in from above the top edge, behind his facing, leaning into it
+      const sx = L.x - L.facing * area.w * 0.22, sy = area.y0 - 40;
+      fx = lerp(sx, L.x, easeOut(kDive));
+      fy = lerp(sy, L.y - L.hover, smooth(kDive));
+      lean = 0.55 * (1 - kDive);
+    } else fy += Math.sin(t * 3) * 2 * L.z;
+    // his shadow on the floor grows as he lands
+    c.save();
+    c.globalAlpha = 0.35 * smooth(kDive) * (1 - kSink);
+    c.fillStyle = '#000000';
+    c.beginPath(); c.ellipse(L.x, L.y, 26 * L.z, 13 * L.z, 0, 0, TAU); c.fill();
+    c.restore();
+    const pose = p > T.banner[0] + 0.08 && p < T.sink[0] ? 'cast' : 'idle';
+    if (kSink > 0) {
+      const hole = holeShape(L.x, L.y, L.z, win(p, [T.sink[0], T.sink[0] + 0.05]) * (1 - win(p, [0.97, 1])));
+      const drop = easeIn(kSink) * (L.figH + L.hover + 12 * L.z);
+      drawHoleBack(c, hole, evt.color, 1);
+      c.save(); clipAboveHole(c, area, hole);
+      drawFigure(c, evt, e.spec, fx, fy + drop, L.z, { t: t, facing: L.facing, pose: 'idle' });
+      c.restore();
+      drawHoleFront(c, hole);
+    } else drawFigure(c, evt, e.spec, fx, fy, L.z, { t: t, facing: L.facing, pose: pose, lean: lean });
+    e._fig = { x: fx, y: fy, anchorX: L.x, anchorY: L.y };
+    // the roast bubble, then the cheat card (or the Bribe's) under it
+    const zs = clamp(num(view.zoom, 1), 0.85, 1.25);
+    const lines = e.lines, tag = tagText(evt);
+    const B = lines.length ? bubbleGeom(c, lines, zs, false, tag) : null, C = e.card ? cardGeom(c, e.card, zs) : null;
+    if (!B && !C) return;
+    const pos = columnBeside(area, L, fx, fy, B || { w: 0, h: 0 }, C);
+    const bw = e.card ? T.bubbleCard : T.bubble;
+    if (B && inWin(p, bw)) {
+      const k = win(p, bw);
+      drawBubbleBox(c, pos.bx, pos.by, B, lines, { zs: zs, color: evt.color, tag: tag, alpha: fadeWin(k, 0.1), scale: 0.75 + 0.25 * easeOutBack(clamp(k / 0.1, 0, 1)),
+        tail: { x: fx, y: fy - L.figH * 0.8 } });
+    }
+    if (C && inWin(p, T.card)) {
+      const k = win(p, T.card), inK = clamp(k / 0.18, 0, 1);
+      const slide = (1 - easeOutBack(inK)) * 70 * zs * (pos.side || 1);
+      drawCard(c, pos.cx + slide, pos.cy, C, e.card, { zs: zs, color: evt.color, alpha: fadeWin(k, 0.1), rot: -0.035 * (pos.side || 1) });
+    }
+  }
+
+  function drawEntrance(c, e, view, p) {
+    const T = CAMEO_TIMES.entrance, evt = e.evt;
+    if (p < T.cue) return; // the DM's banner breathes first
+    const area = boardArea(view), L = figureLayout(e, view, area), t = num(view.t, 0);
+    const open = win(p, T.hole) * (1 - win(p, [0.975, 1]));
+    const hole = holeShape(L.x, L.y, L.z * 1.15, open);
+    drawHoleBack(c, hole, evt.color, open);
+    const full = L.figH + L.hover + 12 * L.z;
+    const kRise = win(p, T.rise), kSink = win(p, T.sink);
+    if (p >= T.rise[0]) {
+      const drop = p < T.rise[1] ? (1 - easeOut(kRise)) * full : easeIn(kSink) * full;
+      const fy = L.y - L.hover + drop + (p >= T.rise[1] && p < T.sink[0] ? Math.sin(t * 3) * 2 * L.z : 0);
+      c.save(); clipAboveHole(c, area, hole);
+      drawFigure(c, evt, e.spec, L.x, fy, L.z, { t: t, facing: L.facing, pose: p < T.sink[0] ? 'cast' : 'idle' });
+      c.restore();
+      e._fig = { x: L.x, y: fy, anchorX: L.x, anchorY: L.y };
+      if (e.lines.length && inWin(p, T.bubble)) {
+        const zs = clamp(num(view.zoom, 1), 0.85, 1.25), k = win(p, T.bubble), tag = tagText(evt);
+        const B = bubbleGeom(c, e.lines, zs * 1.1, true, tag);
+        const pos = columnBeside(area, L, L.x, L.y - L.hover, B, null);
+        drawBubbleBox(c, pos.bx, pos.by, B, e.lines, { zs: zs * 1.1, color: evt.color, tag: tag, alpha: fadeWin(k, 0.08),
+          scale: 0.7 + 0.3 * easeOutBack(clamp(k / 0.1, 0, 1)), tail: { x: L.x, y: L.y - L.hover - L.figH * 0.8 } });
+      }
+    }
+    drawHoleFront(c, hole);
+  }
+
+  function drawShadowPass(c, e, view, p) {
+    const area = boardArea(view), L = figureLayout(e, view, area), t = num(view.t, 0);
+    const z = L.z * 0.85, k = win(p, CAMEO_TIMES.shadow.cross);
+    const x = lerp(area.x0 - L.figW, area.x1 + L.figW, smooth(k));
+    const y = area.y0 + area.h * 0.34 + L.figH * 0.5 + Math.sin(k * TAU) * 10 * z;
+    drawSilhouette(c, e.evt, e.spec, x, y, z, { t: t * 1.6, facing: 1, lean: 0.25, alpha: 0.55 * fadeWin(k, 0.15) });
+    e._fig = { x: x, y: y };
+  }
+
+  function drawBust(c, e, view, p) {
+    const T = CAMEO_TIMES.bubble, evt = e.evt, area = boardArea(view);
+    const zs = clamp(num(view.zoom, 1), 0.85, 1.25), R = 30 * zs, tag = tagText(evt);
+    const B = e.lines.length ? bubbleGeom(c, e.lines, zs, false, tag) : null, C = e.card ? cardGeom(c, e.card, zs) : null;
+    const gap = 10 * zs, lead = B ? B.lead : 0, gw = R * 2 + 14 * zs + Math.max(B ? B.w : 0, C ? C.w : 0);
+    const gh = Math.max(R * 2, lead + (B ? B.h : 0) + (C ? gap + C.h : 0));
+    // the top edge of the board area, centred, nudged clear of the HUD's panels (the objective, the tracker…)
+    const G = dodge({ x: area.cx - gw / 2, y: area.y0 + 10 * zs, w: gw, h: gh }, hudBoxes(view), area);
+    const slideIn = easeOutBack(clamp(e.age / 220, 0, 1)), slideOut = easeIn(clamp((e.age - (e.life - 260)) / 260, 0, 1));
+    const cy = G.y + R + (slideIn - 1 - slideOut) * (G.y - area.y0 + R * 2 + 16 * zs);
+    const cx = G.x + R;
+    // the bust: his portrait in a crimson-and-gold medallion
+    c.save();
+    c.beginPath(); c.arc(cx + 2 * zs, cy + 3 * zs, R, 0, TAU); c.fillStyle = 'rgba(0,0,0,0.3)'; c.fill();
+    c.beginPath(); c.arc(cx, cy, R, 0, TAU); c.fillStyle = '#1d1424'; c.fill();
+    c.save(); c.clip();
+    let pic = null;
+    if (evt.enemy && DD.Sprites && DD.Sprites.portrait && cameoSpec(evt)) { try { pic = DD.Sprites.portrait(evt.enemy, 96); } catch (er) { pic = null; } }
+    if (pic) c.drawImage(pic, cx - R, cy - R, R * 2, R * 2);
+    else drawFigure(c, evt, null, cx, cy + R * 0.9, zs, { t: num(view.t, 0), facing: 1 });
+    c.restore();
+    c.beginPath(); c.arc(cx, cy, R, 0, TAU);
+    c.lineWidth = Math.max(2, 3 * zs); c.strokeStyle = col(evt.color, '#c0213a'); c.stroke();
+    c.beginPath(); c.arc(cx, cy, R - 2.5 * zs, 0, TAU);
+    c.lineWidth = Math.max(1, 1.2 * zs); c.strokeStyle = '#d4af37'; c.stroke();
+    c.restore();
+    e._fig = { x: cx, y: cy };
+    const bx = cx + R + 14 * zs, out = 1 - slideOut;
+    const by = G.y + lead + (C ? 0 : Math.max(0, R - lead - (B ? B.h / 2 : 0)));
+    if (B && inWin(p, T.bubble)) {
+      const k = win(p, T.bubble);
+      drawBubbleBox(c, bx, by, B, e.lines, { zs: zs, color: evt.color, tag: tag, alpha: fadeWin(k, 0.08) * out,
+        scale: 0.8 + 0.2 * easeOutBack(clamp(k / 0.1, 0, 1)), tail: { x: cx + R * 0.6, y: cy } });
+    }
+    if (C && inWin(p, T.card)) {
+      const k = win(p, T.card), slide = (1 - easeOutBack(clamp(k / 0.15, 0, 1))) * 60 * zs;
+      drawCard(c, bx + slide, by + (B ? B.h + gap : 0), C, e.card, { zs: zs, color: evt.color, alpha: fadeWin(k, 0.08) * out, rot: -0.03 });
+    }
+  }
+
+  function drawCameo(c, e, view) {
+    const p = cameoP(e);
+    if (e.cameo === 'swoop') drawSwoop(c, e, view, p);
+    else if (e.cameo === 'entrance') drawEntrance(c, e, view, p);
+    else if (e.cameo === 'shadow') drawShadowPass(c, e, view, p);
+    else drawBust(c, e, view, p);
+  }
+
+  /** Start one cameo's visuals: the body (figure, bubble, card) and, if it has one, its banner on the banner layer. */
+  function addCameo(evt, style) {
+    if (style === 'bubble') for (let i = 0; i < effects.length; i++) if (effects[i].cameo === 'bubble') effects[i].dead = true; // one at a time
+    const card = cardOf(evt);
+    const blocking = style !== 'bubble';
+    const life = blocking ? Math.max(1, num(evt.ms, 0)) * 1.5 + 1500 : Math.max(400, num(evt.life, card ? CAMEO_LIFE.bubbleCard : CAMEO_LIFE.bubble));
+    const e = addEffect({ layer: 'screen', cameo: style, evt: evt, spec: cameoSpec(evt), card: card, lines: style === 'shadow' ? [] : wrapChars(evt.text),
+      life: life, speedCap: blocking ? 0 : 2, cues: null, tick: cameoTick, draw: drawCameo });
+    e.cues = cameoCues(e);
+    const T = CAMEO_TIMES[style];
+    const bn = evt.banner && typeof evt.banner === 'object' ? evt.banner : null;
+    if (T.banner && bn && (bn.title || bn.sub)) {
+      const b = bannerSpec(Object.assign({}, bn, { text: bn.title, fit: bn.fit !== false }), style === 'entrance' ? '#ff4a3a' : '#ffd76a');
+      e.bannerFx = addEffect({ layer: 'screen', banner: true, owner: e, b: b, life: life,
+        tick: function (be) { if (be.owner.dead) be.dead = true; },
+        draw: function (c, be, view) {
+          const p = cameoP(be.owner);
+          if (!inWin(p, T.banner)) return;
+          drawBanner(c, view, be.b, win(p, T.banner));
+        } });
+    }
+    return e;
   }
 
   // ---- handlers (one per DD.FX event type) ----------------------------------------------------------------------------
@@ -1554,7 +2226,7 @@
       start: function (evt) {
         // the initiative banner becomes the title of the dice moment a screen hosts (no double announcement)
         if (initiativeTitle()) { evt.ms = 0; evt.folded = true; return; }
-        addBanner(evt); sfx(evt, 'turn', { vol: 0.7 });
+        addBanner(evt); sfx(evt, bossSting(evt) || 'turn', { vol: 0.7 });
       },
     },
     flash: { start: function (evt) { addFlash(evt.color, evt.dur); } },
@@ -1575,6 +2247,27 @@
         if (!host) return;
         const ms = DD.safe('FX initiative moment', host.start, host, [evt]);
         if (typeof ms === 'number' && isFinite(ms) && ms > 0) evt.ms = Math.min(ms, 9000);
+      },
+    },
+    // V3: a cameo (Svammiel). Blocking styles ask the screen's moment host (the HUD) how long they last; a bubble never
+    // blocks. No host: the event keeps the ms DD.Cameo gave it. Log only / quips push no event at all.
+    cameo: {
+      start: function (evt) {
+        const style = CAMEO_TIMES[evt.style] ? evt.style : evt.style === 'quip' ? null : 'bubble';
+        if (!style) return;
+        if (style !== 'bubble') {
+          const host = momentHost('cameo', evt);
+          if (host) {
+            const ms = DD.safe('FX cameo moment', host.start, host, [evt]);
+            if (typeof ms === 'number' && isFinite(ms) && ms >= 0) evt.ms = Math.min(ms, 15000);
+          }
+          if (!(evt.ms > 0)) return;
+        }
+        evt._fx = addCameo(evt, style);
+      },
+      end: function (evt) {
+        const e = evt._fx;
+        if (e && e.cameo !== 'bubble') { e.dead = true; if (e.bannerFx) e.bannerFx.dead = true; }
       },
     },
     wait: {},
@@ -1664,8 +2357,20 @@
       return addFloat(Object.assign({}, opts, { unit: unit, at: unit ? null : target, text: text }));
     },
     bark: function (unit, text, dur) { return unit && text ? addBark(unit, text, dur) : null; },
-    /** v2 hosted moments by marker type (see the header): { initiative: { start(evt) → ms, wants?(evt) → bool } }. */
+    /** v2 hosted moments by marker type (see the header): { initiative: { start(evt) → ms, wants?(evt) → bool } }; V3
+     *  adds `cameo` (blocking cameo styles: entrance, swoop, shadow). */
     moments: moments,
+    /** V3: a cameo bubble's lines (wrapped at ~44 characters, ≤ 3 lines, "…" past that). */
+    cameoLines: function (text, max, maxLines) { return wrapChars(text, max, maxLines); },
+    /** V3: the cameo choreography (fractions of each style's length) and the lane → stinger fallbacks. */
+    CAMEO_TIMES: CAMEO_TIMES,
+    LANE_STINGS: LANE_STINGS,
+    /** V3: the tile a cameo plays over ({ x, y } | null) for an event and a combat state. */
+    cameoAnchor: function (evt, st) { return cameoAnchor(evt || {}, st); },
+    /** V3: the font size / squeeze a banner title gets at width W ({ size, sx, w }), as drawn. */
+    fitBanner: function (ctx, text, W) {
+      return fitText(ctx, String(text || ''), clamp(W / 22, 26, 60), W * BANNER_FIT, BANNER_MIN, displayFont);
+    },
     /** Zoom-1 screen delta { x, y } between grid positions { x, y, h } at the current view; facingToward → -1 | 0 | 1. */
     screenDelta: function (a, b) { const p = posOf(a), q = posOf(b); return p && q ? screenDelta(p, q) : { x: 0, y: 0 }; },
     facingToward: function (a, b) { const p = posOf(a), q = posOf(b); return p && q ? facingToward(p, q) : 0; },

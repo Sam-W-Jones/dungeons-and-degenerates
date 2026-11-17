@@ -1728,12 +1728,20 @@
     const cv = canvas(640, 360);
     const res = t.tryRun('title', function () { return r.renderTo(cv, { scene: 'title', width: 640, height: 360 }); });
     t.ok(res && res.objects >= 8, 'title diorama objects drawn (' + (res && res.objects) + ')');
-    // the whole table at the fire: every unlocked hero, up to 16 seats (all 16 real heroes are unlocked in v2)
+    // the whole table at the fire: every unlocked hero, up to the renderer's seats (every real hero is unlocked since
+    // v2). V3: counts from the registry, never a literal: N = the registered real heroes, seats = TITLE_SLOTS.length
+    // when the renderer exposes it (DD.Render.TITLE_SLOTS), so "all N sit" reads min(N, seats)
     const ids = Object.keys(DD.defs.heroes);
     const open = ids.filter(function (id) { return !DD.Meta || typeof DD.Meta.isUnlocked !== 'function' || DD.Meta.isUnlocked(id); });
-    t.eq(res && res.units, Math.min(16, (open.length ? open : ids).length), 'title heroes (' + (res && res.units) + ')');
-    if (DD.UI && DD.UI.HERO_ORDER && DD.UI.HERO_ORDER.every(function (id) { return open.indexOf(id) >= 0; })) {
-      t.eq(res && res.units, 16, 'all 16 real heroes sit at the campfire');
+    const pool = open.length ? open : ids;
+    const seats = Array.isArray(r.TITLE_SLOTS) ? r.TITLE_SLOTS.length : null;
+    if (seats !== null) t.eq(res && res.units, Math.min(seats, pool.length), 'title heroes (' + (res && res.units) + ' of ' + seats + ' seats)');
+    else t.ok(res && res.units >= 1 && res.units <= pool.length, 'title heroes (' + (res && res.units) + ')');
+    const real = ids.filter(function (id) { return id.indexOf('test_') !== 0; });
+    if (DD.UI && DD.UI.HERO_ORDER && real.every(function (id) { return open.indexOf(id) >= 0; })) {
+      // real heroes sit first (UI.HERO_ORDER, then any registered hero it does not list yet); test heroes take what is left
+      const want = seats !== null ? Math.min(real.length, seats) : real.length;
+      t.ok(res && res.units >= want, 'all ' + want + ' real heroes sit at the campfire (' + (res && res.units) + ' seated)');
     }
     t.ok(colourVariety(cv) > 40, 'title produced a varied image');
     const none = t.tryRun('none', function () { return r.renderTo(cv, { scene: 'none', width: 320, height: 200 }); });
@@ -2654,6 +2662,350 @@
       t.ok(!!fallback, 'the real describe (or none) still draws the badge ' + JSON.stringify(fallback));
     } finally {
       if (had) AI.describe = old; else delete AI.describe;
+      r.resetOverlay();
+    }
+  }, { tags: ['render'] });
+
+  // ---- V3: act IV "Under the Table" (arenas, E8 zones) and the 17th hero ------------------------------------
+  /** renderTo with Math.random seeded (ambient particles respawn the same way) → { px, res }. */
+  function seededShot(st, opts) {
+    const rand = Math.random;
+    let s = 11;
+    Math.random = function () { s = (s * 16807) % 2147483647; return s / 2147483647; };
+    try {
+      const cv = canvas(opts.width, opts.height);
+      const res = withState(st, function () { return R().renderTo(cv, Object.assign({ state: st }, opts)); });
+      return { px: cv.getContext('2d').getImageData(0, 0, opts.width, opts.height).data, res: res, w: opts.width, h: opts.height };
+    } finally { Math.random = rand; }
+  }
+  /** Pixels that differ noticeably between two shots, and their box. */
+  function shotDiff(a, b) {
+    let n = 0, x0 = a.w, y0 = a.h, x1 = -1, y1 = -1;
+    for (let y = 0; y < a.h; y++) {
+      for (let x = 0; x < a.w; x++) {
+        const i = (y * a.w + x) * 4;
+        if (Math.abs(a.px[i] - b.px[i]) + Math.abs(a.px[i + 1] - b.px[i + 1]) + Math.abs(a.px[i + 2] - b.px[i + 2]) > 24) {
+          n++;
+          if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+        }
+      }
+    }
+    return { n: n, box: n ? { x0: x0, y0: y0, x1: x1, y1: y1 } : null };
+  }
+  function shotPx(s, p) {
+    const x = clampInt(p.x, 0, s.w - 1), y = clampInt(p.y, 0, s.h - 1), i = (y * s.w + x) * 4;
+    return [s.px[i], s.px[i + 1], s.px[i + 2]];
+  }
+  function clampInt(v, a, b) { return Math.max(a, Math.min(b, Math.round(v))); }
+
+  // plan §6.3 (bg top → bottom, ambient): the renderer's own looks when DD.Themes lacks them (MAPGEN's entries win)
+  const A4_LOOKS = {
+    a4_conservatory: ['#18321f', '#050b07', 'pollen'], a4_lair: ['#1c0f28', '#06030a', 'embers'],
+    a4_observatory: ['#0e1240', '#02030a', 'stars'], a4_cottage: ['#1d2a1a', '#070a06', 'fog'],
+    a4_barn: ['#2a1210', '#070302', 'dust'], a4_underfloor: ['#2a1a10', '#070403', 'dust'],
+  };
+
+  T.suite('render: V3 act-4 arenas — theme fallbacks, the new ambients (pollen, stars, notes) and the DM\'s table overhead', function (t) {
+    const r = R();
+    if (typeof r.themeLook !== 'function') { t.fail('DD.Render.themeLook is missing'); return; }
+    const Th = DD.Themes || {};
+    const kinds = r.painters.ambients || [];
+    ['pollen', 'stars', 'notes'].forEach(function (k) { t.ok(kinds.indexOf(k) >= 0, 'the renderer draws the ambient kind ' + k); });
+    // every act-4 arena the registry has (read from DD.Themes, never a count) has a fallback look and an ambient it draws
+    const a4 = Object.keys(Th).filter(function (k) { const v = Th[k]; return v && typeof v === 'object' && typeof v !== 'function' && v.act > 3; });
+    a4.forEach(function (id) {
+      t.ok(r.painters.themes.indexOf(id) >= 0, id + ': the renderer has a fallback look');
+      const l = r.themeLook(id);
+      t.ok(l.ambient === null || kinds.indexOf(l.ambient) >= 0, id + ': its ambient (' + Th[id].ambient + ') is drawn as ' + l.ambient);
+    });
+    t.log('act-4 themes in DD.Themes: ' + (a4.join(', ') || 'none yet'));
+    Object.keys(A4_LOOKS).forEach(function (id) {
+      t.ok(r.painters.themes.indexOf(id) >= 0, id + ': fallback look present');
+      const want = A4_LOOKS[id];
+      const had = Object.prototype.hasOwnProperty.call(Th, id), keep = Th[id];
+      try {
+        if (had) delete Th[id];
+        const l = r.themeLook(id);
+        t.eq(l.bg[0] + ' → ' + l.bg[1] + ' · ' + l.ambient, want[0] + ' → ' + want[1] + ' · ' + want[2], id + ': the fallback bg and ambient (plan §6.3)');
+      } finally { if (had) Th[id] = keep; }
+    });
+    const green = U0(r.themeLook('a4_cottage').ambientColor);
+    t.ok(green && green.g > green.r && green.g > green.b, 'the Coven\'s fog is green (' + r.themeLook('a4_cottage').ambientColor + ')');
+    t.eq(r.themeLook('a4_underfloor').backdrop, 'table', 'the Last Floor: the underside of the DM\'s table looms overhead');
+    t.eq(r.themeLook('a4_barn').backdrop, 'table_far', 'the Barn Burner: the DM\'s table far overhead');
+    t.eq(r.themeLook('cellar').backdrop, null, 'v2 themes keep a plain backdrop');
+
+    // ambient resolution and drawing on a scratch theme (removed again below)
+    const TID = 'test_render_v3_theme';
+    const setTheme = function (extra) { Th[TID] = Object.assign({ id: TID, name: 'Test', act: 1, bg: { top: '#24202a', bottom: '#08070a' }, ambient: null }, extra); };
+    try {
+      const kindOf = function (extra) { setTheme(extra); return r.themeLook(TID).ambient; };
+      t.eq(kindOf({ ambient: 'pollen' }), 'pollen', 'pollen is a kind of its own now');
+      t.eq(kindOf({ ambient: 'stars', ambientFallback: 'dust' }), 'stars', 'a known kind ignores its fallback');
+      t.eq(kindOf({ ambient: 'notes' }), 'notes', 'notes');
+      t.eq(kindOf({ ambient: 'test_render_no_such_kind', ambientFallback: 'spores' }), 'spores', 'an unknown kind uses the theme\'s ambientFallback');
+      t.eq(kindOf({ ambient: 'test_render_no_such_kind', ambientFallback: 'test_render_nor_this' }), 'dust', '… else dust');
+      t.eq(kindOf({ ambient: null }), null, 'null stays none');
+      setTheme({ ambient: 'fog', ambientColor: '#55ff55' });
+      t.eq(r.themeLook(TID).ambientColor, '#55ff55', 'a theme def may recolour its ambient');
+      const grid = function () { return makeGrid(3, 3); };
+      setTheme({ ambient: null });
+      const none = seededShot(makeState(grid(), [], { theme: TID }), { width: 360, height: 240 });
+      t.ok(none.res && none.res.ambient.kind === null && none.res.ambient.n === 0, 'no ambient: no particles');
+      ['pollen', 'stars', 'notes'].forEach(function (k) {
+        setTheme({ ambient: k });
+        const s = seededShot(makeState(grid(), [], { theme: TID }), { width: 360, height: 240 });
+        const a = s.res && s.res.ambient;
+        t.ok(a && a.kind === k && a.n > 0, k + ': particles spawned ' + JSON.stringify(a));
+        t.ok(shotDiff(none, s).n > 30, k + ': and painted (' + shotDiff(none, s).n + ' px)');
+        if (k === 'stars') t.eq(a && a.front, 0, 'stars never drift into the foreground');
+        if (k === 'notes') t.ok(a && a.notes > 0 && a.notes < a.n, 'notes: hay motes with a few music notes (' + (a && a.notes) + ' of ' + (a && a.n) + ')');
+      });
+      // the DM's table overhead: a band across the top only (screen space), thinner and dimmer when far
+      setTheme({ backdrop: null });
+      const plain = seededShot(makeState(grid(), [], { theme: TID }), { width: 360, height: 240 });
+      setTheme({ backdrop: 'table' });
+      const near = shotDiff(plain, seededShot(makeState(grid(), [], { theme: TID }), { width: 360, height: 240 }));
+      setTheme({ backdrop: 'table_far' });
+      const far = shotDiff(plain, seededShot(makeState(grid(), [], { theme: TID }), { width: 360, height: 240 }));
+      t.ok(near.box && near.box.y0 === 0 && near.box.y1 <= 240 * 0.25 && near.box.x1 - near.box.x0 >= 340, 'table: a band across the top ' + JSON.stringify(near.box));
+      t.ok(far.box && far.box.y0 === 0 && far.box.y1 < near.box.y1, 'table_far: a thinner band ' + JSON.stringify(far.box));
+      setTheme({ backdrop: 'test_render_no_such_backdrop' });
+      t.eq(shotDiff(plain, seededShot(makeState(grid(), [], { theme: TID }), { width: 360, height: 240 })).n, 0, 'an unknown backdrop draws nothing');
+    } finally {
+      delete Th[TID];
+      r.invalidate();
+    }
+    // the six arenas draw at the five QA yaws (no "Error in render" warning may appear)
+    Object.keys(A4_LOOKS).forEach(function (id) {
+      const st = makeState(makeGrid(6, 6, function (tl) { if (tl.x === 0) tl.t = 'wall'; if (tl.y === 5 && tl.x > 2) tl.h = 1; }),
+        [makeUnit('a4_h_' + id, 'hero', 2, 2), makeUnit('a4_e_' + id, 'enemy', 4, 3)], { theme: id });
+      [0, 90, 180, 270, 37.5].forEach(function (yaw) {
+        const res = t.tryRun(id + ' @' + yaw, function () { return seededShot(st, { width: 400, height: 260, yaw: yaw }).res; });
+        if (!res || res.units !== 2) t.fail(id + ' @' + yaw + ': units missing (' + (res && res.units) + ')');
+      });
+    });
+  }, { tags: ['render'] });
+  function U0(c) { return DD.util.parseColor(c); }
+
+  T.suite('render: V3 E8 content zones — tinted tiles, a chest-height line and a label at any yaw; nothing when absent', function (t) {
+    const r = R(), Iso = DD.Iso;
+    const W = 560, H = 380;
+    const st = makeState(makeGrid(8, 8), [makeUnit('z8_h', 'hero', 6, 6), makeUnit('z8_e', 'enemy', 1, 6)]);
+    const ZA = { tiles: [{ x: 1, y: 1 }, { x: 2, y: 1 }, { x: 1, y: 2 }], color: '#ff00ff', label: 'Hex Thread' };
+    const ZB = { line: [{ x: 1, y: 4 }, { x: 5, y: 1 }], color: '#00ffff' };
+    const ZC = { tiles: [{ x: 6, y: 6 }], line: [{ x: 6, y: 6 }, { x: 4, y: 6 }], color: '#ffd23f', label: '🗣️' };
+    const near = function (a, b) { return Math.abs(a - b) <= 0.75; };
+    try {
+      r.resetOverlay();
+      // the plan's checks at rot 30 and 200, and the classic view
+      [0, 30, 200].forEach(function (yaw) {
+        const cam = Iso.withYaw(yaw, function () { const w = Iso.toWorld(3.5, 3.5, 0); return { x: w.x, y: w.y - 20, zoom: 1.2 }; });
+        const scr = function (tx, ty, lift) {
+          return Iso.withYaw(yaw, function () { const w = Iso.toWorld(tx, ty, 0); return { x: (w.x - cam.x) * cam.zoom + W / 2, y: (w.y - (lift || 0) - cam.y) * cam.zoom + H / 2 }; });
+        };
+        const shot = function (data) {
+          if (data === undefined) delete st.data; else st.data = data;
+          return seededShot(st, { width: W, height: H, camera: cam, yaw: yaw });
+        };
+        const base = shot(undefined);
+        const blanks = [{}, { zones: [] }, { zones: null }, { zones: [{ tiles: [] }] },
+          { zones: [{ tiles: [{ x: 99, y: 2 }, { x: 1.5, y: 2 }, { x: -1, y: 0 }], line: [{ x: 1, y: 1 }] }] },
+          { zones: [null, 7, 'zone', { tiles: 'nope', line: 5 }, { line: [{ x: 2, y: 2 }, { x: 2, y: 2 }] }] }];
+        blanks.forEach(function (d, i) {
+          const s = shot(d);
+          t.eq(shotDiff(base, s).n, 0, 'yaw ' + yaw + ': no zones / empty / junk zones draw nothing, pixel for pixel (#' + i + ')');
+          t.eq(s.res && s.res.zones.length, 0, 'yaw ' + yaw + ': and report none (#' + i + ')');
+        });
+        const z = shot({ zones: [ZA, ZB, ZC] });
+        t.eq(z.res && z.res.zones.length, 3, 'yaw ' + yaw + ': three zones drawn');
+        if (!z.res || z.res.zones.length !== 3) return;
+        // A: its tiles tinted at their own (rotated) spots; a tile away from every zone untouched
+        const ca = scr(1, 1), pa0 = shotPx(base, ca), pa1 = shotPx(z, ca);
+        const mag = function (p) { return p[0] + p[2] - 2 * p[1]; };
+        t.ok(mag(pa1) > mag(pa0) + 20, 'yaw ' + yaw + ': tile (1, 1) tinted magenta ' + pa0 + ' → ' + pa1);
+        t.eq(z.res.zones[0].tiles, 3, 'yaw ' + yaw + ': three tiles in zone A');
+        const cf = scr(6, 2);
+        t.eq(String(shotPx(z, cf)), String(shotPx(base, cf)), 'yaw ' + yaw + ': a tile outside every zone is untouched');
+        // B: a line between two tiles at unit-chest height (22 px above the tile tops at zoom 1), painted all along
+        const lb = z.res.zones[1].line, a = scr(1, 4, 22), b = scr(5, 1, 22);
+        t.ok(lb && near(lb.ax, a.x) && near(lb.ay, a.y) && near(lb.bx, b.x) && near(lb.by, b.y),
+          'yaw ' + yaw + ': zone B\'s line ends at the two tiles\' chest height ' + JSON.stringify(lb) + ' vs ' + JSON.stringify([a, b]));
+        let hits = 0;
+        for (let k = 1; k <= 7; k++) {
+          const p = shotPx(z, { x: a.x + (b.x - a.x) * k / 8, y: a.y + (b.y - a.y) * k / 8 });
+          if (p[1] > p[0] + 60 && p[2] > p[0] + 60) hits++;
+        }
+        t.ok(hits >= 5, 'yaw ' + yaw + ': the cyan thread is painted along the line (' + hits + ' of 7 samples)');
+        t.eq(z.res.zones[1].label, null, 'yaw ' + yaw + ': no label asked, none drawn');
+        // C: an end on a standing unit hangs at that unit's chest, above the tile's own chest point
+        const lc = z.res.zones[2].line, foot = scr(6, 6, 0);
+        t.ok(lc && lc.ay < foot.y - 10 * cam.zoom && near(lc.ax, foot.x), 'yaw ' + yaw + ': the line starts at the hero\'s chest ' + JSON.stringify(lc) + ' (feet ' + JSON.stringify(foot) + ')');
+        // labels: inside the canvas, just in front of the zone (below its nearest tile), centred under it
+        const la = z.res.zones[0].label, pts = ZA.tiles.map(function (p) { return scr(p.x, p.y); });
+        const lowest = Math.max.apply(null, pts.map(function (p) { return p.y; }));
+        const midX = pts.reduce(function (s, p) { return s + p.x; }, 0) / pts.length;
+        t.ok(la && la.text === 'Hex Thread' && la.x0 >= 0 && la.x1 <= W && la.y0 >= 0 && la.y1 <= H, 'yaw ' + yaw + ': zone A\'s label drawn ' + JSON.stringify(la));
+        t.ok(la && la.y0 >= lowest - 1 && Math.abs((la.x0 + la.x1) / 2 - midX) <= 2, 'yaw ' + yaw + ': below the zone\'s nearest tile, centred ' + JSON.stringify(la) + ' lowest ' + lowest.toFixed(1));
+        t.ok(z.res.zones[2].label && z.res.zones[2].label.text === '🗣️', 'yaw ' + yaw + ': the spotlight\'s 🗣️ label');
+        // the zones gone: the very same picture again (no cache or state leaks)
+        t.eq(shotDiff(base, shot(undefined)).n, 0, 'yaw ' + yaw + ': without zones the frame is pixel-identical again');
+      });
+      // resetOverlay (the HUD's mount / unmount) cannot wipe them: they live in the combat state
+      r.resetOverlay();
+      st.data = { zones: [ZA] };
+      const kept = seededShot(st, { width: W, height: H });
+      t.eq(kept.res && kept.res.zones.length, 1, 'zones survive DD.Render.resetOverlay()');
+      // a finished fight shows none
+      st.result = 'victory';
+      const over = seededShot(st, { width: W, height: H });
+      t.eq(over.res && over.res.zones.length, 0, 'no zones once the fight is over');
+      st.result = null;
+      // a junk colour falls back to gold; a long label is cut to fit
+      st.data = { zones: [{ tiles: [{ x: 3, y: 3 }], color: 'not a colour', label: 'The Stirring Spot Of Unreasonable Length And Then Some' }] };
+      const junk = seededShot(st, { width: W, height: H });
+      const jz = junk.res && junk.res.zones[0];
+      t.ok(jz && jz.color === '#ffd23f', 'a junk colour falls back to gold (' + (jz && jz.color) + ')');
+      t.ok(jz && jz.label && jz.label.text.length <= 26 && /…$/.test(jz.label.text), 'a long label is cut: ' + (jz && jz.label && jz.label.text));
+      // the live renderer reads the same field (DD.Combat.state.data.zones) through currentState
+      st.data = { zones: [ZB] };
+      const live = withState(st, function () { return r.renderTo(canvas(W, H), { width: W, height: H }); });
+      t.ok(live && live.zones.length === 1 && !!live.zones[0].line, 'the live state\'s zones are drawn');
+    } finally {
+      delete st.data;
+      st.result = null;
+      r.resetOverlay();
+    }
+  }, { tags: ['render'] });
+
+  T.suite('render: V3 the 17th hero — Benedick\'s campfire seat on the path, the fallback order, every real hero at the fire', function (t) {
+    const r = R();
+    const slots = r.TITLE_SLOTS, order = r.HERO_ORDER;
+    t.ok(Array.isArray(slots) && Array.isArray(order), 'DD.Render exposes TITLE_SLOTS and HERO_ORDER');
+    if (!Array.isArray(slots) || !Array.isArray(order)) return;
+    slots[0][0] = 99; order.push('test_render_nobody');
+    t.ok(r.TITLE_SLOTS[0][0] !== 99 && r.HERO_ORDER.indexOf('test_render_nobody') < 0, 'both are copies (the renderer\'s own lists stay put)');
+    const S = r.TITLE_SLOTS, O = r.HERO_ORDER;
+    const keys = S.map(function (s) { return s[0] + ',' + s[1]; });
+    t.eq(keys.filter(function (k, i) { return keys.indexOf(k) === i; }).length, keys.length, 'no two heroes share a seat');
+    t.ok(S.every(function (s) { return s[0] >= 0 && s[0] < 7 && s[1] >= 0 && s[1] < 7 && !(s[0] === 3 && s[1] === 3); }), 'every seat on the island, nobody in the fire');
+    t.eq(O[O.length - 1], 'benedick', 'Benedick arrives last in the renderer\'s fallback order (obviously)');
+    t.eq(JSON.stringify(S[O.indexOf('benedick')]), '[4,6]', 'his seat: [4, 6] on the cobble path behind the ring, still arriving');
+    t.ok(S.length >= O.length, 'a seat for every hero of the fallback order (' + S.length + ' seats, ' + O.length + ' heroes)');
+    const ids = Object.keys(DD.defs.heroes);
+    const isOpen = function (id) { return !DD.Meta || typeof DD.Meta.isUnlocked !== 'function' || DD.Meta.isUnlocked(id); };
+    const open = ids.filter(isOpen), pool = open.length ? open : ids;
+    const real = ids.filter(function (id) { return id.indexOf('test_') !== 0; });
+    const missing = real.filter(function (id) { return O.indexOf(id) < 0; });
+    if (missing.length) t.log('NOTE: registered heroes missing from the renderer\'s fallback order (they sit after it): ' + missing.join(', '));
+    const seated = function () {
+      const res = r.renderTo(canvas(640, 360), { scene: 'title', width: 640, height: 360 });
+      return (res && res.seats) || [];
+    };
+    const check = function (tag, orderUsed) {
+      const seats = seated();
+      t.eq(seats.length, Math.min(S.length, pool.length), tag + ': min(seats, open heroes) sit (' + seats.length + ')');
+      let bad = 0;
+      seats.forEach(function (s, i) { if (!S[i] || s.x !== S[i][0] || s.y !== S[i][1]) bad++; });
+      t.eq(bad, 0, tag + ': heroes fill the seats in order');
+      const realSeated = seats.filter(function (s) { return s.id.indexOf('test_') !== 0; }).map(function (s) { return s.id; });
+      const want = Math.min(real.filter(isOpen).length, S.length);
+      t.eq(realSeated.length, want, tag + ': all ' + want + ' real heroes sit (N = ' + real.length + ' from the registry)');
+      t.eq(seats.slice(0, realSeated.length).map(function (s) { return s.id; }).join(','), realSeated.join(','), tag + ': real heroes take the first seats');
+      const listed = realSeated.filter(function (id) { return orderUsed.indexOf(id) >= 0; });
+      t.eq(realSeated.slice(0, listed.length).join(','), listed.slice().sort(function (a, b) { return orderUsed.indexOf(a) - orderUsed.indexOf(b); }).join(','),
+        tag + ': in the display order (a hero it does not list yet sits after the listed ones)');
+      if (DD.defs.heroes.benedick && isOpen('benedick')) {
+        const i = seats.map(function (s) { return s.id; }).indexOf('benedick');
+        t.ok(i >= 0, tag + ': Benedick sits at the fire');
+        if (i === O.indexOf('benedick')) t.eq(seats[i].x + ',' + seats[i].y, '4,6', tag + ': as the last of the full roster, on the path');
+      }
+      // the path seat is taken whenever there are enough heroes (test heroes fill it until Benedick lands)
+      if (pool.length >= S.length) t.ok(seats.some(function (s) { return s.x === 4 && s.y === 6; }), tag + ': the seat on the path [4, 6] is taken');
+      return seats;
+    };
+    const UI = DD.UI;
+    check(UI && Array.isArray(UI.HERO_ORDER) && UI.HERO_ORDER.length ? 'UI.HERO_ORDER' : 'fallback order',
+      UI && Array.isArray(UI.HERO_ORDER) && UI.HERO_ORDER.length ? UI.HERO_ORDER : O);
+    if (UI && Array.isArray(UI.HERO_ORDER)) {
+      const keep = UI.HERO_ORDER;
+      try {
+        UI.HERO_ORDER = [];
+        check('fallback order (UI.HERO_ORDER empty)', O);
+      } finally { UI.HERO_ORDER = keep; r.invalidate(); }
+    }
+    if (!DD.defs.heroes.benedick) t.log('Benedick is not registered yet (HERO-BENEDICK\'s stub): the seat on the path waits for him');
+  }, { tags: ['render'] });
+
+  // ---- V3 QA fixes (render-ui cluster) -------------------------------------------------------------------------------
+  T.suite('render: QA FIGHTS-13 — a tinted wind-up (intent.data.tint) washes its tiles in its own colour under the danger tape; shared tiles stay red', function (t) {
+    const r = R();
+    const grid = makeGrid(7, 7, function (tl) { tl.t = 'gold'; });
+    const tinted = [{ x: 1, y: 1 }, { x: 1, y: 2 }, { x: 3, y: 3 }];
+    const red = [{ x: 4, y: 1 }, { x: 5, y: 1 }, { x: 3, y: 3 }];
+    const wu = function (tiles, extra) {
+      return Object.assign({ skillId: 'test_none', anchor: 'ground', abs: { x: tiles[0].x, y: tiles[0].y }, tiles: tiles.slice(), label: 'Bass', icon: '🔊', dmg: 10, delay: 1 }, extra || {});
+    };
+    const e1 = makeUnit('qa_dj', 'enemy', 6, 6, { intents: [wu(tinted, { data: { tint: '#ffd24a', hint: 'Bass → gold squares' } }), wu(red)] });
+    const st = makeState(grid, [e1], { theme: 'hoard' });
+    const W = 480, H = 320, cam = { x: DD.Iso.toWorld(3, 3, 0).x, y: DD.Iso.toWorld(3, 3, 0).y, zoom: 1.4 };
+    const shot = function (show) {
+      r.resetOverlay();
+      Object.assign(r.overlay, { showIntents: show });
+      const cv = canvas(W, H);
+      const res = withState(st, function () { return r.renderTo(cv, { state: st, width: W, height: H, camera: cam, yaw: 0 }); });
+      return { px: cv.getContext('2d').getImageData(0, 0, W, H).data, res: res };
+    };
+    try {
+      const off = shot(false), on = shot(true);
+      t.ok(on.res && on.res.telegraphs === 1, 'the wind-ups are drawn (' + (on.res && on.res.telegraphs) + ' unit)');
+      // mean channel values inside a tile (a box around its centre)
+      const mean = function (img, tx, ty) {
+        const w = DD.Iso.toWorld(tx, ty, 0), p = { x: (w.x - cam.x) * cam.zoom + W / 2, y: (w.y - cam.y) * cam.zoom + H / 2 };
+        const s = [0, 0, 0];
+        let n = 0;
+        for (let y = Math.round(p.y - 5); y <= Math.round(p.y + 5); y++) {
+          for (let x = Math.round(p.x - 12); x <= Math.round(p.x + 12); x++) {
+            const i = (y * W + x) * 4;
+            s[0] += img[i]; s[1] += img[i + 1]; s[2] += img[i + 2]; n++;
+          }
+        }
+        return s.map(function (v) { return v / n; });
+      };
+      const fmt = function (c) { return c.map(function (v) { return Math.round(v); }).join(','); };
+      const floor = mean(off.px, 1, 1), gold = mean(on.px, 1, 1), hot = mean(on.px, 4, 1), both = mean(on.px, 3, 3);
+      t.ok(hot[1] < floor[1] - 10, 'a plain wind-up washes the gold floor red (green ' + Math.round(floor[1]) + ' → ' + Math.round(hot[1]) + ')');
+      t.ok(gold[1] > hot[1] + 20, 'the tinted one stays gold, clearly apart from the red one (' + fmt(gold) + ' vs ' + fmt(hot) + ')');
+      t.ok(Math.abs(gold[0] - floor[0]) + Math.abs(gold[1] - floor[1]) + Math.abs(gold[2] - floor[2]) > 6, 'and it is still marked (the danger tape; ' + fmt(floor) + ' → ' + fmt(gold) + ')');
+      t.ok(both[1] < gold[1] - 20, 'a tile both wind-ups share keeps the red (' + fmt(both) + ')');
+    } finally { r.resetOverlay(); }
+  }, { tags: ['render'] });
+
+  T.suite('render: QA HERO-5 — a status that opts in (showTurns) draws its turns left by its icon over the unit', function (t) {
+    const r = R();
+    const d = DD.getStatus('ben_dragon') || DD.getStatus('inspired');
+    if (!d) { t.skip('no status to try'); return; }
+    const had = Object.prototype.hasOwnProperty.call(d, 'showTurns'), was = d.showTurns;
+    const grid = makeGrid(5, 5);
+    const h = makeUnit('qa_turns', 'hero', 2, 2, { statuses: [{ id: d.id, stacks: 1, turns: 2 }] });
+    const st = makeState(grid, [h]);
+    const W = 320, H = 240, cam = { x: DD.Iso.toWorld(2, 2, 0).x, y: DD.Iso.toWorld(2, 2, 0).y - 30, zoom: 1.6 };
+    const shot = function () {
+      r.resetOverlay();
+      const cv = canvas(W, H);
+      withState(st, function () { r.renderTo(cv, { state: st, width: W, height: H, camera: cam, yaw: 0 }); });
+      return cv.getContext('2d').getImageData(0, 0, W, H).data;
+    };
+    const diff = function (a, b) { let n = 0; for (let i = 0; i < a.length; i += 4) if (Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]) > 30) n++; return n; };
+    try {
+      d.showTurns = false;
+      const a = shot(), a2 = shot();
+      d.showTurns = true;
+      const b = shot();
+      const noise = diff(a, a2), changed = diff(a, b);
+      t.ok(changed > noise + 8, 'with showTurns the status row gains its "2" (' + changed + ' px changed; ' + noise + ' between two plain frames)');
+    } finally {
+      if (had) d.showTurns = was; else delete d.showTurns;
       r.resetOverlay();
     }
   }, { tags: ['render'] });

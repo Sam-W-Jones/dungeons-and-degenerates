@@ -3,7 +3,8 @@
  * XP — one hero levels up per win, see DD.Run), combat gold, "pick 1 of 3" reward choices, item / consumable /
  * skill-tome rolls with act-shifted rarity odds, treasure, shop stock and prices. Every roll takes an RNG (defaults
  * to DD.Run.rng()). Empty item / consumable / skill registries degrade to gold rewards. apply() goes through DD.Run
- * so the run state stays the source of truth.
+ * so the run state stays the source of truth. V3: odds and prices read acts 1..DD.finalAct() (act 4: its own odds and
+ * the ×1.25 markup once the knob is 4); act-4 shops sell the Bribe; a gauntlet door's loot is its encounter's reward.
  * Reward = { type: 'item'|'skill'|'upgrade'|'consumable'|'gold'|'heal', id?, heroIdx?, heroId?, amount?, icon, label, desc }
  */
 (function () {
@@ -16,7 +17,7 @@
   const LEVEL_UPS_PER_WIN = 1;
   // Gold, prices and healing amounts are DD.Balance knobs (js/data/balance.js); these are the fallbacks.
   const FALLBACK = {
-    prices: { common: 40, rare: 80, legendary: 150, cursed: 25, consumable: 25, tome: 60, scar: 45, heal: 30, reroll: 40 },
+    prices: { common: 40, rare: 80, legendary: 150, cursed: 25, consumable: 25, tome: 60, scar: 45, heal: 30, reroll: 40, bribe: 75 },
     gold: { fight: { normal: [12, 20], elite: [35, 50], boss: [80, 100] }, fightPerAct: { normal: 6, elite: 0, boss: 0 }, finalBoss: 1,
       pile: [30, 45], pilePerAct: 15, treasure: [20, 35], treasurePerAct: 10 },
     heal: { reward: 0.3, shop: 0.3 },
@@ -31,6 +32,7 @@
     1: { common: 70, rare: 25, legendary: 3, cursed: 2 },
     2: { common: 50, rare: 38, legendary: 8, cursed: 4 },
     3: { common: 32, rare: 46, legendary: 16, cursed: 6 },
+    4: { common: 22, rare: 46, legendary: 24, cursed: 8 },   // V3: Svammiel's floor (read once DD.finalAct() is 4)
   };
   const RARITY_FALLBACK = {
     legendary: ['legendary', 'rare', 'common'], rare: ['rare', 'common', 'legendary'],
@@ -46,7 +48,8 @@
   function values(o) { return Object.keys(o || {}).map(function (k) { return o[k]; }); }
   function runOf(run) { return run || (DD.Run && DD.Run.state) || null; }
   function rngOf(rng) { return rng || (DD.Run && DD.Run.rng ? DD.Run.rng() : DD.RNG()); }
-  function actIdx(act) { return Math.max(1, Math.min(3, Math.floor(+act) || 1)); }
+  // an act past the campaign's end reads the last act's odds and prices (V3: DD.finalAct(), the act knob)
+  function actIdx(act) { return Math.max(1, Math.min(DD.finalAct(), Math.floor(+act) || 1)); }
   function kindKey(kind) { return kind === 'elite' || kind === 'boss' ? kind : 'normal'; }
   function weightOf(def) { const w = def && def.weight; return typeof w === 'number' && isFinite(w) ? Math.max(0, w) : 1; }
   function heroName(rh) { const d = rh && DD.getHero(rh.id); return d ? d.name : (rh ? rh.id : 'Someone'); }
@@ -349,8 +352,9 @@
   }
 
   /** Shop stock (DESIGN §3): 3 items, 2 skill tomes, 2 consumables, services (heal 30%, remove a scar, and
-   *  re-roll a Blessing while the passive table has entries). Every entry is a Reward plus { price, sold };
-   *  services are { type: 'service', id: 'heal'|'scar'|'reroll', ... }. */
+   *  re-roll a Blessing while the passive table has entries; V3: in Svammiel's gauntlet act, the Bribe while a door is
+   *  left). Every entry is a Reward plus { price, sold }; prices × DD.Balance.priceAct (act 4: "Svammiel's markup");
+   *  services are { type: 'service', id: 'heal'|'scar'|'reroll'|'bribe', ... }. */
   function shopInventory(act, rng, run) {
     rng = rngOf(rng);
     run = runOf(run);
@@ -398,7 +402,26 @@
         price: actPrice(PRICES.reroll, act), sold: false,
       });
     }
+    if (bribeOn(act, run)) {
+      inv.services.push({
+        type: 'service', id: 'bribe', icon: '💸', label: 'Bribe the Floor Boss',
+        desc: 'Svammiel skips his rule (the cheat he announces) at your next floor boss. One bribe at a time; his own fight has no rule to skip.',
+        price: actPrice(PRICES.bribe, act), sold: false,
+      });
+    }
     return inv;
+  }
+
+  /** V3: the Bribe is sold in Svammiel's gauntlet act only, and only while a door (a fight with a cheat) is left. */
+  function bribeOn(act, run) {
+    const a = actIdx(act);
+    if (!DD.RunMap || typeof DD.RunMap.isGauntlet !== 'function' || !DD.RunMap.isGauntlet(a)) return false;
+    const m = run && run.map;
+    if (m && m.shape === 'gauntlet' && +m.act === a) {
+      const beaten = m.beaten || [];
+      return (m.lanes || []).some(function (l) { return beaten.indexOf(l.id) < 0; });
+    }
+    return true;
   }
 
   // ---- applying -------------------------------------------------------------------------------------------

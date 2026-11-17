@@ -16,6 +16,11 @@
   // boss for every later suite (registry warning 'duplicate id "grimble"', a skill-less Grimble in boss tests).
   const SWAP = ['heroes', 'skills', 'items', 'consumables', 'encounters', 'events', 'statuses', 'passives', 'enemies'];
   const PARTY = ['rt_a', 'rt_b', 'rt_c', 'rt_d'];
+  // The sandbox's classic acts (v2's campaign: rt_ encounters for every act × kind). V3's act ("Under the Table",
+  // Svammiel's gauntlet) is DD.MAX_ACT: its sandbox content is registered per suite (registerGauntlet), and whether a
+  // run reaches it is the act knob's call (withActs). Nothing below writes a literal last act.
+  const CLASSIC_ACTS = [1, 2, 3];
+  const A4 = DD.MAX_ACT;
 
   // ---- sandbox content ----------------------------------------------------------------------------------------
   function skill(id, owner, levels, extra) {
@@ -67,7 +72,7 @@
       DD.registerConsumable({ id: c[0], name: 'Potion ' + c[0], rarity: c[1], target: { type: 'self' }, desc: 'Test potion.', execute: function () {} });
     });
 
-    [1, 2, 3].forEach(function (act) {
+    CLASSIC_ACTS.forEach(function (act) {
       ['normal', 'elite', 'boss'].forEach(function (kind) {
         const n = kind === 'normal' ? 6 : 2;
         for (let i = 1; i <= n; i++) {
@@ -195,6 +200,64 @@
     }
   }
 
+  /** Run fn (sync or async) with DD.Balance.campaign.acts = n; every knob is restored afterwards, also on a throw. */
+  async function withActs(n, fn) {
+    const snap = DD.Balance.snapshot();
+    try {
+      DD.Balance.campaign.acts = n;
+      return await fn();
+    } finally { DD.Balance.restore(snap); }
+  }
+  /** The classic (3-act) campaign: v2's knob value, the floor of DD.finalAct(). */
+  const CLASSIC = CLASSIC_ACTS.length;
+
+  /**
+   * V3 sandbox content for Svammiel's act (A4): n gauntlet doors (lanes rt_lane_1..n; their gauntlet.order runs
+   * backwards against the ids, so the registry's lane order is visible), a floor boss (finale) unless opts.noFinale,
+   * and two act-4 events (one tries to start fights). Earlier rt_a4_ content is removed first. Returns the lane ids in
+   * the registry's order (DD.RunMap.gauntletLanes).
+   */
+  function registerGauntlet(n, opts) {
+    opts = opts || {};
+    Object.keys(DD.defs.encounters).forEach(function (id) { if (id.indexOf('rt_a4_') === 0) delete DD.defs.encounters[id]; });
+    Object.keys(DD.defs.events).forEach(function (id) { if (id.indexOf('rt_ev_a4_') === 0) delete DD.defs.events[id]; });
+    for (let i = 1; i <= n; i++) {
+      DD.registerEncounter({
+        id: 'rt_a4_door_' + i, act: A4, kind: 'boss', weight: 0, name: 'The Door Number ' + i + ' Experience', shortName: 'Door ' + i,
+        icon: '🚪', banner: false, gauntlet: { lane: 'rt_lane_' + i, order: n + 1 - i, hint: 'Hint for door ' + i + '.' },
+        map: { theme: 'cellar', w: 8, h: 8 }, enemies: [{ id: 'rt_enemy', n: 1 }], objective: { type: 'killAll' },
+        reward: { goldMult: 0.9, itemRarity: 'rare' },
+      });
+    }
+    if (!opts.noFinale) {
+      DD.registerEncounter({
+        id: 'rt_a4_finale', act: A4, kind: 'boss', weight: 0, finale: true, name: 'The Floor Boss of Testing', shortName: 'Floor Boss',
+        icon: '😈', banner: false, map: { theme: 'cellar', w: 8, h: 8 }, enemies: [{ id: 'rt_enemy', n: 1 }],
+        reward: { goldMult: 0, itemRarity: null },
+      });
+    }
+    if (!opts.noEvents) {
+      DD.registerEvent({
+        id: 'rt_ev_a4_rest', acts: [A4], title: 'Under-Table Nap', text: 'A rug. A nap.',
+        choices: [{ label: 'Nap', resolve: function (api) { api.heal(0.1); return 'Napped.'; } }],
+      });
+      DD.registerEvent({
+        id: 'rt_ev_a4_fight', acts: [A4], title: 'Ambush Under the Table', text: 'Something tries to start a fight.',
+        choices: [
+          { label: 'Return a fight', resolve: function () { return { text: 'Nope.', combat: { act: A4, kind: 'normal' } }; } },
+          { label: 'api.combat', resolve: function (api) { return 'Queued? ' + api.combat('rt_enc_a1_normal_1'); } },
+        ],
+      });
+    }
+    return DD.RunMap.gauntletLanes(A4).map(function (l) { return l.id; });
+  }
+  /** Lane objects for DD.RunMap.generateGauntlet({ lanes }) without registry content. */
+  function laneObjs(n) {
+    const out = [];
+    for (let i = 1; i <= n; i++) out.push({ id: 'ln' + i, encounterId: 'rt_enc_ln' + i, order: i });
+    return out;
+  }
+
   // ---- helpers ------------------------------------------------------------------------------------------------
   function S() { return DD.Run.state; }
   function newRun(ids, seed, diff) { return DD.Run.newRun(ids || PARTY.slice(), diff || 'normal', seed === undefined ? 1234 : seed); }
@@ -311,7 +374,7 @@
     DD.defs.events = {};
     try {
       for (let seed = 0; seed < n; seed++) {
-        for (let act = 1; act <= 3; act++) {
+        for (let act = 1; act <= DD.finalAct(); act++) {
           const map = DD.RunMap.generate(act, DD.RNG('map-test:' + seed + ':' + act));
           maps++;
           const problems = DD.RunMap.validate(map);
@@ -355,7 +418,7 @@
   T.suite('run: map — encounters and events pre-assigned, lazy when registries are empty', function (t) {
     return sandbox(t, function (eng) {
       const run = newRun();
-      [1, 2, 3].forEach(function (act) {
+      CLASSIC_ACTS.forEach(function (act) {
         const map = DD.RunMap.generate(act, DD.RNG('pre:' + act), { run: run });
         const used = [];
         let ok = true, events = 0;
@@ -1410,8 +1473,8 @@
     }
   }
 
-  T.suite('run: act completion — unlocks, heal, next act, final victory', function (t) {
-    return sandbox(t, function (eng) {
+  T.suite('run: act completion — unlocks, heal, next act, final victory (the classic 3-act campaign)', function (t) {
+    return withActs(CLASSIC, function () { return sandbox(t, function (eng) {
       newRun(PARTY, 'acts');
       const s = S();
       walkAct(t, eng, { pick: function (avail) { return avail.filter(function (n) { return n.type !== 'boss'; })[0] || avail[0]; } });
@@ -1437,17 +1500,18 @@
       t.ok(DD.Meta.isUnlocked('rt_g'), 'act 2 unlocks rt_g');
       const runs = DD.Meta.data.stats.runs;
       walkAct(t, eng);
-      t.eq(s.over, 'victory', 'act 3 boss -> campaign victory');
+      t.eq(s.over, 'victory', 'act 3 boss -> campaign victory (a 3-act knob)');
       t.eq(s.summary.result, 'victory', 'victory summary');
       t.ok(s.summary.unlocked.indexOf('rt_h') >= 0 && DD.Meta.isUnlocked('rt_h'), 'beating the DM unlocks the act 3 hero');
       t.eq(DD.Meta.data.stats.wins, 1, 'win recorded');
       t.eq(DD.Meta.data.stats.runs, runs + 1, 'run recorded');
-      t.eq(DD.Meta.data.stats.bestAct, 3, 'best act 3');
-      t.eq(s.stats.actsCleared, 3, 'three acts cleared');
+      t.eq(DD.Meta.data.stats.bestAct, CLASSIC, 'best act 3');
+      t.eq(s.stats.actsCleared, CLASSIC, 'three acts cleared');
+      t.ok(s.summary.acts === CLASSIC && !s.summary.floorBoss && s.summary.gauntletLanes === 0 && !s.flags.twistSeen, 'a classic summary: acts 3, no gauntlet, no twist');
       t.ok(!DD.Run.hasSave(), 'finished runs are not resumable');
       t.eq(DD.Run.next(), 'victory', 'next() -> victory');
       t.eq(DD.Run.completeAct(), null, 'nothing to complete after victory');
-    });
+    }); });
   });
 
   // ---- save / load -------------------------------------------------------------------------------------------------
@@ -1784,16 +1848,19 @@
         (def.choices || []).forEach(function (choice, ci) {
           let done = false;
           for (let p = 0; p < parties.length && !done; p++) {
-            for (let act = 1; act <= 3 && !done; act++) {
+            for (let act = 1; act <= DD.MAX_ACT && !done; act++) {
               DD.Run.newRun(parties[p], 'normal', 'event:' + id + ':' + ci + ':' + p);
               const s = DD.Run.state;
               s.act = act;
               s.gold = 150;
               if (!DD.RunMap.eventAvailable(def, act, s) && !def.fallback) continue;
+              // V3: an act-4 event resolves on Svammiel's gauntlet, as in the game (a fight it asks for is refused there)
+              if (DD.RunMap.isGauntlet(act)) s.map = DD.RunMap.generateGauntlet(act, DD.RNG('ev-map:' + id), { run: s });
               if (typeof choice.requires === 'function' && !DD.safe('requires of ' + id, choice.requires, choice, [s])) continue;
               t.tryRun(id + ' text', function () { DD.Run.openEvent(id, null, { noShow: true }); return DD.Run.currentEvent(); });
               const out = t.tryRun(id + ' choice ' + ci, function () { return DD.Run.chooseEventOption(ci); });
               t.ok(out && typeof out.text === 'string', id + ' choice ' + ci + ' returns outcome text');
+              if (DD.Run.inGauntlet()) t.ok(out && !out.combat && !s.queuedCombat, id + ' choice ' + ci + ' starts no fight in the gauntlet');
               if (out && out.combat) {
                 const q = out.combat;
                 t.ok(q.id === null || DD.getEncounter(q.id), id + ' choice ' + ci + ' fight spec is valid');
@@ -2013,8 +2080,8 @@
     return ctx;
   }
 
-  T.suite('run: whole headless runs with a simulated engine (3 acts, all node types)', function (t) {
-    return sandbox(t, function (eng) {
+  T.suite('run: whole headless runs with a simulated engine (the classic 3 acts, all node types)', function (t) {
+    return withActs(CLASSIC, function () { return sandbox(t, function (eng) {
       const n = t.n || 6;
       let wins = 0;
       const faces = {};
@@ -2025,7 +2092,7 @@
         t.eq(ctx.errors.length, 0, 'seed ' + seed + ': no invariant violations' + (ctx.errors.length ? ' — ' + ctx.errors.slice(0, 3).join(' | ') : ''));
         t.eq(S().over, 'victory', 'seed ' + seed + ': the run reaches the final victory');
         if (S().over === 'victory') wins++;
-        t.ok(S().stats.bosses === 3 && S().stats.actsCleared === 3, 'seed ' + seed + ': three bosses');
+        t.ok(S().stats.bosses === CLASSIC && S().stats.actsCleared === CLASSIC, 'seed ' + seed + ': three bosses');
         t.ok(['rt_f', 'rt_g', 'rt_h'].every(DD.Meta.isUnlocked), 'seed ' + seed + ': all act unlocks earned');
         t.eq(DD.Meta.data.history[0].result, 'victory', 'seed ' + seed + ': recorded');
         // v2: slow, shared leveling — one level per won fight (plus the odd event), never more than 1 apart
@@ -2043,11 +2110,11 @@
       const lost = simulateRun(eng, 99, { loseAt: 3 });
       t.eq(lost.errors.length, 0, 'defeat run: no invariant violations');
       t.ok(S().over === 'defeat' && DD.Meta.data.history[0].result === 'defeat' && !DD.Run.hasSave(), 'a TPK on the third fight ends the run');
-    });
+    }); });
   });
 
   T.suite('run: UI mode — navigation, HUD-owned combat end, map safety nets (stub DD.UI)', function (t) {
-    return sandbox(t, async function (eng) {
+    return withActs(CLASSIC, function () { return sandbox(t, async function (eng) {
       const savedUI = DD.UI;
       const shown = [];
       DD.UI = {
@@ -2093,15 +2160,15 @@
         t.ok(last().id === 'gameover' && last().params.summary && last().params.summary.result === 'defeat', 'defeat -> gameover { summary }');
         // final victory params
         newRun(PARTY, 'ui-final');
-        S().act = 3;
-        S().map = DD.RunMap.generate(3, DD.RNG('ui-final'), { run: S() });
+        S().act = CLASSIC;
+        S().map = DD.RunMap.generate(CLASSIC, DD.RNG('ui-final'), { run: S() });
         const boss = S().map.nodes[S().map.boss];
         S().nodeId = S().map.layout[6][0];
         S().map.nodes[S().nodeId].links = [boss.id];
         boss.encounterId = 'rt_enc_a3_boss_1';
         DD.Run.travel(boss.id);
         DD.Run.finishCombat('victory', eng.last().state);
-        t.ok(last().id === 'victory' && last().params.final === true && last().params.act === 3, 'campaign victory -> victory { final: true, act: 3 }');
+        t.ok(last().id === 'victory' && last().params.final === true && last().params.act === CLASSIC, 'campaign victory -> victory { final: true, act: 3 }');
         t.ok(last().params.unlocked.indexOf('rt_h') >= 0, 'victory params list the unlocks');
         DD.Run.useUi = false;
         const n = shown.length;
@@ -2109,6 +2176,642 @@
         t.eq(shown.length, n, 'useUi = false never touches DD.UI');
       } finally {
         DD.UI = savedUI;
+      }
+    }); });
+  });
+
+  // ---- V3: act 4 "Under the Table" (plan §2.1-2.6, §4.3; ARCHITECTURE §4.6, §9.2-9.4) ------------------------------
+  /** Put the run in front of the current act's boss (a stop on the last regular row) and travel to it. */
+  function travelToBoss() {
+    const s = S();
+    const boss = s.map.nodes[s.map.boss];
+    const before = s.map.layout[boss.row - 1][0];
+    s.nodeId = before;
+    s.map.nodes[before].links = [boss.id];
+    return DD.Run.travel(boss.id);
+  }
+  /** The gauntlet's door rows: { row, ids } for door row k = 1..L (row 2k − 1). */
+  function doorRows(map) {
+    const out = [];
+    for (let k = 1; k <= map.lanes.length; k++) out.push(map.layout[2 * k - 1]);
+    return out;
+  }
+
+  T.suite('run: V3 — FINAL_ACT follows the act knob: a 3-act campaign ends at the act-3 boss, a 4-act one goes on (the twist)', function (t) {
+    return sandbox(t, async function (eng) {
+      const lanes = registerGauntlet(5);
+      const savedNarr = { twist_loot: DD.defs.narration.twist_loot, act_clear_twist: DD.defs.narration.act_clear_twist };
+      DD.defs.narration.twist_loot = ['RT: the loot is pre-sorted. — S.'];
+      DD.defs.narration.act_clear_twist = ['RT: something under the table laughs.'];
+      try {
+        // acts 3: v2's campaign, act-4 content registered but never reached
+        await withActs(CLASSIC, function () {
+          t.eq(DD.Run.FINAL_ACT, DD.finalAct(), 'DD.Run.FINAL_ACT is DD.finalAct() (3-act knob)');
+          t.eq(DD.Run.FINAL_ACT, CLASSIC, 'the 3-act knob: FINAL_ACT 3');
+          newRun(PARTY, 'twist-3');
+          const runs = DD.Meta.data.stats.runs;
+          for (let a = 1; a <= CLASSIC && !S().over; a++) walkAct(t, eng);
+          t.eq(S().over, 'victory', 'acts 3: the act-3 boss ends the run');
+          t.ok(S().summary.acts === CLASSIC && !S().summary.floorBoss && !S().flags.twistSeen, 'acts 3: a classic summary, no twist');
+          t.eq(DD.Meta.data.stats.runs, runs + 1, 'acts 3: the run is recorded');
+          t.ok(!DD.Meta.isSeen('bosses', 'svammiel'), 'acts 3: the spoiler gate stays shut');
+        });
+        // acts 4: the twist
+        await withActs(A4, function () {
+          t.eq(DD.Run.FINAL_ACT, A4, 'the 4-act knob: FINAL_ACT follows it');
+          DD.Meta.reset(false);
+          newRun(PARTY, 'twist-4');
+          const s = S();
+          walkAct(t, eng);
+          walkAct(t, eng);
+          t.eq(s.act, CLASSIC, 'acts 1-2 cleared as in v2');
+          const runs = DD.Meta.data.stats.runs, hist = DD.Meta.data.history.length;
+          s.party.forEach(function (h) { h.hp = 2; });
+          const gold0 = s.gold;
+          travelToBoss();
+          eng.end('victory');
+          const d = DD.Run.rewards();
+          t.ok(!s.over && !!d, 'the act-3 boss no longer ends the run: its rewards are pending (shown at last)');
+          t.ok(d && d.boss && d.choices.length === 3 && d.choices[0].rarity === 'legendary' && d.gold > 0 && s.gold > gold0, 'the act-3 boss pays his loot (gold and a legendary)');
+          t.ok(d && d.actClear && d.actClear.twist === true && d.actClear.act === CLASSIC && d.actClear.nextAct === A4, 'actClear.twist, act 3 → act 4');
+          t.eq(d && d.text, 'RT: the loot is pre-sorted. — S.', 'the loot text is twist_loot');
+          t.eq(d && d.actClear.text, 'RT: something under the table laughs.', 'the act-clear text is act_clear_twist');
+          t.eq(s.act, A4, 'S.act is the knob\'s last act');
+          t.ok(s.map.shape === 'gauntlet' && s.map.act === A4 && DD.RunMap.validate(s.map).length === 0, 'the act-4 map is the gauntlet (valid)');
+          t.eq(json(s.map.lanes.map(function (l) { return l.id; })), json(lanes), 'its lanes are the registry\'s, in order');
+          t.ok(s.flags.twistSeen === true && DD.Meta.isSeen('bosses', 'svammiel'), 'flags.twistSeen and the spoiler gate');
+          t.ok(DD.Meta.data.stats.runs === runs && DD.Meta.data.history.length === hist, 'no endRun, no recordRun');
+          t.ok(DD.Run.hasSave() && s.stats.actsCleared === CLASSIC, 'the run is saved and goes on (3 acts cleared)');
+          t.ok(s.party.every(function (h) { return h.hp >= 2 + Math.round(DD.Run.heroStats(h).maxHp * 0.5) - 1; }), 'the act-clear heal (50%) at the twist');
+          resolveChoices(DD.RNG('twist-choices'));
+          t.eq(DD.Run.next(), 'map', 'rewards → map (the act intro)');
+          t.ok(DD.Run.availableNodes().every(function (n) { return n.row === 0; }) && DD.Run.availableNodes().length > 0, 'the lobby is open');
+        });
+        // UI flow: rewards (twist) → (the rewards screen's Twist panel) → map, nothing ends the run
+        await withActs(A4, async function () {
+          const savedUI = DD.UI;
+          const shown = [];
+          DD.UI = { current: null, show: function (id, params) { shown.push({ id: id, params: params }); DD.UI.current = id; DD.Events.emit('ui:screen', { id: id }); return true; } };
+          DD.Run.useUi = true;
+          try {
+            newRun(PARTY, 'twist-ui');
+            S().act = CLASSIC;
+            S().map = DD.RunMap.generate(CLASSIC, DD.RNG('twist-ui'), { run: S() });
+            travelToBoss();
+            eng.end('victory');
+            t.eq(S().pending.type, 'combat', 'UI on: the HUD finishes the fight');
+            const out = DD.Run.finishCombat('victory', eng.last().state);
+            const last = shown[shown.length - 1];
+            t.ok(out && out.outcome === 'rewards' && last.id === 'rewards' && last.params.actClear && last.params.actClear.twist, 'finishCombat → rewards { actClear.twist }');
+            t.ok(shown.every(function (x) { return x.id !== 'victory' && x.id !== 'gameover'; }), 'the run never shows an end screen');
+            DD.Run.next();
+            if (shown[shown.length - 1].id === 'levelup') DD.Run.next();
+            t.ok(shown[shown.length - 1].id === 'map' && shown[shown.length - 1].params.act === A4, 'next() (after the level-up screen) → the act-4 map');
+          } finally {
+            DD.UI = savedUI;
+            DD.Run.useUi = false;
+          }
+        });
+      } finally {
+        DD.defs.narration.twist_loot = savedNarr.twist_loot;
+        DD.defs.narration.act_clear_twist = savedNarr.act_clear_twist;
+        if (!savedNarr.twist_loot) delete DD.defs.narration.twist_loot;
+        if (!savedNarr.act_clear_twist) delete DD.defs.narration.act_clear_twist;
+      }
+    });
+  });
+
+  T.suite('run: V3 gauntlet map — validate over many seeds × L = 0..MAX_LANES, the registry\'s lanes, corruption caught', function (t) {
+    return sandbox(t, function () {
+      const n = t.n || 300;
+      let bad = 0, maps = 0;
+      const G = DD.RunMap.gauntletStops();
+      for (let L = 0; L <= DD.RunMap.MAX_LANES; L++) {
+        for (let seed = 0; seed < n; seed++) {
+          const map = DD.RunMap.generateGauntlet(A4, DD.RNG('g:' + L + ':' + seed), { lanes: laneObjs(L), run: S() });
+          maps++;
+          const p = DD.RunMap.validate(map);
+          const rows = map.layout.length;
+          let why = p.length ? p[0] : '';
+          if (!why && (map.rows !== 2 * L + 2 || rows !== 2 * L + 2)) why = 'rows ' + rows;
+          if (!why) {
+            // any path takes one node per row (complete links): L + 1 stops, L doors, the boss
+            let stops = 0, doors = 0, bosses = 0;
+            map.layout.forEach(function (row) {
+              const ty = map.nodes[row[0]].type;
+              if (ty === 'miniboss') doors++; else if (ty === 'boss') bosses++; else stops++;
+              if (ty === 'miniboss' && row.length !== L) why = 'door row of ' + row.length;
+            });
+            if (stops !== L + 1 || doors !== L || bosses !== 1) why = 'path: ' + stops + ' stops, ' + doors + ' doors';
+            if (L > 0 && (json(map.layout[0].map(function (id) { return map.nodes[id].type; })) !== json(G.lobby))) why = 'lobby';
+            if (L > 0 && map.layout[2 * L].map(function (id) { return map.nodes[id].type; }).sort().join() !== G.last.slice().sort().join()) why = 'last stop';
+          }
+          if (why) { bad++; if (bad <= 5) t.log('L ' + L + ' seed ' + seed + ': ' + why); }
+        }
+      }
+      t.eq(bad, 0, maps + ' gauntlets valid: rows 2L + 2, door rows one per lane in order, the knob\'s stops, complete links, reachability; L + 1 stops and L doors per path');
+      const a = DD.RunMap.generateGauntlet(A4, DD.RNG('same'), { lanes: laneObjs(3) });
+      t.eq(json(a), json(DD.RunMap.generateGauntlet(A4, DD.RNG('same'), { lanes: laneObjs(3) })), 'deterministic per seed');
+      t.ok(a.shape === 'gauntlet' && Array.isArray(a.beaten) && !a.beaten.length && !a.cleared, 'shape, beaten [], not cleared');
+      t.ok(Object.keys(a.nodes).every(function (id) { return id.indexOf('a' + A4 + '_') === 0; }), 'act-prefixed node ids');
+      // the stop knob drives the stop rows
+      const snap = DD.Balance.snapshot();
+      try {
+        DD.Balance.map.gauntlet.between = ['tavern', 'tavern'];
+        const k = DD.RunMap.generateGauntlet(A4, DD.RNG('knob'), { lanes: laneObjs(2) });
+        t.ok(k.layout[2].length === 1 && k.nodes[k.layout[2][0]].type === 'tavern' && DD.RunMap.validate(k).length === 0, 'intermissions follow DD.Balance.map.gauntlet (de-duplicated)');
+      } finally { DD.Balance.restore(snap); }
+      // corruption is caught
+      const c = function (fn) { const m = JSON.parse(json(a)); fn(m); return DD.RunMap.validate(m).length > 0; };
+      t.ok(c(function (m) { m.nodes[m.layout[0][0]].links.pop(); }), 'a missing link');
+      t.ok(c(function (m) { m.nodes[m.layout[1][0]].lane = m.lanes[1].id; }), 'a door in the wrong lane slot');
+      t.ok(c(function (m) { m.rows = 9; }), 'a wrong row count');
+      t.ok(c(function (m) { m.nodes[m.layout[2][0]].type = 'combat'; }), 'a fight on a stop row');
+      t.ok(c(function (m) { m.beaten.push(m.lanes[0].id); }), 'a beaten lane whose doors are not sealed');
+      t.ok(c(function (m) { m.beaten.push('nope'); }), 'an unknown beaten lane');
+      // the registry: lanes real before test_, then gauntlet.order, then id; one per lane id; at most MAX_LANES
+      t.ok(!DD.RunMap.isGauntlet(A4) && DD.RunMap.gauntletLanes(A4).length === 0, 'no act-4 content: not a gauntlet act');
+      const lanes = registerGauntlet(3);
+      t.eq(json(lanes), json(['rt_lane_3', 'rt_lane_2', 'rt_lane_1']), 'lanes sorted by gauntlet.order');
+      DD.registerEncounter({ id: 'test_a4_lane_zz', act: A4, kind: 'boss', weight: 0, gauntlet: { lane: 'test_a4_lane_zz', order: 0 } });
+      DD.registerEncounter({ id: 'rt_a4_dupe', act: A4, kind: 'boss', weight: 0, gauntlet: { lane: 'rt_lane_2', order: 0 } });
+      const withTest = DD.RunMap.gauntletLanes(A4).map(function (l) { return l.id; });
+      t.eq(withTest[withTest.length - 1], 'test_a4_lane_zz', 'test_ lanes come after the real ones');
+      t.eq(withTest.filter(function (id) { return id === 'rt_lane_2'; }).length, 1, 'one door per lane id');
+      for (let i = 0; i < 8; i++) DD.registerEncounter({ id: 'rt_a4_extra_' + i, act: A4, kind: 'boss', weight: 0, gauntlet: { lane: 'rt_extra_' + i, order: 50 + i } });
+      t.eq(DD.RunMap.gauntletLanes(A4).length, DD.RunMap.MAX_LANES, 'at most MAX_LANES lanes');
+      t.ok(DD.RunMap.isGauntlet(A4) && !DD.RunMap.isGauntlet(1), 'isGauntlet reads the registry');
+      t.eq(DD.RunMap.finaleOf(A4).id, 'rt_a4_finale', 'finaleOf');
+      const g = DD.RunMap.generate(A4, DD.RNG('reg'), { run: S() });
+      t.ok(g.shape === 'gauntlet' && g.lanes.length === DD.RunMap.MAX_LANES && g.nodes[g.boss].encounterId === 'rt_a4_finale', 'generate builds the registry\'s gauntlet with the finale behind the last stop');
+      t.eq(DD.RunMap.validate(g).length, 0, 'and it is valid');
+      t.ok(Object.keys(g.nodes).every(function (id) { const nd = g.nodes[id]; return nd.type !== 'event' || !nd.eventId || DD.getEvent(nd.eventId).acts.indexOf(A4) >= 0; }), 'event stops carry act-4 events');
+      // a floor boss without doors still builds (partial content): the lobby doubles as the last stop
+      delete DD.defs.encounters.test_a4_lane_zz;
+      registerGauntlet(0);
+      const solo = DD.RunMap.generate(A4, DD.RNG('solo'), { run: S() });
+      t.ok(solo.shape === 'gauntlet' && solo.rows === 2 && DD.RunMap.validate(solo).length === 0, 'only a finale: lobby → floor boss');
+      // random picks never return a door or the finale
+      registerGauntlet(4);
+      let leaked = 0;
+      for (let i = 0; i < 200; i++) {
+        ['normal', 'elite', 'boss'].forEach(function (kind) {
+          const e = DD.RunMap.pickEncounter(A4, kind, DD.RNG('pick' + i));
+          if (e && (e.gauntlet || e.finale)) leaked++;
+        });
+      }
+      t.eq(leaked, 0, 'pickEncounter never returns a gauntlet or finale encounter');
+      const info = DD.RunMap.nodeInfo(DD.RunMap.generate(A4, DD.RNG('info'), { run: S() }).nodes['a' + A4 + '_d1_rt_lane_4']);
+      t.ok(info && info.icon === '🚪' && info.name === 'Door 4' && info.hint === 'Hint for door 4.' && /floor bosses/.test(info.desc), 'nodeInfo: a door names its encounter (shortName), icon and hint');
+      t.ok(DD.RunMap.TYPES.miniboss && DD.RunMap.isFight('miniboss'), 'TYPES.miniboss, isFight');
+    });
+  });
+
+  // The real registry's gauntlet (no sandbox): every count read from the registry, never a literal.
+  T.suite('run: V3 the registry\'s gauntlet — rows 2L + 2, L + 1 stops and L doors per path, every door a boss fight', function (t) {
+    const L = DD.RunMap.gauntletLanes(A4).length;
+    if (!DD.RunMap.isGauntlet(A4)) { t.skip('no act-4 gauntlet content registered yet'); return; }
+    const map = DD.RunMap.generate(A4, DD.RNG('real-gauntlet'), {});
+    t.eq(DD.RunMap.validate(map).length, 0, 'valid: ' + DD.RunMap.validate(map).slice(0, 3).join('; '));
+    t.ok(map.lanes.length === L && map.rows === 2 * L + 2, L + ' lanes → ' + map.rows + ' rows');
+    t.eq(doorRows(map).filter(function (r) { return r.length === L; }).length, L, 'L door rows of L doors (one path meets every lane once)');
+    map.lanes.forEach(function (l) {
+      const e = DD.getEncounter(l.encounterId);
+      t.ok(e && e.kind === 'boss' && e.weight === 0 && e.gauntlet && e.act === A4, l.id + ': a boss-kind door, weight 0');
+    });
+    const fin = DD.RunMap.finaleOf(A4);
+    t.ok(!fin || map.nodes[map.boss].encounterId === fin.id, 'the finale stands behind the last stop' + (fin ? ' (' + fin.id + ')' : ' (none registered yet)'));
+    t.log(L + ' lanes: ' + map.lanes.map(function (l) { return l.id; }).join(', '));
+  });
+
+  T.suite('run: V3 gauntlet travel — sealing on every row, door row k offers L − k lanes, the order beaten, then the floor boss', function (t) {
+    return withActs(A4, function () { return sandbox(t, function (eng) {
+      [0, 1, 3, DD.RunMap.MAX_LANES].forEach(function (L) {
+        registerGauntlet(L);
+        DD.Meta.reset(false);
+        newRun(PARTY, 'gauntlet-' + L);
+        DD.Run.startAtAct(A4, { level: 5 });
+        const s = S();
+        t.ok(s.map.shape === 'gauntlet' && s.map.lanes.length === L, 'L ' + L + ': the gauntlet');
+        const r = DD.RNG('doors:' + L);
+        const order = [];
+        let ok = true;
+        for (let k = 1; k <= s.map.lanes.length; k++) {
+          // a stop (the lobby, then an intermission)
+          let avail = DD.Run.availableNodes();
+          if (!avail.length || avail.some(function (nd) { return DD.RunMap.isFight(nd.type); })) { ok = false; t.log('L ' + L + ' k ' + k + ': no stop row'); break; }
+          const stop = avail[0];
+          DD.Run.travel(stop.id);
+          if (S().pending && S().pending.type === 'event') DD.Run.chooseEventOption(0);
+          DD.Run.next();
+          // the door row: the unbeaten lanes only
+          avail = DD.Run.availableNodes();
+          const open = avail.map(function (nd) { return nd.lane; });
+          const want = s.map.lanes.map(function (l) { return l.id; }).filter(function (id) { return order.indexOf(id) < 0; });
+          if (open.length !== s.map.lanes.length - (k - 1) || json(open) !== json(want)) { ok = false; t.log('L ' + L + ' door row ' + k + ' offers ' + json(open)); }
+          const door = r.pick(avail);
+          const starts = eng.starts.length;
+          t.ok(DD.Run.travel(door.id), 'L ' + L + ': travel(\'miniboss\') to ' + door.id);
+          const pd = S().pending.data;
+          if (!(eng.starts.length === starts + 1 && pd.kind === 'boss' && pd.lane === door.lane)) { ok = false; t.log('door ' + door.id + ' did not start a boss fight'); }
+          if (json(pd.gauntlet) !== json({ lane: door.lane, index: k - 1, beaten: order })) { ok = false; t.log('gauntlet data ' + json(pd.gauntlet)); }
+          if (json(eng.builds[eng.builds.length - 1].opts.gauntlet) !== json(pd.gauntlet)) { ok = false; t.log('Encounter.build did not get opts.gauntlet'); }
+          if (s.flags.lastStop !== stop.type) { ok = false; t.log('lastStop ' + s.flags.lastStop + ' vs ' + stop.type); }
+          eng.end('victory');
+          order.push(door.lane);
+          const d = DD.Run.rewards();
+          if (!(d && d.miniboss && d.title === 'Mini-boss Defeated!' && d.lane === door.lane && d.choices[0].type === 'item' && d.choices[0].rarity === 'rare')) { ok = false; t.log('door rewards ' + json(d && { miniboss: d.miniboss, title: d.title, c0: d.choices[0] })); }
+          if (d && d.actClear) { ok = false; t.log('a door cleared the act'); }
+          if (d && (d.levelUps || []).length !== 1) { ok = false; t.log('a door must level up one hero'); }
+          if (s.stats.miniBosses !== k || json(s.map.beaten) !== json(order) || json(s.flags.gauntlet) !== json(order)) { ok = false; t.log('beaten ' + json(s.map.beaten) + ' / ' + s.stats.miniBosses); }
+          const lane = door.lane;
+          Object.keys(s.map.nodes).forEach(function (id) {
+            const nd = s.map.nodes[id];
+            if (nd.type === 'miniboss' && nd.lane === lane && !(nd.done && nd.sealed)) { ok = false; t.log(id + ' not sealed'); }
+          });
+          if (!(door.result === 'victory' && DD.RunMap.validate(s.map).length === 0)) { ok = false; t.log('the fought door / map after sealing'); }
+          DD.Run.next();
+        }
+        t.ok(ok, 'L ' + L + ': every door row offers exactly the unbeaten lanes; each door a boss fight with its gauntlet data; sealed and counted');
+        t.eq(s.stats.miniBosses, s.map.lanes.length, 'L ' + L + ': miniBosses === map.lanes.length');
+        t.eq(s.stats.bosses, 0, 'L ' + L + ': doors do not count as act bosses');
+        // the last stop, then the floor boss
+        let avail = DD.Run.availableNodes();
+        t.ok(avail.length && avail.every(function (nd) { return nd.row === 2 * s.map.lanes.length && !DD.RunMap.isFight(nd.type); }), 'L ' + L + ': the last stop');
+        t.ok(avail.some(function (nd) { return nd.type === 'tavern'; }), 'L ' + L + ': a tavern before the floor boss');
+        DD.Run.travel(avail[0].id);
+        DD.Run.next();
+        avail = DD.Run.availableNodes();
+        t.ok(avail.length === 1 && avail[0].type === 'boss' && avail[0].encounterId === 'rt_a4_finale', 'L ' + L + ': then the floor boss');
+        const runs = DD.Meta.data.stats.runs;
+        DD.Run.travel(avail[0].id);
+        eng.end('victory');
+        const sum = s.summary;
+        t.ok(s.over === 'victory' && sum && sum.result === 'victory', 'L ' + L + ': the floor boss ends the campaign: victory');
+        t.ok(sum.acts === DD.finalAct() && sum.floorBoss === true && json(sum.gauntlet) === json(order) && sum.gauntletLanes === s.map.lanes.length, 'L ' + L + ': summary acts / floorBoss / gauntlet / gauntletLanes');
+        t.ok(sum.stats.miniBosses === s.map.lanes.length && sum.stats.actsCleared === A4, 'L ' + L + ': summary stats');
+        const M = DD.Meta.data;
+        t.ok(M.stats.runs === runs + 1 && M.stats.wins === 1 && M.stats.bestAct === A4 && M.stats.dmDefeated === 1 && M.stats.miniBosses === s.map.lanes.length, 'L ' + L + ': Meta bestAct 4, dmDefeated, miniBosses');
+      });
+    }); });
+  });
+
+  T.suite('run: V3 rewards — door loot, act-4 odds, Svammiel\'s markup, the Bribe only in act-4 shops', function (t) {
+    return sandbox(t, async function (eng) {
+      registerGauntlet(3);
+      newRun(PARTY, 'a4-rewards');
+      const B = DD.Balance;
+      await withActs(CLASSIC, function () {
+        t.eq(json(DD.Rewards.rarityOdds(A4)), json(DD.Rewards.RARITY_ODDS[CLASSIC]), 'acts 3: act 4 reads act 3\'s odds');
+        t.ok(DD.Rewards.shopInventory(A4, DD.RNG('s3'), S()).services.every(function (x) { return x.id !== 'bribe'; }), 'acts 3: no Bribe');
+      });
+      await withActs(A4, function () {
+        t.eq(json(DD.Rewards.rarityOdds(A4)), json({ common: 22, rare: 46, legendary: 24, cursed: 8 }), 'acts 4: RARITY_ODDS[4]');
+        const G = B.gold.fight.boss, per = (B.gold.fightPerAct.boss || 0) * (A4 - 1);
+        let ok = true;
+        for (let i = 0; i < 60; i++) {
+          const r = DD.Rewards.combat('boss', A4, DD.RNG('door' + i), S(), { goldMult: 0.9, itemRarity: 'rare' });
+          if (r.choices[0].rarity !== 'rare' || r.gold < Math.round((G[0] + per) * 0.9) || r.gold > Math.round((G[1] + per) * 0.9)) ok = false;
+        }
+        t.ok(ok, 'a door: a guaranteed rare, boss gold × its goldMult');
+        const m = B.priceMultOf(A4);
+        t.eq(m, B.priceAct[A4], 'prices × priceAct[4] (Svammiel\'s markup)');
+        for (let a = 1; a <= A4; a++) {
+          const inv = DD.Rewards.shopInventory(a, DD.RNG('mk' + a), S());
+          const pm = B.priceMultOf(a);
+          if (inv.items.some(function (x) { return x.price !== Math.round(DD.getItem(x.id).price * pm); })) ok = false;
+          if (inv.tomes.some(function (x) { return x.price !== Math.round(DD.Rewards.PRICES.tome * pm); })) ok = false;
+          const bribe = inv.services.filter(function (x) { return x.id === 'bribe'; })[0];
+          if (a < A4 && bribe) { ok = false; t.log('a Bribe in act ' + a); }
+          if (a === A4 && !(bribe && bribe.price === Math.round(DD.Rewards.PRICES.bribe * pm))) { ok = false; t.log('act 4 Bribe ' + json(bribe)); }
+        }
+        t.ok(ok, 'shop prices follow priceAct; the Bribe is sold in act 4 only, at ' + Math.round(DD.Rewards.PRICES.bribe * m));
+        // buying it in a gauntlet shop
+        DD.Run.startAtAct(A4, { level: 5, gold: 500 });
+        const s = S();
+        const shopNode = DD.Run.availableNodes().filter(function (nd) { return nd.type === 'shop'; })[0];
+        DD.Run.travel(shopNode.id);
+        const inv = DD.Run.shop();
+        const svc = inv.services.filter(function (x) { return x.id === 'bribe'; })[0];
+        t.ok(svc && /next floor boss/.test(svc.desc) && svc.label === 'Bribe the Floor Boss', 'the Bribe service: ' + (svc && svc.desc));
+        s.gold = svc.price - 1;
+        t.eq(DD.Run.shopService('bribe').reason, 'gold', 'too poor to bribe');
+        s.gold = 500;
+        const res = DD.Run.shopService('bribe');
+        t.ok(res.ok && s.gold === 500 - svc.price && s.flags.cameo.bribe === 1 && svc.sold, 'bribed: gold spent, run.flags.cameo.bribe = 1');
+        t.eq(DD.Run.shopService('bribe').reason, 'sold', 'one per visit');
+        DD.Run.next();
+        // a second shop while the bribe is unspent
+        s.flags.cameo.bribe = 1;
+        const shop2 = DD.Rewards.shopInventory(A4, DD.RNG('again'), s);
+        t.ok(shop2.services.some(function (x) { return x.id === 'bribe'; }), 'still on sale while a door is left');
+        // every door beaten: nothing left to bribe for
+        s.map.lanes.forEach(function (l) { DD.Run.sealLane(l.id); });
+        t.ok(DD.Rewards.shopInventory(A4, DD.RNG('late'), s).services.every(function (x) { return x.id !== 'bribe'; }), 'no Bribe once every door is sealed (Svammiel\'s own fight has no rule)');
+        t.eq(json(DD.Run.unbeatenLanes()), '[]', 'unbeatenLanes()');
+      });
+    });
+  });
+
+  T.suite('run: V3 act-4 events never start fights; the fallback event under the table', function (t) {
+    return withActs(A4, function () { return sandbox(t, function (eng) {
+      registerGauntlet(2);
+      newRun(PARTY, 'a4-events');
+      DD.Run.startAtAct(A4);
+      const api = DD.Run.eventApi();
+      t.eq(api.combat({ act: A4, kind: 'normal' }), false, 'api.combat refuses in the gauntlet');
+      t.eq(DD.Run.queueCombat('rt_enc_a1_normal_1'), false, 'queueCombat refuses in the gauntlet');
+      t.eq(S().queuedCombat, null, 'nothing queued');
+      const starts = eng.starts.length;
+      [0, 1].forEach(function (ci) {
+        DD.Run.openEvent('rt_ev_a4_fight', null, { noShow: true });
+        const out = DD.Run.chooseEventOption(ci);
+        t.ok(out && typeof out.text === 'string' && !out.combat, 'choice ' + ci + ': outcome text, no fight (' + out.text + ')');
+        DD.Run.next();
+      });
+      t.ok(eng.starts.length === starts && !S().queuedCombat && !S().pending, 'no fight started after the events');
+      for (let i = 0; i < 40; i++) {
+        const ev = DD.RunMap.pickEvent(A4, DD.RNG('pe' + i), { run: S() });
+        if (ev && ev.acts.indexOf(A4) < 0) { t.fail('pickEvent(4) offered ' + ev.id); break; }
+      }
+      // with no act-4 event left, the fallback event shows its under-the-table text
+      delete DD.defs.events.rt_ev_a4_rest;
+      delete DD.defs.events.rt_ev_a4_fight;
+      const stop = DD.Run.availableNodes()[0];
+      stop.type = 'event';
+      delete stop.eventId;
+      DD.Run.travel(stop.id);
+      const ev = DD.Run.currentEvent();
+      t.ok(ev && ev.id === DD.Run.FALLBACK_EVENT && /paper hat/.test(ev.text), 'the fallback event under the table: ' + (ev && ev.text));
+    }); });
+  });
+
+  T.suite('run: V3 saves — gauntlet maps and flags round-trip, a v2 act-3 save reaches act 4, an act-4 save under acts 3 clamps', function (t) {
+    return sandbox(t, async function (eng) {
+      const lanes = registerGauntlet(4);
+      await withActs(A4, function () {
+        newRun(PARTY, 'a4-save');
+        DD.Run.startAtAct(A4, { level: 5, gold: 300, beaten: [lanes[1]] });
+        const s = S();
+        const shopNode = DD.Run.availableNodes().filter(function (nd) { return nd.type === 'shop'; })[0];
+        DD.Run.travel(shopNode.id);
+        DD.Run.shopService('bribe');
+        DD.Run.next();
+        t.ok(DD.Run.save(), 'saved in the gauntlet');
+        DD.Run.state = null;
+        t.ok(DD.Run.load(), 'loaded');
+        const l = S();
+        t.ok(l.map.shape === 'gauntlet' && json(l.map) === json(s.map), 'the gauntlet map round-trips');
+        t.ok(json(l.flags.gauntlet) === json([lanes[1]]) && l.flags.cameo.bribe === 1 && l.stats.miniBosses === 1 && l.act === A4, 'flags.gauntlet, flags.cameo, stats.miniBosses, act 4');
+        // a reload mid-door restarts the same door with the same gauntlet data
+        const door = DD.Run.availableNodes()[0];
+        DD.Run.travel(door.id);
+        const g = json(S().pending.data.gauntlet), seed = S().pending.data.seed;
+        DD.Run.state = null;
+        t.ok(DD.Run.load() && S().pending.type === 'combat', 'a mid-door save');
+        DD.Run.resume();
+        t.ok(eng.last().opts.seed === seed && json(eng.builds[eng.builds.length - 1].opts.gauntlet) === g && JSON.parse(g).index === 1, 'resume relaunches the door: same seed, same gauntlet data (index 1)');
+        eng.end('victory');
+        t.ok(S().stats.miniBosses === 2 && S().map.beaten.length === 2, 'and it seals on a win');
+      });
+      // a v2 save in act 3 (no V3 fields) loads under the 4-act knob and meets the twist
+      await withActs(CLASSIC, function () {
+        newRun(PARTY, 'v2-save');
+        walkAct(t, eng);
+        walkAct(t, eng);
+        DD.Run.next();
+      });
+      const v2 = JSON.parse(json(DD.Storage.get('run')));
+      t.eq(v2.act, CLASSIC, 'a v2 save in act 3');
+      ['miniBosses', 'cameos', 'cheats'].forEach(function (k) { delete v2.stats[k]; });
+      delete v2.flags.lastStop;
+      delete v2.flags.lastFight;
+      DD.Storage.set('run', v2);
+      await withActs(A4, function () {
+        DD.Run.state = null;
+        t.ok(DD.Run.load(), 'the v2 save loads');
+        t.ok(S().stats.miniBosses === 0 && S().stats.cameos === 0 && S().stats.cheats === 0 && S().act === CLASSIC, 'normalize fills the V3 stats');
+        walkAct(t, eng);
+        const d = DD.Run.rewards();
+        t.ok(!S().over && d && d.actClear && d.actClear.twist && S().act === A4 && S().map.shape === 'gauntlet', 'the act-3 boss → the twist → act 4');
+        t.eq(DD.RunMap.validate(S().map).length, 0, 'a valid gauntlet');
+        DD.Run.next();
+        t.ok(DD.Run.save(), 'saved in act 4');
+      });
+      // an act-4 save loaded while the knob says 3 acts: clamped to act 3 with a fresh act-3 map
+      await withActs(CLASSIC, function () {
+        DD.Run.state = null;
+        t.ok(DD.Run.load(), 'the act-4 save loads under acts 3');
+        const s = S();
+        t.ok(s.act === CLASSIC && s.map.act === CLASSIC && s.map.shape !== 'gauntlet' && DD.RunMap.validate(s.map).length === 0, 'act clamped to 3 with a valid act-3 map');
+        t.ok(s.nodeId === null && !s.pending && DD.Run.availableNodes().length > 0, 'the party stands at the start of it');
+        t.eq(DD.Run.FINAL_ACT, CLASSIC, 'FINAL_ACT 3');
+      });
+    });
+  });
+
+  T.suite('run: V3 startAtAct — a valid party with gear and gold, pre-sealed lanes, deterministic per seed', function (t) {
+    return sandbox(t, async function () {
+      const lanes = registerGauntlet(4);
+      t.eq(DD.Run.startAtAct(A4), null, 'no run: null');
+      await withActs(A4, function () {
+        const build = function (seed, opts) {
+          DD.Run.state = null;
+          newRun(PARTY, seed);
+          return DD.Run.startAtAct(A4, opts);
+        };
+        const s = build('saa', { level: 5, gold: 450 });
+        t.ok(s && s.act === A4 && s.map.shape === 'gauntlet' && DD.RunMap.validate(s.map).length === 0, 'act 4, the gauntlet');
+        t.ok(s.party.length === PARTY.length && s.party.every(function (h) { return h.level === 5 && !h.dead && h.hp === DD.Run.heroStats(h).maxHp && h.skills.length >= 2 && h.skills.length <= 4 && !h.pendingLevels; }), 'every hero level 5, full HP, auto-built, nothing pending');
+        t.ok(s.party.every(function (h) { return Array.isArray(h.passives) && !h.passiveRolls.length; }), 'Blessings rolled (none pending)');
+        t.ok(s.party.every(function (h) {
+          const w = DD.getItem(h.items.weapon), a = DD.getItem(h.items.armor);
+          return w && a && w.rarity !== 'cursed' && a.rarity !== 'cursed' && (!w.hero || w.hero === h.id) && (!a.hero || a.hero === h.id);
+        }), 'auto gear: a weapon and an armor each, never cursed');
+        t.ok(s.gold === 450 && s.stats.actsCleared === A4 - 1 && s.flags.twistSeen && s.nodeId === null, 'gold, acts cleared, the twist seen, at the lobby');
+        t.ok(!invariantError(), 'run invariants: ' + invariantError());
+        const a1 = json({ p: build('det', { level: 5 }).party, m: S().map, g: S().gold, i: S().inventory });
+        const a2 = json({ p: build('det', { level: 5 }).party, m: S().map, g: S().gold, i: S().inventory });
+        const a3 = json({ p: build('det2', { level: 5 }).party, m: S().map, g: S().gold, i: S().inventory });
+        t.ok(a1 === a2 && a1 !== a3, 'deterministic per seed (and seeds differ)');
+        const def = build('dflt', {});
+        t.ok(def.party.every(function (h) { return h.level === def.party[0].level && h.level > 1; }) && def.party.every(function (h) { return h.items.weapon; }), 'defaults: one level for all, auto gear (level ' + def.party[0].level + ')');
+        const bare = build('bare', { gear: 'none', level: 2 });
+        t.ok(bare.party.every(function (h) { return !h.items.weapon && !h.items.armor && h.level === 2; }), 'gear: none');
+        // pre-sealed lanes: in that order, unknown ids ignored, the party at the last door beaten
+        const b = build('beaten', { beaten: lanes[2] + ', nope,' + lanes[0] });
+        t.eq(json(b.map.beaten), json([lanes[2], lanes[0]]), 'beaten in order (a string list)');
+        t.ok(b.stats.miniBosses === 2 && json(b.flags.gauntlet) === json(b.map.beaten) && DD.RunMap.validate(b.map).length === 0, 'counted, recorded, valid');
+        const here = b.map.nodes[b.nodeId];
+        t.ok(here && here.type === 'miniboss' && here.lane === lanes[0] && here.row === 3 && here.result === 'victory', 'the party stands at the last door beaten (door row 2)');
+        const next = DD.Run.availableNodes();
+        t.ok(next.length && next.every(function (nd) { return nd.row === 4; }), 'next: the intermission after it');
+        DD.Run.travel(next[0].id);
+        DD.Run.next();
+        t.eq(DD.Run.availableNodes().length, b.map.lanes.length - 2, 'then door row 3 offers L − 2 lanes');
+        // review (V3): a second fast-forward in the same run (DDdbg.act twice) starts its gauntlet's record afresh
+        const again = DD.Run.startAtAct(A4, { beaten: lanes[1] });
+        t.ok(json(again.flags.gauntlet) === json([lanes[1]]) && json(again.map.beaten) === json([lanes[1]]) && again.stats.miniBosses === 1,
+          'startAtAct again: flags.gauntlet / miniBosses follow the new map (' + json(again.flags.gauntlet) + ', ' + again.stats.miniBosses + ')');
+        t.eq(json(DD.Run.summary().gauntlet), json([lanes[1]]), 'and the summary repeats no lane');
+      });
+      await withActs(CLASSIC, function () {
+        DD.Run.state = null;
+        newRun(PARTY, 'clamp');
+        const s = DD.Run.startAtAct(A4, { level: 4 });
+        t.ok(s.act === CLASSIC && s.map.shape !== 'gauntlet' && s.party[0].level === 4, 'acts 3: startAtAct(4) clamps to act 3');
+      });
+    });
+  });
+
+  T.suite('run: V3 summary, lastFight and Meta — the classic label, dmDefeated, miniBosses, bestAct, cameo settings, an act-4 defeat', function (t) {
+    return sandbox(t, async function (eng) {
+      const M = DD.Meta;
+      t.eq(M.defaults().settings.cameos, 'full', 'settings.cameos defaults to full');
+      DD.Storage.set('meta', { settings: { cameos: 'loud' } });
+      M.load();
+      t.eq(M.data.settings.cameos, 'full', 'a junk cameo setting falls back');
+      DD.Storage.set('meta', { settings: { cameos: 'short' } });
+      M.load();
+      t.eq(M.data.settings.cameos, 'short', 'a valid one is kept');
+      M.reset(false);
+      M.recordRun({ result: 'victory', act: CLASSIC, acts: CLASSIC, stats: { actsCleared: CLASSIC } });
+      M.recordRun({ result: 'defeat', act: 2, acts: A4, stats: { actsCleared: 1 } });
+      M.recordRun({ result: 'victory', act: A4, acts: A4, gauntlet: ['x', 'y'], gauntletLanes: 2, floorBoss: true, stats: { actsCleared: A4, miniBosses: 2 } });
+      M.recordRun({ result: 'defeat', act: A4, acts: A4, gauntlet: ['x'], gauntletLanes: 2, stats: { actsCleared: CLASSIC, miniBosses: 1 } });
+      t.ok(M.data.stats.wins === 2 && M.data.stats.dmDefeated === 3 && M.data.stats.miniBosses === 3 && M.data.stats.bestAct === A4, 'wins (any victory), dmDefeated (actsCleared ≥ 3), miniBosses summed, bestAct 4');
+      t.eq(M.data.history[0].gauntletLanes, 2, 'history keeps a run\'s own lane count');
+      t.eq(M.unlockHint('rt_h'), 'Beat the Dungeon Master to unlock.', 'the DM\'s act unlock hint');
+      // an act-4 defeat at a door
+      registerGauntlet(3);
+      await withActs(A4, function () {
+        newRun(PARTY, 'a4-defeat');
+        DD.Run.startAtAct(A4, { beaten: [DD.RunMap.gauntletLanes(A4)[0].id] });
+        const s = S();
+        DD.Run.travel(DD.Run.availableNodes()[0].id);
+        DD.Run.next();
+        // the last fight's facts
+        const door = DD.Run.availableNodes()[0];
+        DD.Run.travel(door.id);
+        eng.end('victory', function (units, st) {
+          units[1].hp = 0; units[1].downed = true;
+          st.stats.units = { h0: { kills: 1 }, h2: { kills: 3 } };
+          st.stats.swaps = 2;
+          st.stats.cameos = 2;
+          st.stats.cheats = 1;
+        });
+        const lf = s.flags.lastFight;
+        t.ok(lf && json(lf.downed) === json([s.party[1].id]) && lf.mvp === s.party[2].id && lf.flawless === false && lf.swaps === 2, 'flags.lastFight: downed, mvp, flawless, swaps — ' + json(lf));
+        t.ok(s.stats.cameos === 2 && s.stats.cheats === 1, 'run stats sum the fight\'s cameos and cheats');
+        DD.Run.next();
+        DD.Run.travel(DD.Run.availableNodes()[0].id);
+        DD.Run.next();
+        const lost = DD.Run.availableNodes()[0];
+        DD.Run.travel(lost.id);
+        eng.end('defeat', function (units) { units.forEach(function (u) { u.hp = 0; u.downed = true; }); });
+        const sum = s.summary;
+        t.ok(s.over === 'defeat' && sum.killedBy === DD.getEncounter(lost.encounterId).shortName && sum.killedByEncounter === lost.encounterId, 'a lost door ends the run; killedBy is the short name');
+        t.ok(sum.acts === A4 && sum.gauntlet.length === 2 && sum.gauntletLanes === s.map.lanes.length && sum.floorBoss === false && sum.stats.miniBosses === 2, 'summary: floor bosses N / M from the run (' + sum.gauntlet.length + ' / ' + sum.gauntletLanes + ')');
+      });
+    });
+  });
+
+  // [qa flow-2] a v2 veteran's Hall read "The DM defeated 0" and counted classic wins from the 20-entry history
+  T.suite('run: V3 Meta — a v2 veteran\'s lifetime stats migrate (dmDefeated, classicWins; qa flow-2)', function (t) {
+    return sandbox(t, function () {
+      const M = DD.Meta;
+      t.eq(M.defaults().stats.classicWins, 0, 'classicWins is a lifetime stat (default 0)');
+      // the QA harness's veteran: 30 runs, 25 wins, the last 20 in history (15 of them wins, no `acts`)
+      const hist = [];
+      for (let i = 0; i < M.HISTORY_MAX; i++) hist.push({ result: i < 15 ? 'victory' : 'defeat', act: CLASSIC, date: 1000 - i, stats: { actsCleared: i < 15 ? CLASSIC : 2 } });
+      const v2 = { version: 1, unlocked: [], stats: { runs: 30, wins: 25, bestAct: CLASSIC, kills: 1200, actsCleared: 80 }, seen: { bosses: { dungeon_master: 1 } }, history: hist };
+      DD.Storage.set('meta', v2);
+      M.load();
+      t.ok(M.data.stats.dmDefeated === 25 && M.data.stats.classicWins === 25 && M.data.stats.wins === 25 && M.data.stats.miniBosses === 0,
+        'every v2 win beat the DM and was classic: ' + json(M.data.stats));
+      M.load();
+      t.ok(M.data.stats.dmDefeated === 25 && M.data.stats.classicWins === 25, 'loading twice seeds the same (nothing doubles)');
+      // an act-4 run abandoned after the DM, then a four-act win and a 3-act win: only the last is classic
+      M.recordRun({ result: 'abandoned', act: A4, acts: A4, stats: { actsCleared: CLASSIC } });
+      M.recordRun({ result: 'victory', act: A4, acts: A4, stats: { actsCleared: A4 } });
+      M.recordRun({ result: 'victory', act: CLASSIC, acts: CLASSIC, stats: { actsCleared: CLASSIC } });
+      t.ok(M.data.stats.dmDefeated === 28 && M.data.stats.wins === 27 && M.data.stats.classicWins === 26, 'recordRun: dmDefeated 28, wins 27, classic 26 — ' + json(M.data.stats));
+      // saved and reloaded: the stored stats now carry both keys, no re-seeding
+      M.load();
+      t.ok(M.data.stats.dmDefeated === 28 && M.data.stats.classicWins === 26, 'kept across a reload');
+      // more runs push the v2 entries out of the history: the lifetime count stays
+      for (let i = 0; i < M.HISTORY_MAX; i++) M.recordRun({ result: 'defeat', act: A4, acts: A4, stats: { actsCleared: 1 } });
+      t.ok(M.data.history.every(function (h) { return h.acts === A4; }) && M.data.stats.classicWins === 26, 'v2 entries gone from history, classic wins still 26');
+      // a V3 meta saved before classicWins existed: its wins minus the four-act wins its history shows
+      DD.Storage.set('meta', { stats: { runs: 6, wins: 4, dmDefeated: 5 }, history: [{ result: 'victory', acts: A4 }, { result: 'victory', acts: CLASSIC }, { result: 'defeat', acts: A4 }, { result: 'victory' }] });
+      M.load();
+      t.ok(M.data.stats.dmDefeated === 5 && M.data.stats.classicWins === 3, 'a pre-fix V3 meta: dmDefeated kept, classicWins 4 − 1 = 3 (' + M.data.stats.classicWins + ')');
+      // a fresh player: nothing to seed
+      DD.Storage.remove('meta');
+      M.load();
+      t.ok(M.data.stats.dmDefeated === 0 && M.data.stats.classicWins === 0, 'no stored meta: zeros');
+    });
+  });
+
+  T.suite('run: V3 whole headless runs with a simulated engine (4 acts: the twist, the gauntlet, the floor boss)', function (t) {
+    return withActs(A4, function () { return sandbox(t, function (eng) {
+      registerGauntlet(5);
+      const n = t.n || 4;
+      for (let seed = 0; seed < n; seed++) {
+        DD.Meta.reset(false);
+        const ctx = simulateRun(eng, 'v3-' + seed);
+        const s = S();
+        t.eq(ctx.errors.length, 0, 'seed ' + seed + ': no invariant violations' + (ctx.errors.length ? ' — ' + ctx.errors.slice(0, 3).join(' | ') : ''));
+        t.eq(s.over, 'victory', 'seed ' + seed + ': the run reaches the final victory');
+        t.ok(s.stats.actsCleared === DD.finalAct() && s.stats.bosses === DD.finalAct(), 'seed ' + seed + ': every act cleared, one act boss each (doors apart)');
+        t.ok(s.map.shape === 'gauntlet' && s.stats.miniBosses === s.map.lanes.length && s.summary.gauntlet.length === s.map.lanes.length, 'seed ' + seed + ': every lane beaten (' + s.summary.gauntlet.join(', ') + ')');
+        t.ok(s.summary.floorBoss && s.summary.acts === DD.finalAct() && s.flags.twistSeen, 'seed ' + seed + ': floor boss, acts, twist');
+        t.ok(DD.Meta.data.stats.dmDefeated === 1 && DD.Meta.data.stats.bestAct === A4 && DD.Meta.data.history[0].result === 'victory', 'seed ' + seed + ': Meta');
+        t.log('seed ' + seed + ': ' + ctx.fights + ' fights (' + ctx.wins + ' won), order ' + s.summary.gauntlet.join(' → ') + ', gold ' + s.gold);
+      }
+    }); });
+  });
+
+  T.suite('run: V3 a gauntlet door with the real combat engine (state.data.gauntlet, a boss fight, sealed on a win)', function (t) {
+    if (!DD.Combat || typeof DD.Combat.start !== 'function' || !DD.AutoPlay || typeof DD.AutoPlay.runBattle !== 'function' ||
+        !DD.Encounter || typeof DD.Encounter.build !== 'function') { t.skip('DD.Combat / DD.AutoPlay / DD.Encounter not available yet'); return; }
+    if (!DD.RunMap.gauntletLanes(A4).length) { t.skip('no act-4 gauntlet lanes registered yet'); return; }
+    const real = Object.keys(DD.defs.heroes).filter(function (id) { return id.indexOf('test_') !== 0; });
+    const pool = real.length >= 4 ? real : Object.keys(DD.defs.heroes);
+    if (pool.length < 4) { t.skip('fewer than 4 heroes registered'); return; }
+    const savedUi = DD.Run.useUi;
+    const savedMeta = DD.util.deepClone(DD.Meta.data);
+    DD.Run.useUi = false;
+    return withActs(A4, function () {
+      try {
+        DD.Run.newRun(pool.slice(0, 4), 'normal', 'real-door');
+        DD.Run.startAtAct(A4, { level: 6 });
+        const s = S();
+        t.ok(s.map.shape === 'gauntlet' && DD.RunMap.validate(s.map).length === 0, 'the registry\'s gauntlet');
+        const stop = DD.Run.availableNodes().filter(function (nd) { return nd.type !== 'event'; })[0];
+        DD.Run.travel(stop.id);
+        DD.Run.next();
+        const door = DD.Run.availableNodes()[0];
+        t.ok(door && door.type === 'miniboss', 'a door is open after the lobby');
+        t.ok(DD.Run.travel(door.id), 'travel to ' + door.id);
+        const cs = DD.Combat.state;
+        t.ok(cs && cs.run === s && DD.Run.inCombat(), 'the door\'s fight runs for the run');
+        t.ok(cs.encounter && cs.encounter.id === door.encounterId && s.pending.data.kind === 'boss', 'its encounter, a boss fight');
+        t.eq(json(cs.data.gauntlet), json(s.pending.data.gauntlet), 'state.data.gauntlet = the door\'s { lane, index, beaten }');
+        const res = t.tryRun('AutoPlay.runBattle', function () { return DD.AutoPlay.runBattle(40); });
+        if (DD.FX && DD.FX.flush) DD.FX.flush();
+        if (DD.Run.inCombat()) { t.log('the door hit the round cap: ' + json(res)); DD.Run.finishCombat(cs.result || 'defeat', cs); }
+        t.ok(!DD.Run.inCombat(), 'the fight finished');
+        if (s.over) t.ok(s.over === 'defeat' && s.summary.gauntletLanes === s.map.lanes.length, 'a lost door ends the run (summary N / M)');
+        else t.ok(door.sealed && s.map.beaten[0] === door.lane && s.stats.miniBosses === 1 && DD.Run.rewards().miniboss, 'a won door is sealed, counted and pays mini-boss loot');
+        t.log(door.encounterId + ': ' + (cs.result || '?') + ' in ' + (cs.round || '?') + ' rounds');
+      } finally {
+        DD.Run.useUi = savedUi;
+        DD.Run.state = null;
+        DD.Storage.remove(DD.Run.SAVE_KEY);
+        DD.Meta.data = savedMeta;
+        DD.Meta.save();
+        if (DD.FX && DD.FX.reset) DD.FX.reset();
       }
     });
   });
@@ -2175,5 +2878,166 @@
       DD.Meta.save();
       if (DD.FX && DD.FX.reset) DD.FX.reset();
     }
+  });
+
+  // ---- Review (V3) ----------------------------------------------------------------------------------------------------
+  T.suite('run: V3 review — a new run\'s opening line: run_start only before the spoiler gate, run_start_seen joins after it (plan §2.6)', function (t) {
+    return sandbox(t, function () {
+      const saved = { a: DD.defs.narration.run_start, b: DD.defs.narration.run_start_seen };
+      const savedUI = DD.UI;
+      const texts = [];
+      DD.UI = { current: null, show: function (id, params) { if (id === 'map' && params && params.intro) texts.push(params.text); return true; } };
+      DD.Run.useUi = true;
+      try {
+        DD.defs.narration.run_start = ['RT: three acts, as promised.'];
+        DD.defs.narration.run_start_seen = ['RT: something under the table disagrees.'];
+        for (let i = 0; i < 12; i++) newRun(PARTY, 'rs-' + i);
+        t.ok(texts.length === 12 && texts.every(function (x) { return x === 'RT: three acts, as promised.'; }), 'gate shut: run_start only (' + texts.length + ' runs)');
+        DD.Meta.markSeen('bosses', 'svammiel');
+        texts.length = 0;
+        for (let i = 0; i < 40; i++) newRun(PARTY, 'rs-seen-' + i);
+        const seen = texts.filter(function (x) { return x === 'RT: something under the table disagrees.'; }).length;
+        t.ok(texts.length === 40 && seen > 0 && seen < 40 && texts.every(function (x) { return /^RT: /.test(x); }), 'gate open: both pools (' + seen + ' of 40 from run_start_seen)');
+      } finally {
+        DD.UI = savedUI;
+        DD.Run.useUi = false;
+        if (saved.a) DD.defs.narration.run_start = saved.a; else delete DD.defs.narration.run_start;
+        if (saved.b) DD.defs.narration.run_start_seen = saved.b; else delete DD.defs.narration.run_start_seen;
+      }
+    });
+  });
+
+  // ---- Review (V3): the real act-4 content, end to end ----------------------------------------------------------------
+  /** The registry's real lanes (no test_ door), in the gauntlet's order. */
+  function realLanes() {
+    return DD.RunMap.gauntletLanes(A4).filter(function (l) { return l.encounterId.indexOf('test_') !== 0 && l.id.indexOf('test_') !== 0; });
+  }
+
+  T.suite('run: V3 review — the real lanes over 300 seeds: rows 2L + 2, every path L + 1 stops and L doors, door row k offers L − k lanes', function (t) {
+    const lanes = realLanes();
+    if (!lanes.length) { t.skip('no real act-4 lanes registered yet'); return; }
+    const L = lanes.length, n = t.n || 300;
+    let bad = 0;
+    for (let seed = 0; seed < n; seed++) {
+      const map = DD.RunMap.generateGauntlet(A4, DD.RNG('rv-real:' + seed), { lanes: lanes.map(function (l) { return l.encounterId; }) });
+      const r = DD.RNG('rv-path:' + seed);
+      let why = DD.RunMap.validate(map)[0] || '';
+      if (!why && (map.rows !== 2 * L + 2 || map.lanes.length !== L)) why = 'rows ' + map.rows + ' for ' + L + ' lanes';
+      // walk one random path to the floor boss, sealing each door fought (as DD.Run does): stops, doors, the open lanes
+      let id = r.pick(map.start), stops = 0, doors = 0, bosses = 0;
+      for (let guard = 0; !why && id && guard < 2 * L + 3; guard++) {
+        const nd = map.nodes[id];
+        if (nd.type === 'miniboss') {
+          const open = map.layout[nd.row].filter(function (x) { return !map.nodes[x].done; }).length;
+          if (open !== L - doors) why = 'door row ' + (doors + 1) + ' offers ' + open + ' lanes';
+          DD.RunMap.sealLane(map, nd.lane, nd.id);
+          doors++;
+        } else if (nd.type === 'boss') bosses++;
+        else {
+          stops++;
+          if (nd.type === 'event' && nd.eventId && DD.getEvent(nd.eventId).acts.indexOf(A4) < 0) why = 'event ' + nd.eventId + ' is not an act-4 event';
+        }
+        const next = nd.links.filter(function (x) { return !map.nodes[x].done; });
+        id = next.length ? r.pick(next) : null;
+      }
+      if (!why && (stops !== L + 1 || doors !== L || bosses !== 1)) why = 'path: ' + stops + ' stops, ' + doors + ' doors, ' + bosses + ' boss';
+      if (!why && (map.beaten.length !== L || DD.RunMap.validate(map).length)) why = 'after sealing every lane: ' + (DD.RunMap.validate(map)[0] || map.beaten.length + ' beaten');
+      if (why) { bad++; if (bad <= 5) t.log('seed ' + seed + ': ' + why); }
+    }
+    t.eq(bad, 0, n + ' real gauntlets: ' + (2 * L + 2) + ' rows, every path ' + (L + 1) + ' stops, ' + L + ' doors and the floor boss');
+    // the whole registry (test lanes too, as in this harness): real lanes first, never past the cap
+    const all = DD.RunMap.gauntletLanes(A4);
+    t.ok(all.length <= DD.RunMap.MAX_LANES && json(all.slice(0, L).map(function (l) { return l.id; })) === json(lanes.map(function (l) { return l.id; })),
+      'the registry\'s ' + all.length + ' lanes: the ' + L + ' real ones first, at most MAX_LANES');
+    t.log(L + ' real lanes: ' + lanes.map(function (l) { return l.id; }).join(', ') + ' · registry: ' + all.map(function (l) { return l.id; }).join(', '));
+  });
+
+  T.suite('run: V3 review — the real twist from a v2-shaped act-3 save (real engine): acts 3 stays dark, acts 4 opens the gauntlet; a door\'s cheat replays after a mid-fight reload', function (t) {
+    if (!DD.Combat || typeof DD.Combat.start !== 'function' || !DD.Encounter || typeof DD.Encounter.build !== 'function') { t.skip('DD.Combat / DD.Encounter not available yet'); return; }
+    const dm = DD.RunMap.pickEncounter(CLASSIC, 'boss', DD.RNG('rv-dm'));
+    if (!dm || !DD.getCameo('svammiel') || !realLanes().length) { t.skip('the act-3 boss, Svammiel\'s cameo or the real lanes are not registered yet'); return; }
+    const real = Object.keys(DD.defs.heroes).filter(function (id) { return id.indexOf('test_') !== 0; });
+    if (real.length < 4) { t.skip('fewer than 4 heroes registered'); return; }
+    const savedUi = DD.Run.useUi, savedInstant = DD.FX.instant;
+    const savedMeta = DD.util.deepClone(DD.Meta.data);
+    DD.Run.useUi = false;
+    DD.FX.instant = true;
+    const reload = function () { DD.Run.state = null; return DD.Run.load(); };
+    const toBoss = function () {
+      const s = S(), boss = s.map.nodes[s.map.boss], before = s.map.layout[boss.row - 1][0];
+      s.nodeId = before;
+      s.map.nodes[before].links = [boss.id];
+      return DD.Run.travel(boss.id);
+    };
+    const win = function () {
+      DD.Act.endCombat('victory');
+      if (DD.FX.flush) DD.FX.flush();
+      if (DD.Run.inCombat()) DD.Run.finishCombat('victory', DD.Combat.state);
+    };
+    const cheats = function (cs) { return cs.rules.filter(function (r) { return r.cheat; }).map(function (r) { return r.id + '=' + r.desc; }).join(' | '); };
+    return (async function () {
+      try {
+        // a v2-shaped save in front of act 3 (no V3 field at all)
+        let raw = null;
+        await withActs(CLASSIC, function () {
+          DD.Meta.reset(false);
+          DD.Run.newRun(real.slice(0, 4), 'normal', 'rv-v2-save');
+          DD.Run.startAtAct(CLASSIC, { level: 5, noShow: true });
+          raw = DD.Storage.get(DD.Run.SAVE_KEY, null);
+          ['miniBosses', 'cameos', 'cheats'].forEach(function (k) { delete raw.stats[k]; });
+          ['gauntlet', 'cameo', 'lastFight', 'lastStop', 'twistSeen', 'floorBoss'].forEach(function (k) { delete raw.flags[k]; });
+          raw = json(raw);
+          // acts 3: the act-3 boss ends the campaign with nothing of act 4 on his board
+          DD.Storage.set(DD.Run.SAVE_KEY, JSON.parse(raw));
+          t.ok(reload() && S().act === CLASSIC, 'acts 3: the v2-shaped save loads');
+          toBoss();
+          const cs = DD.Combat.state;
+          t.eq(cs.encounter.id, S().map.nodes[S().map.boss].encounterId, 'the act-3 boss fight (' + cs.encounter.id + ')');
+          cs.round = 9;
+          DD.Cameo.fire('round:start', { round: 9 });
+          win();
+          t.eq(S().over, 'victory', 'acts 3: he ends the run');
+          t.ok(cs.data.cameo === undefined && !cs.log.some(function (l) { return l.cls === 'cameo'; }) && !DD.Meta.isSeen('bosses', 'svammiel'),
+            'acts 3: no cameo memory, no cameo line, the spoiler gate shut');
+          t.eq(S().summary.acts, CLASSIC, 'acts 3: a classic summary');
+        });
+        await withActs(A4, function () {
+          DD.Meta.reset(false);
+          DD.Storage.set(DD.Run.SAVE_KEY, JSON.parse(raw));
+          t.ok(reload() && S().act === CLASSIC && S().map.shape !== 'gauntlet' && S().stats.miniBosses === 0, 'acts 4: the v2-shaped save loads (act 3, a classic map, V3 stats filled)');
+          toBoss();
+          const cs = DD.Combat.state;
+          win();
+          t.ok(cs.log.some(function (l) { return l.cls === 'cameo' && l.speaker === 'Svammiel' && /CONTROL ALL/.test(l.text); }), 'the twist plays on his board (Svammiel\'s line, logged as a cameo)');
+          const d = DD.Run.rewards();
+          t.ok(!S().over && d && d.actClear && d.actClear.twist && S().act === A4 && S().map.shape === 'gauntlet', 'his loot is pending, the act clear is the twist, act 4 is the gauntlet');
+          t.ok(DD.Meta.isSeen('bosses', 'svammiel') && S().flags.twistSeen, 'the gate opens');
+          t.eq(json(S().map.lanes.map(function (l) { return l.id; })), json(DD.RunMap.gauntletLanes(A4).map(function (l) { return l.id; })), 'the registry\'s lanes');
+          t.ok(reload() && DD.Run.rewards() && DD.Run.rewards().actClear.twist && S().map.shape === 'gauntlet', 'the twist rewards survive a reload');
+          // the lobby, then a door: its start cameo and cheat; a reload mid-fight relaunches the same cheat, bribed or not
+          for (let g = 0; g < 6 && S().pending; g++) DD.Run.next();
+          const stop = DD.Run.availableNodes().filter(function (nd) { return nd.type !== 'event'; })[0] || DD.Run.availableNodes()[0];
+          DD.Run.travel(stop.id);
+          for (let g = 0; g < 6 && S().pending; g++) DD.Run.next();
+          const door = DD.Run.availableNodes()[0];
+          t.ok(door && door.type === 'miniboss' && DD.Run.travel(door.id), 'a door: ' + (door && door.lane));
+          const c1 = cheats(DD.Combat.state);
+          t.ok(DD.Combat.state.log.some(function (l) { return l.cls === 'cameo' && l.speaker === 'Svammiel'; }), 'his start cameo at the door');
+          t.ok(!DD.Combat.state.encounter.cameo || !DD.Combat.state.encounter.cameo.cheat || c1 !== '', 'the door\'s cheat is on: ' + c1);
+          t.ok(reload(), 'a reload mid-fight (the run was saved before it)');
+          DD.Run.resume();
+          t.eq(cheats(DD.Combat.state), c1, 'the relaunched fight gets the same cheat');
+          t.eq(json(DD.Combat.state.data.gauntlet), json({ lane: door.lane, index: 0, beaten: [] }), 'and the same state.data.gauntlet');
+        });
+      } finally {
+        DD.Run.useUi = savedUi;
+        DD.FX.instant = savedInstant;
+        DD.Run.state = null;
+        DD.Storage.remove(DD.Run.SAVE_KEY);
+        DD.Meta.data = savedMeta;
+        DD.Meta.save();
+        if (DD.FX && DD.FX.reset) DD.FX.reset();
+      }
+    })();
   });
 })();

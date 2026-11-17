@@ -21,6 +21,9 @@
     'Nobody telegraphs. Bosses and a few elites wind up. You still stand in it.',
   ];
 
+  // V3: rotates in only after the spoiler gate (Svammiel met once; V §13.4)
+  const TAGLINE_SEEN = 'Now with a fourth act. Allegedly.';
+
   const TIP_FALLBACK = [
     'Every fight opens with a roll for initiative: d20 plus each unit\'s modifier. The order holds for the whole fight.',
     'Walking away from a melee foe gives it a free attack of opportunity. Pushes, leaps and teleports never provoke.',
@@ -88,6 +91,16 @@
     UI.resumeRun();
   }
 
+  /** A loading tip: the classic pool; once Svammiel has been met, act IV's tips (tips_act4) join it (weighted by size). */
+  function loadingTip() {
+    const UI = DD.UI;
+    const pools = DD.defs.narration || {};
+    const a4 = UI.act4Seen() && Array.isArray(pools.tips_act4) ? pools.tips_act4.length : 0;
+    const base = Array.isArray(pools.tips) ? pools.tips.length : TIP_FALLBACK.length;
+    if (a4 && DD.rng.next() * (a4 + base) < a4) return UI.narrate('tips_act4', {}, TIP_FALLBACK);
+    return UI.narrate('tips', {}, TIP_FALLBACK);
+  }
+
   function showCredits() {
     const UI = DD.UI, el = UI.el;
     const rows = [
@@ -139,15 +152,16 @@
           el('div.logo-amp', { html: D20_SVG, title: 'Natural 20' }),
           el('div.logo-line.logo-bottom', null, 'Degenerates'));
         wrap.appendChild(logo);
-        const tagline = el('div.tagline', null, '“' + TAGLINES[0] + '”');
+        const lines = UI.act4Seen() ? TAGLINES.concat([TAGLINE_SEEN]) : TAGLINES;
+        const tagline = el('div.tagline', null, '“' + lines[0] + '”');
         wrap.appendChild(tagline);
-        let ti = Math.floor(Math.random() * TAGLINES.length);
-        tagline.textContent = '“' + TAGLINES[ti] + '”';
+        let ti = Math.floor(Math.random() * lines.length);
+        tagline.textContent = '“' + lines[ti] + '”';
         every(function () {
           tagline.classList.add('swap');
           later(function () {
-            ti = (ti + 1) % TAGLINES.length;
-            tagline.textContent = '“' + TAGLINES[ti] + '”';
+            ti = (ti + 1) % lines.length;
+            tagline.textContent = '“' + lines[ti] + '”';
             tagline.classList.remove('swap');
           }, 420);
         }, 6500);
@@ -167,7 +181,7 @@
         wrap.appendChild(menu);
         root.appendChild(wrap);
 
-        const tip = UI.narrate('tips', {}, TIP_FALLBACK);
+        const tip = loadingTip();
         if (tip) root.appendChild(el('div.title-tip', null, el('span.tip-label', null, 'Tip'), el('span', null, tip)));
         const meta = UI.meta();
         const runs = meta && meta.stats ? meta.stats.runs || 0 : 0;

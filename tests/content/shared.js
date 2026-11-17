@@ -1659,8 +1659,9 @@
   // ==========================================================================================================
   // Real heroes (the hero files; every suite below skips when they are not loaded, e.g. isolated runs)
   // ==========================================================================================================
+  // V3 (the integrator): Benedick, the 17th hero, joins once his file is registered (plan §4.12)
   const REAL = ['zarathor', 'syllamin', 'marbles', 'marwyn', 'ellaria', 'josiah', 'sparrow', 'corelos', 'slate', 'buga',
-    'kiri', 'betty', 'basanos', 'valdris', 'hjalmar', 'pebbles'];
+    'kiri', 'betty', 'basanos', 'valdris', 'hjalmar', 'pebbles', 'benedick'];
   function realHeroes() { return REAL.filter(function (id) { return !!DD.getHero(id); }); }
   function haveAll(t, ids) {
     const miss = ids.filter(function (id) { return !DD.getHero(id) && !DD.getSkill(id); });

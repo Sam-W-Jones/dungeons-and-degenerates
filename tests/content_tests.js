@@ -36,7 +36,9 @@
     // v2: attacks of opportunity (modifyOpportunity must be pure: previews and the AI query it)
     'modifyOpportunity', 'onOpportunityAttack',
     // engine requests: pure estimate queries (DD.AI.estimate) and the after-the-fact hooks for a refused death / a status gone
-    'estimateDealt', 'estimateTaken', 'onDeathPrevented', 'onStatusRemoved'];
+    'estimateDealt', 'estimateTaken', 'onDeathPrevented', 'onStatusRemoved',
+    // V3 E13: a pure veto in Combat.canUse (Svammiel's No Signatures, the Radio Edit)
+    'modifyUse'];
   const BARK_KEYS = ['select', 'start', 'move', 'kill', 'hurt', 'lowhp', 'downed', 'revive', 'ally_down', 'levelup', 'victory', 'idle', 'signature'];
   const ENEMY_BARK_KEYS = ['spawn', 'attack', 'hurt', 'death'];
   // noProvoke: its moves never provoke attacks of opportunity · noOpportunity: it never makes them (v2)
@@ -45,9 +47,11 @@
     'hero_downed', 'hero_revived', 'hero_death', 'level_up', 'signature', 'round_start', 'enemy_turn', 'shop_greet', 'shop_buy', 'shop_broke',
     'shop_leave', 'tavern_greet', 'rest', 'recruit', 'map_enter', 'act_intro_1', 'act_intro_2', 'act_intro_3', 'act_clear', 'treasure', 'tips',
     'gameover_title', 'victory_title', 'run_start', 'idle_dm'];
-  // DESIGN §5 targets (HP per act and tier), with some slack; outside them is an advisory, not a failure
-  const ENEMY_HP = { minion: [[6, 9], [10, 14], [14, 18]], normal: [[12, 20], [20, 30], [28, 40]], elite: [[45, 70], [80, 110], [120, 150]],
-    boss: [[150, 200], [260, 320], [420, 520]] };
+  // DESIGN §5 targets (HP per act and tier), with some slack; outside them is an advisory, not a failure. V3 act 4 (the
+  // gauntlet): minions 18-20, squad members (elites) 60-115, solo mini-bosses 300-340 up to the floor boss's 480; no
+  // normal-tier enemies there
+  const ENEMY_HP = { minion: [[6, 9], [10, 14], [14, 18], [18, 20]], normal: [[12, 20], [20, 30], [28, 40], null],
+    elite: [[45, 70], [80, 110], [120, 150], [60, 115]], boss: [[150, 200], [260, 320], [420, 520], [300, 480]] };
   const SPRITE = {
     base: ['humanoid', 'quadruped', 'blob', 'flyer', 'swarm', 'construct', 'custom'],
     build: ['tiny', 'slim', 'normal', 'stocky', 'huge'],
@@ -81,6 +85,10 @@
 
   function all(kind) { const bag = DD.defs[kind]; return Object.keys(bag).map(function (k) { return bag[k]; }); }
   function isTest(id) { return String(id).indexOf('test_') === 0; }
+  // V3: content may be written for any act up to DD.MAX_ACT (act 4 ships dark while DD.finalAct() is 3)
+  function inActs(a) { return Number.isInteger(a) && a >= 1 && a <= DD.MAX_ACT; }
+  // V3: a gauntlet act (act 4) has only its doors (encounters with `gauntlet`) and the floor boss (`finale`), all boss fights
+  function gauntletAct(act) { return all('encounters').some(function (en) { return en.act === act && (en.gauntlet || en.finale); }); }
   function badText(s) { return typeof s !== 'string' || !s.trim() || /undefined|NaN|\[object /.test(s); }
   function key(p) { return p.x + ',' + p.y; }
   function quote(s) { s = String(s); return '"' + (s.length > 90 ? s.slice(0, 87) + '...' : s) + '"'; }
@@ -225,7 +233,7 @@
       t.ok(h.passive && !badText(h.passive.name) && !badText(h.passive.desc), L + ': passive name + desc');
       hookProblems(h.passive && h.passive.hooks, L).forEach(function (p) { t.fail(p); });
       // ARCHITECTURE §3.1: null | { act: N } | { boss: enemyId } (boss unlocks: surgical fix by hero-buga, see docs/notes/hero-buga.md)
-      t.ok(h.unlock === null || (h.unlock && ([1, 2, 3].indexOf(h.unlock.act) >= 0 || (typeof h.unlock.boss === 'string' && h.unlock.boss.length > 0))), L + ': unlock');
+      t.ok(h.unlock === null || (h.unlock && (inActs(h.unlock.act) || (typeof h.unlock.boss === 'string' && h.unlock.boss.length > 0))), L + ': unlock');
       spriteProblems(h.sprite).forEach(function (p) { t.fail(L + ' sprite: ' + p); });
       const minBarks = isTest(h.id) ? 1 : 3;
       BARK_KEYS.forEach(function (k) {
@@ -275,7 +283,7 @@
     });
     enemies.forEach(function (e) {
       const L = 'enemy ' + e.id;
-      t.ok([1, 2, 3].indexOf(e.act) >= 0, L + ': act');
+      t.ok(inActs(e.act), L + ': act (1-' + DD.MAX_ACT + ')');
       t.ok(TIERS.indexOf(e.tier) >= 0, L + ': tier');
       t.ok(e.hp > 0 && e.mov >= 0, L + ': hp/mov');
       t.ok(Array.isArray(e.skills), L + ': skills');
@@ -322,7 +330,7 @@
     });
     all('encounters').forEach(function (en) {
       const L = 'encounter ' + en.id;
-      t.ok([1, 2, 3].indexOf(en.act) >= 0 && ['normal', 'elite', 'boss'].indexOf(en.kind) >= 0, L + ': act/kind');
+      t.ok(inActs(en.act) && ['normal', 'elite', 'boss'].indexOf(en.kind) >= 0, L + ': act/kind');
       t.ok(en.map && (en.map.layout || en.map.w || en.map.theme), L + ': map');
       t.ok(Array.isArray(en.enemies) && en.enemies.length > 0, L + ': enemies');
       (en.enemies || []).forEach(function (e) {
@@ -333,14 +341,26 @@
       const otype = typeof en.objective === 'string' ? en.objective : (en.objective || {}).type;
       t.ok(['killAll', 'boss', 'survive', 'destroy', 'protect', 'custom'].indexOf(otype) >= 0, L + ': objective');
       if (otype === 'custom') t.ok(typeof en.checkObjective === 'function' || typeof (en.objective || {}).check === 'function', L + ': custom objective needs checkObjective(state)');
-      if (en.kind === 'boss') t.ok(en.enemies.some(function (e) { const d = DD.getEnemy(e.id); return d && d.tier === 'boss'; }), L + ': has a boss');
+      // a boss fight has a boss-tier enemy, or (V3 squads: the League, the Coven, the Rapping Goats, all elites) names its
+      // squad in objective.bossIds: registered enemies, at least one of them in the opening line-up
+      const bossIds = en.objective && en.objective.bossIds;
+      if (en.kind === 'boss' && Array.isArray(bossIds) && bossIds.length) {
+        t.ok(bossIds.every(function (id) { return !!DD.getEnemy(id); }), L + ': objective.bossIds are registered enemies');
+        t.ok((en.enemies || []).some(function (e) { return bossIds.indexOf(e.id) >= 0; }), L + ': its squad (objective.bossIds) starts on the board');
+      } else if (en.kind === 'boss') t.ok(en.enemies.some(function (e) { const d = DD.getEnemy(e.id); return d && d.tier === 'boss'; }), L + ': has a boss');
+      if (en.gauntlet || en.finale) {
+        // V3 act-4 fights: placed only by the gauntlet map (never a random pick), always boss fights
+        t.ok(en.kind === 'boss' && en.weight === 0, L + ': a gauntlet door / the finale is a boss fight with weight 0');
+        if (en.gauntlet) t.ok(typeof en.gauntlet.lane === 'string' && en.gauntlet.lane && typeof en.gauntlet.order === 'number', L + ': gauntlet { lane, order }');
+      }
       (en.enemies || []).forEach(function (e) { const d = DD.getEnemy(e.id); if (d && !/^(test_|mgt_|mg_)/.test(en.id) && d.act !== en.act) notes.push(L + ' (act ' + en.act + ') uses ' + e.id + ' (act ' + d.act + ')'); });
     });
-    [1, 2, 3].forEach(function (act) {
-      ['normal', 'elite', 'boss'].forEach(function (kind) {
+    // every act of the campaign (1..DD.finalAct()) has its fights: the regular acts every kind, a gauntlet act boss fights
+    for (let act = 1; act <= DD.finalAct(); act++) {
+      (gauntletAct(act) ? ['boss'] : ['normal', 'elite', 'boss']).forEach(function (kind) {
         t.ok(all('encounters').some(function (en) { return en.act === act && en.kind === kind; }), 'an encounter for act ' + act + ' ' + kind);
       });
-    });
+    }
     all('items').forEach(function (it) {
       const L = 'item ' + it.id;
       t.ok(['weapon', 'armor', 'trinket'].indexOf(it.slot) >= 0 && ['common', 'rare', 'legendary', 'cursed'].indexOf(it.rarity) >= 0, L + ': slot/rarity');
@@ -1192,7 +1212,9 @@
           w.arm();
           const s = DD.Combat.state;
           t.ok(DD.Combat.heroes().length > 0 && DD.Combat.enemies().length > 0, 'encounter ' + en.id + ': units placed');
-          if (en.kind === 'boss') t.ok(s.units.some(function (u) { return u.side === 'enemy' && DD.Act.isBoss(u) && !u.dead; }), 'encounter ' + en.id + ': the boss is on the board');
+          // V3 E10: a squad boss fight (objective.bossIds: the League, the Coven, the Rapping Goats) has its squad there
+          const squad = s.objective && Array.isArray(s.objective.bossIds) && s.objective.bossIds.length ? s.objective.bossIds : null;
+          if (en.kind === 'boss') t.ok(s.units.some(function (u) { return u.side === 'enemy' && !u.dead && (squad ? squad.indexOf(u.defId) >= 0 : DD.Act.isBoss(u)); }), 'encounter ' + en.id + ': the boss is on the board');
           s.units.forEach(function (u) { if (!u.dead) t.ok(DD.Grid.isWalkable(u.x, u.y, u), 'encounter ' + en.id + ': ' + u.name + ' on a walkable tile'); });
           sanity(t, 'encounter ' + en.id + ' start');
           const res = DD.AutoPlay.runBattle(30);

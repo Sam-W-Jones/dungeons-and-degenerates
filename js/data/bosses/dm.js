@@ -675,6 +675,17 @@
     };
   }
 
+  // ---- the twist cut-off (V3) ------------------------------------------------------------------------------------
+  const CUT_LINE = 'Fine. FINE. You win. Same time next—';
+  const DEATH_LINES = ['Fine. FINE. You win. Same time next week?', 'Fine. FINE. You win. Same time next week? *sniff*'];
+  /** Does the twist cut him off (act 4 follows this fight)? With DD.finalAct() === 3 never. */
+  function cutOff() { return !!(DD.Cameo && DD.Cameo.campaignGoesOn && DD.Cameo.campaignGoesOn(DD.Combat && DD.Combat.state)); }
+  /** The moment of his last words: the fight's DM is at 0 HP (the engine barks 'death' before it marks him dead). */
+  function dying() {
+    const s = DD.Combat && DD.Combat.state;
+    return !!(s && s.units && s.units.some(function (u) { return u.defId === DM_ID && !u.dead && u.hp <= 0; }));
+  }
+
   // ---- hooks on the DM ------------------------------------------------------------------------------------------
   const HOOKS = {
     onCombatStart: function (unit) {
@@ -787,9 +798,17 @@
     },
     onDeath: function (unit) {
       DD.Act.removeRule(RULE_ID);
-      DD.FX.banner('THE DM YIELDS', { sub: '"Fine. FINE. You win. Same time next week?"', color: '#ffd34d', ms: 1400 });
+      // V3 (C5): while the campaign goes on (act 4 follows), the twist cuts him off mid-sentence; Svammiel's entrance
+      // plays at combat:end. With DD.finalAct() === 3 the line is unchanged.
+      const cut = cutOff();
+      const line = cut ? CUT_LINE : 'Fine. FINE. You win. Same time next week?';
+      // QA flow-1: the engine's death bark is silent while he is cut off (barks.death), so his bubble says the cut line
+      if (cut && !DD.Act.simulating) DD.FX.bark(unit, CUT_LINE);
+      DD.FX.banner('THE DM YIELDS', { sub: '"' + line + '"', color: '#ffd34d', ms: 1400 });
       DD.Act.narrate('dm_defeat', {});
-      DD.Act.log('The Dungeon Master: "Fine. FINE. You win. Same time next week?"', 'enemy');
+      DD.Act.log('The Dungeon Master: "' + line + '"', 'enemy');
+      // QA flow-4: the table shakes as he is cut off, ahead of Svammiel's line (svammiel.js; it logs once)
+      if (cut && DD.BossSvammiel && typeof DD.BossSvammiel.twistShake === 'function') DD.BossSvammiel.twistShake(DD.Combat.state);
     },
   };
 
@@ -1399,7 +1418,9 @@
         'Roll for initiative. Actually, don\'t. I already did.'],
       attack: ['That\'s a hit. Don\'t ask what I rolled.', 'I\'ll allow it. For me.', 'Natural 20. Trust me.', 'Make a saving throw. Kidding. It hits.'],
       hurt: ['Okay, ow. Who allowed flanking?', 'That\'s... technically legal.', 'I\'m writing that down.', 'You\'re supposed to lose here!'],
-      death: ['Fine. FINE. You win. Same time next week?', 'Fine. FINE. You win. Same time next week? *sniff*'],
+      // QA flow-1: the engine barks 'death' before onDeath; while the twist cuts him off this pool is empty and onDeath
+      // bubbles the cut line itself (nothing on screen finishes his sentence)
+      get death() { return cutOff() && dying() ? [] : DEATH_LINES; },
       phase2: ['You WILL go where the story goes.', 'All aboard the plot!', 'No side quests. The train leaves NOW.'],
       phase3: ['Rocks fall.', 'Rocks fall. Everyone dies. I prepped this.', 'I didn\'t want to do this. Yes I did.'],
       screen: ['My notes! Don\'t read my notes!', 'Okay, that\'s a spoiler. Unsee it.', 'Who touched my screen?!'],

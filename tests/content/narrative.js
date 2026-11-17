@@ -10,6 +10,10 @@
  *  - narration: every key (ARCHITECTURE §3.10 plus the v2 engine key 'initiative') has 8+ lines, tokens only where
  *    every caller fills them (static, and in practice: DD.narrate recorded during real fights and run flows), no v1
  *    talk, no pronouns for {hero}; 30+ tips, each one re-checked in-engine (or listed as checked against the source).
+ *  - V3 (act IV): Benedick's hero event ev_ben_bistro with the others; the act-4 narration keys and the @a4 variants
+ *    (counts, base tokens, lengths, no hero named, no count of doors), the variants in an act-4 fight only, the gated
+ *    act-4 tips each true in the build, and no spoiler before the twist. (Svammiel's pools: svammiel_lines.js; the
+ *    act-4 events: events_act4.js.)
  * Works in isolation (core + fixtures + these files): missing real heroes are stood in by fixture clones.
  */
 (function () {
@@ -23,6 +27,7 @@
     ellaria: 'ev_ell_lost_corgi', josiah: 'ev_jos_rat_union', sparrow: 'ev_spa_blood_bank', corelos: 'ev_cor_fine_print',
     slate: 'ev_sla_noisy_kids', buga: 'ev_buga_reelection', kiri: 'ev_kir_lost_and_found', betty: 'ev_bet_family_reunion',
     basanos: 'ev_bas_somebody_ate_dolly', valdris: 'ev_val_forge_god', hjalmar: 'ev_hja_prank_king', pebbles: 'ev_peb_best_in_show',
+    benedick: 'ev_ben_bistro',   // V3: the 17th hero (his event lands before his hero file: a fixture stand-in plays him until then)
   };
   // second events for Slate and Mayor Buga (DESIGN §11 offers two ideas each)
   const HERO_EXTRA = { ev_sla_sculptor: 'slate', ev_buga_toaster_cult: 'buga' };
@@ -34,8 +39,11 @@
   const HERO_NAMES = {
     zarathor: 'Zarathor', syllamin: 'Syllamin', marbles: 'Professor Marbles', marwyn: 'Marwyn', ellaria: 'Ellaria',
     josiah: 'Josiah', sparrow: 'Sparrow', corelos: 'Corelos', slate: 'Slate', buga: 'Mayor Buga', kiri: 'Kiri', betty: 'Betty',
-    basanos: 'Basanos', valdris: 'Valdris', hjalmar: 'Hjalmar', pebbles: 'Pebbles',
+    basanos: 'Basanos', valdris: 'Valdris', hjalmar: 'Hjalmar', pebbles: 'Pebbles', benedick: 'Benedick',
   };
+  // heroes with exactly one hero event whose text features them: the v2 roster's last six, then V3's
+  const ONE_EVENT_HEROES = ['kiri', 'betty', 'basanos', 'valdris', 'hjalmar', 'pebbles'];
+  const V3_ONE_EVENT_HEROES = ['benedick'];
   // the user's pronouns: she/her for these three, he/him for every other hero
   const SHE = ['ellaria', 'sparrow', 'kiri'];
   const HE_WORDS = ['he', 'him', 'his', 'himself'];
@@ -52,6 +60,20 @@
     'shop_leave', 'tavern_greet', 'rest', 'recruit', 'map_enter', 'act_intro_1', 'act_intro_2', 'act_intro_3', 'act_clear', 'treasure', 'tips',
     'gameover_title', 'victory_title', 'run_start', 'idle_dm', 'initiative', 'objective_failed', 'opportunity',
     'swap'];   // [finish D7] the engine narrates a swap now and then ({hero} the mover, {ally} the ally)
+  // V3 (plan §4.9 / §5.5): the act-4 keys, with their exact line counts (a key with one line is the plan's exact line)
+  const V3_NARRATION_KEYS = ['act_intro_4', 'act_clear_twist', 'twist_loot', 'victory_final', 'campaign_won', 'tips_act4', 'run_start_seen',
+    'svam_defeat', 'svam_phase2', 'svam_phase3'];
+  const V3_COUNTS = { act_intro_4: 8, act_clear_twist: 3, twist_loot: 1, victory_final: 3, campaign_won: 3, tips_act4: 19, run_start_seen: 3,
+    svam_defeat: 2, svam_phase2: 2, svam_phase3: 2 };
+  // the @a4 variants of plan §5.5 (min lines; titles are short)
+  const A4_VARIANTS = { boss_start: 6, round_start: 8, enemy_turn: 6, initiative: 6, victory: 8, defeat: 8, hero_downed: 6, level_up: 4,
+    idle_dm: 6, shop_greet: 8, shop_buy: 6, shop_broke: 6, shop_leave: 6, tavern_greet: 8, rest: 6, recruit: 4, map_enter: 8,
+    gameover_title: 8, victory_title: 8 };
+  // the six foreshadowing lines (V §3.3) in the classic pools
+  const FORESHADOW = { idle_dm: [/tucks his feet up/, /Something under the table bumps/], act_clear: [/A text from "S"/],
+    boss_start: [/glances at the floor/], act_intro_3: [/says it to the floor/], victory: [/checks under the table/] };
+  // a number of doors or heroes written out (they come from the registry): never in act-4 text
+  const COUNT_WORDS = /\b(?:four|five|six|sixteen|seventeen) (?:mini-?bosses|doors|rooms|heroes|lanes|favourites|toys)\b/i;
   const POCKET_GOLD = 15;
   const CONSOLATION_GOLD = 30;
   const DEBT_SCAR = 'scar_owes_the_dm';   // Corelos' fine print
@@ -91,7 +113,13 @@
   const RARITY_CHAIN = { legendary: ['legendary', 'rare', 'common'], rare: ['rare', 'common', 'legendary'], common: ['common', 'rare', 'legendary'], cursed: ['cursed', 'common', 'rare'] };
   const BAD_TEXT = /undefined|NaN|\[object|\{\w+\}/;
 
-  function ours() { return Object.keys(DD.defs.events).filter(function (id) { return id.indexOf('ev_') === 0; }).map(function (id) { return DD.defs.events[id]; }); }
+  /** V3: an act-4 event (js/data/events_act4.js, ids ev_a4_*): tests/content/events_act4.js checks those. */
+  function isAct4Event(ev) { return Array.isArray(ev.acts) && ev.acts.some(function (a) { return a > 3; }); }
+  /** The classic events of js/data/events.js (ev_*, acts 1-3). */
+  function ours() {
+    return Object.keys(DD.defs.events).filter(function (id) { return id.indexOf('ev_') === 0; }).map(function (id) { return DD.defs.events[id]; })
+      .filter(function (ev) { return !isAct4Event(ev); });
+  }
   function added(before, after) {
     const count = {};
     before.forEach(function (x) { count[x] = (count[x] || 0) + 1; });
@@ -740,6 +768,19 @@
       } },
       det(function (c) { c.healAll(0.3); c.goldIs(0); c.noLevels(); c.noFight(); c.noItems(); }),
     ],
+    // V3: the 17th hero (the Benedick addendum §19.1)
+    ev_ben_bistro: [
+      det(function (c) { c.healAll(0.3); c.goldIs(0); c.noLevels(); c.noFight(); c.noItems(); c.noScars(); }),
+      det(function (c) {
+        c.goldIs(40); c.noLevels(); c.hpSame(); c.noFight(); c.noItems();
+        c.ok(c.out.text.indexOf('pays 40 gold') >= 0, 'the outcome names the gold the chef paid');
+      }),
+      { branches: ['cabinet', 'salt'], check: function (c) {
+        c.goldIs(0); c.noLevels(); c.noFight(); c.noScars();
+        if (c.newItems.length) { c.heroItem(c.st, 'rare'); c.hpSame(); return 'cabinet'; }
+        c.hurt(c.st, 0.3); c.hpSame(c.st); c.noItems(); return 'salt';
+      } },
+    ],
   };
 
   /** Resolve every choice of `def` from `base` over seeds until every required branch was seen; check each outcome. */
@@ -831,8 +872,8 @@
     Object.keys(HERO_EVENTS).forEach(function (hid) {
       t.ok(evs.some(function (ev) { return ev.hero === hid; }), hid + ': has a hero event');
     });
-    // the six heroes of the v2 roster have exactly one event each, and theirs is about them
-    ['kiri', 'betty', 'basanos', 'valdris', 'hjalmar', 'pebbles'].forEach(function (hid) {
+    // the six heroes of the v2 roster have exactly one event each, and theirs is about them; so does V3's Benedick
+    ONE_EVENT_HEROES.concat(V3_ONE_EVENT_HEROES).forEach(function (hid) {
       const evh = evs.filter(function (ev) { return ev.hero === hid; });
       t.eq(evh.length, 1, hid + ': one event');
       if (evh[0]) t.ok(evh[0].text.indexOf(HERO_NAMES[hid]) >= 0, hid + ': the event text features ' + HERO_NAMES[hid]);
@@ -840,6 +881,18 @@
     t.ok(/"It's a family name[.,]"/.test((DD.getEvent('ev_bet_family_reunion') || {}).text || ''), 'Betty: "It\'s a family name."');
     // ids are unique and prefixed
     t.ok(evs.every(function (ev) { return /^ev_[a-z0-9_]+$/.test(ev.id); }), 'ids are ev_snake_case');
+    // V3: every ev_* event is a classic one (acts within 1-3, above) or an act-4 one (ev_a4_*, acts exactly [4]); a hero
+    // event is never an act-4 event (Benedick is no act-4 secret, and act 4 hides from a first run)
+    Object.keys(DD.defs.events).filter(function (id) { return id.indexOf('ev_') === 0; }).map(function (id) { return DD.defs.events[id]; })
+      .filter(isAct4Event).forEach(function (ev) {
+        t.ok(/^ev_a4_[a-z0-9_]+$/.test(ev.id) && ev.acts.length === 1 && ev.acts[0] === 4 && !ev.hero, ev.id + ': an act-4 event is ev_a4_*, acts [4], no hero');
+      });
+    const ben = DD.getEvent('ev_ben_bistro');
+    if (t.ok(ben, 'V3: Benedick\'s hero event ev_ben_bistro')) {
+      t.eq(JSON.stringify(ben.acts), '[1,2,3]', 'ev_ben_bistro: the classic acts');
+      t.ok(!/Svammiel|Act IV|fourth act|under the table/i.test([ben.title, ben.text].concat(ben.choices.map(function (c) { return c.label + ' ' + c.hint; })).join(' ')),
+        'ev_ben_bistro: nothing about act 4');
+    }
   });
 
   T.suite('narrative: events — text, requires and gold costs through the run API', function (t) {
@@ -1215,7 +1268,8 @@
   T.suite('narrative: narration — every key, line counts, tokens (static)', function (t) {
     const N = DD.Narrator;
     if (!t.ok(N && N.TOKENS && N.LINES, 'DD.Narrator')) return;
-    t.eq(N.KEYS.slice().sort().join(','), NARRATION_KEYS.slice().sort().join(','), 'the token table covers exactly the §3.10 keys + initiative + objective_failed + opportunity + swap');
+    t.eq(N.KEYS.slice().sort().join(','), NARRATION_KEYS.concat(V3_NARRATION_KEYS).sort().join(','),
+      'the token table covers exactly the §3.10 keys + initiative + objective_failed + opportunity + swap (+ the V3 act-4 keys)');
     // a lost objective is not a TPK: its lines never say everybody is down, and the TPK key keeps its punchlines
     (N.LINES.objective_failed || []).forEach(function (l) {
       t.ok(!/total party kill|\bTPK\b|everybody is down|campaign ended|spare character sheets/i.test(l), 'objective_failed: the party still stands in "' + l + '"');
@@ -1414,6 +1468,9 @@
       'act_clear'];
     if (DD.Combat.heroes().length) expected.push('signature');
     if (DD.UI && DD.UI.narrate) expected.push('map_enter', 'act_intro_1', 'tips', 'gameover_title', 'victory_title', 'shop_leave', 'hero_death', 'level_up', 'idle_dm');
+    // V3 (the integrator's flip): once Svammiel's spoiler gate is open (an earlier suite's twist may have opened it on this
+    // page), a new run's opening line is drawn from run_start or run_start_seen (run.js runStartText)
+    if (keys.run_start_seen && DD.Meta && DD.Meta.isSeen && DD.Meta.isSeen('bosses', 'svammiel')) keys.run_start = true;
     expected.forEach(function (k) { t.ok(keys[k], k + ' was narrated in practice'); });
     t.ok(keys.recruit || !Object.keys(DD.defs.heroes).length, 'recruit was narrated in practice');
     t.log(calls.length + ' narration calls recorded over ' + Object.keys(keys).length + ' keys');
@@ -2255,5 +2312,347 @@
       rh.items = rh.items || {};
       Object.keys(DD.defs.items).forEach(function (id) { const d = DD.getItem(id); if (d && !d.hero && !rh.items[d.slot]) rh.items[d.slot] = id; });
     }
+  });
+
+  // =================================================================================================================
+  // V3: act IV "Under the Table" (plan .tmp/v3/design.md §2.6, §4.9, §5.5, §5.7). Svammiel's cameo pools:
+  // tests/content/svammiel_lines.js; the act-4 events: tests/content/events_act4.js.
+  // =================================================================================================================
+
+  /** The party filter's name test over every hero (the V3 roster and the registry): capitalised words of 3+ letters. */
+  function heroWordsRe() {
+    const words = [];
+    const names = Object.keys(HERO_NAMES).map(function (id) { return HERO_NAMES[id]; });
+    Object.keys(DD.defs.heroes).forEach(function (id) { if (!/^test_/.test(id)) names.push(DD.getHero(id).name); });
+    names.forEach(function (n) {
+      String(n).split(/[^A-Za-z]+/).forEach(function (w) { if (w.length >= 3 && /^[A-Z]/.test(w) && w !== 'The' && words.indexOf(w) < 0) words.push(w); });
+    });
+    return new RegExp('\\b(' + words.join('|') + ')\\b');
+  }
+  /** The shape every V3 narration pool keeps (`base`: the key whose tokens apply, as for an @a4 variant). */
+  function v3Shape(t, k, lines, base, maxLen) {
+    const N = DD.Narrator;
+    const HW = heroWordsRe();
+    t.eq(lines.filter(function (l, i) { return lines.indexOf(l) !== i; }).length, 0, k + ': no duplicate lines');
+    lines.forEach(function (l) {
+      t.ok(typeof l === 'string' && l.trim() === l && l.length >= 4 && l.length <= maxLen && !/undefined|NaN/.test(l), k + ': line length/shape "' + l + '" (' + l.length + ', max ' + maxLen + ')');
+      t.ok(!V1_TALK.test(l), k + ': no v1 talk in "' + l + '"');
+      t.ok(!COUNT_WORDS.test(l), k + ': no count of doors or heroes in "' + l + '"');
+      t.ok(!HW.test(l), k + ': names no hero (narration names heroes through tokens only): "' + l + '"');
+    });
+    t.eq(N.badTokens(k, lines).length, 0, k + ': only the tokens ' + JSON.stringify(N.TOKENS[base]) + ' — ' + N.badTokens(k, lines).join(' | '));
+    const vars = { hero: 'Zarathor', enemy: 'Goblin Grunt', n: 12, gold: 30, name: 'Sparrow', ally: 'Kiri' };
+    const some = {};
+    (N.TOKENS[base] || []).forEach(function (tk) { some[tk] = vars[tk]; });
+    const low = Object.assign({}, some, LOWER_FILLS[base] || {});
+    lines.forEach(function (l) {
+      t.ok(!/\{\w+\}/.test(DD.util.fmt(l, some)), k + ': fills "' + l + '"');
+      t.eq(lowerStarts(DD.util.fmt(l, low)).length, 0, k + ': sentences start uppercase ("' + DD.util.fmt(l, low) + '")');
+      sentences(l).forEach(function (sen) {
+        const at = sen.indexOf('{hero}');
+        if (at < 0) return;
+        const words = sen.slice(at).toLowerCase().match(/[a-z]+/g) || [];
+        const bad = words.filter(function (w) { return HE_WORDS.indexOf(w) >= 0 || SHE_WORDS.indexOf(w) >= 0 || THEY_WORDS.indexOf(w) >= 0; });
+        t.eq(bad.join(','), '', k + ': no pronoun for {hero} in "' + sen + '"');
+      });
+    });
+    if (!/title|tips/.test(base)) {
+      lines.forEach(function (l, i) {
+        const g = grams(l);
+        const twin = lines.filter(function (o, j) { return j !== i && grams(o).some(function (x) { return g.indexOf(x) >= 0; }); });
+        t.eq(twin.length, 0, k + ': "' + l + '" is not a near-repeat of ' + JSON.stringify(twin));
+      });
+    }
+    const reg = DD.defs.narration[k] || [];
+    t.ok(lines.every(function (l) { return reg.indexOf(l) >= 0; }), k + ': registered');
+  }
+
+  T.suite('narrative: V3 — the act-4 keys and the @a4 variants (counts, tokens, lengths, no hero named, no count of doors)', function (t) {
+    const N = DD.Narrator;
+    if (!t.ok(N && N.V3_KEYS && N.VARIANTS, 'DD.Narrator.V3_KEYS and VARIANTS')) return;
+    t.eq(N.V3_KEYS.slice().sort().join(','), V3_NARRATION_KEYS.slice().sort().join(','), 'the V3 keys (plan §4.9)');
+    V3_NARRATION_KEYS.forEach(function (k) {
+      const lines = N.LINES[k] || [];
+      t.eq(lines.length, V3_COUNTS[k], k + ': ' + lines.length + ' lines');
+      t.ok(Array.isArray(N.TOKENS[k]) && N.TOKENS[k].length === 0, k + ': token-free (its readers pass no vars)');
+      v3Shape(t, k, lines, k, k === 'tips_act4' ? 140 : 160);
+    });
+    Object.keys(A4_VARIANTS).forEach(function (base) {
+      const k = base + '@a4';
+      const lines = N.VARIANTS[k] || [];
+      t.ok(lines.length >= A4_VARIANTS[base], k + ': ' + lines.length + ' lines (>= ' + A4_VARIANTS[base] + ')');
+      t.ok(base in N.TOKENS && N.V3_KEYS.indexOf(base) < 0, k + ': its base is a classic narration key');
+      v3Shape(t, k, lines, base, /title/.test(base) ? 50 : 160);
+    });
+    t.eq(Object.keys(N.VARIANTS).filter(function (k) { return !/@a4$/.test(k) || !(DD.narrationBaseKey(k) in A4_VARIANTS); }).join(','), '',
+      'no variant beyond the plan §5.5 list');
+    t.ok(N.VARIANTS['round_start@a4'].every(function (l) { return /\{n\}/.test(l); }), 'round_start@a4 shows the round {n}');
+    t.ok(N.VARIANTS['recruit@a4'].every(function (l) { return /\{hero\}/.test(l); }), 'recruit@a4 names the recruit');
+    // the plan's exact lines
+    t.eq(N.LINES.twist_loot[0], 'The DM\'s loot is already sorted, labelled and signed in a handwriting that is not his: "Enjoy it. You\'ll need it. — S."',
+      'twist_loot: the plan §2.1 line');
+    t.eq(N.LINES.victory_final[0], 'Svammiel, from somewhere far below: "Fine. FINE. ...Same time next week?"', 'victory_final: Svammiel\'s last word (plan §2.4)');
+    t.eq(N.LINES.act_clear_twist[0], 'The DM, from under his screen: "He\'s my DM. He has never once let me win. ...Good luck."', 'act_clear_twist: V §4.3 step 8');
+    // the foreshadowing (V §3.3) sits in the classic pools; act 4's own pools replace them there
+    Object.keys(FORESHADOW).forEach(function (k) {
+      FORESHADOW[k].forEach(function (re) { t.eq((N.LINES[k] || []).filter(function (l) { return re.test(l); }).length, 1, k + ': the foreshadowing line ' + re); });
+    });
+    // the demoted DM whispers in act IV
+    t.ok(N.VARIANTS['boss_start@a4'].concat(N.VARIANTS['idle_dm@a4'], N.LINES.act_intro_4).filter(function (l) { return /whisper/.test(l); }).length >= 3,
+      'the demoted DM whispers in act IV');
+    // [review V3] the in-fight variants play at every act-4 fight, Svammiel's own included (the floor boss, on the board,
+    // and no loot at the campaign's end): no line calls the opponent a mini-boss or a favourite, promises loot, puts
+    // Svammiel out of sight, or calls the opponent "it" (Galbraith, Svammiel and the squads are he / she / they)
+    ['boss_start', 'round_start', 'enemy_turn', 'initiative', 'victory', 'defeat', 'hero_downed'].forEach(function (base) {
+      const bad = (N.VARIANTS[base + '@a4'] || []).filter(function (l) { return /mini-?boss|favourite|\bloot\b|out of sight|\bSomewhere, (?:Svammiel|a demon is tapping)|\bits\b|\bThis one\b/i.test(l); });
+      t.eq(bad.join(' | '), '', base + '@a4: every line holds at the doors and at the floor boss\'s fight');
+    });
+  });
+
+  T.suite('narrative: V3 — the @a4 variants replace their base pools in act 4, and only there', function (t) {
+    const N = DD.Narrator;
+    if (!N || !N.VARIANTS || typeof DD.narrationKey !== 'function') { t.skip('core narration variants / narrator not loaded'); return; }
+    Object.keys(A4_VARIANTS).forEach(function (base) {
+      t.eq(DD.narrationKey(base, 4), base + '@a4', base + ': act 4 reads ' + base + '@a4');
+      [1, 2, 3].forEach(function (a) { t.eq(DD.narrationKey(base, a), base, base + ': act ' + a + ' reads the classic pool'); });
+    });
+    V3_NARRATION_KEYS.forEach(function (k) { t.eq(DD.narrationKey(k, 4), k, k + ': no variant of its own'); });
+    if (!DD.Combat || !DD.getHero('test_knight') || !DD.getEnemy('test_grunt')) { t.skip('needs the engine and tests/fixtures.js for the in-fight check'); return; }
+    const savedRun = DD.Run ? DD.Run.state : null;
+    if (DD.Run) DD.Run.state = null;
+    try {
+      const vars = { hero: 'Kiri', enemy: 'Goblin Grunt', n: 4, gold: 9, name: 'Kiri', ally: 'Slate' };
+      const filled = function (k) { return (DD.defs.narration[k] || []).map(function (l) { return DD.util.fmt(l, vars); }); };
+      [[4, '@a4'], [2, '']].forEach(function (x) {
+        DD.Combat.sandbox({ w: 6, h: 6, seed: 'narr:a4:' + x[0], cameo: false, enemyAi: false, noPlan: true,
+          encounter: { id: 'zz_narr_act' + x[0], act: x[0], kind: 'boss', name: 'Test Door', objective: { type: 'killAll' } },
+          heroes: [{ id: 'test_knight', x: 1, y: 1 }], enemies: [{ id: 'test_grunt', x: 4, y: 4 }] });
+        t.eq(DD.narrationAct(), x[0], 'a sandbox fight of act ' + x[0] + ' narrates as act ' + DD.narrationAct());
+        Object.keys(A4_VARIANTS).forEach(function (base) {
+          const pool = filled(base + x[1]);
+          for (let i = 0; i < 5; i++) {
+            const line = DD.narrate(base, vars, DD.RNG('narr:a4:' + base + ':' + i));
+            if (!t.ok(pool.indexOf(line) >= 0, 'act ' + x[0] + ': ' + base + ' draws from ' + base + x[1] + ' ("' + line + '")')) break;
+          }
+        });
+      });
+    } finally { if (DD.Run) DD.Run.state = savedRun; }
+  });
+
+  // act-4 tips checked against the source rather than in-engine (flavour the run layer keeps by design: rest stops are
+  // never fights, and no cheat reaches a tavern)
+  const A4_SOURCE_ONLY = [/^The tavern rug is the one floor Svammiel doesn't control/];
+  function act4Encounters() {
+    return Object.keys(DD.defs.encounters).map(function (id) { return DD.defs.encounters[id]; })
+      .filter(function (e) { return e && e.act === 4 && !/^test_/.test(e.id); });
+  }
+  /** Does `o` (walked to depth 7) hold a string matching re? */
+  function deepHas(o, re, depth) {
+    depth = depth || 0;
+    if (o === null || o === undefined || depth > 7) return false;
+    if (typeof o === 'string') return re.test(o);
+    if (typeof o !== 'object') return false;
+    return Object.keys(o).some(function (k) { return deepHas(o[k], re, depth + 1); });
+  }
+  /** Registered enemy ids an encounter names anywhere in its def (its line-up, objective, layout legend). */
+  function enemiesOf(enc, depth, out) {
+    out = out || [];
+    depth = depth || 0;
+    if (enc === null || enc === undefined || depth > 7) return out;
+    if (typeof enc === 'string') { if (DD.getEnemy(enc) && out.indexOf(enc) < 0) out.push(enc); return out; }
+    if (typeof enc === 'object') Object.keys(enc).forEach(function (k) { enemiesOf(enc[k], depth + 1, out); });
+    return out;
+  }
+
+  T.suite('narrative: V3 — act-4 tips: each true in the build (checked, or skipped while its content is missing), count-free and gated', function (t) {
+    const N = DD.Narrator;
+    const tips = (N && N.LINES.tips_act4) || [];
+    t.eq(tips.length, V3_COUNTS.tips_act4, tips.length + ' act-4 tips');
+    // gated: none sits in the ungated tips pool, and run_start_seen stays out of run_start (their readers add them after
+    // the seen.bosses.svammiel gate)
+    const plain = DD.defs.narration.tips || [];
+    t.eq(tips.filter(function (x) { return plain.indexOf(x) >= 0; }).join(' | '), '', 'no act-4 tip in the plain tips pool');
+    t.eq(((N && N.LINES.run_start_seen) || []).filter(function (x) { return (DD.defs.narration.run_start || []).indexOf(x) >= 0; }).join(' | '), '',
+      'run_start_seen stays out of run_start');
+    // the order tip names no number (any count of doors); the goats' four are the addendum's (§17.7)
+    const order = tips.filter(function (x) { return /pick the order of the mini-bosses/.test(x); })[0];
+    t.ok(!!order && !/\b(?:one|two|three|four|five|six|\d+)\b/i.test(order), 'the order tip is count-free: "' + order + '"');
+    ['A bar takes two goats: one starts it, another finishes it. Shut one up in between and the bar hangs.',
+      'Clap back at the Rapping Goats\' mic stand: their verse turns on you. Send your sturdiest hero.',
+      'The goats need to see who they diss. Hay bales and barn posts hide you. Lil\' Kid just yells, though.',
+      'At half health the Rapping Goats wake whatever is snoring in the hay. It is a bear. It writes poetry.'].forEach(function (x) {
+      t.ok(tips.indexOf(x) >= 0, 'the goats\' tip: "' + x + '"');
+    });
+    const checked = {};
+    const skipped = [];
+    function tip(re) { const hit = tips.filter(function (x) { return re.test(x); }); t.eq(hit.length, 1, 'one act-4 tip matches ' + re); if (hit[0]) checked[hit[0]] = true; return hit[0]; }
+    function need(what, ok) { if (!ok) skipped.push(what); return !!ok; }
+    function section(name, fn) { t.tryRun('tips_act4: ' + name, fn); }
+    const cameo = DD.getCameo ? DD.getCameo('svammiel') : null;
+    const B = DD.BossSvammiel;
+
+    section('the doors are mini-bosses that wind up', function () {
+      tip(/^In Act IV every door is a mini-boss, and mini-bosses wind up their big moves like bosses: marked tiles, an hourglass/);
+      t.ok(DD.AI && typeof DD.AI.windUp === 'function', 'DD.AI.windUp (marked tiles and an hourglass)');
+      const doors = act4Encounters().filter(function (e) { return e.gauntlet; });
+      if (!need('act-4 doors', doors.length)) return;
+      doors.forEach(function (e) {
+        t.ok(e.kind === 'boss' && e.weight === 0, e.id + ': a door is a boss fight');
+        const fams = enemiesOf(e).map(function (id) { return id.split('_')[0] + '_'; }).filter(function (f, i, a) { return a.indexOf(f) === i; });
+        const winds = Object.keys(DD.defs.skills).filter(function (id) {
+          return fams.some(function (f) { return id.indexOf(f) === 0; }) && /^Wind-up/.test(DD.skillDesc(DD.getSkill(id), 1, null));
+        });
+        t.ok(winds.length > 0, e.id + ': its mini-boss winds up (' + winds.join(', ') + ')');
+      });
+    });
+    section('Svammiel cheats out loud', function () {
+      tip(/^Svammiel cheats, but always out loud: the banner names the cheat and its exact effect, and the rule bar keeps it until it ends/);
+      if (!need('the svammiel cameo (svammiel.js)', cameo)) return;
+      const ids = Object.keys(cameo.cheats || {});
+      t.ok(ids.length > 0, ids.length + ' cheats');
+      ids.forEach(function (id) {
+        const c = cameo.cheats[id];
+        t.ok(typeof c.name === 'string' && c.name.length > 0 && typeof c.desc === 'string' && c.desc.length > 8 && !!c.icon, id + ': a name, an icon and an exact desc');
+      });
+    });
+    section('round cheats a round ahead', function () {
+      tip(/^Svammiel announces his round cheats a round ahead\. Read the "Next round" chip, then plan\./);
+      if (!need('DD.BossSvammiel', B && B.DECK && B.CHEATS)) return;
+      const deck = [].concat(B.DECK.petty || [], B.DECK.blatant || []);
+      const late = deck.filter(function (id) { return !(B.CHEATS[id] && B.CHEATS[id].next === true); });
+      t.ok(deck.length > 0 && !late.length, 'every Round Cheat is announced a round ahead (next: true)' + (late.length ? ': not ' + late.join(',') : ''));
+    });
+    section('the kids\' table', function () {
+      tip(/^The DM sits at the kids' table in Svammiel's fight\. Ask him for a Ruling: it cancels a cheat and hurts Svammiel\./);
+      if (!need('Svammiel\'s fight (svammiel.js)', B && DD.getObject('svam_dm_table'))) return;
+      t.ok(typeof B.askRuling === 'function' && !!B.N && B.N.rulingDmg > 0, 'a Ruling: askRuling, ' + (B.N && B.N.rulingDmg) + ' damage to him');
+    });
+    section('Svammiel flies', function () {
+      tip(/^Svammiel flies: lava, fire, puddles and traps never touch him\. Until somebody catches him cheating\./);
+      const w = DD.getStatus('svam_wings');
+      if (!need('svam_wings (svammiel.js)', w)) return;
+      t.ok(!!w.flying, 'Wings (Graph Paper): flying');
+      t.ok(!!DD.getStatus('svam_caught') && !!B && typeof B.caught === 'function', 'CAUGHT CHEATING grounds him');
+    });
+    section('the order of the doors', function () {
+      tip(/^In Act IV you pick the order of the mini-bosses, with rests, shops and events in between\. Then the floor boss\./);
+      const g = DD.Balance && DD.Balance.map && DD.Balance.map.gauntlet;
+      t.ok(!!g && ['tavern', 'shop', 'event'].every(function (k) { return (g.between || []).indexOf(k) >= 0; }), 'between doors: tavern, shop and event stops (' + JSON.stringify(g && g.between) + ')');
+      const finale = act4Encounters().filter(function (e) { return e.finale; });
+      if (need('the floor boss (finale)', finale.length)) t.ok(finale.every(function (e) { return e.kind === 'boss'; }), 'then the floor boss');
+    });
+    section('the swap move', function () {
+      tip(/^Heroes can swap places with an adjacent ally as a move\. On a stirring spot, that means the spot never comes free\./);
+      t.ok(!!DD.Combat && typeof DD.Combat.swap === 'function' && typeof DD.Combat.canSwap === 'function', 'the swap move (DD.Combat.canSwap / swap)');
+      if (need('the Coven (coven.js)', DD.getEncounter('boss_coven'))) t.ok(!!DD.getObject('cov_spot'), 'the Coven\'s Stirring Spots');
+    });
+    section('Galbraith\'s Counterspell', function () {
+      tip(/^Galbraith counters one spell a round\. Swords, arrows and corgis go straight through\./);
+      const enc = DD.getEncounter('boss_galbraith');
+      if (!need('Galbraith (galbraith.js)', enc)) return;
+      t.ok(deepHas(enc, /counterspell/i) || !!DD.getSkill('gal_counterspell') ||
+        Object.keys(DD.defs.statuses).some(function (id) { return /^gal_/.test(id) && /counterspell/i.test(id + ' ' + DD.getStatus(id).name); }), 'Galbraith\'s Counterspell exists');
+    });
+    section('the Gardener\'s plants burn', function () {
+      tip(/^The Gardener's plants burn\. Fire in a greenhouse/);
+      const v = DD.getEnemy('gard_vine');
+      if (!need('the Gardener (gardener.js)', DD.getEncounter('boss_gardener') && v)) return;
+      t.ok((v.tags || []).indexOf('plant') >= 0 && ((v.resist || {}).fire || 1) > 1, 'Strangler Vine: a plant that takes extra fire damage (' + JSON.stringify(v.resist) + ')');
+    });
+    section('the League\'s bodies', function () {
+      tip(/^Break the League's bodies, or Zargash prays them back up\./);
+      if (!need('the League (league.js)', DD.getEncounter('boss_league'))) return;
+      const body = DD.getObject('lg_body');
+      t.ok(!!body && body.hp > 0, 'Villain\'s Body: breakable (' + (body && body.hp) + ' HP)');
+      t.ok(!!DD.getSkill('lg_revival') && !!DD.getEnemy('lg_zargash'), 'Zargash\'s Spiteful Revival');
+    });
+    section('the Coven\'s Eye', function () {
+      tip(/^Whoever holds the Coven's Eye runs the Coven's turn\. Take her down and they act separately\./);
+      if (!need('the Coven (coven.js)', DD.getEncounter('boss_coven'))) return;
+      const g = DD.getEnemy('cov_granny'), b = DD.getEnemy('cov_brine');
+      t.ok(!!g && !!b && !!g.actsWithOwner && !!b.actsWithOwner, 'Granny and Brine act on the Eye-holder\'s turn (actsWithOwner)');
+    });
+    section('the DM\'s counters', function () {
+      // [review V3] not "for every cheat": svammiel.js plays no counter for his snap cheats (Reroll!, That's a 1 Now) nor
+      // for the silent phase chips (Cutscenes, Pencilled HP, My REAL Dice); the tip claims only what the log shows
+      tip(/^The DM whispers counters to Svammiel's cheats in the combat log\. Read the log; he is on your side now\./);
+      const ids = cameo ? Object.keys(cameo.cheats || {}) : (DD.SvammielLines ? DD.SvammielLines.CHEATS : []);
+      const miss = ids.filter(function (id) { return !/^DM \(whispering\): "/.test((DD.defs.narration['svam_counter_' + id] || [])[0] || ''); });
+      t.ok(ids.length > 0 && !miss.length, ids.length + ' cheats, each with its whispered counter' + (miss.length ? ': not ' + miss.join(',') : ''));
+      // in practice: a cheat announced through DD.Cameo puts the DM's whisper in the combat log
+      if (!need('the real DD.Cameo (cameo.js) and tests/fixtures.js', cameo && cameo.cheats && cameo.cheats.svam_rule_zero && DD.Cameo && !DD.Cameo.stub &&
+        DD.Combat && DD.getHero('test_knight') && DD.getEnemy('test_grunt'))) return;
+      DD.Combat.sandbox({ w: 6, h: 4, seed: 'narr:a4:counter', noPlan: true, enemyAi: false, cameo: false,
+        encounter: { id: 'zz_narr_counter', act: 4, kind: 'boss', name: 'Test Door', objective: { type: 'killAll' } },
+        heroes: [{ id: 'test_knight', x: 1, y: 1 }], enemies: [{ id: 'test_grunt', x: 4, y: 2 }] });
+      const before = DD.Combat.state.log.length;
+      t.ok(!!DD.Cameo.cheat('svammiel', 'svam_rule_zero'), 'DD.Cameo.cheat announces Rule Zero');
+      const logged = DD.Combat.state.log.slice(before).map(function (l) { return l.text; });
+      t.ok(logged.indexOf((DD.defs.narration.svam_counter_svam_rule_zero || [])[0]) >= 0, 'the DM\'s whisper is in the log: ' + JSON.stringify(logged));
+    });
+    section('the League\'s powder kegs', function () {
+      tip(/^Shooting a barrel still works in Act IV\. The League calls theirs Evil Powder Kegs\. Same barrels\./);
+      const enc = DD.getEncounter('boss_league');
+      if (!need('the League (league.js)', enc)) return;
+      t.ok(!!DD.getObject('barrel_explosive') && (deepHas(enc, /Evil Powder Keg/) || deepHas(DD.League, /Evil Powder Keg/)),
+        'the League\'s arena labels its core explosive barrels "Evil Powder Keg" (plan §3.2)');
+    });
+    section('heals get the downed up', function () {
+      tip(/^Heals aimed at a downed ally still bring them back up\. Svammiel calls it cheating\. It isn't\./);
+      if (!need('tests/fixtures.js (test_cleric)', DD.Combat && DD.Targeting && DD.getHero('test_cleric') && DD.getSkill('test_heal'))) return;
+      DD.Combat.sandbox({ w: 6, h: 4, seed: 'narr:a4:heal', noPlan: true, enemyAi: false,
+        heroes: [{ id: 'test_cleric', x: 1, y: 1 }, { id: 'test_knight', x: 2, y: 1 }], enemies: [{ id: 'test_grunt', x: 5, y: 3 }] });
+      const cl = DD.Combat.heroes().filter(function (u) { return u.defId === 'test_cleric'; })[0];
+      const kn = DD.Combat.heroes().filter(function (u) { return u.defId === 'test_knight'; })[0];
+      DD.Act.kill(kn, null);
+      const at = DD.Targeting.validTargets(cl, DD.Act.makeSlot('test_heal', 1)).filter(function (p) { return p.x === kn.x && p.y === kn.y; })[0];
+      t.ok(kn.downed && !!at && at.revive === true, 'a single-target heal aimed at a downed ally is a revive');
+    });
+    section('the Rapping Goats', function () {
+      tip(/^A bar takes two goats: one starts it, another finishes it\./);
+      tip(/^Clap back at the Rapping Goats' mic stand: their verse turns on you\./);
+      tip(/^The goats need to see who they diss\. Hay bales and barn posts hide you\. Lil' Kid just yells, though\./);
+      tip(/^At half health the Rapping Goats wake whatever is snoring in the hay\. It is a bear\. It writes poetry\./);
+      const enc = DD.getEncounter('boss_goats');
+      if (!need('the Rapping Goats (goats.js)', enc)) return;
+      t.ok(deepHas(enc, /^rap_verse$/), 'the Verse is the fight\'s rule (rap_verse)');
+      const mic = DD.getObject('rap_mic_stand');
+      t.ok(!!mic && !!mic.interact, 'the Mic Stand: Clap Back (an interact)');
+      const bale = DD.getObject('rap_bale'), what = DD.getSkill('rap_what'), gruff = DD.getSkill('rap_gruff');
+      t.ok(!!bale && bale.blocksLos === true, 'Hay Bales block line of sight');
+      t.ok(!!what && what.target && what.target.los === false && !!gruff && (gruff.target || {}).los !== false, 'Lil\' Kid\'s WHAT?! needs no sight; Billy\'s Gruff Talk does');
+      t.ok(!!DD.getEnemy('rap_ursa'), 'the bear lyricist (Ursa Verse)');
+    });
+    tips.forEach(function (x) { t.ok(checked[x] || A4_SOURCE_ONLY.some(function (re) { return re.test(x); }), 'act-4 tip checked: "' + x + '"'); });
+    if (skipped.length) t.log('content not loaded yet, its act-4 tip check skipped: ' + skipped.join(', '));
+  });
+
+  T.suite('narrative: V3 — nothing a first run meets names Svammiel or a fourth act (spoilers), Benedick included', function (t) {
+    const SPOIL = /Svammiel|\bAct IV\b|\bfourth act\b|Under the Table|Floor Boss|\bact 4\b/;
+    NARRATION_KEYS.forEach(function (k) {
+      const bad = (DD.defs.narration[k] || []).filter(function (l) { return SPOIL.test(l); });
+      t.eq(bad.join(' | '), '', k + ': no act-4 spoiler in the classic pool (every author)');
+    });
+    ours().forEach(function (ev) {
+      const text = typeof ev.text === 'function' ? DD.safe('event text', ev.text, ev, [null]) : ev.text;
+      const all = [ev.title, text].concat(ev.choices.map(function (c) { return c.label + ' ' + c.hint; })).join(' ');
+      t.ok(!SPOIL.test(all), ev.id + ': no act-4 spoiler');
+    });
+    // Benedick is no secret: nothing of his (the hero, his skills, items and lines) mentions act 4
+    const hb = DD.getHero('benedick');
+    if (!hb) { t.log('Benedick\'s hero file has not landed yet: his own text is checked once it does'); return; }
+    const strings = [];
+    function walk(o, d) {
+      if (o === null || o === undefined || d > 6) return;
+      if (typeof o === 'string') { strings.push(o); return; }
+      if (typeof o === 'object') Object.keys(o).forEach(function (k) { if (k !== 'sprite') walk(o[k], d + 1); });
+    }
+    walk({ name: hb.name, epithet: hb.epithet, blurb: hb.blurb, barks: hb.barks, passive: hb.passive && hb.passive.desc }, 0);
+    Object.keys(DD.defs.skills).forEach(function (id) {
+      const s = DD.getSkill(id);
+      if (s.owner === 'benedick') { strings.push(s.name, DD.skillDesc(s, 1, null)); if (s.flavor) strings.push(s.flavor); }
+    });
+    Object.keys(DD.defs.items).forEach(function (id) { const it = DD.getItem(id); if (it.hero === 'benedick') strings.push(it.name, String(it.desc || ''), String(it.flavor || '')); });
+    t.eq(strings.filter(function (x) { return SPOIL.test(x); }).join(' | '), '', 'Benedick\'s ' + strings.length + ' texts: no act-4 spoiler');
   });
 })();

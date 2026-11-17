@@ -386,4 +386,92 @@
     t.ok(ir.hp === 1.1 && ir.dmg === 1.45, 'boss_dr_iris ×' + ir.hp + ' HP / ×' + ir.dmg + ' damage');
     if (DD.getHero('slate')) t.eq(DD.getHero('slate').stats.mov, 4, 'Slate moves 4');
   });
+
+  // ---- 11. V3: act 4 "Under the Table" and the 17th hero (BAL, Nov 15) -------------------------------------------------
+  // Campaign parties reach act 4 with three acts of items and Blessings, past three act bosses, with a tavern between doors:
+  // at ×1 they won the doors ~99% and Svammiel ~95-100%, a 35% four-act campaign against the user's "about 25%". act[4]
+  // adds ×1.3 damage; each door carries its own row toward the same campaign band (the long doors trade HP for damage);
+  // Svammiel carries the hardest row; the order scaling stays off (the door order is a free choice). His Master Dice break
+  // in one hit (AutoPlay caught him in ~20% of wins at 12 HP), the Radio Edit stays a whole-fight ban (the user was shown
+  // exactly that: no pass shortens it), and Benedick's only heal stays the Snail Mucin Serum (D9).
+  // docs/notes/balance.md "V3".
+  const A4_ROWS = {
+    act: { hp: 1, dmg: 1.3 },
+    boss_gardener: { hp: 0.75, dmg: 1.45 }, boss_league: { dmg: 1.05 }, boss_galbraith: { dmg: 0.95 }, boss_coven: { dmg: 0.9 },
+    // the audit (Nov 16-17): the goats pay the Radio Edit back on their own row (×1 damage); Svammiel ×1.1 / ×1.3 (91.5% of
+    // 142 fights at the pass's rows -> 86% of 167 on fresh seeds, the plan's 80-85%)
+    boss_goats: { hp: 0.8 }, boss_svammiel: { hp: 1.1, dmg: 1.3 },
+  };
+  const A4_FINALE = 'boss_svammiel';
+  /** The registered act-4 doors (not the fixture lanes). */
+  function a4Doors() {
+    return Object.keys(DD.defs.encounters || {}).map(function (k) { return DD.defs.encounters[k]; })
+      .filter(function (e) { return e && e.act === DD.MAX_ACT && e.gauntlet && !/^test_/.test(e.id); });
+  }
+  T.suite('balance: V3 act 4 — the gauntlet rows lean on damage, every door is tuned on its own, Svammiel carries the hardest row, the order stays free', function (t) {
+    withKnobs(function () {
+      const b = B();
+      b.campaign.acts = DD.MAX_ACT;   // read act 4's rows whatever the knob says (the flip is the integrator's)
+      const A4 = DD.MAX_ACT;
+      t.eq(DD.finalAct(), A4, 'act ' + A4 + ' is the campaign\'s last act inside this suite');
+      t.eq(json(b.act[A4]), json(A4_ROWS.act), 'act ' + A4 + ': ×' + b.act[A4].hp + ' HP, ×' + b.act[A4].dmg + ' damage (at ×1 campaign parties won the doors ~99%)');
+      Object.keys(A4_ROWS).filter(function (k) { return k !== 'act'; }).forEach(function (id) {
+        t.eq(json((b.encounters || {})[id]), json(A4_ROWS[id]), id + ': its row stays ' + json(A4_ROWS[id]));
+      });
+      t.eq(json(b.gauntlet), json({ hpPerBeaten: 0, dmgPerBeaten: 0 }), 'no order scaling: every door is tuned on its own, the party\'s order stays a free choice');
+      const doors = a4Doors();
+      if (!doors.length) { t.log('(no act-4 door loaded: the per-door checks are skipped)'); return; }
+      const fin = b.scale('normal', A4, 'boss', { encounter: A4_FINALE });
+      doors.forEach(function (e) {
+        const n = b.scale('normal', A4, 'boss', { encounter: e.id, gauntlet: { index: 3 } });
+        t.ok(n.dmg > 1 && n.dmg >= n.hp, e.id + ': harder than its content numbers and leaning on damage (×' + n.hp + ' HP, ×' + n.dmg + ' damage, the 4th door)');
+        t.ok(n.hp >= 0.7 && n.hp <= 1.2 && n.dmg <= 2, e.id + ': not by a silly amount');
+        const c = b.scale('casual', A4, 'boss', { encounter: e.id }), x = b.scale('brutal', A4, 'boss', { encounter: e.id });
+        t.ok(c.hp < n.hp && n.hp < x.hp && c.dmg < n.dmg && n.dmg < x.dmg, e.id + ': casual < normal < brutal');
+      });
+      t.ok(fin.hp >= 1 && fin.hp * fin.dmg > Math.max.apply(null, doors.map(function (e) { const s = b.scale('normal', A4, 'boss', { encounter: e.id }); return s.hp * s.dmg; })),
+        'the finale carries the hardest row of the act (×' + fin.hp + ' HP, ×' + fin.dmg + ' damage)');
+      // the act-3 fights never read act 4's rows (the twist leaves v2's acts 1-3 as they were)
+      t.eq(json(b.scale('normal', 3, 'boss')), json(b.scale('normal', 3, 'boss', { encounter: 'no_such_fight' })), 'act 3 reads its own row');
+      t.ok(b.scale('normal', 3, 'normal').dmg === b.act[3].dmg * b.kind.normal.dmg, 'act 3\'s regular fights keep act 3\'s damage row');
+      // a real door starts at the scaled numbers (combat.js reads the act and encounter rows through B.scale)
+      const enc = DD.getEncounter('boss_gardener'), def = DD.getEnemy('gard_gardener');
+      if (!enc || !def || !DD.Encounter || !DD.Combat || !DD.Combat.makeRunHero || !DD.getHero('test_knight')) { t.log('(the Gardener or the fixture heroes are not loaded: the live check is skipped)'); return; }
+      const party = ['test_knight', 'test_cleric', 'test_mage', 'test_rogue'].map(function (h) { return DD.Combat.makeRunHero({ id: h, level: 5 }); });
+      const setup = DD.Encounter.build(enc, party, { rng: DD.RNG('bal:a4'), difficulty: 'normal', act: A4 });
+      DD.Combat.start(setup, { seed: 7, headless: true, difficulty: 'normal', kind: 'boss', cameo: false });
+      const s = DD.Combat.state, sc = b.scale('normal', A4, 'boss', { encounter: enc.id });
+      const g = s && s.units.filter(function (u) { return u.defId === def.id; })[0];
+      t.ok(!!s && Math.abs(s.difficulty.hp - sc.hp) < 1e-9 && Math.abs(s.difficulty.dmg - sc.dmg) < 1e-9, 'a real Gardener fight starts at ×' + sc.hp + ' HP / ×' + sc.dmg + ' damage');
+      if (g) t.eq(g.maxHp, Math.max(1, Math.round(def.hp * sc.hp * b.tierHpOf('boss'))), 'the Gardener has ' + (g && g.maxHp) + ' HP (' + def.hp + ' × ' + sc.hp + ')');
+      if (DD.FX && DD.FX.reset) DD.FX.reset();
+    });
+  });
+
+  T.suite('balance: V3 act 4 — the economy and the levers it rests on: the markup, the Bribe, the door purses, 12-HP Master Dice, the Radio Edit whole-fight, Benedick\'s one heal', function (t) {
+    const b = B();
+    t.ok(b.priceAct[DD.MAX_ACT] >= 1.25 && b.priceAct[DD.MAX_ACT] <= 1.3, 'act ' + DD.MAX_ACT + ' shops: Svammiel\'s markup ×' + b.priceAct[DD.MAX_ACT]);
+    t.ok(b.prices.bribe >= 75 && b.prices.bribe <= 85, 'the Bribe costs ' + b.prices.bribe + ' (×the markup: ' + Math.round(b.prices.bribe * b.priceAct[DD.MAX_ACT]) + ')');
+    a4Doors().forEach(function (e) {
+      const r = e.reward || {};
+      t.ok(r.goldMult === 0.9 && r.itemRarity === 'rare', e.id + ': a door pays a boss purse × 0.9 and a rare (' + json(r) + ')');
+    });
+    const fin = DD.getEncounter(A4_FINALE);
+    if (fin) t.ok(fin.reward && fin.reward.goldMult === 0 && !fin.reward.itemRarity, 'Svammiel pays nothing (the run ends)');
+    const sv = DD.BossSvammiel;
+    if (sv && sv.N) {
+      // QA FIGHTS-08 (Nov 17): back to 12 (6 made CAUGHT one hit a die, a formality for a human); AutoPlay's two-hit
+      // objectValue is the RULES request that makes it chase them
+      t.ok(sv.N.masterHp >= 12, 'a Master Die has ' + sv.N.masterHp + ' HP: two hits of a typical skill, a puzzle for a human');
+      t.ok(sv.N.masterHint >= 45, 'AutoPlay prizes a Master Die (' + sv.N.masterHint + ')');
+      const radio = (sv.CAMEO_CHEATS || {}).svam_cameo_radio || (DD.getCameo && DD.getCameo('svammiel') && DD.getCameo('svammiel').cheats.svam_cameo_radio);
+      if (radio) t.eq(radio.rounds, -1, 'the Radio Edit bleeps its skill for the whole fight (the user was shown a whole-fight ban: never shortened)');
+      else t.log('(no Radio Edit def found)');
+    } else t.log('(svammiel.js not loaded)');
+    const ben = DD.Benedick, serum = DD.getItem && DD.getItem('ben_mucin_serum');
+    if (ben && serum) {
+      t.eq(ben.SERUM_HEAL, 3, 'the Snail Mucin Serum heals ' + ben.SERUM_HEAL + ' a stuck foe (his only heal, D9)');
+      t.ok(serum.desc.indexOf('heals ' + ben.SERUM_HEAL + ' HP') >= 0, 'its desc says so: ' + serum.desc);
+    } else t.log('(benedick.js not loaded)');
+  });
 })();

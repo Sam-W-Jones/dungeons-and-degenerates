@@ -408,3 +408,178 @@ Confirmed playtest findings that live in events.js (fix:content; narrator.js is 
   name test as `new RegExp('\b' + w + '\b')` (a backspace in a string, so it could never match); it uses `'\\b'` now and
   the lines pass. The D1 / D2 tips read right ("aim any single-target damage skill at an explosive barrel", "Slate is
   immovable: he can start a swap …").
+
+## V3 — act IV "Under the Table" and the 17th hero (NARRATIVE, Nov 14)
+
+Plan `.tmp/v3/design.md` §4.9, §5.1-§5.2, §5.5-§5.8, §8.2 row H, §8.4 NARRATIVE; the voice of `.tmp/v3/design/voice.md`
+(V) §3.3, §4.3-§4.4, §5.5-§5.6, §6, §7, §9.3-§9.6, §15; the goats addendum §15 / §17.7; the Benedick addendum §19.
+
+### Files
+| File | What |
+|---|---|
+| `js/data/svammiel_lines.js` (new) | every `svam_*` pool of plan §5.2: `svam_twist` (exactly the user's line), `svam_twist_react_<hero>` ×17, `svam_twist_panel` (new: V §4.3 step 7), `svam_cameo_<lane>` ×5 (8 each; the goats' verbatim), `svam_hero_<hero>` ×17 (6 each), `svam_back_<hero>` ×17 (3 each), `svam_sit_<situation>` ×19 (the keys svammiel.js `situation()` names), `svam_generic` (8), the interjections `svam_phase / _down / _env_kill / _signature / _long / _countered` (6-8 each: one per fight of the act, review V3) and `svam_member_down` (4), `svam_phase_goats` (2), `svam_sulk_<lane>` ×5 (2), `svam_bribe` (3), `svam_reason` (16), `svam_quip_<cheat>` (2; R4 Skill Ban 3 with the Radio Edit callback) and `svam_counter_<cheat>` (1) for all 25 cheats of svammiel.js (5 cameo incl. the Radio Edit, 12 round, 2 snap, 6 phase). The catalogue `DD.SvammielLines` (`HEROES`, `LANES`, `SITUATIONS`, `CHEATS`, `KEYS`, `TRIGGER`, `all()`) serves the suites. |
+| `js/data/narrator.js` | the V3 keys in `TOKENS` / `LINES` (`act_intro_4` 8, `act_clear_twist` 3, `twist_loot` 1, `campaign_won` 3, `victory_final` 3, `tips_act4` 19, `run_start_seen` 3, `svam_defeat` 2, `svam_phase2` 2, `svam_phase3` 2) and `DD.Narrator.V3_KEYS`; `DD.Narrator.VARIANTS`: 19 `@a4` pools (`boss_start, round_start, enemy_turn, initiative, victory, defeat, hero_downed, level_up, idle_dm, shop_greet, shop_buy, shop_broke, shop_leave, tavern_greet, rest, recruit, map_enter, gameover_title, victory_title`); the six foreshadowing lines (V §3.3) in `idle_dm` ×2, `act_clear`, `boss_start`, `act_intro_3`, `victory`; `badTokens` holds an `@a<act>` key to its base key's tokens (the wave-0 request). |
+| `js/data/events_act4.js` (new) | 7 events, ids `ev_a4_*`, `acts: [4]`, no `api.combat`: The DM's Support Group, Svammiel's Suggestion Box, League Recruitment Drive (Skylla, and Zarak mouthing "ORC"), The Coven's Bake Sale, Galbraith's Book Signing, The Gardener's Compost Heap (plan §5.6), Herd Mentality's Merch Table (the optional seventh, addendum §17.7). |
+| `js/data/events.js` | `ev_ben_bistro` "Le Bistro Escargot" (the Benedick addendum §19.1: acts 1-3, weight 2, `withHero('benedick')`, he/him, nothing about act 4). |
+| `tests/content/svammiel_lines.js` (new) | 10 suites `svammiel_lines: …` |
+| `tests/content/events_act4.js` (new) | 4 suites `events_act4: …` |
+| `tests/content/narrative.js` | `HERO_EVENTS` / `HERO_NAMES` += benedick, `V3_ONE_EVENT_HEROES = ['benedick']`, the bistro's outcome checker; `ours()` = the classic events (the registry suite checks every `ev_*` is classic or `ev_a4_*` with `acts [4]`); the static key table includes the V3 keys; 4 new suites `narrative: V3 — …`. |
+
+Run: `tools/test.sh "suite=svammiel_lines,events_act4,narrative&isolate=narrat,svammiel,events"` (one Chrome run).
+
+### What the suites check (plan §8.4 NARRATIVE)
+- `svam_twist` is exactly "You thought this was over? I, SVAMMIEL, CONTROL ALL."; the cameo plays it at the act-3 victory.
+- Coverage from the registry: every id of `DD.defs.heroes` (and the V3 roster) has ≥ 6 roasts, ≥ 3 comebacks and a twist
+  reaction, so an 18th hero fails loudly; Benedick's are the addendum's, verbatim; every door lane (the plan's five and
+  the registry's) has 8 announcer lines and 2 sulks; every gauntlet encounter's `cameo.start` pool exists; every cheat of
+  the svammiel cameo (and the plan's 25) has 2+ quips and a `DM (whispering): "…"` counter; the goats' pools verbatim.
+- Shape: bubbles ≤ 70 (≤ 92 filled with the longest names), counters ≤ 160, tokens only where the trigger fills them
+  (`{hero}` in roasts, the down / signature / env-kill interjections and the hero situations, `{name}` in
+  `svam_sit_fallen`, `{enemy}` / `{n}` where cameo.js fills them), no pronoun after a token-named hero, uppercase
+  starts, no v1 talk, no line in two `svam_*` pools (C5's `svam_finale_open` included), no count of doors.
+- The party filter: a roast names its hero in exact case and nobody else; comebacks and reactions name no other hero;
+  every other pool names no hero, "Mayor" / "Professor" included; in a fight `DD.Act.partyLines` keeps exactly that.
+- Pronouns: each sentence naming one act-4 character (Svammiel, the Gardener "it", Galbraith, Skylla, Kelek, Zarak,
+  Warduke, Zargash, the three hags, Billy Bleatz, Lil' Kid, DJ Turnip, Ursa Verse, the DM) across every V3 line and the
+  act-4 events; the heroes' own pronouns in their roasts; an advisory log over other owners' act-4 pools.
+- Tone: no dialect markers, never "black", Zarak is the dwarf who says orc, no draft League names.
+- The svammiel cameo (C5) finds every pool: its prefixes, `DD.Cameo.keyOf`, each trigger key, each door's sulk through its
+  `keyOf`, every cheat, every situation.
+- A run never repeats a line: the real `DD.Cameo` plays the start cameos of every door (the registry's ∪ the plan's five)
+  and the finale for 7 runs with the roster rotated (quiet runs: hero roasts; busy runs: every situation), barks included.
+- Act-4 display names (enemies, skills, statuses, objects, surfaces, cheats with `svam_ gard_ lg_ gal_ cov_ rap_` ids)
+  never equal a hero-side, classic or other-door name, nor Benedick's reserved names (one family may repeat its own: the
+  cameo's and the finale's "The Floor Is Lava").
+- narrative: the V3 keys' counts and shape; the 19 variants (≥ the plan's counts, base tokens, ≤ 160 / titles ≤ 50, no
+  hero named, no count of doors, no near-repeats); the plan's exact lines; the foreshadowing; `DD.narrationKey` and
+  `DD.narrate` in an act-4 vs an act-2 sandbox fight; every act-4 tip checked in-engine or in the registry (skipped with a
+  log while its content is missing; the rug tip is source-only), gated (not in `tips`; `run_start_seen` not in
+  `run_start`), the order tip count-free, the goats' four; spoilers: no classic pool (every author), classic event or
+  Benedick text names Svammiel / Act IV / a fourth act.
+- events_act4: registry and copy (the v2 rules), `acts [4]`, never a fight (the resolve source and in practice), gold
+  gates, enough events for the registry's event stops; every choice over 6 seeds against its hint; offered only in act 4
+  (and `pickEvent` never draws one in act 2); outcomes name heroes without pronouns, full pockets, 1-HP heroes.
+
+### Deviations (from the plan / V, each with its reason)
+- **Count-free text** (plan §8.1; five doors, and any later count): V's "Four of his favourites" (act_intro_4) → "All of
+  his favourites"; map_enter "four rooms" / "Four doors" → a room for each favourite / "A row of doors";
+  `svam_sit_last_mini` "Three down?" → "All my toys but one?"; generic "Four heroes. Adorable." → "A party this size?" (a
+  party can be smaller); the League's "Five against four" → the Zarak gag; recruit "act four" → "the last act";
+  campaign_won "Four acts…" → "One campaign…". A lint keeps counts out.
+- **Tips stay true**: tip 1 says "every door is a mini-boss" (Svammiel is the floor boss) and "marked tiles" (the v1-talk
+  lint bans "red tiles"); tip 3 says "his round cheats" are announced a round ahead (snap and phase cheats aren't).
+- **Every roast names its hero** (the party filter, and the bubble must say who): V's Marbles kung-fu line, Ellaria's
+  corgi line and Zarathor's tiefling line now name them.
+- **No line twice in a run**: the Coven's "…zero chill" → "They share. You won't." (the goats' verbatim announcer has
+  it); R1's quips don't reuse the cameo lava's line; Sparrow's and Hjalmar's roasts reworded off C5's named barks;
+  Pebbles' carpet line → the tavern rug; Sparrow's twist reaction (V's echoed her comeback); campaign_won does not repeat
+  `svam_defeat`'s line (both show within seconds), and `svam_defeat` #2 is new for the same reason.
+- **Honest quips and counters**: The Tilt's quip no longer says "toward my throne" (the direction varies); Moving Costs
+  Extra's no longer says "2 AP" and Hype Confiscated's no "fifty percent" (knobs); counters quote no knob and name no
+  hero (cameo.js runs counters through the party filter: C5's fallback lava counter naming Pebbles vanishes without him).
+- `svam_long` "Round eight?" → "Round {n}?" (the trigger fires from round 8, maybe later); `svam_countered` fits its
+  trigger (an interrupted wind-up, not a countered cheat); `svam_member_down` avoids a singular "them".
+- New key `svam_twist_panel` (V §4.3 step 7's three lines; META-UI may read it). `victory_final` is Svammiel's last word
+  (the plan's 😈 line first), `campaign_won` the DM's narration (V §9.6). `svam_phase2/3`: two lines each (V: one).
+- Events: ids `ev_a4_*`; hints in the v2 wording ("Pay 10 gold." gates its choice; V had "Spend"); the League event is
+  Skylla's (Baba Yaga signs the pay) with Zarak mouthing "ORC"; texts trimmed to 2-5 sentences (the Bake Sale sign, the
+  Book Signing's "Vol. CCCXII" → "(Volume 312)"); a 1-HP hero says "ow" instead of "loses 0 HP"; the Compost Heap's
+  sprinkler → garden shears (the plan cut the sprinklers).
+- `ev_ben_bistro`: "a salad that Benedick insists on finishing personally" (no pronoun a stand-in could get wrong) and
+  the review prints the gold the chef really paid (a gold Blessing raises it).
+
+### Requests
+- **C5 (`svammiel.js` `situation()`)**: situations crowd out the hero roasts. In a real act 4 nearly every start cameo
+  finds one (first; mvp / downed_last after every fight; from_* at 50%; rich with act-4 gold; last_mini…), so the
+  heroes' roasts and comebacks ("every hero gets the last word") rarely play. V §6.2's rule of thumb is 2-3 situations
+  and 2-3 hero roasts a run: e.g. at most every other start cameo is a situation (first and last_mini excepted), or the
+  deterministic ones at 50% like from_*. (The no-repeat suite plays quiet and busy runs either way.)
+- **META-UI** (`title.js`, `gameover.js`, `map.js`): `tips_act4` join the loading tips after the `seen.bosses.svammiel`
+  gate; the four-act final victory shows `campaign_won` (DM badge) then `victory_final` (😈); `act_intro_4` on the Act IV
+  banner; optional: `svam_twist_panel` for the Twist panel's Svammiel line (V §4.3 step 7).
+- **META-RUN** (`run.js newRun`): after the gate, `run_start` draws from `run_start` + `run_start_seen` (plan §2.6).
+- **C1 / C3 (any door with a phase)**: `DD.Cameo.say('svammiel', 'svam_phase')` at the phase change; **C6**:
+  `DD.Cameo.say('svammiel', 'svam_phase_goats')` at the bear's entrance (both pools exist).
+- **Lead (`js/loader.js`)**: the wave-0 isolate request (P9) still stands; until then `svammiel_lines.js` and
+  `events_act4.js` load in every isolated run (harmless: they only register lines and events).
+
+### Known issues
+- Full run (Nov 14): 1132 suites, one failure outside this area: `kit: finish D1 — object texts and tips say "any
+  single-target damage skill"`: `lg_body` (C2, `league.js`, in progress) lacks the D1 wording. The MapGen "unknown theme
+  a4_lair / a4_underfloor" warnings are MAPGEN's act-4 themes, not landed yet.
+- The act-4 tip checks for the Gardener, Galbraith, the Coven and the goats skip (logged) until those files land; the
+  no-repeat and coverage suites play Benedick with a fixture stand-in until his file lands.
+
+## Review (V3) — adversarial review of the narrative work (Nov 15)
+
+Verdict: **fixed** (7 findings fixed in this area, each with a regression check; the rest passed on below). Checked by
+running code: the owned suites, the full `tools/test.sh`, a scratch harness (since removed) that played 12 whole act-4
+gauntlets through `DD.Run` + `DD.AutoPlay` (`campaign.acts` 4, `startAtAct(4)`, every door plus Svammiel; every cameo
+and narrator log line and every bark dumped) and 4 act-3 runs through the DM (acts 4: the twist; acts 3: no twist), and
+one shot (`debug=1&acts=4&act=4&screen=event&event=ev_a4_book_signing`).
+
+### Fixed (most severe first)
+1. **Act-4 in-fight narration was false at Svammiel's own fight.** The `@a4` variants play at every act-4 fight, the
+   finale too: the transcript showed "Mini-boss! Down here everything is a mini-boss…" opening `boss_svammiel`, "The
+   mini-boss acts. Somewhere, Svammiel applauds." while he stood on the board, and victory lines about "the mini-boss",
+   "another favourite toy" and the loot table at the campaign's end (the finale pays no loot). Rewritten so every line
+   of `boss_start / round_start / enemy_turn / victory / hero_downed @a4` holds at the doors and at the floor boss;
+   `act_intro_4` "Every fight down here is a mini-boss" → "Every door down here hides a mini-boss"; `level_up@a4` "the
+   next mini-boss's HP" → "the next fight's HP". Lint in `narrative: V3 — the act-4 keys…`.
+2. **Pronoun**: `boss_start@a4` "This one winds up its big moves" played at Galbraith (he), Svammiel (he) and the squads.
+   Now "Down here the big moves get wound up first". Same lint (`its`, "This one").
+3. **Interjections repeated within a run.** Act-4 fights run long, so `svam_long` (2 lines) played 52 times in 12 runs
+   (4.3 a run) and the run memory reset the pool: 24 repeated cameo lines in 12 runs, in 11 of them. Every interjection
+   that can fire in any fight now has a line per fight of the act (`svam_phase` 6, `svam_down` 8, `svam_env_kill` 6,
+   `svam_signature` 6, `svam_long` 7, `svam_countered` 6; `svam_member_down` 4 for the squad doors). After: **0
+   repeats** in the same 12 runs. The suite's "2-3 interjections" check is now a registry floor (doors + the finale).
+4. **`svam_down` said the hero was still lying there** ("napping on my floor", "…Stay."), but `unit:downed` is emitted
+   after the `onDowned` hooks, so an instant revive comes first: the transcript logged "Sparrow is back up" and then
+   "Sparrow is napping on my floor". Every line is now about the fall itself; lint. (RULES request below.)
+5. **`svam_countered` "{enemy} had a whole bit planned!"** made Svammiel name himself in his own fight (his bark:
+   "Svammiel had a whole bit planned! Rude."). Replaced by lines that fit both; lint (no `{enemy}` in that pool).
+6. **Tip "The DM whispers a counter for every cheat in the combat log" was false**: `svammiel.js` whispers none for the
+   snap cheats (`spendSnap`: Reroll!, That's a 1 Now) nor for the silent phase chips (Cutscenes, Pencilled HP, My REAL
+   Dice); their pools exist but never play. Tip now "The DM whispers counters to Svammiel's cheats in the combat log…";
+   the tip check also plays `DD.Cameo.cheat('svammiel', 'svam_rule_zero')` in a sandbox and finds the whisper in the log.
+7. **Galbraith's Book Signing**: the typo "spells "Galbraith" with one L" is the correct spelling (his own death line
+   insists on "one L"). Now "with two Ls"; the event checker asserts it.
+
+### Verified (no change needed)
+- `svam_twist` exact, through a real run: the DM falls, "You thought this was over? I, SVAMMIEL, CONTROL ALL.", the
+  narrator's table shake and "Oh no. That's my DM.", a hero's reaction bark, `twist_loot` as the DM's rewards text,
+  `act_clear_twist` on the act clear, act 4 next; with acts 3 the DM ends the run as v2 (no cameo, no twist).
+- Tips (19): each re-read against the landed boss files (Counterspell is spell-only, corgi attacks are `attack`; vines
+  `plant` + fire weakness; `lg_body` + Spiteful Revival; the Eye-holder's death splits the turn; Help Up 2 AP; Hay
+  Bales / Barn Posts block sight, WHAT?! needs none; the bear at the goats' combined half HP; act-4 prices ×1.25).
+- Benedick's six roasts, three comebacks and twist reaction are the addendum's verbatim and he/him; `ev_ben_bistro` acts
+  1-3, his name in the text, nothing of act 4. The goats' Svammiel pools verbatim; the Radio Edit quips / counter and
+  the R4 callback present. League lines: Kelek's Staff of Power / Ringlerun, Zarak the "dwarf" who says orc, Skylla's
+  Baba Yaga. Ship dark: the act-4 events, tips and `run_start_seen` stay gated; the classic pools name nothing of act 4.
+- Act-4 events through the run API (the suite's 6 seeds a choice) and on screen (the shot: text and hints fit).
+
+### Passed on (not this area's files)
+- **C5 `situation()` starves the hero roasts** (the narrative request, now measured): 12 of 12 simulated runs played
+  **0 hero roasts** in 72 start cameos (a situation matched every time; `mvp` follows every fight). Every hero's six
+  roasts (Benedick's included) never play; comebacks come only after `mvp` / `downed_last`. V §6.2's rule of thumb is
+  2-3 situations and 2-3 hero roasts a run.
+- **C5 / RULES: the door sulks are budgeted** (a `quip` interjection): 10 sulks in ~55 door wins, the goats' and the
+  League's ~0-1 in 12 runs. Suggest `force: true` on the `sulk` trigger (it ends the fight; the budget is for mid-fight).
+- **RULES (`cameo.js`)**: `heroDowned` should skip a hero no longer `downed` (revived by an `onDowned` hook).
+- **C5**: whisper the counters of the snap cheats and of the phase-3 chips (the pools exist), then the tip can say
+  "every" again.
+- `svam_signature` never played: AutoPlay fired 3 signatures in ~66 act-4 fights (BAL / AutoPlay, informational).
+- **META-RUN**: `run.js newRun` still ignores `run_start_seen` (plan §2.6). **Lead**: the `js/loader.js` isolate filter
+  for `svammiel_lines.js` / `events_act4.js` (P9) is still open.
+
+### Numbers
+- Owned suites: 31 suites, 22,905 assertions, 0 failures. Full run: 1227 suites, 143,159 assertions, 0 failures.
+- The 12-run harness: before 24 repeated cameo lines (11 runs), after 0; interjections per 12 runs: `svam_long` 52,
+  `svam_member_down` 32, `svam_down` 29, `svam_phase` 22, `svam_countered` 18, `svam_phase_goats` 10, `svam_env_kill` 6,
+  sulks 10, hero roasts 0.
+
+## QA fixes (Nov 17, QA FIXER content cluster; the full list: docs/notes/boss-svammiel.md "QA fixes (Nov 17)")
+- `js/data/svammiel_lines.js` counters: **voice-1** That's a 1 Now (cameo) says "the first big hit on him"; **FIGHTS-05**
+  the counters whispered at an announcement (No Healing, No Signatures, Hype Confiscated) never say "this round" early;
+  **FIGHTS-06** the Coven lava counter says it never burns a hag. **voice-4**: the Skill Ban "radio edit" quip stays in
+  `svam_quip_svam_ban`; svammiel.js plays it only after the Radio Edit landed this run. Suite "svammiel_lines: QA".

@@ -7,6 +7,12 @@
  * at travel time when they are missing.
  * ActMap = { act, rows: 8, nodes: { [id]: Node }, start: [ids], boss: id, layout: [[ids per row]], cleared }
  * Node   = { id, row, col, x (0..1 horizontal layout hint), type, links: [ids], encounterId?, eventId?, done }
+ * V3 (ARCHITECTURE §9.3): an act whose registry has `gauntlet` (or `finale`) encounters gets the gauntlet instead —
+ * Svammiel's floor. With L lanes (read from the registry, never counted here): rows = 2L + 2 — the lobby, one door row
+ * per lane (a `miniboss` node for every lane, in lane order) with a stop row between doors, the last stop and the
+ * floor boss; consecutive rows are linked completely. Beating a door seals its lane on every door row, so door row k
+ * offers the L − k lanes still open. ActMap (gauntlet) adds { shape: 'gauntlet', lanes: [{ id, encounterId, order }],
+ * beaten: [laneIds] }; door nodes { type: 'miniboss', lane, encounterId, sealed?, result? }.
  */
 (function () {
   'use strict';
@@ -25,14 +31,20 @@
     tavern: { icon: '🍺', name: 'Tavern', desc: 'Pick one: rest, train a skill or recruit a hero.' },
     treasure: { icon: '💰', name: 'Treasure', desc: 'Free gold and loot. Probably not a mimic.' },
     boss: { icon: '👑', name: 'Boss', desc: 'The act boss. One hero levels up. Always offers a legendary item.' },
+    miniboss: { icon: '😈', name: 'Mini-boss', desc: 'One of Svammiel\'s floor bosses. One hero levels up. Always offers a rare item. Beat it and its door is sealed.' },
   };
+  // V3 gauntlet: at most this many lanes (doors per row); the stop rows' types when DD.Balance.map.gauntlet is absent.
+  const MAX_LANES = 6;
+  // the floor boss's node text (a finale ends the run: no level-up, no loot screen)
+  const FINALE_DESC = 'The floor boss. Beat him and the campaign is over (for real this time).';
+  const GAUNTLET_STOPS = { lobby: ['shop', 'event'], between: ['tavern', 'shop', 'event'], last: ['tavern', 'shop'] };
   // Type weights for rows 1-5 (DESIGN §5 pacing: roughly 4-5 fights per act on any path).
   const WEIGHTS = { combat: 44, event: 24, elite: 14, shop: 9, treasure: 7, tavern: 3 };
   // These never appear directly after a node of the same type.
   const NO_REPEAT = { elite: true, shop: true, treasure: true, tavern: true };
 
   function values(obj) { return Object.keys(obj || {}).map(function (k) { return obj[k]; }); }
-  function isFight(type) { return type === 'combat' || type === 'elite' || type === 'boss'; }
+  function isFight(type) { return type === 'combat' || type === 'elite' || type === 'boss' || type === 'miniboss'; }
   function actMatch(def, act) {
     return Array.isArray(def.act) ? def.act.indexOf(act) >= 0 : +def.act === act;
   }
@@ -158,8 +170,11 @@
   }
 
   // ---- content picking (shared with DD.Run for lazy assignment) ---------------------------------
+  /** A hand-placed V3 encounter (a gauntlet door or the floor boss): never a random pick. */
+  function placedOnly(e) { return !!e && (!!e.gauntlet || !!e.finale); }
+
   function pickFromRegistry(act, kind, rng, depth, exclude) {
-    const all = values(DD.defs.encounters).filter(function (e) { return e && e.id && !e.fallback; });
+    const all = values(DD.defs.encounters).filter(function (e) { return e && e.id && !e.fallback && !placedOnly(e); });
     const kinds = kind === 'boss' ? ['boss', 'elite', 'normal'] : kind === 'elite' ? ['elite', 'normal'] : ['normal'];
     for (let k = 0; k < kinds.length; k++) {
       const ofKind = all.filter(function (e) { return e.kind === kinds[k]; });
@@ -190,7 +205,7 @@
     const exclude = opts.exclude || [];
     if (DD.Encounter && typeof DD.Encounter.pick === 'function') {
       const def = DD.safe('Encounter.pick', DD.Encounter.pick, DD.Encounter, [act, kind, rng, { depth: depth, exclude: exclude }]);
-      if (def && def.id && DD.getEncounter(def.id)) return DD.getEncounter(def.id);
+      if (def && def.id && DD.getEncounter(def.id) && !placedOnly(DD.getEncounter(def.id))) return DD.getEncounter(def.id);
     }
     return pickFromRegistry(act, kind, rng, depth, exclude);
   }
@@ -233,11 +248,150 @@
     });
   }
 
-  /** Build an act map. opts: { run (for event requires), exclude: [encounter ids to avoid] }. */
+  // ---- V3: the gauntlet (Svammiel's floor) ------------------------------------------------------------------
+  function isTestId(id) { return typeof id === 'string' && id.indexOf('test_') === 0; }
+  function laneOrder(e) { const o = e.gauntlet && +e.gauntlet.order; return isFinite(o) ? o : 999; }
+  function laneIdOf(e) { const l = e.gauntlet && e.gauntlet.lane; return typeof l === 'string' && l ? l : e.id; }
+  function byId(a, b) { return a.id < b.id ? -1 : a.id > b.id ? 1 : 0; }
+
+  /** The act's lanes from the registry: encounters with that act and `gauntlet`, real before `test_`, then by
+   *  gauntlet.order, then id; one per lane id; at most MAX_LANES. [{ id, encounterId, order }] */
+  function gauntletLanes(act) {
+    act = Math.floor(+act) || 0;
+    const encs = values(DD.defs.encounters).filter(function (e) {
+      return e && e.id && e.gauntlet && typeof e.gauntlet === 'object' && actMatch(e, act);
+    });
+    encs.sort(function (a, b) {
+      const ta = isTestId(a.id) || isTestId(laneIdOf(a)) ? 1 : 0, tb = isTestId(b.id) || isTestId(laneIdOf(b)) ? 1 : 0;
+      return ta - tb || laneOrder(a) - laneOrder(b) || byId(a, b);
+    });
+    const out = [];
+    encs.forEach(function (e) {
+      const id = laneIdOf(e);
+      if (out.length >= MAX_LANES || out.some(function (l) { return l.id === id; })) return;
+      out.push({ id: id, encounterId: e.id, order: laneOrder(e) });
+    });
+    return out;
+  }
+  /** The act's floor boss: the encounter with `finale` (real before `test_`, then by id), or null. */
+  function finaleOf(act) {
+    act = Math.floor(+act) || 0;
+    const encs = values(DD.defs.encounters).filter(function (e) { return e && e.id && e.finale && actMatch(e, act); });
+    encs.sort(function (a, b) { return (isTestId(a.id) ? 1 : 0) - (isTestId(b.id) ? 1 : 0) || byId(a, b); });
+    return encs[0] || null;
+  }
+  /** True when `act` is a gauntlet act: its registry has doors (`gauntlet`) or a floor boss (`finale`). */
+  function isGauntlet(act) { return gauntletLanes(act).length > 0 || !!finaleOf(act); }
+
+  /** The stop rows' types (DD.Balance.map.gauntlet, else GAUNTLET_STOPS): { lobby, between, last }, each de-duplicated. */
+  function gauntletStops() {
+    const g = DD.Balance && DD.Balance.map && DD.Balance.map.gauntlet;
+    const out = {};
+    Object.keys(GAUNTLET_STOPS).forEach(function (k) {
+      const list = g && Array.isArray(g[k]) ? g[k].filter(function (t) { return TYPES[t] && !isFight(t); }) : [];
+      const src = list.length ? list : GAUNTLET_STOPS[k];
+      out[k] = src.filter(function (t, i) { return src.indexOf(t) === i; });
+    });
+    return out;
+  }
+  /** Stop row `r` of an L-lane gauntlet: the lobby (0), an intermission (2..2L-2) or the last stop (2L). With no lanes
+   *  the lobby is also the last stop (its types, then the last stop's). */
+  function stopTypesFor(r, L, G) {
+    if (r === 0 && L === 0) return G.lobby.concat(G.last.filter(function (t) { return G.lobby.indexOf(t) < 0; }));
+    if (r === 0) return G.lobby;
+    if (r === 2 * L) return G.last;
+    return G.between;
+  }
+  function isDoorRow(r, L) { return r % 2 === 1 && r <= 2 * L - 1; }
+
+  /** Lanes for a gauntlet from opts.lanes (lane objects or encounter ids; tests, partial content) or the registry. */
+  function lanesFrom(act, list) {
+    if (!Array.isArray(list)) return gauntletLanes(act);
+    const out = [];
+    list.forEach(function (l) {
+      const enc = typeof l === 'string' ? DD.getEncounter(l) : null;
+      const lane = enc ? { id: laneIdOf(enc), encounterId: enc.id, order: laneOrder(enc) } :
+        l && typeof l === 'object' && typeof l.id === 'string' ? { id: l.id, encounterId: l.encounterId || null, order: isFinite(+l.order) ? +l.order : out.length + 1 } : null;
+      if (lane && out.length < MAX_LANES && !out.some(function (x) { return x.id === lane.id; })) out.push(lane);
+    });
+    return out;
+  }
+
+  /** Build the gauntlet map of `act` (rows 2L + 2). opts: { run, lanes (override), finale (encounter id override) }. */
+  function generateGauntlet(act, rng, opts) {
+    opts = opts || {};
+    act = Math.max(1, Math.floor(+act) || 1);
+    rng = rng || DD.RNG('map:' + act);
+    const lanes = lanesFrom(act, opts.lanes);
+    const L = lanes.length;
+    const G = gauntletStops();
+    const nodes = {};
+    const layout = [];
+    const usedEvents = [];
+    for (let r = 0; r <= 2 * L; r++) {
+      const ids = [];
+      if (isDoorRow(r, L)) {
+        const k = (r + 1) / 2;
+        lanes.forEach(function (lane, c) {
+          const id = 'a' + act + '_d' + k + '_' + lane.id;
+          nodes[id] = { id: id, row: r, col: c, x: (c + 0.5) / L, type: 'miniboss', lane: lane.id, encounterId: lane.encounterId, links: [], done: false };
+          ids.push(id);
+        });
+      } else {
+        const base = stopTypesFor(r, L, G);
+        const types = r > 0 && r < 2 * L ? rng.shuffle(base.slice()) : base.slice();
+        types.forEach(function (type, c) {
+          const id = 'a' + act + '_s' + (r / 2) + 'c' + c;
+          const n = { id: id, row: r, col: c, x: (c + 0.5) / types.length, type: type, links: [], done: false };
+          if (type === 'event') {
+            const ev = pickEvent(act, rng, { run: opts.run, exclude: usedEvents });
+            if (ev) { n.eventId = ev.id; usedEvents.push(ev.id); }
+          }
+          nodes[id] = n;
+          ids.push(id);
+        });
+      }
+      layout.push(ids);
+    }
+    const bossId = 'a' + act + '_boss';
+    const fin = opts.finale ? DD.getEncounter(opts.finale) : finaleOf(act);
+    const bossEnc = fin || pickEncounter(act, 'boss', rng, { depth: 2 * L + 1 });
+    nodes[bossId] = { id: bossId, row: 2 * L + 1, col: 0, x: 0.5, type: 'boss', links: [], done: false };
+    if (bossEnc) nodes[bossId].encounterId = bossEnc.id;
+    layout.push([bossId]);
+    for (let r = 0; r < layout.length - 1; r++) {
+      layout[r].forEach(function (id) { nodes[id].links = layout[r + 1].slice(); });
+    }
+    return {
+      act: act, shape: 'gauntlet', rows: layout.length, nodes: nodes, start: layout[0].slice(), boss: bossId, layout: layout,
+      lanes: lanes.map(function (l) { return { id: l.id, encounterId: l.encounterId, order: l.order }; }), beaten: [], cleared: false,
+    };
+  }
+
+  /** Seal a beaten lane: every door node of it done + sealed (nodeId, the door fought, also result 'victory'), the lane
+   *  pushed to map.beaten. Returns true when the lane was newly sealed. (DD.Run.sealLane also records run.flags.gauntlet.) */
+  function sealLane(map, lane, nodeId) {
+    if (!map || map.shape !== 'gauntlet' || !Array.isArray(map.lanes) || !map.lanes.some(function (l) { return l.id === lane; })) return false;
+    if (!Array.isArray(map.beaten)) map.beaten = [];
+    const fresh = map.beaten.indexOf(lane) < 0;
+    Object.keys(map.nodes).forEach(function (id) {
+      const n = map.nodes[id];
+      if (n.type !== 'miniboss' || n.lane !== lane) return;
+      n.done = true;
+      n.sealed = true;
+      if (id === nodeId) n.result = 'victory';
+    });
+    if (fresh) map.beaten.push(lane);
+    return fresh;
+  }
+
+  /** Build an act map. opts: { run (for event requires), exclude: [encounter ids to avoid], lanes (gauntlet override),
+   *  shape: 'rows' (force the classic shape) }. A gauntlet act (isGauntlet) gets the gauntlet. */
   function generate(act, rng, opts) {
     opts = opts || {};
     act = Math.max(1, Math.floor(+act) || 1);
     rng = rng || DD.RNG('map:' + act);
+    if (opts.shape !== 'rows' && (Array.isArray(opts.lanes) || opts.shape === 'gauntlet' || isGauntlet(act))) return generateGauntlet(act, rng, opts);
     const nodes = {};
     const layout = [];
     for (let r = 0; r < ROWS; r++) {
@@ -261,10 +415,98 @@
     return map;
   }
 
+  /** Problems with reachability: every node reachable from a start node and leading to the boss. */
+  function reachability(map) {
+    const out = [];
+    const nodes = map.nodes;
+    const fwd = {};
+    const stack = (map.start || []).slice();
+    while (stack.length) {
+      const id = stack.pop();
+      if (fwd[id] || !nodes[id]) continue;
+      fwd[id] = true;
+      nodes[id].links.forEach(function (l) { stack.push(l); });
+    }
+    const parents = parentMap(nodes);
+    const back = {};
+    const st2 = [map.boss];
+    while (st2.length) {
+      const id = st2.pop();
+      if (back[id] || !nodes[id]) continue;
+      back[id] = true;
+      (parents[id] || []).forEach(function (p) { st2.push(p); });
+    }
+    Object.keys(nodes).forEach(function (id) {
+      if (!fwd[id]) out.push(id + ' is unreachable');
+      if (!back[id]) out.push(id + ' does not lead to the boss');
+    });
+    if ((map.start || []).join() !== (map.layout[0] || []).join()) out.push('start must be the row-0 nodes');
+    return out;
+  }
+
+  /** The gauntlet branch of validate: rows 2L + 2, door rows one node per lane in lane order, stop rows the knob's
+   *  types, complete links between consecutive rows, the last stop → the boss, sealing consistent, reachability. */
+  function validateGauntlet(map) {
+    const out = [];
+    const nodes = map.nodes;
+    if (!Array.isArray(map.lanes)) return ['gauntlet map without lanes'];
+    const L = map.lanes.length;
+    const rows = 2 * L + 2;
+    if (L > MAX_LANES) out.push(L + ' lanes (at most ' + MAX_LANES + ')');
+    const laneIds = map.lanes.map(function (l) { return l && l.id; });
+    if (laneIds.some(function (id, i) { return typeof id !== 'string' || !id || laneIds.indexOf(id) !== i; })) out.push('lane ids must be unique strings');
+    if (map.rows !== rows || map.layout.length !== rows) out.push('expected ' + rows + ' rows for ' + L + ' lanes, got ' + map.rows + ' / ' + map.layout.length);
+    const G = gauntletStops();
+    const prefix = 'a' + map.act + '_';
+    map.layout.forEach(function (row, r) {
+      row.forEach(function (id, c) {
+        const n = nodes[id];
+        if (!n) { out.push('missing node ' + id); return; }
+        if (n.row !== r || n.col !== c) out.push(id + ' row/col mismatch');
+        if (id.indexOf(prefix) !== 0) out.push(id + ' is not an act ' + map.act + ' id');
+        if (!TYPES[n.type]) out.push(id + ' has unknown type ' + n.type);
+        const next = map.layout[r + 1];
+        if (next) {
+          if (n.links.length !== next.length || next.some(function (x) { return n.links.indexOf(x) < 0; })) out.push(id + ' must link to every node of row ' + (r + 1));
+        } else if (n.links.length) out.push(id + ': the boss leads nowhere');
+      });
+      if (r === rows - 1) {
+        if (row.length !== 1 || !nodes[row[0]] || nodes[row[0]].type !== 'boss') out.push('the last row must be the boss alone');
+      } else if (isDoorRow(r, L)) {
+        if (row.length !== L) out.push('door row ' + r + ' has ' + row.length + ' doors for ' + L + ' lanes');
+        row.forEach(function (id, c) {
+          const n = nodes[id], lane = map.lanes[c];
+          if (!n || !lane) return;
+          if (n.type !== 'miniboss') out.push(id + ': door rows hold mini-bosses only');
+          if (n.lane !== lane.id || n.encounterId !== lane.encounterId) out.push(id + ': door ' + c + ' must be lane ' + lane.id);
+          if (n.sealed && (map.beaten || []).indexOf(n.lane) < 0) out.push(id + ' is sealed but its lane is not beaten');
+        });
+      } else {
+        const want = stopTypesFor(r, L, G).slice().sort().join();
+        const got = row.map(function (id) { return nodes[id] ? nodes[id].type : '?'; }).sort().join();
+        if (want !== got) out.push('stop row ' + r + ' is [' + got + '], expected [' + want + ']');
+      }
+    });
+    if (map.boss !== (map.layout[rows - 1] || [])[0]) out.push('map.boss must be the last row');
+    const beaten = Array.isArray(map.beaten) ? map.beaten : null;
+    if (!beaten) out.push('gauntlet map without beaten');
+    else {
+      beaten.forEach(function (lane, i) {
+        if (laneIds.indexOf(lane) < 0 || beaten.indexOf(lane) !== i) out.push('beaten lane ' + lane + ' unknown or repeated');
+        Object.keys(nodes).forEach(function (id) {
+          const n = nodes[id];
+          if (n.type === 'miniboss' && n.lane === lane && !(n.done && n.sealed)) out.push(id + ': every door of a beaten lane is sealed');
+        });
+      });
+    }
+    return out.concat(reachability(map));
+  }
+
   /** Structural checks (tests / debug). Returns a list of problems; empty means valid. */
   function validate(map) {
     const out = [];
     if (!map || !map.nodes || !Array.isArray(map.layout)) return ['map is missing nodes/layout'];
+    if (map.shape === 'gauntlet') return validateGauntlet(map);
     const nodes = map.nodes;
     if (map.rows !== BOSS_ROW + 1 || map.layout.length !== BOSS_ROW + 1) out.push('expected ' + (BOSS_ROW + 1) + ' rows');
     map.layout.forEach(function (row, r) {
@@ -303,29 +545,7 @@
       }
     }
     // reachability both ways
-    const fwd = {};
-    const stack = (map.start || []).slice();
-    while (stack.length) {
-      const id = stack.pop();
-      if (fwd[id] || !nodes[id]) continue;
-      fwd[id] = true;
-      nodes[id].links.forEach(function (l) { stack.push(l); });
-    }
-    const parents = parentMap(nodes);
-    const back = {};
-    const st2 = [map.boss];
-    while (st2.length) {
-      const id = st2.pop();
-      if (back[id] || !nodes[id]) continue;
-      back[id] = true;
-      (parents[id] || []).forEach(function (p) { st2.push(p); });
-    }
-    Object.keys(nodes).forEach(function (id) {
-      if (!fwd[id]) out.push(id + ' is unreachable');
-      if (!back[id]) out.push(id + ' does not lead to the boss');
-    });
-    if ((map.start || []).join() !== (map.layout[0] || []).join()) out.push('start must be the row-0 nodes');
-    return out;
+    return out.concat(reachability(map));
   }
 
   function parents(map, id) { return parentMap(map.nodes)[id] || []; }
@@ -336,6 +556,7 @@
     TAVERN_ROW: TAVERN_ROW,
     TYPES: TYPES,
     WEIGHTS: WEIGHTS,
+    MAX_LANES: MAX_LANES,
     generate: generate,
     validate: validate,
     parents: parents,
@@ -343,11 +564,26 @@
     pickEncounter: pickEncounter,
     pickEvent: pickEvent,
     eventAvailable: eventAvailable,
-    /** Display info for a node: { icon, name, desc } (boss/elite names come from the assigned encounter). */
+    // V3 gauntlet
+    isGauntlet: isGauntlet,
+    gauntletLanes: gauntletLanes,
+    finaleOf: finaleOf,
+    generateGauntlet: generateGauntlet,
+    gauntletStops: gauntletStops,
+    sealLane: sealLane,
+    /** Display info for a node: { icon, name, desc } (boss names come from the assigned encounter). V3: a door adds
+     *  { lane, hint (gauntlet.hint), sealed } and names its encounter (shortName, else name); encounter icons win. */
     nodeInfo: function (node) {
       if (!node) return null;
       const t = TYPES[node.type] || TYPES.combat;
       const enc = node.encounterId ? DD.getEncounter(node.encounterId) : null;
+      if (node.type === 'miniboss') {
+        return {
+          icon: (enc && enc.icon) || t.icon, name: enc ? enc.shortName || enc.name || t.name : t.name, desc: t.desc,
+          lane: node.lane || null, hint: enc && enc.gauntlet && enc.gauntlet.hint ? String(enc.gauntlet.hint) : '', sealed: !!node.sealed,
+        };
+      }
+      if (node.type === 'boss' && enc && enc.finale) return { icon: enc.icon || t.icon, name: enc.shortName || enc.name || t.name, desc: FINALE_DESC };
       return { icon: t.icon, name: node.type === 'boss' && enc && enc.name ? enc.name : t.name, desc: t.desc };
     },
   };

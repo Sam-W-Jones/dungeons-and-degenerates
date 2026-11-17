@@ -951,6 +951,7 @@
       t.ok(!DD.HUD.mounted(), 'HUD unmounted');
       t.eq(DD.Render.overlay.moveTiles.length, 0, 'overlay reset on unmount');
       t.ok(!DD.FXRender || !DD.FXRender.moments || !DD.FXRender.moments.initiative, 'the dice moment host is released on unmount');
+      t.ok(!DD.FXRender || !DD.FXRender.moments || !DD.FXRender.moments.cameo, 'V3: so is the cameo moment host');
     } finally {
       s.unlockAll = unlock;
       DD.Run.useUi = useUi;
@@ -2804,6 +2805,539 @@
       DD.HUD.hover(st.x, st.y);
       const pill = qa('.hud-inspect .pill').filter(function (p) { return /🗿 Immovable/.test(p.textContent); })[0];
       t.eq(pill ? pill.getAttribute('title') : '', st.name + ' can\'t be pushed, pulled or swapped.', 'the statue\'s pill: ' + (pill && pill.getAttribute('title')));
+    } finally { leave(); }
+  });
+
+  // ---- V3 (act IV, plan §4.8): Svammiel's cameos, cheat chips, kind labels, the tracker crowd, the BLEEP sticker ------------
+  // The fixtures' test doors (test_a4_lane_a..d, test_a4_finale) are act-4 boss fights whose cameo actor is the Heckler
+  // (test_heckler, tests/fixtures.js): the same DD.Cameo path as Svammiel's, without depending on the real content.
+  function v3Ready(t) {
+    if (!ready(t)) return false;
+    if (!DD.Cameo || DD.Cameo.stub || !DD.getCameo || !DD.getCameo('test_heckler') || !DD.getEncounter('test_a4_lane_b')) { t.skip('DD.Cameo or the act-4 test doors missing'); return false; }
+    return true;
+  }
+  const ZONE4 = [{ x: 1, y: 1 }, { x: 1, y: 2 }, { x: 1, y: 3 }, { x: 2, y: 1 }, { x: 2, y: 2 }, { x: 2, y: 3 }];
+  /** A test door in deployment (cameo + cheat at combat:ready). */
+  function door(id, extra) {
+    return fight(Object.assign({ encounter: DD.getEncounter(id), heroes: [{ id: 'test_knight', x: 1, y: 1 }, { id: 'test_mage', x: 1, y: 2 }],
+      enemies: [{ id: 'test_boss', x: 5, y: 5 }, { id: 'test_minion', x: 6, y: 2 }], deploy: true, deployTiles: ZONE4, initiative: 'roll', enemyAi: false }, extra || {}));
+  }
+  /** Run the FX until the HUD hosts a blocking cameo (or give up). → the 'cameo' FX event or null */
+  function untilCameo(F) {
+    for (let i = 0; i < 200 && !DD.HUD.cameo(); i++) { F.update(40); DD.HUD.tick(); }
+    return F.active.filter(function (e) { return e.type === 'cameo'; })[0] || null;
+  }
+  function settleFx(F) { for (let i = 0; i < 400 && F.busy(); i++) F.update(50); DD.HUD.tick(); }
+  /** Run fn with Settings "Svammiel's cameos" set to v (restored after). */
+  function withCameoSetting(v, fn) {
+    const st = DD.Meta && DD.Meta.data && DD.Meta.data.settings;
+    if (!st) return fn(false);
+    const had = Object.prototype.hasOwnProperty.call(st, 'cameos'), old = st.cameos;
+    st.cameos = v;
+    try { return fn(true); } finally { if (had) st.cameos = old; else delete st.cameos; }
+  }
+
+  T.suite('hud: V3 — a blocking cameo is hosted: input waits, Space / Enter / Esc / a click skip it, deployment works right after, AutoPlay shortens it', function (t) {
+    if (!v3Ready(t)) return;
+    if (!DD.FXRender || !DD.FXRender.moments || !DD.FX.handlers.cameo) { t.skip('fx_render has no cameo handler'); return; }
+    const hadMain = Object.prototype.hasOwnProperty.call(DD, 'Main'), oldMain = DD.Main;
+    try {
+      withCameoSetting('full', function () {
+        withAnimatedFx(function (F) {
+          door('test_a4_lane_d');
+          const host = DD.FXRender.moments.cameo;
+          t.ok(host && typeof host.start === 'function' && typeof host.wants === 'function', 'the mounted HUD hosts the cameo moment (DD.FXRender.moments.cameo)');
+          const k = byDef('test_knight');
+          const evt = untilCameo(F);
+          const c = DD.HUD.cameo();
+          t.ok(evt && c && c.active, 'the start cameo (a swoop) is showing');
+          if (!evt || !c) return;
+          t.eq(c.style, 'swoop', 'style swoop');
+          t.eq(c.name, 'The Heckler', 'the actor is named');
+          const full = DD.Cameo.STYLES.swoop.cheatMs || DD.Cameo.STYLES.swoop.ms;
+          t.eq(evt.ms, full, 'the event lasts DD.Cameo\'s length (a cheat card: ' + full + ' ms)');
+          t.eq(c.ms, evt.ms, 'the host answered that length');
+          t.eq(DD.HUD.lock(), 'busy', 'input is locked while it plays');
+          t.ok(/The Heckler/.test(text('.hud-phase')), 'the phase pill names him: ' + text('.hud-phase'));
+          t.ok(/has the floor/.test(DD.HUD.hint()) && /Space/.test(DD.HUD.hint()), 'the hint says how to skip: ' + DD.HUD.hint());
+          t.ok(!q('.hud-cameoscrim').classList.contains('hud-hidden'), 'a see-through layer takes the skip click');
+          t.ok(q('.hud-endbtn').classList.contains('is-disabled') && q('.hud-rollcta').classList.contains('is-disabled'), 'Roll / End Turn look locked (not live during the swoop)');
+          DD.HUD.click(2, 3);
+          t.ok(k.x === 1 && k.y === 1 && DD.Combat.isDeploying(), 'a deploy click does nothing while he has the floor');
+          t.ok(DD.HUD.key(' '), 'Space is consumed');
+          t.eq(DD.HUD.cameo(), null, 'Space skipped the cameo');
+          t.ok(evt.elapsed >= evt.ms, 'the event jumps to its end (elapsed = ms)');
+          t.ok(q('.hud-cameoscrim').classList.contains('hud-hidden'), 'the click layer is gone');
+          t.ok(DD.Combat.isDeploying() && !DD.Combat.state.order, 'and Space did NOT also roll initiative');
+          settleFx(F);
+          t.ok(!F.busy() && evt.done, 'playback finished the event');
+          t.eq(DD.HUD.lock(), null, 'input unlocks');
+          t.ok(/Deployment/.test(text('.hud-phase')), 'deployment, right after');
+          DD.HUD.click(2, 3);
+          t.ok(k.x === 2 && k.y === 3, 'a deploy click works right after the cameo');
+          settleFx(F);
+          t.ok(DD.HUD.rollInitiative() && !!DD.Combat.state.order, 'and the roll');
+          // Enter, Esc and a click skip it too (Esc never opens the menu over it)
+          [['Enter', function () { return DD.HUD.key('Enter'); }], ['Esc', function () { return DD.HUD.key('Escape'); }],
+            ['a click', function () { q('.hud-cameoscrim').click(); return true; }]].forEach(function (w) {
+            F.reset();
+            door('test_a4_lane_d');
+            const e2 = untilCameo(F);
+            t.ok(e2 && DD.HUD.cameo(), w[0] + ': the cameo plays');
+            t.ok(w[1]() && DD.HUD.cameo() === null && e2 && e2.elapsed >= e2.ms, w[0] + ' skips it');
+            t.ok(!DD.UI.topModal(), w[0] + ': no menu opened');
+            settleFx(F);
+            t.ok(DD.HUD.lock() === null && DD.Combat.isDeploying(), w[0] + ': deployment is open');
+          });
+          // AutoPlay plays it at 35% of its length
+          F.reset();
+          DD.Main = { autoplay: true };
+          door('test_a4_lane_d');
+          const e3 = untilCameo(F);
+          t.ok(!!e3, 'AutoPlay: the cameo plays');
+          t.eq(e3 && e3.ms, Math.round(full * 0.35), 'AutoPlay shortens it to 35% (' + (e3 && e3.ms) + ' ms)');
+          DD.HUD.skipCameo();
+          settleFx(F);
+          if (hadMain) DD.Main = oldMain; else delete DD.Main;
+        });
+      });
+      // Settings "Short": the HUD keeps DD.Cameo's short length; "Log only": no moment at all, the lines reach the log
+      withCameoSetting('short', function (ok) {
+        if (!ok) return;
+        withAnimatedFx(function (F) {
+          door('test_a4_lane_d');
+          const e = untilCameo(F);
+          t.eq(e && e.ms, DD.Cameo.STYLES.swoop.short, 'Short: ' + DD.Cameo.STYLES.swoop.short + ' ms');
+          DD.HUD.skipCameo();
+          settleFx(F);
+        });
+      });
+      withCameoSetting('log', function (ok) {
+        if (!ok) return;
+        withAnimatedFx(function (F) {
+          door('test_a4_lane_d');
+          const e = untilCameo(F);
+          t.ok(!e && !DD.HUD.cameo(), 'Log only: no cameo FX, no moment');
+          t.ok(qa('.hud-log .log-line.cameo').length >= 2, 'the lines are in the log (' + qa('.hud-log .log-line.cameo').length + ')');
+          settleFx(F);
+          t.eq(DD.HUD.lock(), null, 'deployment is open at once');
+        });
+      });
+      // instant FX (tests, sims): nothing is hosted, nothing waits
+      door('test_a4_lane_d');
+      t.ok(!DD.HUD.cameo() && !DD.FX.busy() && DD.HUD.lock() === null, 'instant FX: no moment, deployment open');
+      t.ok(DD.Combat.state.data.cameo && DD.Combat.state.data.cameo.started, 'the start cameo still played (its memory is there)');
+    } finally {
+      if (hadMain) DD.Main = oldMain; else delete DD.Main;
+      leave();
+    }
+  });
+
+  T.suite('hud: V3 — the twist\'s entrance on a won board is hosted too: the end of the fight waits for it, Space skips it', function (t) {
+    if (!v3Ready(t)) return;
+    if (!DD.FX.handlers.cameo) { t.skip('fx_render has no cameo handler'); return; }
+    try {
+      withCameoSetting('full', function () {
+        withAnimatedFx(function (F) {
+          fight({ heroes: [{ id: 'test_knight', x: 2, y: 2 }], enemies: [{ id: 'test_grunt', x: 3, y: 2 }], enemyAi: false });
+          F.reset();
+          DD.Combat.finish('victory');
+          t.eq(DD.Combat.state.result, 'victory', 'the fight is won');
+          DD.Cameo.play('test_heckler', 'You thought this was over? I, THE HECKLER, CONTROL ALL.', { style: 'entrance', force: true, afterEnd: true });
+          const evt = untilCameo(F);
+          t.ok(evt && DD.HUD.cameo() && DD.HUD.cameo().style === 'entrance', 'an entrance is hosted like the swoop');
+          t.eq(evt && evt.ms, DD.Cameo.STYLES.entrance.ms, 'at its full length (' + (evt && evt.ms) + ' ms)');
+          t.ok(/THE HECKLER/.test(text('.hud-log')), 'its line is in the log with the speaker chip');
+          t.ok(/has the floor/.test(DD.HUD.hint()), 'the hint says how to skip him: ' + DD.HUD.hint());
+          DD.HUD.tick();
+          t.ok(!DD.HUD.endPending() && !DD.UI.topModal(), 'the end of the fight waits for him');
+          t.ok(DD.HUD.key(' ') && !DD.HUD.cameo(), 'Space skips it');
+          t.ok(!DD.HUD.endPending(), 'that press does not also hurry the hand-off');
+          settleFx(F);
+          t.ok(DD.HUD.endPending() || !!DD.UI.topModal(), 'then the fight ends as usual');
+        });
+      });
+    } finally { leave(); }
+  });
+
+  T.suite('hud: V3 — cameo lines carry the speaker chip (DM lines keep "DM"); the caption shows who speaks; the DM is demoted under the table', function (t) {
+    if (!v3Ready(t)) return;
+    try {
+      withCameoSetting('full', function () {
+        door('test_a4_lane_b');
+        const lines = qa('.hud-log .log-line.cameo');
+        t.ok(lines.length >= 3, 'the start cameo\'s lines are in the log (' + lines.length + ')');
+        t.ok(lines.every(function (l) { const c = l.querySelector('.hl-dm.hl-cameo'); return c && c.textContent === '🤡 THE HECKLER'; }), 'each with the actor\'s chip "🤡 THE HECKLER"');
+        t.ok(lines.every(function (l) { return !/^DM/.test(l.textContent); }), 'not the DM\'s chip');
+        const ch = lines.filter(function (l) { return l.classList.contains('cheat'); })[0];
+        t.ok(ch && /^🤡 THE HECKLERThe Heckler cheats: Rigged Tests\. Heroes take 1 more damage from every hit this fight\. Reason: /.test(ch.textContent),
+          'the cheat\'s line: marked, its icon once (the chip has it), the exact desc and a reason: ' + (ch && ch.textContent));
+        t.eq(DD.Combat.state.log.filter(function (e) { return e.cls === 'cameo' && e.cheat; })[0].text.indexOf('🤡 The Heckler cheats:'), 0, '(the engine\'s line keeps its icon)');
+        const nar = qa('.hud-log .log-line.narrator .hl-dm');
+        t.ok(nar.length > 0 && nar.every(function (c) { return c.textContent === 'DM' && c.getAttribute('title') === 'The DM (demoted)'; }), 'DM lines keep "DM"; under the table its tooltip reads "The DM (demoted)"');
+        t.eq(getComputedStyle(lines[0]).overflowWrap, 'anywhere', 'log lines wrap anywhere (the League\'s 72-letter name)');
+        // the caption: a quip (log + caption only) speaks with his portrait and name; a DM line gets the DM back
+        DD.Cameo.play('test_heckler', 'Fine. You win. This time.', { style: 'quip', force: true });
+        let cap = DD.HUD.caption();
+        t.ok(cap && cap.text === 'Fine. You win. This time.' && cap.speaker === 'The Heckler' && cap.actor === 'test_heckler', 'a quip takes the caption, by him: ' + JSON.stringify(cap));
+        t.eq(cap && cap.title, 'The Heckler, Test Critic', 'his badge says who he is');
+        t.ok(q('.hud-dm').classList.contains('cameo') && q('.hud-dm .dm-port') && text('.hud-dm .dm-who') === 'The Heckler:', 'his portrait and name in the caption');
+        t.ok(!q('.hud-dm .dm-badge'), '(no DM badge)');
+        DD.Act.log('The DM checks the rules. Under the table.', 'narrator');
+        cap = DD.HUD.caption();
+        t.ok(cap && cap.speaker === null && cap.title === 'The DM (demoted)' && !q('.hud-dm').classList.contains('cameo') && text('.hud-dm .dm-badge') === 'DM', 'a DM line: the DM badge, demoted: ' + JSON.stringify(cap));
+        // a bubble shows on the canvas: it leaves the caption alone (Full)
+        DD.Cameo.play('test_heckler', 'Boo! A bubble.', { style: 'bubble', force: true });
+        t.eq((DD.HUD.caption() || {}).speaker, null, 'Full: a bubble interjection leaves the caption to the DM');
+        t.ok(/Boo! A bubble\./.test(text('.hud-log')), '(it is in the log)');
+      });
+      withCameoSetting('log', function (ok) {
+        if (!ok) return;
+        DD.Cameo.play('test_heckler', 'Log only, still heckling.', { style: 'bubble', force: true });
+        const cap = DD.HUD.caption();
+        t.ok(cap && cap.speaker === 'The Heckler' && cap.text === 'Log only, still heckling.', 'Log only (no FX): his lines take the caption');
+      });
+      // a classic fight: the DM is the Dungeon Master
+      fight({ heroes: [{ id: 'test_knight', x: 1, y: 1 }], enemies: [{ id: 'test_grunt', x: 6, y: 6 }] });
+      DD.Act.log('The DM clears his throat.', 'narrator');
+      t.eq(DD.HUD.caption() && DD.HUD.caption().title, 'The Dungeon Master', 'acts 1-3: "The Dungeon Master"');
+      t.ok(qa('.hud-log .log-line.narrator .hl-dm').every(function (c) { return c.getAttribute('title') === 'The Dungeon Master'; }), 'the log\'s DM chips too');
+    } finally { leave(); }
+  });
+
+  T.suite('hud: V3 — cheat chips: 😈 and the exact desc, one icon, "Next round" once; a rule\'s live name refreshes its chip (E7, the goats\' Verse)', function (t) {
+    if (!v3Ready(t)) return;
+    try {
+      door('test_a4_lane_b');
+      const s = DD.Combat.state;
+      const rule = s.rules.filter(function (r) { return r.id === 'cameo:test_cheat_rule'; })[0];
+      t.ok(rule && rule.cheat && rule.name === '🧪 Rigged Tests', 'the start cheat is a rule (name with its icon, as DD.Cameo builds it)');
+      const chip = q('.hud-obj .hud-chip.rule.cheat');
+      t.ok(chip && chip.querySelector('.rl-cheat') && chip.querySelector('.rl-cheat').textContent === '😈', 'a cheat chip with the 😈 badge');
+      t.eq(chip && chip.querySelector('.rl-name').textContent, '🧪 Rigged Tests', 'its icon once (not "🧪 🧪 Rigged Tests")');
+      const tip = tipOf(chip);
+      t.ok(/Heroes take 1 more damage from every hit this fight\./.test(tip), 'the tooltip has the exact desc');
+      t.ok(/😈 The Heckler cheats/.test(tip) && /whole fight/.test(tip), 'who cheats, and for how long');
+      // announced cheats (Svammiel's finale): "Next round" style, the prefix once
+      DD.Act.addRule({ id: 'test_next_a', name: 'Next round: Pop Quiz', icon: '📝', desc: 'Next round every test is a pop quiz.', turns: -1, hooks: {}, cheat: true, next: true, source: 'test_heckler', silent: true });
+      DD.Act.addRule({ id: 'test_next_b', name: '🎲 Flaky Dice', icon: '🎲', desc: 'Next round every roll is flaky.', turns: 1, hooks: {}, cheat: true, next: true, source: 'test_heckler', silent: true });
+      DD.HUD.refresh();
+      const nx = qa('.hud-obj .hud-chip.rule.next');
+      t.eq(nx.map(function (c) { return c.querySelector('.rl-name').textContent; }).join(' | '), '📝 Next round: Pop Quiz | 🎲 Next round: Flaky Dice', '"Next round" once, the icon once');
+      t.ok(nx.every(function (c) { return c.classList.contains('cheat') && /goes live next round/.test(tipOf(c)); }), 'the tooltip says when it goes live');
+      // E7: content rewrites a rule's name and desc mid-fight; the chip follows on the next refresh
+      DD.Act.addRule({ id: 'test_verse', name: '📝 Verse 0/3', icon: '📝', desc: 'No bars yet.', turns: -1, hooks: {}, silent: true });
+      DD.HUD.refresh();
+      const verseChip = function () { return qa('.hud-obj .hud-chip.rule').filter(function (c) { return c.dataset.rule === 'test_verse'; })[0]; };
+      t.eq(verseChip() && verseChip().querySelector('.rl-name').textContent, '📝 Verse 0/3', 'a plain rule chip (no 😈)');
+      t.ok(verseChip() && !verseChip().classList.contains('cheat'), '(not a cheat)');
+      const r = s.rules.filter(function (x) { return x.id === 'test_verse'; })[0];
+      r.name = '📝 Verse 1/3 → Sir Testsalot';
+      r.desc = 'One bar about Sir Testsalot.';
+      DD.HUD.refresh();
+      t.eq(verseChip() && verseChip().querySelector('.rl-name').textContent, '📝 Verse 1/3 → Sir Testsalot', 'the live name shows (same id, same turns)');
+      t.ok(/One bar about Sir Testsalot\./.test(tipOf(verseChip())), 'the tooltip reads the live desc');
+      s.objective.flavor = '🐐 Crew 168/255 · something in the hay wakes at 127';
+      DD.HUD.refresh();
+      t.eq(text('.hud-obj .ho-flavor'), '🐐 Crew 168/255 · something in the hay wakes at 127', 'the objective flavour line follows too');
+    } finally { leave(); }
+  });
+
+  T.suite('hud: V3 — kind labels (Mini-boss, Floor Boss), short names for squads, the inspect line naming this and next round\'s cheats, the wind-up hint', function (t) {
+    if (!v3Ready(t)) return;
+    try {
+      const foot = function () { return tipOf(q('.hud-round')).replace(/<[^>]+>/g, ' '); };
+      door('test_a4_lane_c', { enemies: [{ id: 'test_boss', x: 5, y: 5 }, { id: 'test_brute', x: 6, y: 2 }] });
+      t.ok(/Mini-boss fight/.test(foot()), 'a gauntlet door is a Mini-boss fight: ' + foot().slice(0, 140));
+      t.eq(text('.hud-obj .ho-flavor'), 'Two bosses walk into a bar.', 'the squad\'s flavour line');
+      const brute = byDef('test_brute');
+      const chip = qa('.hud-init .tk-chip').filter(function (c) { return c.dataset.unit === brute.id; })[0];
+      t.ok(chip && /Elite · The Test Brute Brigade/.test(tipOf(chip)), 'a squad member\'s tracker tooltip names the squad (short name)');
+      DD.HUD.hover(brute.x, brute.y);
+      t.ok(/Elite · The Test Brute Brigade/.test(text('.hud-inspect .hi-sub')), 'and its inspect panel: ' + text('.hud-inspect .hi-sub'));
+      const cl = q('.hud-inspect .hi-line.cheat');
+      t.ok(cl && /^😈 Cheats this round: 📦 Mystery Box · next round: none announced\.$/.test(cl.textContent), 'a squad member names the cheats this and next round: ' + (cl && cl.textContent));
+      DD.HUD.hover(null);
+      door('test_a4_finale', { enemies: [{ id: 'test_boss', x: 5, y: 5 }, { id: 'test_heckler_imp', x: 6, y: 2 }] });
+      t.ok(/Floor Boss fight/.test(foot()), 'the finale is the Floor Boss fight');
+      const imp = byDef('test_heckler_imp');
+      DD.HUD.hover(imp.x, imp.y);
+      t.ok(!q('.hud-inspect .hi-line.cheat'), 'no cheats in play: no line');
+      DD.Act.addRule({ id: 'test_now', name: 'Rigged Mic', icon: '🎤', desc: 'This round his mic is louder.', turns: 1, hooks: {}, cheat: true, source: 'test_heckler', silent: true });
+      DD.Act.addRule({ id: 'test_next', name: 'Next round: Pop Quiz', icon: '📝', desc: 'Next round every test is a pop quiz.', turns: -1, hooks: {}, cheat: true, next: true, source: 'test_heckler', silent: true });
+      DD.HUD.refresh();
+      DD.HUD.hover(imp.x, imp.y);
+      const line = q('.hud-inspect .hi-line.cheat');
+      t.ok(line && line.textContent === '😈 Cheats this round: 🎤 Rigged Mic · next round: 📝 Pop Quiz.', 'the cheater himself (on the board) names this and next round\'s cheats: ' + (line && line.textContent));
+      t.ok(line && /This round his mic is louder\./.test(line.getAttribute('title')), '(the descs in its tooltip)');
+      const minion = DD.Combat.state.units.filter(function (u) { return u.side === 'enemy' && !u.isBoss && u.tier !== 'boss' && u !== imp && !u.dead; })[0];
+      if (minion) { DD.HUD.hover(minion.x, minion.y); t.ok(!q('.hud-inspect .hi-line.cheat'), 'a plain minion has no such line'); }
+      DD.HUD.hover(null);
+      // classic fights keep their labels
+      fight({ heroes: [{ id: 'test_knight', x: 1, y: 1 }], enemies: [{ id: 'test_boss', x: 5, y: 5 }], kind: 'boss' });
+      t.ok(/\bBoss fight/.test(foot()) && !/Mini-boss|Floor Boss/.test(foot()), 'a v2 boss fight is a Boss fight');
+      fight({ heroes: [{ id: 'test_knight', x: 1, y: 1 }], enemies: [{ id: 'test_grunt', x: 5, y: 5 }] });
+      t.ok(/Skirmish fight/.test(foot()), 'a skirmish is a Skirmish');
+      // E7: a wind-up's hint line (intent.data.hint) in the inspect panel and the tracker
+      fight({ w: 11, h: 9, heroes: [{ id: 'test_knight', x: 2, y: 4 }], enemies: [{ id: 'test_boss', x: 8, y: 4 }], kind: 'boss', enemyAi: false });
+      const boss = byDef('test_boss');
+      const it = DD.AI.windUp(boss, 'test_boss_meteor', { x: 3, y: 4 }, { label: 'Big Slam', data: { hint: 'Slam → Sir Testsalot' } });
+      DD.HUD.refresh();
+      if (!it) t.skip('no wind-up');
+      else {
+        DD.HUD.hover(boss.x, boss.y);
+        t.eq(text('.hud-inspect .hi-intent .hii-hint'), '👉 Slam → Sir Testsalot', 'the wind-up row carries its hint line');
+        const bc = qa('.hud-init .tk-chip').filter(function (c) { return c.dataset.unit === boss.id; })[0];
+        t.ok(bc && /Big Slam \(Slam → Sir Testsalot\)/.test(tipOf(bc)), 'and the tracker tooltip');
+        DD.HUD.hover(null);
+      }
+    } finally { leave(); }
+  });
+
+  T.suite('hud: V3 — a skill a rule refuses shows its reason in the ⛔ line; "Bleeped …" gets the BLEEP sticker (the Radio Edit)', function (t) {
+    if (!v3Ready(t)) return;
+    if (typeof DD.Combat.vetoOf !== 'function') { t.skip('no E13 veto (Combat.vetoOf)'); return; }
+    const hadMain = Object.prototype.hasOwnProperty.call(DD, 'Main'), oldMain = DD.Main;
+    try {
+      fight({ heroes: [{ id: 'test_mage', x: 1, y: 1 }, { id: 'test_knight', x: 1, y: 3 }], enemies: [{ id: 'test_grunt', x: 6, y: 6 }], enemyAi: false });
+      const m = byDef('test_mage');
+      DD.Act.addRule({ id: 'test_radio', name: 'Radio Edit (test)', icon: '📻', desc: 'Fire Fixture (Wizzy McTest) is bleeped: it can\'t be used this fight.', turns: -1, cheat: true, source: 'test_heckler', silent: true,
+        hooks: { modifyUse: function (qq) { if (qq.unit.defId === 'test_mage' && qq.skill.id === 'test_fireball') qq.why = 'Bleeped by the Heckler (Radio Edit).'; } } });
+      DD.HUD.refresh();
+      t.eq(DD.HUD.selected(), m, 'the mage acts');
+      const btn = function (id) { return qa('.hud-bar .hud-skill').filter(function (b) { return b.querySelector('.hs-name') && b.querySelector('.hs-name').textContent === DD.getSkill(id).name; })[0]; };
+      const fb = btn('test_fireball'), fr = btn('test_frost_ray');
+      t.ok(fb && fb.classList.contains('is-disabled') && fb.classList.contains('bleeped'), 'the bleeped skill is greyed and marked');
+      t.eq(fb && fb.querySelector('.hs-bleep') && fb.querySelector('.hs-bleep').textContent, 'BLEEP', 'with a BLEEP sticker');
+      t.ok(fb && /⛔ Bleeped by the Heckler \(Radio Edit\)\./.test(tipOf(fb)), 'its ⛔ line gives the reason');
+      t.ok(fr && !fr.classList.contains('bleeped') && !fr.querySelector('.hs-bleep'), 'the other skills are fine');
+      DD.HUD.key('2');
+      t.ok(/Bleeped/.test(DD.HUD.hint()) && DD.HUD.mode().kind === 'move', 'its key says why and arms nothing: ' + DD.HUD.hint());
+      // locked (here: AutoPlay drives): the ⛔ line names the lock AND the ban; the sticker stays
+      DD.Main = { autoplay: true };
+      DD.HUD.refresh();
+      const fb2 = btn('test_fireball');
+      t.ok(fb2 && fb2.querySelector('.hs-bleep') && /⛔ Autoplay is driving\./.test(tipOf(fb2)) && /⛔ Bleeped by the Heckler/.test(tipOf(fb2)), 'locked: both ⛔ lines, still BLEEP');
+      if (hadMain) DD.Main = oldMain; else delete DD.Main;
+      DD.HUD.refresh();
+      // another refusal (not "Bleeped"): the ⛔ line only, no sticker (the fixtures' Muted Test cheat)
+      door('test_a4_lane_d', { heroes: [{ id: 'test_mage', x: 1, y: 1 }], deploy: false, initiative: 'heroesFirst' });
+      const mute = DD.Combat.state.data.testMute;
+      const mb = mute ? btn(mute.skillId) : null;
+      t.ok(mb && mb.classList.contains('is-disabled') && !mb.querySelector('.hs-bleep') && /⛔ Muted by the Heckler \(Muted Test\)\./.test(tipOf(mb)), 'a "Muted …" veto: greyed, its reason, no BLEEP');
+      // the real Radio Edit (svammiel.js), when loaded: the picked skill gets the sticker all fight
+      const sv = DD.getCameo('svammiel');
+      const heroes = ['zarathor', 'syllamin', 'kiri', 'betty'].filter(function (id) { return !!DD.getHero(id); });
+      if (sv && sv.cheats && sv.cheats.svam_cameo_radio && heroes.length) {
+        fight({ heroes: heroes.map(function (id, i) { return { id: id, x: 1, y: 1 + i, level: 4 }; }), enemies: [{ id: 'test_grunt', x: 7, y: 7 }], enemyAi: false });
+        const rule = DD.Cameo.cheat('svammiel', 'svam_cameo_radio');
+        const pick = DD.Combat.state.data.cameoRadio;
+        t.ok(rule && pick, 'the Radio Edit applied (' + (rule && rule.desc) + ')');
+        if (rule && pick) {
+          const who = DD.Combat.byId(pick.unitId);
+          for (let i = 0; i < 6 && DD.Combat.current() !== who; i++) DD.HUD.endTurn();
+          DD.HUD.refresh();
+          t.eq(DD.Combat.current(), who, 'the bleeped hero acts (' + who.name + ')');
+          const rb = btn(pick.skillId);
+          t.ok(rb && rb.querySelector('.hs-bleep') && /⛔ Bleeped by Svammiel \(Radio Edit\)\./.test(tipOf(rb)), DD.getSkill(pick.skillId).name + ': BLEEP and the ⛔ line');
+          const rc = q('.hud-obj .hud-chip.rule.cheat');
+          const filled = DD.getSkill(pick.skillId).name + ' (' + who.name + ') is bleeped: it can\'t be used this fight.';
+          t.ok(rc && rc.querySelector('.rl-name').textContent === '📻 Radio Edit' && tipOf(rc).indexOf(DD.util.escapeHtml(filled)) >= 0,
+            'the chip: "📻 Radio Edit" (one icon), the filled desc "' + filled + '"');
+        }
+      } else t.ok(true, '(svammiel.js or real heroes not loaded: the real Radio Edit check is skipped)');
+    } finally {
+      if (hadMain) DD.Main = oldMain; else delete DD.Main;
+      leave();
+    }
+  });
+
+  /** The real game (index.html, debug URL params work) in an iframe of exactly w × h px. */
+  function gameFrame(query, w, h) {
+    return new Promise(function (resolve) {
+      const f = document.createElement('iframe');
+      f.style.cssText = 'position:fixed;left:0;top:0;border:0;opacity:0;pointer-events:none;width:' + w + 'px;height:' + h + 'px';
+      let done = false;
+      const finish = function () { if (!done) { done = true; resolve(f); } };
+      f.onload = finish;
+      setTimeout(finish, 20000);
+      f.src = '../index.html?' + query;
+      document.body.appendChild(f);
+    });
+  }
+  async function frameUntil(fn, ms) {
+    const end = Date.now() + (ms || 10000);
+    while (Date.now() < end) { let ok = false; try { ok = !!fn(); } catch (e) { ok = false; } if (ok) return true; await tick(50); }
+    return false;
+  }
+
+  T.suite('hud: V3 — the initiative tracker fits a squad of five, four heroes and three summons (and the crowd of 16 chips) at 1280×720 (real page)', async function (t) {
+    if (!v3Ready(t)) return;
+    const sizes = [[1280, 720], [1024, 640]];
+    for (let i = 0; i < sizes.length; i++) {
+      const w = sizes[i][0], h = sizes[i][1];
+      const f = await gameFrame('debug=1&fixtures=1&seed=3', w, h);
+      try {
+        const W = f.contentWindow;
+        const ok = await frameUntil(function () { return W.DD_LOADED && W.DD && W.DD.UI && W.DD.UI.current === 'title' && W.DD.getHero('test_knight'); }, 15000);
+        t.ok(ok, w + '×' + h + ': the game is up with the fixtures');
+        if (!ok) continue;
+        const D = W.DD, doc = W.document;
+        D.FX.instant = true;
+        const league = ['lg_kelek', 'lg_warduke', 'lg_skylla', 'lg_zarak', 'lg_zargash'].every(function (id) { return !!D.getEnemy(id); });
+        const squad = league ? ['lg_kelek', 'lg_warduke', 'lg_skylla', 'lg_zarak', 'lg_zargash'] : ['test_brute', 'test_brute', 'test_brute', 'test_brute', 'test_brute'];
+        const goats = ['rap_billy', 'rap_kid', 'rap_turnip', 'rap_ursa'].every(function (id) { return !!D.getEnemy(id); });
+        const cases = [
+          { tag: 'the League (' + (league ? 'real' : 'test elites') + ') + 4 heroes + 3 summons', enemies: squad.map(function (id, k) { return { id: id, x: 10, y: 1 + 2 * k }; }), n: 9 },
+          { tag: 'the crowd: 12 units roll (16 chips)', enemies: squad.concat(['test_minion', 'test_minion', 'test_minion']).map(function (id, k) { return { id: id, x: k < 5 ? 10 : 12, y: k < 5 ? 1 + 2 * k : 2 + 3 * (k - 5) }; }), n: 12 },
+        ];
+        if (goats) cases.push({ tag: 'the goats (with the bear) + 4 heroes + 3 summons', enemies: [{ id: 'rap_billy', x: 10, y: 1 }, { id: 'rap_kid', x: 10, y: 4 }, { id: 'rap_turnip', x: 10, y: 7 }, { id: 'rap_ursa', x: 12, y: 3 }], n: 8 });
+        for (let c = 0; c < cases.length; c++) {
+          const cs = cases[c], tag = w + '×' + h + ', ' + cs.tag + ': ';
+          D.Combat.sandbox({ w: 14, h: 11, seed: 3, enemyAi: false,
+            heroes: [{ id: 'test_knight', x: 1, y: 1 }, { id: 'test_mage', x: 1, y: 3 }, { id: 'test_cleric', x: 1, y: 5 }, { id: 'test_summoner', x: 1, y: 7 }],
+            summons: [{ id: 'test_hound', x: 2, y: 6, owner: 'test_summoner' }, { id: 'test_hound', x: 2, y: 7, owner: 'test_summoner' }, { id: 'test_hound', x: 2, y: 8, owner: 'test_summoner' }],
+            enemies: cs.enemies, objective: { type: 'boss', bossIds: cs.enemies.map(function (e) { return e.id; }) } });
+          if (D.UI.current !== 'combat') D.UI.show('combat');
+          await tick(250);
+          const tr = doc.querySelector('.hud-init');
+          const chipsF = Array.prototype.slice.call(doc.querySelectorAll('.hud-init .tk-chip'));
+          const units = D.Combat.order().length;
+          t.ok(units >= cs.n, tag + units + ' initiative entries');
+          t.ok(chipsF.length >= units, tag + chipsF.length + ' tracker chips');
+          if (!tr || !chipsF.length) continue;
+          const b = tr.getBoundingClientRect();
+          const out = chipsF.filter(function (n) { const r = n.getBoundingClientRect(); return r.left < b.left - 1 || r.right > b.right + 1; });
+          t.eq(out.length, 0, tag + 'every chip sits inside the tracker (' + Math.round(b.width) + ' px wide)');
+          t.ok(tr.scrollWidth <= tr.clientWidth + 1, tag + 'no overflow (' + tr.scrollWidth + ' ≤ ' + tr.clientWidth + ')');
+          const hit = function (a, z) { return a.left < z.right - 1 && z.left < a.right - 1 && a.top < z.bottom - 1 && z.top < a.bottom - 1; };
+          const bad = ['.hud-round', '.hud-tr'].filter(function (sel) { const n = doc.querySelector(sel); return n && hit(b, n.getBoundingClientRect()); });
+          t.eq(bad.join(','), '', tag + 'the tracker overlaps neither the round box nor the top-right buttons');
+          t.ok(b.left >= 0 && b.right <= w, tag + 'on screen');
+        }
+      } finally { f.remove(); }
+    }
+  });
+
+  // ---- V3 QA fixes (render-ui cluster) -------------------------------------------------------------------------------
+  T.suite('hud: QA HERO-1 — a skill\'s own preview reaches the board and the hint: Snail Mail\'s "📦 N next turn" on every foe in the footprint, the Mystery Potion\'s "? (d6)"', function (t) {
+    if (!ready(t)) return;
+    const mail = DD.getSkill('ben_mail');
+    if (!DD.getHero('benedick') || !mail || typeof mail.preview !== 'function') { t.skip('Benedick (Snail Mail with its own preview) is not registered'); return; }
+    try {
+      const pot = DD.getConsumable('con_mystery_potion');
+      fight({ heroes: [{ id: 'benedick', x: 2, y: 3, level: 5, skills: [{ id: 'ben_shell', level: 1 }, { id: 'ben_slime_line', level: 2 }, { id: 'ben_mail', level: 2 }] }],
+        enemies: [{ id: 'test_grunt', x: 6, y: 3 }, { id: 'test_archer', x: 6, y: 5 }, { id: 'test_minion', x: 1, y: 7 }], consumables: pot ? ['con_mystery_potion'] : [], enemyAi: false });
+      const b = byDef('benedick'), g = byDef('test_grunt'), a = byDef('test_archer'), far = byDef('test_minion');
+      t.eq(DD.HUD.selected() && DD.HUD.selected().id, b.id, 'Benedick\'s turn');
+      DD.HUD.pressSlot(3);
+      t.ok(DD.HUD.mode().kind === 'skill' && /Snail Mail/.test(DD.HUD.hint()), 'Snail Mail armed (key 4): ' + DD.HUD.hint());
+      DD.HUD.hover(6, 4);
+      const slot = (b.skills || []).filter(function (s) { return s && s.id === 'ben_mail'; })[0];
+      const eng = DD.Targeting.preview(b, slot, { x: 6, y: 4 });
+      const eg = eng.perUnit[g.id], ea = eng.perUnit[a.id];
+      t.ok(eg && /^📦 \d+ next turn$/.test(eg.text) && eg.dmg === 0, 'the engine\'s honest number for the grunt: ' + (eg && eg.text));
+      const pg = ov().previews[g.id], pa = ov().previews[a.id];
+      t.ok(pg && pg.text === eg.text, 'the grunt wears it on the board (overlay text "' + (pg && pg.text) + '")');
+      t.ok(pa && ea && pa.text === ea.text, 'so does the archer ("' + (pa && pa.text) + '")');
+      t.ok(pg && pg.dmg === 0 && !pg.lethal, 'nothing lands now: no damage number, no skull');
+      t.ok(!ov().previews[far.id], 'a foe outside the footprint gets nothing');
+      const hint = DD.HUD.hint();
+      t.ok(hint.indexOf(eg.text + ' → ') >= 0 && hint.indexOf(g.name) >= 0 && hint.indexOf(a.name) >= 0, 'the hint names the parcel\'s hit and who it is for: ' + hint);
+      t.ok(!/Hits \d+ foe/.test(hint), 'and promises no hit now');
+      DD.HUD.rightClick();
+      // the Mystery Potion's bare "? (d6)" (its own preview: the die stays hidden) keeps its words too
+      if (pot && typeof pot.preview === 'function') {
+        DD.HUD.pressConsumable(0);
+        t.eq(DD.HUD.mode().kind, 'cons', 'the Mystery Potion armed');
+        DD.HUD.hover(b.x, b.y);
+        const pb = ov().previews[b.id];
+        t.eq(pb && pb.text, '? (d6)', 'the drinker\'s badge reads "? (d6)", not a bare "?"');
+        DD.HUD.rightClick();
+      } else t.log('the Mystery Potion is not registered: its check waits');
+      // a dry-run preview keeps the plain badge (no custom text): the slime line's hit is the HP number
+      DD.HUD.pressSlot(2);
+      DD.HUD.hover(g.x, g.y);
+      const pl = ov().previews[g.id];
+      t.ok(pl && pl.dmg > 0 && !/next turn/.test(pl.text || ''), 'a dry-run preview stays the damage badge (' + JSON.stringify(pl) + ')');
+    } finally { leave(); }
+  });
+
+  T.suite('hud: QA FIGHTS-04 — the objective fades only where a unit (or the hovered tile) is under it; the chips clear of it keep their text and tooltips', function (t) {
+    if (!ready(t)) return;
+    const R = DD.Render;
+    const w2s = R.worldToScreen;
+    try {
+      fight({ heroes: [{ id: 'test_knight', x: 2, y: 2 }], enemies: [{ id: 'test_grunt', x: 6, y: 6 }], enemyAi: false });
+      const s = DD.Combat.state, g = byDef('test_grunt');
+      s.objective.flavor = 'This round: Pop Quiz · Next cheat: Flaky Dice';
+      [['qa_obj_a', '📝 The Extremely Long Pop Quiz'], ['qa_obj_b', '🎲 Flaky Dice of Questionable Origin'], ['qa_obj_c', '🧻 The Paper Cut of Destiny']].forEach(function (r, i) {
+        DD.Act.addRule({ id: r[0], name: r[1], desc: 'QA rule ' + i + '.', turns: -1, hooks: {}, cheat: i > 0, silent: true });
+      });
+      DD.HUD.refresh();
+      const E = DD.HUD.els();
+      const chipEls = qa('.hud-obj .hud-chip');
+      t.ok(chipEls.length >= 3, 'three rule chips on the objective (' + chipEls.length + ')');
+      const first = chipEls[0], last = chipEls[chipEls.length - 1];
+      const rf = first.getBoundingClientRect(), rl = last.getBoundingClientRect();
+      const m = DD.Sprites && DD.Sprites.metrics ? DD.Sprites.metrics(g) : null;
+      if (!m || !(m.height > 0) || !(rl.width > 0)) { t.skip('no sprite metrics or no layout'); return; }
+      const z = R.camera.zoom, zc = Math.max(0.65, Math.min(1.5, z));
+      const top = Math.max((m.height + 16) * z, m.height * z + 4 * z + 5 * zc + 4);
+      const hw = Math.max(30 * zc + 9, (m.width || 0) * 0.5 * z);
+      t.ok(rl.left - 4 - hw > rf.right || rl.top >= rf.bottom, '(the last chip is well clear of the first: ' + Math.round(rf.right) + ' → ' + Math.round(rl.left) + ')');
+      const bg0 = getComputedStyle(E.obj).backgroundImage;
+      // the grunt flies at the back: its head just under the last chip's bottom edge, its body below the panel
+      R.worldToScreen = function (x, y) { return x === g.x && y === g.y ? { x: rl.right - 4, y: rl.bottom + top - 4 } : { x: -500, y: -500 }; };
+      t.ok(DD.HUD.objPeek(), 'a unit under the panel: it peeks');
+      t.eq(getComputedStyle(E.obj).pointerEvents, 'none', 'the panel lets clicks through to the board');
+      t.eq(getComputedStyle(E.obj).backgroundImage, 'none', 'its background goes (the unit shows through)');
+      t.ok(last.classList.contains('ho-under') && getComputedStyle(last).pointerEvents === 'none', 'the chip over the unit fades and lets clicks through');
+      t.ok(!first.classList.contains('ho-under') && getComputedStyle(first).pointerEvents === 'auto', 'the chip clear of it stays solid and hoverable (its tooltip opens)');
+      t.eq(getComputedStyle(first).opacity, '1', '(full opacity)');
+      ['.ho-main', '.ho-flavor'].forEach(function (sel) { const n = q('.hud-obj ' + sel); t.ok(n && !n.classList.contains('ho-under'), sel + ' clear of the unit: readable'); });
+      t.ok(/Pop Quiz/.test(text('.hud-obj .ho-flavor')), '(the flavour line names this round\'s cheat)');
+      // the hovered tile counts too: a tile under the first chip fades that chip, not the others
+      R.worldToScreen = function (x, y) { return x === 0 && y === 0 ? { x: (rf.left + rf.right) / 2, y: rf.bottom - 1 } : { x: -500, y: -500 }; };
+      DD.HUD.hover(0, 0);
+      t.ok(DD.HUD.objPeek(), 'the hovered tile under the panel: it peeks');
+      t.ok(first.classList.contains('ho-under') && !last.classList.contains('ho-under'), 'only the chip over the hovered tile fades');
+      DD.HUD.hover(null);
+      R.worldToScreen = function () { return { x: -500, y: -500 }; };
+      t.ok(!DD.HUD.objPeek(), 'nobody under it: solid again');
+      t.eq(qa('.hud-obj .ho-under').length, 0, 'every part solid again');
+      t.eq(getComputedStyle(E.obj).backgroundImage, bg0, 'and the background is back' + (bg0 === 'none' ? ' (this page has no style.css: the panel has none)' : ''));
+    } finally {
+      R.worldToScreen = w2s;
+      leave();
+    }
+  });
+
+  T.suite('hud: QA HERO-3 — a skill that spends all your AP says so where you commit: "1+" on its button and tooltip, "spends all N AP" in the armed hint', function (t) {
+    if (!ready(t)) return;
+    if (!DD.getHero('benedick') || !DD.getSkill('ben_shell')) { t.skip('Benedick is not registered'); return; }
+    try {
+      fight({ heroes: [{ id: 'benedick', x: 2, y: 3, level: 5, skills: ['ben_shell', 'ben_slime_line'] }], enemies: [{ id: 'test_grunt', x: 6, y: 3 }], enemyAi: false });
+      const b = byDef('benedick');
+      const btns = qa('.hud-bar .hud-skill');
+      const cost = DD.Combat.costOf(b, DD.getSkill('ben_shell'), 1).ap;
+      t.eq(btns[1] && btns[1].querySelector('.hs-ap').textContent, cost + '+', 'Coming Out of My Shell\'s cost badge reads "' + cost + '+"');
+      t.ok(/every AP you have left/.test(btns[1].querySelector('.hs-ap').title), 'its title says why');
+      t.ok(!/\+/.test(btns[2].querySelector('.hs-ap').textContent), 'the Slime Line\'s badge stays a plain number');
+      const tip = DD.UI.skillTooltipHtml('ben_shell', 1, b);
+      t.ok(tip.indexOf('>' + cost + '+ AP') >= 0, 'the tooltip\'s cost pill reads "' + cost + '+ AP"');
+      t.ok(b.ap > cost, '(Benedick starts his turn with ' + b.ap + ' AP)');
+      DD.HUD.pressSlot(1);
+      t.eq(DD.HUD.mode().kind, 'skill', 'the shell armed');
+      t.ok(DD.HUD.hint().indexOf('spends all ' + b.ap + ' AP') >= 0, 'the armed hint warns before the click: ' + DD.HUD.hint());
+      DD.HUD.rightClick();
+      b.ap = cost;
+      DD.HUD.refresh();
+      DD.HUD.pressSlot(1);
+      t.ok(DD.HUD.mode().kind === 'skill' && !/spends all/.test(DD.HUD.hint()), 'with only the cost left there is nothing extra to warn about');
+      DD.HUD.rightClick();
+      t.ok(DD.getSkill('gen_power_nap') ? DD.UI.skillInfo('gen_power_nap', 1).drainsAp === true : true, 'Power Nap is a drain too (its desc says so)');
+      t.ok(DD.UI.skillInfo('test_fireball', 1).drainsAp === false, 'a plain skill is not');
     } finally { leave(); }
   });
 

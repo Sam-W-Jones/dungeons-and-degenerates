@@ -165,3 +165,117 @@ within(list, r), freeTiles(x, y, r), tile(x, y), pick(list), isBoss(u), immovabl
   stays "Destructible." without the D1 sentence on purpose: as The Last Keg it is the protect objective and nobody may aim
   at it (the HUD shows the def's desc for every keg). Every other breakable generic prop in terrain.js now says "any
   single-target damage skill can break it" (`kit: finish D1` asserts it).
+
+## V3 (act IV "Under the Table", Nov 14) — MAPGEN
+
+Plan `.tmp/v3/design.md` §4.6, §6.3, §0.3 V7 / V17, §8.4 MAPGEN; contract ARCHITECTURE §3.8, §5.8, §6.10; lead patches
+P8, P9, P11 (`docs/notes/v3-contract.md`). Files: `js/engine/encounter.js`, `js/data/themes.js`, `tests/mapgen_tests.js`,
+this file, and `js/data/wildmagic.js` (a v2 MAPGEN file: the wave-0 request, see Deviations).
+
+### What landed
+- **`DD.finalAct()` everywhere** (no literal last act): `encounter.js clampAct` → 1..`DD.finalAct()` (exported as
+  `DD.Encounter.clampAct`); `pickFrom`'s act list is bounded by `DD.finalAct()`; `themes.js forAct` clamps to
+  1..`DD.finalAct()`; `wildmagic.js` reads the last `SCALE` row for any later act (`scaleRow`, data-driven: act 4 reads
+  act 3's numbers, the intended clamp). With `campaign.acts` 3 every pick, theme and build is exactly v2 (ship dark):
+  an act-4 encounter builds as act 3 (`setup.act` 3, act 3's row), `forAct(4)` / `random(4)` give act-3 themes.
+- **Random picks never return a door or the finale**: `DD.Encounter.isScripted(def)` (= `gauntlet` or `finale`);
+  `pickFrom` drops those before anything else (all acts and kinds, weighted or not), so `pick`, act-map nodes and
+  `api.combat` never get one; a list of doors only → `null` (then `pick` synthesizes). `synthesize` also never uses an
+  enemy of an act past `DD.finalAct()` or of a gauntlet act (act-4 units need their own encounter's scripting), unless
+  nothing else is registered.
+- **Squads (E10)**: `buildObjective` copies `objective.bossIds` (a new array of the string ids; `flavor` kept as
+  before) and keeps a `boss` objective whose squad has no boss-tier unit (v2 fell back to killAll: the League's
+  `bossId: KELEK` workaround is no longer needed). The build text names the squad by `shortName` like the live bar
+  (`Combat.objectiveText`): "Defeat the Test Squad. They came as a set. They leave as a set." A squad of unknown ids
+  and no boss-tier unit still warns and falls back to killAll.
+- **The gauntlet order knob (P11)**: `build(def, party, { …, gauntlet })` keeps `opts.gauntlet` as `setup.gauntlet`
+  (the same object; absent without it) and `difficultyInfo` passes it to `DD.Balance.scale(…, { gauntlet })`, so
+  `setup.difficulty` matches what `Combat.start` plays (RULES' `difficultyOf` reads `setup.gauntlet`). The knob ships
+  off (`DD.Balance.gauntlet` 0 / 0). `DD.Encounter.difficulty(d, act, kind, encId, gauntlet)` takes it too.
+- **Six act-IV themes** (`act: 4`, plan §6.3; DESIGN §10): `a4_conservatory` The Overgrown Conservatory (grass / gravel
+  paths / moss, planters h1, hedges, a sprinkler pond, compost, weedkiller; `pollen`), `a4_lair` The League's Clubhouse
+  (obsidian / carpet runway / marble dais, the Shark Tank moat and pools, Evil Powder Kegs 2-3; `embers`),
+  `a4_observatory` Galbraith's Grand Observatory (marble, orrery columns, mirrors, the starry void as pits and a chasm,
+  loose starlight, a rune ring; `stars`), `a4_cottage` Tea with the Coven (moss / grass / dirt hills, a bog creek, bog,
+  pools, a spilled brew; `fog`), `a4_barn` **The Barn Burner** (worn planks with loose straw, the hayloft stage, a
+  walled barn: border walls 90% + stall partitions, barn posts, stall fences, feed crates, loose hay = rubble patches,
+  lantern oil, the water trough; **no pits**; `dust`) and `a4_underfloor` The Last Floor (obsidian / graph-paper
+  panels, giant table legs, lost dice, missing panels = pits and a chasm, Cheeto dust, spilled soda; `dust`). bg
+  colours as plan §6.3. Every hand-made act-4 fight reads the theme's floors for its `.` tiles (see Requests).
+- **The barn's hay bales**: theme field `borrow: { obstacles: { rap_bale: 5 } }`: `themes.js` adds the goats' Hay
+  Bale to the barn's obstacles in `DD.afterLoad`, only when `goats.js` registered it (isolated runs and the stub keep
+  crates and barrels as stand-ins). The bale burns (its own `react` / `onDestroyed`).
+- **New ambients** `pollen` (conservatory) and `stars` (observatory) carry `ambientFallback` ('fireflies' / 'dust'); a
+  renderer that doesn't know the kind today draws no particles (no error).
+
+### Numbers (the suites)
+- 15 themes × 49 maps in "generate 300+ maps" (735 maps): 0 invalid, 0 fallbacks, avg 1.00 attempts. Act IV: elevated
+  100% · 4+ objects 100% · hazards 98-100% · cliff edges 0.0-1.1% of steps; barrier 37-63%; the Lair has barrels in 100%.
+- V3 arena suite: 6 themes × 5 sizes (15 × 14, the goats' arena size, included) × 20 seeds = 600 maps, 0 invalid,
+  0 fallbacks; the barn: 0 pits, barn walls in ≥ 80% (bales in ≥ 50% of barn maps once goats.js lands).
+- Picks: 500 seeds × acts 0..`MAX_ACT`+1 × 3 kinds × knob 3 and 4, list and registry: 0 doors / finales returned.
+- Look: `tools/shot.sh "debug=1&acts=4&screen=combat&encounter=boss_league&seed=3"` (`.tmp/v3/mapgen/lair.png`): the
+  League's layout on `a4_lair` (violet backdrop, embers), "Defeat the League of Villainy (5 left)".
+
+### Tests (`tests/mapgen_tests.js`)
+- Widened: `THEME_IDS` = the 9 classic + `A4_THEMES` (every map suite runs the act-IV arenas: themes, 300+ maps,
+  determinism, combat integration, DD.Grid agreement, reinforcements; the combat defs set `cameo: false`); `AMBIENT`
+  adds `pollen` / `stars` / `notes` (a new kind must name a v2 `ambientFallback`); `forAct` clamps high to
+  `DD.finalAct()`; wild magic: act IV reads the last row.
+- New suites `mapgen: V3 — …`: the six arenas at every seed (the barn's no-pits / walls / bales); `forAct`, `random`,
+  `clampAct` and the build act under `campaign.acts` 3 and 4 (knob set and restored with `DD.Balance.snapshot()`);
+  random picks never a door or the finale (500 seeds, list + registry, both knob values; a regular act-4 fight only
+  after the flip); build: squad objective (copied `bossIds`, text, flavor, killAll fallback for junk), `setup.gauntlet`
+  identity, the order knob (off = no change; on: HP × 1.2 / damage × 1.1 at index 2 = `DD.Balance.scale`; map and
+  line-up unchanged; junk index / object ignored; `Combat.start` plays the same numbers, keeps `state.data.gauntlet`
+  and counts the squad); stand-ins never use a gauntlet-act enemy.
+- `bash tools/test.sh "suite=mapgen&isolate=goats"`: 21 suites, 3054 assertions, PASS (with
+  `isolate=league,svammiel,goats`: 3062, PASS). Full run (Nov 14): 1137 suites, 138,605 assertions, 1 failure outside
+  MAPGEN (`kit: finish D1` on `lg_body`, C2's `league.js`), 0 swallowed "Error in" lines, missing scripts 6 (the
+  Gardener, Galbraith and the Coven, not yet created).
+
+### Deviations
+- **`js/data/wildmagic.js`** is not in this role's V3 file list, but ARCHITECTURE §1 keeps it with MAPGEN (v2 row) and
+  the wave-0 contract addressed its `Math.min(3, …)` clamps to MAPGEN: made data-driven (two lines + a helper).
+- **Theme floors are canonical terrain ids** (no new terrain registered in `themes.js`): lawn = `grass`, gravel =
+  `cobble`, black marble = `obsidian`, linoleum panels = `obsidian` / `paper`, barn planks = `wood`, straw = `sand`. The
+  fights' own terrains (the goats' stage and squares, Svammiel's floor, the Shark Tank) live in their layouts' legends.
+- **New theme fields** `ambientFallback` and `borrow` (documented in `themes.js`'s header): the plan names "fallbacks"
+  for the new ambients and "scattered bales" for the barn's gen without a mechanism; `borrow` keeps `themes.js` free of a
+  load-order dependency on a boss file.
+- **Squad objective text and joke** ("They came as a set. They leave as a set.") and the stand-in filter in
+  `synthesize` are beyond the plan's list (each closes a gap: a squad door's build text would otherwise read "Defeat
+  the boss.", and a stand-in fight could borrow a League member without its encounter).
+- **`DD.Encounter.clampAct` / `isScripted`** are new public helpers (tests, and any caller that needs the rule).
+
+### Requests
+- **RENDER-WORLD (`renderer.js`)**: when `AMBIENT_N[kind]` is missing, use `DD.Themes[theme].ambientFallback`
+  (`a4_conservatory` 'pollen' → 'fireflies', `a4_observatory` 'stars' → 'dust') until the new kinds exist; THEME_LOOK /
+  WALLS fallbacks for the six `a4_*` ids (plan §4.7; bg values are in `themes.js`).
+- **C1, C3, C4, C6 (hand-made act-4 arenas)**: a layout's `.` takes the theme's floor mix (patches of its secondary
+  floors: the barn has ~10% `sand` straw on `wood`). For a uniform floor set `legend['.'] = { terrain: '<id>' }` (as the
+  League and Svammiel do).
+- **C6 (goats)**: the barn's gen borrows the object id `rap_bale`; if it is renamed, tell MAPGEN (the theme just stops
+  borrowing it, nothing breaks).
+- **C2 (League)**: `objective.bossId: KELEK` is no longer needed for a squad boss objective (harmless if kept). The full
+  run's only failure is in your file: `kit: finish D1 — … terrain.js props name the rule too (the keg excepted): lg_body`
+  (`tests/content/kit.js` matches `/any single-target damage skill/` case-sensitively; the Villain's Body desc says
+  "Any single-target…"). Either C2 writes "any" in lower case, or the integrator (owner of `kit.js`) makes the match
+  case-insensitive / adds the act-4 prefixes to its `OWN` list.
+
+### Known issues
+- Until RENDER-WORLD adds `pollen` / `stars` (or reads `ambientFallback`), the conservatory and the observatory draw no
+  ambient particles.
+
+## Review (V3) — adversarial review of MAPGEN's V3 work (REVIEWER, core cluster, Nov 15)
+Scope: `js/engine/encounter.js`, `js/data/themes.js` (and the `wildmagic.js` clamp), `tests/mapgen_tests.js`.
+- **Verified by running**: `mapgen: V3` suites PASS, also with the knob flipped (`.tmp/metarun/test4.sh`); the six
+  act-IV arenas with `n=100` (3,000 maps over the five sizes incl. the goats' 15 × 14): 0 invalid, the barn never has a
+  pit and borrows `rap_bale` now that goats.js registers it; random picks never return a door or the finale (suite +
+  `DD.RunMap.pickEncounter` in run_tests); a squad door builds a boss objective from `bossIds` with its shortName text;
+  `opts.gauntlet` → `setup.gauntlet` → `state.data.gauntlet` in every door of 20 real act-4 runs (`.tmp/rvcore/`); the
+  acts-3 sim without Benedick reproduces the wave-0 re-baseline exactly (the act-4 themes and encounters leave v2's
+  picks and maps unchanged).
+- **Requests to MAPGEN, both done** (checked in code and suites): RULES' "keep `objective.type 'boss'` for a squad in
+  `bossIds`" and META-RUN's "`Encounter.build(…, { gauntlet })` → `setup.gauntlet`".
+- **No fixes needed** in MAPGEN's files.

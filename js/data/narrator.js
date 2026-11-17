@@ -7,6 +7,13 @@
  * every caller fills them (DD.Narrator.TOKENS): DD.narrate leaves an unfilled token in the text, so keys with any
  * token-less caller use none. Lines that name a hero never use a pronoun for them (the caller only passes a name).
  * Tips are mechanically true in v2 (each one was checked against the engine; tests/content/narrative.js re-checks them).
+ * V3 (act IV "Under the Table", plan .tmp/v3/design.md §4.9 / §5.5 / §5.7): the act-4 keys (act_intro_4, the twist's
+ * act_clear_twist / twist_loot, the four-act ending's campaign_won / victory_final, the gated tips_act4 and
+ * run_start_seen, Svammiel's svam_defeat / svam_phase2 / svam_phase3) and the `key@a4` variants (VARIANTS) that replace
+ * a base pool while act 4 is played: the DM narrates act IV demoted, whispering from under his chair. Variants use
+ * their base key's tokens. The six foreshadowing lines (V §3.3) sit in the classic pools: ordinary DM quirks on a first
+ * run. Nothing a player sees before the twist names Svammiel or a fourth act (tips_act4 / run_start_seen are gated by
+ * their readers on DD.Meta.data.seen.bosses.svammiel). Svammiel's own cameo pools live in js/data/svammiel_lines.js.
  */
 (function () {
   'use strict';
@@ -21,7 +28,15 @@
     shop_greet: [], shop_buy: [], shop_broke: [], shop_leave: [], tavern_greet: [], rest: [], recruit: ['hero', 'name'],
     map_enter: [], act_intro_1: [], act_intro_2: [], act_intro_3: [], act_clear: [], treasure: [], tips: [],
     gameover_title: [], victory_title: [], run_start: [], idle_dm: [],
+    // V3: act IV (ARCHITECTURE §3.10). The map's act banner; the twist panel's DM line (run.js) and the DM's loot text;
+    // the four-act final victory (campaign_won, then Svammiel's last word from far below: victory_final); the loading
+    // tips and run-start lines that join only after the twist was seen; Svammiel's fight (svammiel.js narrates them)
+    act_intro_4: [], act_clear_twist: [], twist_loot: [], victory_final: [], campaign_won: [], tips_act4: [],
+    run_start_seen: [], svam_defeat: [], svam_phase2: [], svam_phase3: [],
   };
+  /** The V3 keys above (the act-4 pools; the narrative suite checks them apart from the classic keys). */
+  const V3_KEYS = ['act_intro_4', 'act_clear_twist', 'twist_loot', 'victory_final', 'campaign_won', 'tips_act4', 'run_start_seen',
+    'svam_defeat', 'svam_phase2', 'svam_phase3'];
 
   const LINES = {
     // ---- combat (DD.Act.narrate → combat log + the HUD's DM caption) ----------------------------------------
@@ -57,6 +72,8 @@
       'The DM whispers "finally," and nobody likes the way he said it.',
       'Everything this act has been building to. No pressure. Rocks could fall at any moment.',
       'When this boss starts winding up, the floor turns red and an hourglass appears. The DM is not bluffing.',
+      // V3 foreshadowing (V §3.3): an ordinary DM quirk on a first run, a joke on every run after the twist
+      'The DM glances at the floor before the boss fight. Just once. Just to check.',
     ],
     victory: [
       'Victory! The DM sighs and opens the loot table he was hoping not to use.',
@@ -68,6 +85,7 @@
       'The monsters are defeated. Their families will be notified by goblin post.',
       'Nailed it. The DM says "good job" in a voice that means "next time."',
       'The DM removes the defeated minis one by one, slowly, like a funeral.',
+      'The DM checks under the table before he hands over the loot. Habit, he says.',
     ],
     defeat: [
       'The DM closes his notebook gently. "So. Who brought spare character sheets?"',
@@ -377,6 +395,7 @@
       'Act III: hellscapes, a dragon hoard and a man with a lot of dice. This is where it ends.',
       'The last act. The DM has saved his meanest encounters, and his biggest bag of snacks.',
       'Act III. You have come too far to die to something embarrassing. Probably.',
+      'Act III. The DM swears this is the last act. He says it to the floor, for some reason.',
     ],
     act_clear: [
       'The DM flips to a fresh page and cracks his knuckles.',
@@ -387,6 +406,7 @@
       'Another chapter closed. The bards are already exaggerating it.',
       'The act is over. Everyone stretches, refills their drinks and pretends not to be tired.',
       'That is the act! The DM is moving the goalposts as we speak.',
+      'The DM\'s phone buzzes. A text from "S": "Cute act. Mine\'s better." He turns the phone face down.',
     ],
     treasure: [
       'Treasure! Definitely not a mimic. The DM looks disappointed.',
@@ -438,6 +458,8 @@
       'The DM mentions, to nobody in particular, that holding Alt shows what the monsters can reach.',
       'The DM hums the hold music from the Infernal DMV. Badly.',
       'The DM tilts his head sideways to read the board. Somebody tell him about the Q and R keys.',
+      'The DM tucks his feet up onto his chair. He always does. He won\'t say why.',
+      'Something under the table bumps the DM\'s chair. He does not look down. He has learned not to look down.',
     ],
 
     // ---- loading-screen tips (title screen). Every tip is true in v2; numbers are the engine's. -----------------
@@ -530,24 +552,265 @@
       'Brutal: enemies get 15% more HP and 5% more damage, and normal fights bring an extra enemy.',
       'Clearing an act heals every hero for 50% of their max HP.',
     ],
+
+    // ---- V3: act IV "Under the Table" (plan §5.5; the twist §2.1; the ending §2.4) --------------------------------
+    // the act banner (map.js showActBanner): count-free, the gauntlet's doors come from the registry
+    act_intro_4: [
+      'Act IV: Under the Table. Down here the floor has a boss, and the boss has wings.',
+      'Act IV. The DM whispers from under his chair: "All of his favourites, in any order. Then him. I\'m so sorry."',
+      'Under the table: chewing gum, lost dice, a Cheeto the size of a canoe and a demon who owns all of it.',
+      'Act IV. You can see the underside of the DM\'s table from here. Someone has carved "S WAS HERE" into it.',
+      '"Welcome to the floor," says Svammiel. "Mind the gum. The gum is load-bearing."',
+      'Act IV: no more DM. Well, there is a DM. He is a lot taller and he does not play fair.',
+      'The last act. For real this time. Probably. Svammiel refuses to confirm.',
+      'Act IV. Every door down here hides a mini-boss, and every mini-boss has a fan club of one: Svammiel.',
+    ],
+    // the twist panel's DM line (run.js completeAct: the act-clear text when the campaign goes on)
+    act_clear_twist: [
+      'The DM, from under his screen: "He\'s my DM. He has never once let me win. ...Good luck."',
+      'The DM, very quietly, from under the table: "Every DM has a DM. Mine has wings. I\'m so sorry."',
+      'The DM pulls his feet up onto his chair. "Now you know why I never put them on the floor."',
+    ],
+    // the act-3 boss's rewards text at the twist (run.js resolveCombat), exactly the plan's line
+    twist_loot: [
+      'The DM\'s loot is already sorted, labelled and signed in a handwriting that is not his: "Enjoy it. You\'ll need it. — S."',
+    ],
+    // the four-act final victory (gameover.js): campaign_won is the DM's narration, victory_final Svammiel's last word
+    campaign_won: [
+      'One campaign, one very sore demon and a party that refused to stay down. The DM is so proud he could cry. He does cry.',
+      'The Cheeto dust settles. The DM writes THE END at the bottom of his notes, then, after a moment, adds a question mark.',
+      'The DM sets his screen back up on top of the table, where screens belong, and grins at the party over it.',
+    ],
+    victory_final: [
+      'Svammiel, from somewhere far below: "Fine. FINE. ...Same time next week?"',
+      'From very far below the floor, a small, sulky voice: "Best two out of three?"',
+      'Far below, something with graph-paper wings is already writing the sequel. In pencil.',
+    ],
+    // loading tips that join `tips` only once Svammiel has been seen (title.js gates them); each is true in the final
+    // build and re-checked by the narrative suite. Count-free on purpose: the doors come from the registry.
+    tips_act4: [
+      'In Act IV every door is a mini-boss, and mini-bosses wind up their big moves like bosses: marked tiles, an hourglass, get clear.',
+      'Svammiel cheats, but always out loud: the banner names the cheat and its exact effect, and the rule bar keeps it until it ends.',
+      'Svammiel announces his round cheats a round ahead. Read the "Next round" chip, then plan.',
+      'The DM sits at the kids\' table in Svammiel\'s fight. Ask him for a Ruling: it cancels a cheat and hurts Svammiel.',
+      'Svammiel flies: lava, fire, puddles and traps never touch him. Until somebody catches him cheating.',
+      'In Act IV you pick the order of the mini-bosses, with rests, shops and events in between. Then the floor boss.',
+      'Heroes can swap places with an adjacent ally as a move. On a stirring spot, that means the spot never comes free.',
+      'Galbraith counters one spell a round. Swords, arrows and corgis go straight through.',
+      'The Gardener\'s plants burn. Fire in a greenhouse: not advised, unless you are the heroes.',
+      'Break the League\'s bodies, or Zargash prays them back up.',
+      'Whoever holds the Coven\'s Eye runs the Coven\'s turn. Take her down and they act separately.',
+      'The tavern rug is the one floor Svammiel doesn\'t control. Rest stops are safe.',
+      'The DM whispers counters to Svammiel\'s cheats in the combat log. Read the log; he is on your side now.',
+      'Shooting a barrel still works in Act IV. The League calls theirs Evil Powder Kegs. Same barrels.',
+      'Heals aimed at a downed ally still bring them back up. Svammiel calls it cheating. It isn\'t.',
+      'A bar takes two goats: one starts it, another finishes it. Shut one up in between and the bar hangs.',
+      'Clap back at the Rapping Goats\' mic stand: their verse turns on you. Send your sturdiest hero.',
+      'The goats need to see who they diss. Hay bales and barn posts hide you. Lil\' Kid just yells, though.',
+      'At half health the Rapping Goats wake whatever is snoring in the hay. It is a bear. It writes poetry.',
+    ],
+    // run-start lines that join `run_start` once the twist was seen (the lie of "three acts" is the setup until then)
+    run_start_seen: [
+      'The DM has prepared three acts. Something under the table has prepared a fourth.',
+      'A new campaign. The DM keeps his feet up on his chair. You know why now.',
+      'Three acts, says the DM. A voice from under the table says: "Four."',
+    ],
+    // Svammiel's fight (svammiel.js): his defeat and his phase flips
+    svam_defeat: [
+      'The DM climbs back into his chair and, for the first time in eleven years, puts both feet on the floor. "Same time next week," he says. It is not a question.',
+      'Somewhere above, the table stops shaking. The DM peeks over the edge of it, sees the party and starts a slow clap that goes on for a while.',
+    ],
+    svam_phase2: [
+      'Svammiel kicks the board. The floor tiles rearrange themselves out of fear.',
+      'Svammiel spreads his wings and takes a second turn, because apparently that is allowed now.',
+    ],
+    svam_phase3: [
+      'Svammiel stops pretending there is a rulebook. There is only him, and a lot of capital letters.',
+      'Svammiel rage-quits his own floor. The outer panels start falling into the dark, panel by panel.',
+    ],
+  };
+
+  /**
+   * V3: act-4 variants (`key@a4`, ARCHITECTURE §2 / §3.10): while act 4 is played, DD.narrate draws from these instead
+   * of the base pool. Same tokens as the base key; {hero} never gets a pronoun; {enemy} may be 'gravity' (a down with
+   * nobody to credit) and {hero} 'the party' (initiative), so neither starts a sentence.
+   */
+  const VARIANTS = {
+    'boss_start@a4': [
+      'Whatever comes next has Svammiel\'s handwriting all over it. The DM recognises the red pen.',
+      'The lights dim. A spotlight snaps on. Svammiel paid for the spotlight.',
+      'The DM whispers: "Down here the big moves get wound up first. Watch for the marked tiles and the hourglass."',
+      'Svammiel has a laminated card for this fight. He laminated it twice.',
+      'Boss music plays from somewhere above you, on a cursed kazoo.',
+      'Every fight in Act IV is a boss fight. The DM calls that "a lot". Svammiel calls it "Tuesday".',
+    ],
+    'round_start@a4': [
+      'Round {n}. The DM whispers the round number. Svammiel repeats it, louder, for credit.',
+      'Round {n}. A demon taps a d20 against a table leg, loudly, on purpose.',
+      'Round {n}. The floor shifts slightly. Probably nothing. It is never nothing.',
+      'Round {n}! The DM, under his breath: "You can do this."',
+      'Round {n}. The gum on the ceiling stretches a little lower.',
+      'Round {n}. Svammiel checks his notes, smiles, and crosses out something you did.',
+      'It is round {n}. The DM would like everyone to know he is rooting for you. Quietly.',
+      'Round {n}. The floor boss is watching. The floor is also watching.',
+    ],
+    'enemy_turn@a4': [
+      'The monsters move. Svammiel does the voices. He is better at voices than the DM. The DM is hurt.',
+      'Enemy turn. Svammiel commentates it like a sports announcer who hates you.',
+      'Monster time, under the table. The dust bunnies scatter.',
+      'Their turn. Svammiel applauds before anything has even happened.',
+      'Enemy turn. The DM covers his eyes. Then peeks.',
+      'The enemies act. Svammiel adds sound effects nobody asked for.',
+    ],
+    'initiative@a4': [
+      'Roll for initiative! Svammiel rolls too. He rolls a 20. He shows nobody.',
+      'Initiative! First up for the heroes: {hero}. Svammiel has already started heckling.',
+      'The dice tumble across the floor. Svammiel owns the floor. Make of that what you will.',
+      'Dice rolled under the table, where the DM can\'t see them. Svammiel can. Svammiel sees everything.',
+      'Initiative! The DM whispers "nice roll" to {hero} and hides behind a chair leg.',
+      'Everyone rolls. One die rolls under the canoe-sized Cheeto and is never seen again.',
+    ],
+    'victory@a4': [
+      'Victory! Svammiel boos from somewhere above. Then below. Then above again.',
+      'A tiny thumbs up appears from under a chair. The DM is not allowed to cheer down here.',
+      'You win! Svammiel writes "cheated" in his notes. He would know.',
+      'Svammiel takes it personally. He takes everything personally, including the furniture.',
+      'Victory. The DM does a quiet fist pump, then pretends it was a stretch.',
+      'The floor boss is losing his floor, and he is taking it very badly.',
+      'The dice stop rolling. Down here, that counts as applause.',
+      'Cleared! Somewhere, a demon is drafting a strongly worded errata.',
+    ],
+    'defeat@a4': [
+      'Svammiel lands on the pile of heroes. "You thought this was over? Now it is."',
+      'Total party kill. Svammiel flips the board. You were all still on it.',
+      'The DM, from under the table, quietly packs your minis away. He is crying a little.',
+      'Everyone is down. Svammiel rolls his d20. It says 20. It always says 20.',
+      'Swept under the rug. Svammiel has waited all act to say that, and he hates rugs.',
+      'The campaign ends under the table, where all the dropped things go.',
+      'Svammiel does a victory lap of the room. He flies it, so it counts double.',
+      'Rule Zero: the DM always wins. Svammiel wrote that rule, and he just used it.',
+    ],
+    'hero_downed@a4': [
+      '{hero} hits the floor. Svammiel\'s floor. It remembers everyone.',
+      '{hero} goes down to {enemy}. Svammiel starts a slow clap. Nobody joins in.',
+      'Down goes {hero}! The DM whispers: "Help Up is two AP. Or aim a heal at the fallen."',
+      '{hero} is down, courtesy of {enemy}. Svammiel makes a note in red ink.',
+      '{hero} is down. The DM, under his breath: "Get up. Please. I can\'t watch him gloat."',
+      'A thud under the table: {hero} is down, and {enemy} looks very pleased with the floor.',
+    ],
+    'level_up@a4': [
+      'Level up! Svammiel objects. The rules overrule him. He hates the rules.',
+      'Ding! The DM rolls for who levels up. Svammiel demands a reroll. He doesn\'t get one.',
+      'Level up, under the table. The DM slips you the next page of your character sheet.',
+      'More levels. Svammiel quietly adds a zero to the next fight\'s HP. In his head. Only in his head.',
+    ],
+    'idle_dm@a4': [
+      'Svammiel drums his claws on the floor. It is his floor. He can drum as loudly as he likes.',
+      'The DM, whispering: "Take your time. He can\'t rush you. That rule is still mine."',
+      'Svammiel starts building a tower out of the party\'s lost dice. It is very tall.',
+      'Svammiel yawns theatrically. His wings yawn too.',
+      'Somewhere, Svammiel is reading your character sheets aloud in funny voices.',
+      'The DM mentions, very quietly, that holding Alt still shows what the monsters can reach.',
+    ],
+    'shop_greet@a4': [
+      'The DM, in a paper hat: "Welcome to Ye Olde Overpriced Shoppe. I used to run this whole campaign."',
+      '"Under new management," says the DM, pointing at a portrait of Svammiel. The portrait winks.',
+      'The DM is working the counter. His name tag says DM (DEMOTED). He seems very relieved to see you.',
+      '"Everything is genuine," whispers the DM. "Except the prices. Svammiel sets the prices."',
+      'The DM restocks potions with the quiet dignity of a man who once had a screen.',
+      '"Buy something," the DM pleads. "I work on commission. He pays me in dice. Ones only."',
+      '"Between us," whispers the DM, "the Red Drinks are the only honest thing in this shop."',
+      '"Everything costs more down here," whispers the DM. "Svammiel\'s markup. Don\'t ask."',
+    ],
+    'shop_buy@a4': [
+      '"Excellent choice," says the DM. "Back when I was in charge, I\'d have hidden that in a chest for you."',
+      'The DM rings it up and mouths "good luck".',
+      '"Sold! Svammiel takes a cut. Svammiel takes every cut."',
+      'The DM wraps it in an old character sheet. Yours, from session one.',
+      '"No refunds," sighs the DM. "His rule. I would have allowed refunds."',
+      'Ka-ching. Somewhere below, a demon hears the till and smiles.',
+    ],
+    'shop_broke@a4': [
+      '"Not enough gold," says the DM gently. "Trust me, I know the feeling."',
+      '"I\'d spot you," whispers the DM, "but he audits the till."',
+      'The DM checks his own pockets for you: two d4s and a Cheeto. Not legal tender.',
+      '"Come back richer," says the DM. "Or come back with his crown. I\'d frame it."',
+      '"Svammiel says no credit," says the DM. "Svammiel says no to a lot of things."',
+      'Short on gold? The DM nods sadly. He was short on gold for eleven years.',
+    ],
+    'shop_leave@a4': [
+      '"Go get him," whispers the DM. "But don\'t tell him I said that."',
+      'The DM waves you off with his paper hat.',
+      '"Come back alive! I need the commission."',
+      '"If you see my screen down there, I\'d like it back."',
+      'The DM flips the sign to CLOSED (FOREVER?), then flips it back.',
+      '"Good luck," says the DM. "I mean it. I always meant it."',
+    ],
+    'tavern_greet@a4': [
+      'The Last Tavern Under the Table. Wipe your feet on the rug: it\'s the only floor down here Svammiel doesn\'t own.',
+      'A tavern with a very, very large rug. "He can\'t cheat on carpet," says the barkeep. "Fine print."',
+      '"No demons past the rug," says the barkeep, nodding at a sign. Someone has drawn horns on the sign.',
+      'The fire is warm, the ale is cold and the rug is wall to wall. You are safe here. Mostly.',
+      '"Rest, train or recruit," says the barkeep. "The rug\'s got you."',
+      'Svammiel hovers at the tavern door, just off the rug, sulking. He is not allowed in.',
+      '"Last stop before a mini-boss," says the barkeep. "Or after one. I lose track down here."',
+      'Three adventurers at the bar argue about which mini-boss to fight first. All three are crying.',
+    ],
+    'rest@a4': [
+      'The party sleeps on the rug. Svammiel taps on the window all night. Nobody lets him in.',
+      'A long rest under the table. The gum overhead drips once, ominously, and stops.',
+      'Everyone rests. The DM sneaks in, tucks a blanket over the party and sneaks out again.',
+      'Eight hours on the rug. Svammiel spends all of them outside, muttering about carpet loopholes.',
+      'The party rests. Down here, "night" is when the DM switches his desk lamp off.',
+      'Rested. The rug has never felt so much like a legal document.',
+    ],
+    'recruit@a4': [
+      '{hero} has been living under the table since session four and is thrilled to see lamplight.',
+      '{hero} signs on in the middle of the last act. Svammiel immediately opens a file.',
+      'A fresh face under the table: {hero}. Svammiel gives a slow, delighted clap from outside the rug.',
+      '{hero} crawls out from behind a table leg, holding a character sheet and a very old sandwich.',
+    ],
+    'map_enter@a4': [
+      'The floor plan has a room for each of his favourites, and a throne. Svammiel has drawn horns on your party token.',
+      'Pick a mini-boss. Any mini-boss. Svammiel has rigged all of them equally.',
+      'The DM whispers from behind a chair leg: "Rest when you can. He hates the rug."',
+      'A map drawn on graph paper in red pen, with a smiley face over every trap.',
+      'A row of doors. Behind each one, a mini-boss and a demon waiting to heckle you about it.',
+      'Svammiel\'s map has a legend. The legend is a drawing of Svammiel.',
+      'The path forks. Svammiel insists both forks are his. He is technically right.',
+      'Somewhere above you, the DM\'s table creaks. Somewhere below you, something laughs.',
+    ],
+    'gameover_title@a4': [
+      'Floored', 'Swept Under the Rug', 'Rule Zero Wins Again', 'The DM\'s DM Sends His Regards',
+      'Cheated Out of a Happy Ending', 'Lost Under the Table', 'You Thought This Was Over', 'Svammiel Controls All (Allegedly)',
+    ],
+    'victory_title@a4': [
+      'The Party That Beat the DM\'s DM', 'Floor Bosses No More', 'Above the Table at Last', 'Cheated, Undefeated',
+      'Natural 20s (Unfudged)', 'Svammiel Controls Nothing', 'Same Time Next Week', 'Certified Under-the-Table Survivors',
+    ],
   };
 
   Object.keys(LINES).forEach(function (k) { DD.registerNarration(k, LINES[k]); });
+  Object.keys(VARIANTS).forEach(function (k) { DD.registerNarration(k, VARIANTS[k]); });
 
   /** Public: the token contract per key (for content authors and tests) and this file's own lines. */
   DD.Narrator = {
     TOKENS: TOKENS,
     KEYS: Object.keys(TOKENS),
     LINES: LINES,
+    V3_KEYS: V3_KEYS,
+    VARIANTS: VARIANTS,
     /** Tokens used by a line, e.g. ['hero', 'enemy']. */
     tokensOf: function (line) {
       const out = [];
       String(line).replace(/\{(\w+)\}/g, function (m, k) { if (out.indexOf(k) < 0) out.push(k); return m; });
       return out;
     },
-    /** Lines of `key` (all registered, or `lines`) that use a token its callers do not fill. */
+    /** Lines of `key` (all registered, or `lines`) that use a token its callers do not fill. An act variant
+     *  ('victory@a4') is held to its base key's tokens. */
     badTokens: function (key, lines) {
-      const ok = TOKENS[key] || [];
+      const base = DD.narrationBaseKey ? DD.narrationBaseKey(key) : String(key).replace(/@a\d+$/, '');
+      const ok = TOKENS[base] || [];
       return (lines || DD.defs.narration[key] || []).filter(function (l) {
         return DD.Narrator.tokensOf(l).some(function (t) { return ok.indexOf(t) < 0; });
       });

@@ -1,6 +1,7 @@
 /* Dungeons and Degenerates — tests/mapgen_tests.js
  * MAPGEN suites (names start with "mapgen:"): themes, 300+ procedural maps (connectivity, zones, determinism),
- * map features, layouts, encounter build/pick, reinforcement waves, wild magic.
+ * map features, layouts, encounter build/pick, reinforcement waves, wild magic; V3 (act IV): the six a4_* arenas,
+ * DD.finalAct() clamps (forAct, clampAct, pick), no random gauntlet door / finale, squads (bossIds), the order knob.
  * Connectivity is re-checked here with an independent BFS (tile walkability from DD.MapGen's tile helpers,
  * which read the real terrain/object defs when js/data/terrain.js is loaded).
  */
@@ -9,8 +10,13 @@
   const T = window.DD_TEST;
   const DD = window.DD;
 
-  const THEME_IDS = ['cellar', 'sewer', 'warren', 'hauntwood', 'academy', 'graveyard', 'hellscape', 'hoard', 'dm_table'];
-  const AMBIENT = [null, 'dust', 'spores', 'embers', 'fog'];
+  // V3: the six act-IV arenas (plan §6.3) ride every map suite below with the nine classic themes
+  const A4_THEMES = ['a4_conservatory', 'a4_lair', 'a4_observatory', 'a4_cottage', 'a4_barn', 'a4_underfloor'];
+  const THEME_IDS = ['cellar', 'sewer', 'warren', 'hauntwood', 'academy', 'graveyard', 'hellscape', 'hoard', 'dm_table'].concat(A4_THEMES);
+  const ACT_IV = 4;   // the act these arenas are written for (content), not "the last act" (that is DD.finalAct())
+  // V3 ambients ('pollen', 'stars', optional 'notes') name a v2 ambientFallback for a renderer without them
+  const AMBIENT = [null, 'dust', 'spores', 'embers', 'fog', 'pollen', 'stars', 'notes'];
+  const AMBIENT_V2 = ['dust', 'spores', 'embers', 'fog', 'fireflies'];
   const DIRS = [[0, -1], [1, 0], [0, 1], [-1, 0]];
 
   function tileAt(grid, x, y) { return x >= 0 && y >= 0 && x < grid.w && y < grid.h ? grid.tiles[y * grid.w + x] : null; }
@@ -122,7 +128,7 @@
   T.suite('mapgen: themes', function (t) {
     t.ok(DD.Themes, 'DD.Themes exists');
     if (!DD.Themes) return;
-    t.eq(Object.keys(DD.Themes).sort().join(','), THEME_IDS.slice().sort().join(','), 'enumerable keys are exactly the 9 theme ids');
+    t.eq(Object.keys(DD.Themes).sort().join(','), THEME_IDS.slice().sort().join(','), 'enumerable keys are exactly the ' + THEME_IDS.length + ' theme ids');
     t.eq(DD.Themes.ids().join(','), THEME_IDS.join(','), 'ids() in design order');
     const canonFloors = DD.MapGen.CANON.floors, canonObjects = DD.MapGen.CANON.objects, canonSurfaces = DD.MapGen.CANON.surfaces;
     const knownTerrain = function (id) { return DD.MapGen.CANON.terrain.indexOf(id) >= 0 || !!DD.getTerrain(id); };
@@ -133,7 +139,8 @@
       t.eq(th.id, id, id + '.id');
       t.ok(typeof th.name === 'string' && th.name.length > 3, id + ' has a name');
       t.ok(typeof th.flavor === 'string' && th.flavor.length <= 120, id + ' flavor ≤ 120 chars');
-      t.ok([1, 2, 3].indexOf(th.act) >= 0, id + ' act');
+      // V3: a theme may serve any act up to DD.MAX_ACT (the act-4 arenas ship dark while DD.finalAct() is 3)
+      t.ok(Number.isInteger(th.act) && th.act >= 1 && th.act <= DD.MAX_ACT, id + ' act');
       t.ok(Array.isArray(th.floors) && th.floors.length >= 2, id + ' has floors');
       th.floors.forEach(function (f) { t.ok(canonFloors.indexOf(f) >= 0 || !!DD.getTerrain(f), id + ' floor ' + f + ' is canonical'); });
       t.eq((th.floorWeights || []).length, th.floors.length, id + ' floorWeights parallel to floors');
@@ -150,6 +157,7 @@
       (th.surfaces || []).forEach(function (s) { t.ok(canonSurfaces.indexOf(s) >= 0 || !!DD.getSurface(s), id + ' surface ' + s); });
       t.ok(th.bg && DD.util.parseColor(th.bg.top) && DD.util.parseColor(th.bg.bottom), id + ' bg colors');
       t.ok(AMBIENT.indexOf(th.ambient) >= 0, id + ' ambient kind');
+      if (AMBIENT_V2.indexOf(th.ambient) < 0 && th.ambient !== null) t.ok(AMBIENT_V2.indexOf(th.ambientFallback) >= 0, id + ' new ambient ' + th.ambient + ' names a v2 ambientFallback');
       const g = th.gen || {};
       t.ok(['flat', 'hills', 'terraces'].indexOf(g.elevation) >= 0, id + ' elevation style');
       t.ok(g.maxH >= 1 && g.maxH <= 4, id + ' maxH');
@@ -173,7 +181,8 @@
     t.eq(DD.Themes.forAct(2).join(','), 'hauntwood,academy,graveyard', 'forAct(2)');
     t.eq(DD.Themes.forAct(3).join(','), 'hellscape,hoard,dm_table', 'forAct(3)');
     t.eq(DD.Themes.forAct(0).join(','), 'cellar,sewer,warren', 'forAct clamps low');
-    t.eq(DD.Themes.forAct(7).join(','), 'hellscape,hoard,dm_table', 'forAct clamps high');
+    t.eq(DD.Themes.forAct(7).join(','), DD.Themes.forAct(DD.finalAct()).join(','), 'forAct clamps high (to DD.finalAct())');
+    t.ok(DD.Themes.forAct(DD.finalAct()).length >= 1, 'the last act has themes');
     t.eq(DD.Themes.get('nope').id, 'cellar', 'get() falls back to the cellar');
     t.eq(DD.Themes.get('forAct').id, 'cellar', 'get() never returns a helper');
     t.ok(DD.Themes.has('hoard') && !DD.Themes.has('ids'), 'has()');
@@ -677,7 +686,12 @@
     t.eq(DD.Encounter.pickFrom([mk('z', 1, 'normal', { weight: 0 })], 1, 'normal', rng).id, 'z', 'weight 0 still beats nothing');
     // the real registry
     const fighters = enemyIds().filter(function (id) { return !/^wm_/.test(id); });
-    [1, 2, 3].forEach(function (act) {
+    // the campaign's regular acts (1..DD.finalAct()); a gauntlet act (V3 act 4: doors and the finale only) has no random picks
+    const regularActs = [];
+    for (let a = 1; a <= DD.finalAct(); a++) {
+      if (!Object.keys(DD.defs.encounters).some(function (id) { const d = DD.defs.encounters[id]; return d.act === a && (d.gauntlet || d.finale); })) regularActs.push(a);
+    }
+    regularActs.forEach(function (act) {
       ['normal', 'elite', 'boss'].forEach(function (kind) {
         const e = DD.Encounter.pick(act, kind, DD.RNG(act + kind), { depth: 6 });
         if (!fighters.length && !Object.keys(DD.defs.encounters).length) { t.eq(e, null, 'nothing to fight → null'); return; }
@@ -739,8 +753,9 @@
     const heroes = heroIds(), foes = enemyIds(['normal', 'minion']);
     if (heroes.length < 2 || !foes.length) { t.skip('needs registered heroes and enemies'); return; }
     THEME_IDS.forEach(function (theme, i) {
+      // cameo: false keeps Svammiel out of these map checks (an act-IV theme's def is an act-4 fight)
       const def = { id: 'mgt_int_' + theme, act: DD.Themes[theme].act, kind: 'normal', map: { theme: theme, w: 11, h: 11 },
-        enemies: [{ id: foes[i % foes.length], n: 3 }], objective: { type: 'killAll' } };
+        enemies: [{ id: foes[i % foes.length], n: 3 }], objective: { type: 'killAll' }, cameo: false };
       const setup = DD.Encounter.build(def, heroes.slice(0, 4), { rng: DD.RNG('int' + theme) });
       const state = t.tryRun('start ' + theme, function () { return DD.Combat.start(setup, { seed: 'int' + theme, headless: true }); });
       if (!state) return;
@@ -801,7 +816,7 @@
     THEME_IDS.forEach(function (theme, i) {
       ['N', 'E', 'S', 'W', 'zone'].forEach(function (edge, k) {
         const def = { id: 'mgt_rw_' + theme + edge, act: DD.Themes[theme].act, kind: 'normal', map: { theme: theme, w: 11, h: 11 },
-          enemies: [{ id: foes[0], n: 2 }], objective: { type: 'custom', text: 'Wait' }, checkObjective: function () { return null; } };
+          enemies: [{ id: foes[0], n: 2 }], objective: { type: 'custom', text: 'Wait' }, checkObjective: function () { return null; }, cameo: false };
         const setup = DD.Encounter.build(def, heroes.slice(0, 4), { rng: DD.RNG('rw' + i + k) });
         const st = DD.Combat.start(setup, { seed: 'rw' + i + k, headless: true, noPlan: true });
         const spawned = DD.Encounter.spawnWave(st, { round: 2, enemies: [{ id: foes[i % foes.length], n: 4 }], edge: edge });
@@ -840,10 +855,10 @@
       t.ok(typeof d.quip === 'string' && d.quip.length > 8 && d.quip.length <= 120, d.id + ' quip ≤ 120 chars');
       t.ok(d.weight > 0, d.id + ' weight');
       t.ok(d.good === true || d.good === false || d.good === null, d.id + ' good flag');
-      [1, 2, 3].forEach(function (a) {
+      for (let a = 1; a <= DD.MAX_ACT; a++) {   // every act a surge can happen in (V3: act 4 too)
         const txt = DD.WildMagic.describe(d.id, a);
         t.ok(txt.length > 10 && txt.indexOf('{') < 0, d.id + ' text resolves for act ' + a + ': ' + txt);
-      });
+      }
       total += d.weight;
       if (d.good === true) good += d.weight; else if (d.good === false) bad += d.weight; else chaos += d.weight;
     });
@@ -854,6 +869,7 @@
     t.ok(safe.length >= 10 && safe.some(function (d) { return d.good === true; }), safe.length + ' enemy-safe surges');
     t.ok(!safe.some(function (d) { return /gold|Hype/.test(d.text); }), 'enemy-safe surges never touch party gold or Hype');
     t.eq(DD.WildMagic.describe('wm_make_it_rain', 2), 'The party gains 15 gold.', 'act scaling in text');
+    t.eq(DD.WildMagic.describe('wm_make_it_rain', ACT_IV), DD.WildMagic.describe('wm_make_it_rain', 3), 'V3: act IV reads the last row (act 3\'s numbers)');
     t.eq(DD.WildMagic.describe('nope', 1), '', 'describe unknown → empty');
     t.eq(DD.WildMagic.surge(null), null, 'surge(null) → null');
     t.eq(DD.WildMagic.apply('nope', {}), null, 'apply(unknown) → null');
@@ -977,5 +993,233 @@
       objects: [{ x: 3, y: 3, id: 'keg' }], objective: { type: 'protect', objId: 'keg' } });
     DD.Combat.refreshObjective();
     t.eq(DD.Combat.state.objective.text, 'Protect the Ale Keg and defeat all enemies', 'no label: the def name');
+  });
+
+  // =====================================================================================================
+  // V3: act IV "Under the Table" (plan §4.6, §6.3, §8.4 MAPGEN)
+  // =====================================================================================================
+
+  /** Run fn with DD.Balance.campaign.acts = acts, restoring every knob afterwards. */
+  function withActs(acts, fn) {
+    const snap = DD.Balance.snapshot();
+    try { DD.Balance.campaign.acts = acts; return fn(); } finally { DD.Balance.restore(snap); }
+  }
+  function isA4(id) { return A4_THEMES.indexOf(id) >= 0; }
+
+  T.suite('mapgen: V3 — the six act-IV arenas (a4_barn included) generate a valid map at every seed', function (t) {
+    A4_THEMES.forEach(function (id) { t.ok(DD.Themes[id] && DD.Themes[id].act === ACT_IV, id + ' is an act-IV theme'); });
+    t.eq(DD.Themes.a4_barn && DD.Themes.a4_barn.name, 'The Barn Burner', 'a4_barn is The Barn Burner (the Rapping Goats)');
+    const seeds = t.n || 20;
+    const sizes = [[9, 9], [11, 11], [13, 13], [15, 14], [12, 10]];   // 15 × 14 is the goats' arena size
+    const bale = !!DD.getObject('rap_bale');
+    const barn = { maps: 0, pits: 0, walled: 0, bales: 0 };
+    let total = 0, failed = 0, fallbacks = 0;
+    A4_THEMES.forEach(function (theme) {
+      sizes.forEach(function (sz) {
+        for (let s = 0; s < seeds; s++) {
+          const seed = 'a4:' + theme + ':' + sz.join('x') + ':' + s;
+          const map = DD.MapGen.generate({ theme: theme, w: sz[0], h: sz[1], rng: DD.RNG(seed) });
+          total++;
+          if (map.meta.fallback) fallbacks++;
+          const problems = checkMap(map, sz[0], sz[1]);
+          if (map.theme !== theme) problems.push('theme ' + map.theme);
+          if (problems.length) { failed++; if (failed <= 12) t.fail('map ' + seed + ': ' + problems.slice(0, 4).join(' | ')); }
+          if (theme !== 'a4_barn') continue;
+          barn.maps++;
+          if (map.grid.tiles.some(function (x) { return x.t === 'pit'; })) barn.pits++;
+          if (map.grid.tiles.some(function (x) { return x.t === 'wall'; })) barn.walled++;
+          if (map.grid.tiles.some(function (x) { return x.obj && x.obj.id === 'rap_bale'; })) barn.bales++;
+        }
+      });
+    });
+    t.eq(failed, 0, total + ' act-IV maps, none failing validation');
+    t.ok(fallbacks <= Math.ceil(total * 0.02), 'flat fallback used ' + fallbacks + '/' + total + ' times (<= 2%)');
+    t.eq(barn.pits, 0, 'the barn never has a pit (' + barn.maps + ' maps)');
+    t.ok(barn.walled / barn.maps >= 0.8, 'a walled barn: ' + barn.walled + '/' + barn.maps + ' maps have barn walls');
+    if (bale) {
+      t.ok(DD.Themes.a4_barn.obstacles.indexOf('rap_bale') >= 0, "the goats' Hay Bale is borrowed once goats.js registers it");
+      t.ok(barn.bales / barn.maps >= 0.5, 'scattered bales: ' + barn.bales + '/' + barn.maps + ' barn maps');
+    } else {
+      t.ok(DD.Themes.a4_barn.obstacles.indexOf('rap_bale') < 0, 'no borrowed bale while rap_bale is not registered');
+      t.log("rap_bale is not registered (goats.js not loaded): crates and barrels stand in for the bales");
+    }
+    t.eq(DD.Themes.a4_barn.obstacles.length, DD.Themes.a4_barn.obstacleWeights.length, 'barn obstacleWeights stay parallel');
+  });
+
+  T.suite('mapgen: V3 — forAct, random themes and the build act follow DD.finalAct() (act IV ships dark)', function (t) {
+    const def4 = { id: 'mgt_v3_plain', act: ACT_IV, kind: 'normal', enemies: [{ id: 'test_grunt', n: 1 }], objective: { type: 'killAll' }, cameo: false };
+    const party = ['test_knight', 'test_mage'];
+    const before = [1, 2, 3].map(function (a) { return DD.Themes.forAct(a).join(','); });
+    withActs(3, function () {
+      const last = DD.finalAct();
+      t.eq(last, 3, 'campaign.acts 3 → finalAct() 3');
+      t.eq(DD.Themes.forAct(ACT_IV).join(','), DD.Themes.forAct(last).join(','), 'forAct(4) reads the last act while acts = 3');
+      t.ok(!DD.Themes.forAct(ACT_IV).some(isA4), 'no act-IV arena in any act list');
+      const rng = DD.RNG('ship-dark');
+      let leaked = 0;
+      for (let i = 0; i < 40; i++) if (isA4(DD.Themes.random(ACT_IV, rng))) leaked++;
+      t.eq(leaked, 0, 'random(4) never draws an act-IV arena');
+      t.eq(DD.Encounter.clampAct(ACT_IV), last, 'clampAct(4) → 3');
+      t.eq(DD.Encounter.clampAct(99), last, 'clampAct(99) → 3');
+      const s = DD.Encounter.build(def4, party, { rng: DD.RNG('a4-dark') });
+      t.eq(s.act, last, 'an act-4 encounter builds as act 3 (its numbers read act 3 until the flip)');
+      t.ok(!isA4(s.theme), 'and a map-less one gets an act-3 theme (' + s.theme + ')');
+    });
+    withActs(4, function () {
+      const last = DD.finalAct();
+      t.eq(last, ACT_IV, 'campaign.acts 4 → finalAct() 4');
+      t.eq(DD.Themes.forAct(ACT_IV).join(','), A4_THEMES.join(','), 'forAct(4) = the six act-IV arenas in plan order');
+      t.eq(DD.Themes.forAct(99).join(','), A4_THEMES.join(','), 'forAct clamps high to the last act');
+      t.eq([1, 2, 3].map(function (a) { return DD.Themes.forAct(a).join(','); }).join(' | '), before.join(' | '), 'acts 1-3 keep their themes');
+      const rng = DD.RNG('lights-on');
+      for (let i = 0; i < 30; i++) {
+        const id = DD.Themes.random(ACT_IV, rng);
+        if (!isA4(id)) { t.fail('random(4) → ' + id); break; }
+      }
+      t.eq(DD.Encounter.clampAct(ACT_IV), ACT_IV, 'clampAct(4) → 4');
+      t.eq(DD.Encounter.clampAct(99), last, 'clampAct(99) → the last act');
+      t.eq(DD.Encounter.clampAct(0) + ',' + DD.Encounter.clampAct('x') + ',' + DD.Encounter.clampAct(2.4), '1,1,2', 'clampAct low / junk / rounding');
+      const s = DD.Encounter.build(def4, party, { rng: DD.RNG('a4-lit') });
+      t.eq(s.act, ACT_IV, 'an act-4 encounter builds as act 4');
+      t.ok(isA4(s.theme), 'a map-less act-4 encounter gets an act-IV arena (' + s.theme + ')');
+      t.eq(checkSetup(s, def4, party, 'normal').hard.join(' | '), '', 'and builds cleanly');
+    });
+    t.eq(DD.Encounter.clampAct(99), DD.finalAct(), 'the knob is restored');
+  });
+
+  T.suite('mapgen: V3 — random picks never return a gauntlet door or the finale (every act and kind, 500 seeds)', function (t) {
+    const mk = function (id, act, kind, extra) { return Object.assign({ id: id, act: act, kind: kind, weight: 1, minDepth: 0 }, extra || {}); };
+    const list = [
+      mk('a1_n', 1, 'normal'), mk('a2_e', 2, 'elite'), mk('a3_n', 3, 'normal'), mk('a3_b', 3, 'boss'),
+      mk('door_a', ACT_IV, 'boss', { weight: 5, gauntlet: { lane: 'a', order: 1 } }),   // weighted on purpose
+      mk('door_b', ACT_IV, 'boss', { weight: 0, gauntlet: { lane: 'b', order: 2 } }),
+      mk('the_floor', ACT_IV, 'boss', { weight: 9, finale: true }),
+      mk('stray_door', 2, 'normal', { weight: 50, gauntlet: { lane: 'x', order: 3 } }),  // a door filed under act 2: still never
+      mk('a4_n', ACT_IV, 'normal'),                                                       // a regular act-4 fight: only after the flip
+    ];
+    t.ok(DD.Encounter.isScripted(list[4]) && DD.Encounter.isScripted(list[6]) && !DD.Encounter.isScripted(list[0]), 'isScripted: doors and the finale');
+    t.eq(DD.Encounter.pickFrom(list.filter(DD.Encounter.isScripted), ACT_IV, 'boss', DD.RNG(1)), null, 'a list of doors only → null (never a door)');
+    const seeds = 500, kinds = ['normal', 'elite', 'boss'];
+    const registryScripted = Object.keys(DD.defs.encounters).filter(function (id) { return DD.Encounter.isScripted(DD.defs.encounters[id]); });
+    t.log(registryScripted.length + ' registered doors / finales: ' + registryScripted.join(', '));
+    [3, 4].forEach(function (acts) {
+      withActs(acts, function () {
+        let bad = [], lateAct4 = 0, real = 0, picks = 0;
+        for (let a = 0; a <= DD.MAX_ACT + 1; a++) {
+          kinds.forEach(function (kind) {
+            for (let s = 0; s < seeds; s++) {
+              const e = DD.Encounter.pickFrom(list, a, kind, DD.RNG('v3pick:' + acts + a + kind + s), { depth: s % 8 });
+              picks++;
+              if (!e || DD.Encounter.isScripted(e)) bad.push(a + '/' + kind + '→' + (e && e.id));
+              else if (e.id === 'a4_n' && acts < ACT_IV) lateAct4++;
+              const r = DD.Encounter.pick(a, kind, DD.RNG('v3real:' + acts + a + kind + s), { depth: s % 8 });
+              real++;
+              if (!r || DD.Encounter.isScripted(r)) bad.push('registry ' + a + '/' + kind + '→' + (r && r.id));
+              else if ((+r.act || 1) > DD.finalAct()) bad.push('registry ' + a + '/' + kind + '→' + r.id + ' (act ' + r.act + ' past the last act)');
+            }
+          });
+        }
+        t.eq(bad.slice(0, 5).join(', '), '', 'acts ' + acts + ': ' + picks + ' list picks + ' + real + ' registry picks, no door or finale' + (bad.length ? ' (' + bad.length + ' bad)' : ''));
+        t.eq(lateAct4, 0, 'acts ' + acts + ': a regular act-4 fight only once the campaign has an act 4');
+      });
+    });
+    withActs(4, function () {
+      const got = {};
+      for (let s = 0; s < 50; s++) got[DD.Encounter.pickFrom(list, ACT_IV, 'normal', DD.RNG('lit' + s)).id] = 1;
+      t.eq(Object.keys(got).join(','), 'a4_n', 'acts 4: pick(4, normal) finds the regular act-4 fight');
+      // the kind relaxes before the act (v2 order), but never onto a door; without a regular act-4 fight: the nearest act
+      const boss = {}, near = {}, noA4 = list.filter(function (e) { return e.id !== 'a4_n'; });
+      for (let s = 0; s < 50; s++) {
+        boss[DD.Encounter.pickFrom(list, ACT_IV, 'boss', DD.RNG('boss' + s)).id] = 1;
+        near[DD.Encounter.pickFrom(noA4, ACT_IV, 'boss', DD.RNG('near' + s)).id] = 1;
+      }
+      t.eq(Object.keys(boss).sort().join(','), 'a4_n', 'acts 4: a random act-4 boss pick relaxes the kind, skipping the doors and the finale');
+      t.eq(Object.keys(near).sort().join(','), 'a3_b', 'acts 4: with no regular act-4 fight it takes the nearest act\'s boss');
+    });
+  });
+
+  T.suite('mapgen: V3 — build: a squad boss objective (bossIds), setup.gauntlet and the order-scaling knob', function (t) {
+    const door = { id: 'mgt_v3_door', act: ACT_IV, kind: 'boss', name: 'The Test Squad of Very Many Letters', shortName: 'The Test Squad',
+      gauntlet: { lane: 'mgt', order: 99, hint: 'Two of them.' }, cameo: false, map: { theme: 'a4_barn', w: 11, h: 11 },
+      enemies: [{ id: 'test_brute', n: 1 }, { id: 'test_grunt', n: 1 }],
+      objective: { type: 'boss', bossIds: ['test_brute', 'test_grunt'], flavor: 'Two of them walk into a barn.' },
+      reward: { goldMult: 0.9, itemRarity: 'rare' } };
+    const party = ['test_knight', 'test_mage'];
+    const warned = DD.problems.length;
+    const s0 = DD.Encounter.build(door, party, { rng: DD.RNG('door') });
+    const o = s0.objective;
+    t.eq(o.type, 'boss', 'a squad without a boss-tier unit stays a boss fight (no killAll fallback)');
+    t.eq((o.bossIds || []).join(','), 'test_brute,test_grunt', 'objective.bossIds copied');
+    t.ok(o.bossIds !== door.objective.bossIds, 'a copy, never the def array');
+    t.eq(o.bossId, undefined, 'no single bossId invented for a squad');
+    t.eq(o.flavor, 'Two of them walk into a barn.', 'objective.flavor kept');
+    t.ok(/^Defeat the Test Squad\. /.test(o.text) && o.text.length <= 100, 'the text names the squad by shortName: ' + o.text);
+    t.ok(!DD.problems.slice(warned).some(function (w) { return /boss objective/.test(w); }), 'no "boss objective" warning');
+    t.eq(checkSetup(s0, door, party, 'normal').hard.join(' | '), '', 'the door builds cleanly');
+    t.ok(!('gauntlet' in s0), 'no opts.gauntlet → no setup.gauntlet');
+    const fx = DD.getEncounter('test_a4_lane_c');
+    if (fx) {
+      const sc = DD.Encounter.build(fx, party, { rng: DD.RNG('lane_c') });
+      t.eq(sc.objective.bossId + '|' + sc.objective.bossIds.join(','), 'test_boss|test_boss,test_brute', 'a squad with a boss-tier member keeps the bossId too');
+    }
+    const junkDef = Object.assign({}, door, { id: 'mgt_v3_junk', objective: { type: 'boss', bossIds: ['no_such_foe', 7, null] } });
+    const w2 = DD.problems.length;
+    const junk = DD.Encounter.build(junkDef, party, { rng: DD.RNG('junk') });
+    t.eq(junk.objective.type, 'killAll', 'a squad of unknown ids and no boss-tier unit falls back to killAll (as v2)');
+    t.ok(DD.problems.slice(w2).some(function (w) { return /boss objective without/.test(w) && !/^Error in/.test(w); }), 'and warns (not an error)');
+
+    withActs(4, function () {
+      const B = DD.Balance;
+      const g0 = { lane: 'mgt', index: 0, beaten: [] }, g2 = { lane: 'mgt', index: 2, beaten: ['a', 'b'] };
+      const plain = DD.Encounter.build(door, party, { rng: DD.RNG('k') });
+      const off2 = DD.Encounter.build(door, party, { rng: DD.RNG('k'), gauntlet: g2 });
+      t.ok(off2.gauntlet === g2, 'setup.gauntlet is opts.gauntlet (the same object)');
+      const num = function (s) { return s.difficulty.hp + ':' + s.difficulty.dmg; };
+      t.eq(num(off2), num(plain), 'the knob ships off (' + JSON.stringify(B.gauntlet) + '): the order changes nothing');
+      B.gauntlet = { hpPerBeaten: 0.1, dmgPerBeaten: 0.05 };
+      const s2 = DD.Encounter.build(door, party, { rng: DD.RNG('k'), gauntlet: g2 });
+      const s0b = DD.Encounter.build(door, party, { rng: DD.RNG('k'), gauntlet: g0 });
+      const want = B.scale('normal', ACT_IV, 'boss', { encounter: door.id, gauntlet: g2 });
+      t.eq(num(s2), want.hp + ':' + want.dmg, 'setup.difficulty = DD.Balance.scale with the door (' + num(s2) + ')');
+      t.eq(num(s0b), num(plain), 'the first door (index 0) is unscaled');
+      t.ok(Math.abs(s2.difficulty.hp / s0b.difficulty.hp - 1.2) < 0.01 && Math.abs(s2.difficulty.dmg / s0b.difficulty.dmg - 1.1) < 0.01,
+        'two lanes beaten: HP × 1.2, damage × 1.1');
+      t.eq(JSON.stringify(s2.grid) + JSON.stringify(s2.enemies), JSON.stringify(plain.grid) + JSON.stringify(plain.enemies), 'the order never changes the map or the line-up');
+      t.eq(num(DD.Encounter.build(door, party, { rng: DD.RNG('k'), gauntlet: { lane: 'mgt', index: -3 } })), num(plain), 'a junk index scales nothing');
+      t.eq(num(DD.Encounter.build(door, party, { rng: DD.RNG('k'), gauntlet: 'nope' })), num(plain), 'a junk gauntlet is ignored');
+      if (DD.Combat && typeof DD.Combat.start === 'function') {
+        const st = DD.Combat.start(s2, { seed: 'v3door', headless: true, difficulty: 'normal', cameo: false });
+        t.eq(st.difficulty.hp + ':' + st.difficulty.dmg, num(s2), 'Combat.start plays the same order-scaled numbers');
+        t.eq(st.data.gauntlet && st.data.gauntlet.lane + ':' + st.data.gauntlet.index, 'mgt:2', 'and keeps the door in state.data.gauntlet');
+        t.eq(DD.Combat.objectiveText(st), 'Defeat the Test Squad (2 left)', 'the live objective counts the squad');
+      }
+    });
+  });
+
+  T.suite('mapgen: V3 — a stand-in fight never borrows an enemy from the gauntlet act or past the last act', function (t) {
+    const scripted = {};
+    Object.keys(DD.defs.encounters).forEach(function (id) { const e = DD.defs.encounters[id]; if (DD.Encounter.isScripted(e)) scripted[+e.act || 1] = true; });
+    [3, 4].forEach(function (acts) {
+      withActs(acts, function () {
+        const bad = [];
+        let built = 0;
+        for (let a = 1; a <= DD.MAX_ACT; a++) {
+          ['normal', 'elite', 'boss'].forEach(function (kind) {
+            for (let s = 0; s < 8; s++) {
+              const syn = DD.Encounter.synthesize(a, kind, DD.RNG('syn' + acts + a + kind + s), { register: false });
+              if (!syn) continue;
+              built++;
+              if (syn.act > DD.finalAct()) bad.push(syn.id + ' act ' + syn.act);
+              syn.enemies.forEach(function (e) {
+                const d = DD.getEnemy(e.id), ea = d ? +d.act || 1 : 0;
+                if (ea > DD.finalAct() || scripted[ea]) bad.push(syn.id + ': ' + e.id + ' (act ' + ea + ')');
+              });
+            }
+          });
+        }
+        t.ok(built > 0, 'acts ' + acts + ': ' + built + ' stand-in encounters');
+        t.eq(bad.slice(0, 5).join(', '), '', 'acts ' + acts + ': none uses a gauntlet-act or later enemy');
+      });
+    });
   });
 })();

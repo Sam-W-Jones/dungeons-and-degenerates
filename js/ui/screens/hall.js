@@ -4,6 +4,11 @@
  * (every registered enemy and boss; unseen ones are silhouettes), Blessings (every entry of the Table of
  * Questionable Blessings by rarity; ones never rolled are ???) and History (past runs).
  * Params: { back: screenId, tab: 'records'|'heroes'|'codex'|'blessings'|'history' }.
+ * V3 (plan §2.4, §2.6, §5.8): behind the spoiler gate (DD.UI.act4Seen: Svammiel met once) the codex gains the Act IV
+ * group — one sub-group per gauntlet lane (its encounter's units, their spawns by id prefix, a content module's CODEX
+ * export, its breakable objects and any object / status flagged `codex: true`), then the floor boss — and act-4 defs
+ * stay out of "Miscellaneous Horrors" and every seen count until then. Records add "The DM defeated" and "Floor bosses beaten" and split classic (3-act)
+ * wins; History shows a run's "Act IV · N / M floor bosses" (M: that run's own lane count) with the lanes' icons.
  */
 (function () {
   'use strict';
@@ -27,6 +32,17 @@
     return !!bag[id];
   }
 
+  /** V3: the codex acts shown (act IV once the gate is open) and whether a def belongs to a hidden act. */
+  function codexActs() {
+    const last = typeof DD.MAX_ACT === 'number' ? DD.MAX_ACT : 3;
+    const out = [];
+    for (let a = 1; a <= last; a++) if (a <= 3 || DD.UI.act4Seen()) out.push(a);
+    return out;
+  }
+  function hiddenAct(d) { const a = num(d && d.act); return a > 3 && !DD.UI.act4Seen(); }
+  /** A history entry's win: classic (a v2 summary has no `acts`, or a 3-act campaign) vs the four-act one. */
+  function isClassicWin(h) { return (h.result === 'victory' || h.result === 'win' || h.won === true) && !(num(h.acts) >= 4); }
+
   function records() {
     const UI = DD.UI, el = UI.el;
     const m = meta();
@@ -34,21 +50,26 @@
     const runs = num(s.runs), wins = num(s.wins);
     const rate = runs ? Math.round(wins / runs * 100) : 0;
     const quip = !runs ? 'No campaigns yet. The DM is waiting. Impatiently.' : rate === 0 ? 'A flawless losing record. The DM is thrilled.' : rate < 30 ? 'Some wins! The DM is mildly concerned.' : rate < 70 ? 'A respectable record. Suspiciously respectable.' : 'Unstoppable. The DM is considering a career change.';
-    const card = function (icon, val, label) { return el('div.rec-card', null, el('div.rc-icon', null, icon), el('div.rc-val', null, String(val)), el('div.rc-label', null, label)); };
+    const card = function (icon, val, label, cls) { return el('div.rec-card', { class: cls || null }, el('div.rc-icon', null, icon), el('div.rc-val', null, String(val)), el('div.rc-label', null, label)); };
     const box = el('div.hall-records');
-    box.appendChild(el('div.rec-grid', null,
+    // V3 (gated): the classic wins split out, the DM defeated, the floor bosses beaten
+    const seen4 = UI.act4Seen();
+    const classic = seen4 ? (m.history || []).filter(isClassicWin).length : 0;
+    const cards = [
       card('🎲', runs, 'Campaigns finished'),
-      card('👑', wins, 'Campaigns won'),
+      card('👑', wins, seen4 && classic ? 'Campaigns won (of which classic: ' + classic + ')' : 'Campaigns won'),
       card('📈', rate + '%', 'Win rate'),
       card('🗺️', num(s.bestAct) ? 'Act ' + DD.util.roman(num(s.bestAct)) : '—', 'Furthest reached'),
       card('⚔️', num(s.combats), 'Fights won'),
       card('💀', num(s.kills), 'Monsters slain'),
       card('🐲', num(s.elites) + ' / ' + num(s.bosses), 'Elites / bosses felled'),
       card('🪙', num(s.goldEarned), 'Gold earned'),
-      card('⚰️', num(s.deaths), 'Heroes lost')));
+      card('⚰️', num(s.deaths), 'Heroes lost')];
+    if (seen4) cards.push(card('🎭', num(s.dmDefeated), 'The DM defeated', 'v3'), card('😈', num(s.miniBosses), 'Floor bosses beaten', 'v3'));
+    box.appendChild(el('div.rec-grid', null, cards));
     box.appendChild(UI.narration(quip, { cls: 'center' }));
     const ids = UI.heroIds();
-    const enemies = Object.keys(DD.defs.enemies || {}).filter(function (id) { return id.indexOf('test_') !== 0; });
+    const enemies = Object.keys(DD.defs.enemies || {}).filter(function (id) { return id.indexOf('test_') !== 0 && !hiddenAct(DD.defs.enemies[id]); });
     const seenCount = enemies.filter(function (id) { return seen('enemies', id) || seen('bosses', id); }).length;
     const bless = blessingDefs();
     // v2: every hero is available from the start: the collection is "who has played a campaign", not unlocks
@@ -142,8 +163,11 @@
     const UI = DD.UI, el = UI.el;
     const recs = heroRecords();
     const box = el('div.hall-roster');
-    const grid = el('div.hall-heroes');
-    UI.heroIds().forEach(function (id) {
+    const ids = UI.heroIds();
+    // more than a 4 × 4 grid: still 4 columns, one more row; `.many` tightens each card a little (CSS) so 17 and 18 fit
+    // 1024×640 to 1920×1080 (the fit suite checks it, worst-case cards included)
+    const grid = el('div.hall-heroes', { class: ids.length > 4 * 4 ? 'many' : null });
+    ids.forEach(function (id) {
       const d = DD.getHero(id);
       const r = recs[id];
       const line = r ? [plural(r.runs, 'campaign'), r.wins ? '👑 ' + r.wins : '', r.kills ? '💀 ' + r.kills : '', r.best ? 'best Lv ' + r.best : ''].filter(Boolean).join(' · ')
@@ -169,31 +193,150 @@
   }
   function plural(n, w) { return n + ' ' + w + (n === 1 ? '' : 's'); }
 
+  function isSeenEnemy(id) { return seen('enemies', id) || seen('bosses', id); }
+  function byTierName(a, b) { return (TIER_ORDER[a.tier] || 9) - (TIER_ORDER[b.tier] || 9) || String(a.name).localeCompare(String(b.name)); }
+  /** One enemy codex card (unseen: a silhouette and ???). label: the tier line (V3 groups say Mini-boss / Floor Boss). */
+  function enemyCard(e, label) {
+    const UI = DD.UI, el = UI.el;
+    const isSeen = isSeenEnemy(e.id);
+    const card = el('div.cx-card', { class: [isSeen ? '' : 'unseen', 'tier-' + (e.tier || 'normal')] },
+      UI.portrait(e.id, 56, { locked: !isSeen, frame: false }),
+      el('div.cx-name', null, isSeen ? e.name : '???'),
+      el('div.cx-tier', null, label || (e.tier === 'boss' ? 'Boss' : e.tier === 'elite' ? 'Elite' : e.tier === 'minion' ? 'Minion' : 'Enemy')));
+    UI.tooltip(card, isSeen ? function () { return UI.enemyTooltipHtml(e.id); } : '<div class="tt"><div class="tt-desc">Not encountered yet. Go get hit by it.</div></div>');
+    return card;
+  }
+  /** A codex card for a lane's object or status (known once its lane's units have been met). */
+  function thingCard(d, kind, known) {
+    const UI = DD.UI, el = UI.el;
+    const icon = d.icon || (kind === 'status' ? '✨' : '📦');
+    const card = el('div.cx-card.cx-thing', { class: [known ? '' : 'unseen', 'kind-' + kind] },
+      el('div.cx-thing-icon', null, known ? icon : '?'),
+      el('div.cx-name', null, known ? d.name : '???'),
+      el('div.cx-tier', null, kind === 'status' ? 'Status' : 'Object'));
+    const desc = typeof d.desc === 'function' ? '' : String(d.desc || '');
+    UI.tooltip(card, known ? '<div class="tt"><div class="tt-title">' + UI.esc(d.name) + '</div>' + (desc ? '<div class="tt-desc">' + UI.esc(desc) + '</div>' : '') +
+      (kind === 'object' && num(d.hp) > 0 ? '<div class="tt-target">' + num(d.hp) + ' HP</div>' : '') + '</div>' : '<div class="tt"><div class="tt-desc">Not encountered yet.</div></div>');
+    return card;
+  }
+  /** The id prefix a lane's units share ('rap_', 'lg_', 'svam_'): their spawns and things carry it too. */
+  function prefixOf(ids) {
+    const count = {};
+    ids.forEach(function (id) { const m = /^([a-z0-9]+_)/.exec(id); if (m) count[m[1]] = (count[m[1]] || 0) + 1; });
+    let best = '', n = 0;
+    Object.keys(count).forEach(function (k) { if (count[k] > n) { best = k; n = count[k]; } });
+    return best;
+  }
+  /**
+   * Codex exports of content modules: DD.<Module>.CODEX = { group, entries: [{ id, name, icon, text }] } (the goats'
+   * DD.Goats.CODEX: their Golden Mic is a status, their Mic Stand an unbreakable object, so neither is found by the
+   * generic rules below). → [CODEX]
+   */
+  function codexExports() {
+    const out = [];
+    Object.keys(DD).forEach(function (k) {
+      let m = null;
+      try { m = DD[k]; } catch (e) { m = null; }
+      if (m && typeof m === 'object' && m.CODEX && typeof m.CODEX === 'object' && Array.isArray(m.CODEX.entries)) out.push(m.CODEX);
+    });
+    return out;
+  }
+  /** An exported codex entry as a thing card's def ({ id, name, icon, desc, hp }) and kind ('status' | 'object'). */
+  function exportedThing(x) {
+    const st = (DD.defs.statuses || {})[x.id], ob = (DD.defs.objects || {})[x.id];
+    const d = { id: String(x.id), name: String(x.name || (st || ob || {}).name || x.id), icon: x.icon || (st || ob || {}).icon || null,
+      desc: String(x.text || x.desc || ''), hp: ob ? num(ob.hp) : 0 };
+    return { def: d, kind: st && !ob ? 'status' : 'object' };
+  }
+  /**
+   * The Act IV codex: per lane (gauntlet order), then the floor boss, then any other act-4 def. A group lists its
+   * encounter's units, every act-4 enemy sharing their id prefix (spawns: the goats' bear, Svammiel's imps), the
+   * entries of a content module's CODEX export whose ids share that prefix (or whose `group` is the lane's codex title),
+   * its breakable objects (hp > 0) and any object or status flagged `codex: true` (never one flagged `codex: false`).
+   * → [{ title, note, enemies: [def], things: [{ def, kind }] }]
+   */
+  function act4Groups(all) {
+    const UI = DD.UI;
+    const act4 = all.filter(function (e) { return num(e.act) === 4; });
+    const used = {};
+    const lanes = UI.gauntletLanes(null).filter(function (l) { return l.id.indexOf('test_') !== 0; });
+    const fin = DD.RunMap && DD.RunMap.finaleOf ? DD.RunMap.finaleOf(4) : null;
+    const encs = lanes.map(function (l) { return { info: UI.laneInfo(l), enc: DD.getEncounter(l.encounterId) }; });
+    if (fin && fin.id.indexOf('test_') !== 0) encs.push({ info: UI.laneInfo(fin.id), enc: fin });
+    const exports = codexExports();
+    const groups = encs.map(function (x) {
+      const ids = UI.encounterUnitIds(x.enc);
+      const pre = prefixOf(ids);
+      const enemies = act4.filter(function (e) { return !used[e.id] && (ids.indexOf(e.id) >= 0 || (pre && e.id.indexOf(pre) === 0)); });
+      enemies.forEach(function (e) { used[e.id] = true; });
+      const exp = exports.filter(function (c) {
+        return c.group === x.info.codex.title || (pre && c.entries.some(function (en) { return en && String(en.id || '').indexOf(pre) === 0; }));
+      })[0] || null;
+      const things = exp ? exp.entries.filter(function (en) { return en && en.id; }).map(exportedThing) : [];
+      const listed = {};
+      things.forEach(function (th) { listed[th.def.id] = true; });
+      if (pre) {
+        [['objects', 'object'], ['statuses', 'status']].forEach(function (k) {
+          const bag = DD.defs[k[0]] || {};
+          Object.keys(bag).sort().forEach(function (id) {
+            const d = bag[id];
+            if (id.indexOf(pre) !== 0 || !d || d.codex === false || listed[id]) return;
+            if (d.codex === true || (k[1] === 'object' && num(d.hp) > 0 && d.desc)) things.push({ def: d, kind: k[1] });
+          });
+        });
+      }
+      const title = x.info.finale ? 'The Floor Boss — ' + (enemies.filter(function (e) { return e.tier === 'boss'; })[0] || { name: x.info.shortName }).name :
+        (exp && exp.group) || x.info.codex.title;
+      return { title: title, note: x.info.codex.note || '', icon: x.info.icon, enemies: enemies.sort(byTierName), things: things, bossIds: ids };
+    }).filter(function (g) { return g.enemies.length || g.things.length; });
+    const rest = act4.filter(function (e) { return !used[e.id]; }).sort(byTierName);
+    if (rest.length) groups.push({ title: 'Also Under the Table', note: '', icon: '🕳️', enemies: rest, things: [], bossIds: [] });
+    return groups;
+  }
+
   function codex() {
     const UI = DD.UI, el = UI.el;
-    const all = Object.keys(DD.defs.enemies || {}).map(function (k) { return DD.defs.enemies[k]; }).filter(function (e) { return e.id.indexOf('test_') !== 0; });
+    // V3: act-4 defs stay out of the codex (every group and count) until Svammiel has been met
+    const all = Object.keys(DD.defs.enemies || {}).map(function (k) { return DD.defs.enemies[k]; })
+      .filter(function (e) { return e.id.indexOf('test_') !== 0 && !hiddenAct(e); });
     const box = el('div.hall-codex');
     if (!all.length) { box.appendChild(el('div.empty-state', null, el('div.es-icon', null, '📖'), el('div', null, 'The monster manual is blank. Suspicious.'))); return box; }
-    [1, 2, 3, 0].forEach(function (act) {
-      const list = all.filter(function (e) { return act ? num(e.act) === act : !(num(e.act) >= 1 && num(e.act) <= 3); })
-        .sort(function (a, b) { return (TIER_ORDER[a.tier] || 9) - (TIER_ORDER[b.tier] || 9) || String(a.name).localeCompare(String(b.name)); });
+    const acts = codexActs();
+    acts.concat([0]).forEach(function (act) {
+      if (act === 4) { codexAct4(box, all); return; }
+      const list = all.filter(function (e) { return act ? num(e.act) === act : acts.indexOf(num(e.act)) < 0; }).sort(byTierName);
       if (!list.length) return;
       const info = UI.ACTS[act];
-      const known = list.filter(function (e) { return seen('enemies', e.id) || seen('bosses', e.id); }).length;
+      const known = list.filter(function (e) { return isSeenEnemy(e.id); }).length;
       box.appendChild(el('div.codex-h', null, el('span', null, info ? 'Act ' + info.roman + ' — ' + info.name : 'Miscellaneous Horrors'), el('span.codex-count', null, known + ' / ' + list.length)));
       const grid = el('div.codex-grid');
-      list.forEach(function (e) {
-        const isSeen = seen('enemies', e.id) || seen('bosses', e.id);
-        const card = el('div.cx-card', { class: [isSeen ? '' : 'unseen', 'tier-' + (e.tier || 'normal')] },
-          UI.portrait(e.id, 56, { locked: !isSeen, frame: false }),
-          el('div.cx-name', null, isSeen ? e.name : '???'),
-          el('div.cx-tier', null, e.tier === 'boss' ? 'Boss' : e.tier === 'elite' ? 'Elite' : e.tier === 'minion' ? 'Minion' : 'Enemy'));
-        UI.tooltip(card, isSeen ? function () { return UI.enemyTooltipHtml(e.id); } : '<div class="tt"><div class="tt-desc">Not encountered yet. Go get hit by it.</div></div>');
-        grid.appendChild(card);
-      });
+      list.forEach(function (e) { grid.appendChild(enemyCard(e)); });
       box.appendChild(grid);
     });
     return box;
+  }
+
+  /** V3: the Act IV group (only reached behind the gate): a sub-group per lane, then the floor boss. */
+  function codexAct4(box, all) {
+    const UI = DD.UI, el = UI.el;
+    const groups = act4Groups(all);
+    if (!groups.length) return;
+    const info = UI.ACTS[4];
+    const enemies = [].concat.apply([], groups.map(function (g) { return g.enemies; }));
+    const known = enemies.filter(function (e) { return isSeenEnemy(e.id); }).length;
+    box.appendChild(el('div.codex-h.act-4', null, el('span', null, 'Act ' + info.roman + ' — ' + info.name), el('span.codex-count', null, known + ' / ' + enemies.length)));
+    groups.forEach(function (g) {
+      const met = g.enemies.some(function (e) { return isSeenEnemy(e.id); });
+      const sub = el('div.codex-sub', null, el('span.cs-title', null, g.icon + ' ' + g.title), g.note ? el('span.cs-note', null, ' ' + g.note) : null);
+      box.appendChild(sub);
+      const grid = el('div.codex-grid');
+      g.enemies.forEach(function (e) {
+        const label = e.tier === 'boss' ? (e.boss && e.boss.mini ? 'Mini-boss' : 'Floor Boss') : g.bossIds.indexOf(e.id) >= 0 ? 'Mini-boss' : null;
+        grid.appendChild(enemyCard(e, label));
+      });
+      g.things.forEach(function (t) { grid.appendChild(thingCard(t.def, t.kind, met)); });
+      box.appendChild(grid);
+    });
   }
 
   function history() {
@@ -202,6 +345,7 @@
     const ts = function (e) { return num(e && (e.endedAt || e.date || e.time || e.at)); };
     list.sort(function (a, b) { return ts(b) - ts(a); });
     const box = el('div.hall-history');
+    const seen4 = UI.act4Seen();
     if (!list.length) { box.appendChild(el('div.empty-state', null, el('div.es-icon', null, '⏳'), el('div', null, 'No finished campaigns yet. History is written by the survivors, and so far there are none.'))); return box; }
     list.slice(0, 40).forEach(function (h) {
       const won = h.result === 'victory' || h.result === 'win' || h.won === true;
@@ -211,13 +355,22 @@
       const stats = h.stats || {};
       const kills = h.kills !== undefined ? num(h.kills) : stats.kills !== undefined ? num(stats.kills) : null;
       const act = DD.util.roman(num(h.act) || 1);
-      const title = won ? 'Victory!' : abandoned ? 'Abandoned in Act ' + act : 'Fell in Act ' + act + (h.killedBy ? ' to ' + h.killedBy : '');
+      // V3: the floor boss's fight is named after him (he cheated); classic wins say so once act IV is known
+      const killer = UI.killerOf(h);
+      const fourAct = num(h.acts) >= 4;
+      const title = won ? (fourAct ? 'Victory! The floor boss, floored' : seen4 ? 'Won (classic, 3 acts)' : 'Victory!') :
+        abandoned ? 'Abandoned in Act ' + act : 'Fell in Act ' + act + (killer ? ' to ' + killer.name + UI.cheatedText(killer) : '');
       const meta = [ts(h) ? UI.ago(ts(h)) : '', diff ? diff.icon + ' ' + diff.name : '', kills !== null ? '💀 ' + kills + ' kills' : '',
         stats.durationMs ? '⏱️ ' + UI.duration(stats.durationMs) : ''].filter(Boolean).join(' · ');
+      // V3: a run that reached Svammiel's floor: "Act IV · 3 / 5 floor bosses" (M: that run's lane count) + the lanes beaten
+      const fc = UI.floorCounts(h);
+      const floor = fc.m > 0 ? el('div.hist-floor', null, 'Act ' + DD.util.roman(Math.max(4, num(h.act))) + ' · ' + fc.n + ' / ' + fc.m + ' floor bosses',
+        fc.order.length ? el('span.hist-lanes', null, fc.order.map(function (id) { const li = UI.laneInfo(id); return el('span', { title: li.shortName }, li.icon); })) : null) : null;
       box.appendChild(el('div.hist-row', { class: won ? 'won' : abandoned ? 'abandoned' : 'lost' },
         el('div.hist-result', null, won ? '👑' : abandoned ? '🏳️' : '💀'),
         el('div.hist-main', null,
           el('div.hist-title', null, title, h.title ? el('span.hist-sub', null, ' — “' + h.title + '”') : null),
+          floor,
           el('div.hist-meta', null, meta)),
         el('div.hist-party', null, party.map(function (p) {
           const port = UI.portrait(p.id, 34, { dead: !!p.dead });

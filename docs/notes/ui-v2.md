@@ -410,3 +410,201 @@ Full table, probes, docs-truth list and requests: docs/notes/hud-v2.md "Review (
 - ARCHITECTURE §8.1 now lists `CONTROLS`, `partyLines`, `bossWithTitle`, `consumableDesc`, `chooseSkillSlot`
   (`forgetWarning`); §8.3 the adjacent-ally click in one sentence and the ✖ on a refused swap.
 - Suite: `ui: review (finish) — every title quip fits one line; ARCHITECTURE §3.7 / §7.5 / §8.1 / §8.3 …`.
+
+## V3 — act IV "Under the Table" and the 17th hero (META-UI, Nov 14-15)
+
+Plan `.tmp/v3/design.md` §2.1-2.6, §4.10, §4.12, §8.4 (META-UI); the goats' door and codex from
+`.tmp/v3/addendum-goats.md` §17.7; Benedick's lists from `.tmp/v3/addendum-benedick.md` §17. Ships dark: nothing here
+shows until a run reaches act IV (`DD.finalAct() === 4`) or the spoiler gate `seen.bosses.svammiel` is open. Every count
+is read from the run or the registry (`map.lanes.length`, `summary.gauntletLanes`, `UI.heroIds()`), never a literal.
+(A first attempt at this role was cut off on Nov 14; its edits were reviewed, kept and finished here.)
+
+### What the player sees
+- **Svammiel's floor** (`map.js renderGauntlet`, `map.shape === 'gauntlet'`): blue graph paper, red ink, table legs, a
+  coffee ring, horns on the party token, a smug Svammiel doodle ("mine.") over the floor boss and the DM in the margin
+  ("help"). Columns = the map's rows, every node on one of T lane tracks (T = lanes, at least the widest stop row): a
+  lane's doors share its track, so the labels (the encounter's `shortName`, two lines at most) sit between tracks and
+  never meet a node. Node size and label width follow the board (container units) and `--g-cols` / `--g-tracks`, so
+  L = 0..6 fits; `fitGauntlet` keeps the nodes under the narration box and lifts them until the bottom labels clear the
+  legend. Only travelled and open links are drawn (plus a dotted "leads on" stub). Doors show the mini-boss portrait
+  (the first `objective.bossIds` def: the goats' door is Billy Bleatz, the bear stays a surprise), the encounter icon
+  (🕷️ 🦹 🔭 🫖 🐐) and the shortName; a beaten lane is greyed out on every row ("✓ Beaten"; the fought door
+  "✓ <shortName>"). Door tooltip: the full name (the League's 72 characters wrap: the wrap is the joke), the teaser
+  (V §5.1; the goats': "🐐 The Rapping Goats — three goats, one mic, a verse about each of you. (feat. ???)"), 🧭 the
+  `gauntlet.hint`, the node text, the state. The legend lists Mini-boss / Event / Shop / Tavern / Floor Boss, only on a
+  gauntlet map (P15). Act banner and cartouche: "Act IV — Under the Table" + `act_intro_4`; `UI.ACTS[4].sub` is
+  count-free.
+- **The Twist panel** (`gameover.js twistPanel`: the `victory` screen with `twist: true`, passed by `rewards.js finish`
+  from `actClear.twist`): V §4.3's steps on a timeline — the act-3 clear and the DM yielding, the crack and vignette (and
+  `svam_sting` off the debug pages), the typed **YOU THOUGHT THIS WAS OVER?**, his portrait rising, **I, SVAMMIEL,
+  CONTROL ALL.** (both halves split from `svam_twist[0]`, the user's line), the cast card (SVAMMIEL · The Floor Boss ·
+  Dungeon Master of Dungeon Masters, then every lane of the run's map as a chip, the goats' "(feat. ???)"), his
+  `svam_twist_panel` line (😈 badge), the DM's `act_clear_twist` line, the heal "(Svammiel allowed it. Healthy players
+  last longer.)", **Descend to Act IV** (Enter) and "Next: Under the Table — Svammiel's floor. Five mini-bosses in any
+  order, then him." (the number word from the lanes). A click or Space completes every step; a second press descends.
+  Headless and static captures mount it fully drawn. No confetti.
+- **The four-act victory**: "The Campaign Is Over (For Real This Time)", a `victory_title` line, `campaign_won` (the
+  DM), then a `victory_final` line with Svammiel's 😈 badge; the stat grid adds "Floor bosses N / M" and "The order:"
+  lane icons → 😈. A v2 summary (no `acts`) keeps the classic screen and the DM's "Fine. FINE." line.
+- **Game over in act IV**: the killer by shortName; the floor boss by his unit's name plus " (he cheated)" (`UI.killerOf`
+  reads `summary.killedByEncounter`'s `finale`); "😈 Floor bosses beaten: N / M (names)"; the stat grid's floor bosses.
+- **Hall** (behind the gate): records "Campaigns won (of which classic: N)", "The DM defeated" (`stats.dmDefeated`),
+  "Floor bosses beaten" (`stats.miniBosses`); history "Act IV · N / M floor bosses" (M: that run's `gauntletLanes`) with
+  the lanes' icons, "Won (classic, 3 acts)" for a 3-act win, "Fell in Act IV to Svammiel (he cheated)". The codex's Act
+  IV group: a sub-group per lane in gauntlet order (its units, act-4 enemies sharing their id prefix, a content
+  module's `CODEX` export, breakable objects, anything flagged `codex: true`), then "The Floor Boss — Svammiel", then
+  "Also Under the Table" for strays. Before the gate act-4 defs are out of every group, "Miscellaneous Horrors" and every
+  count. The goats' group: "The Rapping Goats (Herd Mentality, feat. Ursa Verse)", 8 entries (4 units + `DD.Goats.CODEX`).
+- **Settings** (behind the gate, P15): "Svammiel's cameos": Full / Short / Log only (`DD.Meta.CAMEO_SETTINGS`), saved
+  in `settings.cameos`.
+- **Title**: "Now with a fourth act. Allegedly." joins the taglines and `tips_act4` the loading tips (weighted by pool
+  size), both only after the gate.
+- **Shop and tavern under the table**: "Ye Olde Overpriced Shoppe (Under New Management)", the DM (Demoted) at the
+  counter in a paper hat, the Bribe as a fourth counter service (refusal texts: an unspent bribe, no door left); with
+  four services the column tightens and Party goes icon-only (title "Party & Loadout (P)") so Leave Shop fits 1024 px.
+  The tavern: a wall-to-wall rug and the sign "NO DEMONS PAST THE RUG" ("He can't cheat on carpet. Fine print.").
+- **The 17th hero**: `'benedick'` appended to `UI.HERO_ORDER`; party select switches to a 5-column grid below 1280 px and
+  6 columns from 1280 px once the registry outgrows a 4 × 4 grid (`.ps-roster.many`); the Hall roster keeps 4 columns
+  (17 and 18 fit at every size). He shows from the start; nothing of him names act IV.
+- **Debug params** (`js/main.js`): `acts=3|4`; `act=4` (alias `start=4`, the sims' name) through `DD.Run.startAtAct(4,
+  { gear: 'auto', beaten, level?, gold?, noShow })`; `beaten=a,b`; `twist=1` (`screen=victory`: the Twist panel;
+  `screen=combat&encounter=boss_dm`: the entrance via `DD.Cameo.fire('victory')`); `final=1` (act 4: every lane sealed);
+  `screen=gameover` in act 4 (killed by the floor boss); `cameo=full|short|log|0` (0 → `DD.Balance.cameo.off = 1`);
+  `bosshp=<0..1>` (applied on `combat:ready`); two additions: `gate=1` (the spoiler gate open in memory) and
+  `screen=hall&tab=<tab>`. `DDdbg.act(n, beaten?)` fast-forwards from the console.
+
+### Public API (new / changed)
+- `DD.UI.ACTS[4]`, `DD.UI.NODE_TYPES.miniboss`, `DD.UI.HERO_ORDER` (+ `'benedick'`).
+- `DD.UI.narration(text, { cls, speaker })`: `speaker` = a cameo actor id → its badge (😈) and colour.
+- `DD.UI.narrate` filters `DD.defs.narration[DD.narrationKey(key)]` (the act variant's pool; the wave-0 request).
+- `DD.UI.act4Seen()` (the gate), `DD.UI.inGauntlet(run?)`, `DD.UI.laneInfo(lane | laneId | encounterId)` → `{ id,
+  encounterId, icon, name, shortName, hint, teaser, castNote, portrait, finale, codex: { title, note } }`,
+  `DD.UI.gauntletLanes(run?)` (the run's map, else the registry's), `DD.UI.laneShort(lane)`,
+  `DD.UI.encounterUnitIds(enc)`, `DD.UI.killerOf(summary)` → `{ name, cheated, pronoun }`, `DD.UI.cheatedText(k)`,
+  `DD.UI.floorCounts(run | summary)` → `{ n, m, order }`, `DD.UI.numberWord(n)`.
+- `victory` screen params: `twist: true` (+ `act`, `nextAct`, `healed`, `text`) → the Twist panel.
+- Read by the Hall codex: a content module's `DD.<Module>.CODEX = { group, entries: [{ id, name, icon, text }] }`.
+
+### Deviations
+- The Hall codex also reads a content module's `CODEX` export (any `DD.<Module>.CODEX` with `entries`), besides
+  `codex: true` flags and breakable objects: the goats' Golden Mic is a status and their Mic Stand an unbreakable
+  object, so without it their group showed 6 of its 8 entries.
+- Debug additions not in the plan: `gate=1`, `screen=hall&tab=`, `start=` as an alias of `act=`, and a debug run that
+  starts below the table opens the spoiler gate in memory (a real party there has always met him; the Settings row and
+  the codex then show as they would). The params save nothing themselves.
+- `bosshp=` uses `objective.bossIds` / `bossId`, and boss-tier units when the encounter names neither.
+- The Hall roster keeps 4 columns (5 rows of 17 or 18 fit at all four sizes); only party select got the 6 × 3 / 5 × 4
+  grid. Its switch is "more heroes than a 4 × 4 grid holds" (`GRID4_CAP`), a layout constant, not a hero count.
+- `gameover.js summary()` prefers a finished run's own `run.summary` to a rebuild from the live state.
+- `victory_final` is NARRATIVE's pool of three lines; the plan's "Svammiel, from somewhere far below" is one of them, and
+  whichever is drawn wears his badge.
+- A debug map from `startAtAct` stands the party at a door it never walked to from the lobby, so no travelled link is
+  drawn into it; real play always has the lobby → door path.
+
+### Requests
+- Lead (ARCHITECTURE §10.1): list `gate=1`, `screen=hall&tab=<tab>`, `start=` (alias of `act=`), "a debug run below the
+  table opens the spoiler gate for the page" and `bosshp`'s boss-tier fallback; §8.1: the new `DD.UI` helpers above and
+  the `CODEX` export the codex reads.
+- C5 (`js/data/bosses/svammiel.js`): "The DM (Demoted)" is on plan §5.8's codex list, but the kids'-table object has
+  `hp: 0` and no `codex: true`, so the codex skips it. Set `codex: true` on it (or list it in a `DD.Svammiel.CODEX`
+  export) and it joins the Floor Boss group.
+- QA: `.tmp/v3/metaui/shotpage.sh "q=<url-encoded query>&to=<selector>&block=start|end" <absolute out.png> [WxH]` shoots
+  a scrolled screen (e.g. the codex's Act IV group); it takes a slot like `tools/shot.sh`.
+
+### Tests (`tests/ui_tests.js`, 11 new suites "ui: V3 — …", ~250 assertions with full content)
+- Svammiel's floor: a door per lane per door row (L × L, lane order, shortName, icon, portrait), the floor boss, the
+  doodles, only the lobby's open links at the start, the legend, "Act IV — Under the Table", door and boss tooltips,
+  the goats' teaser and Billy's portrait; a beaten lane: the fought door "✓ <shortName>" under the party, the rest
+  "✓ Beaten", the next door row offers L − 1, only travelled and open links.
+- The board's fit (real page) at 1280×720 and 1024×640 with L = 5 and L = 6 (stand-in lanes when fewer are loaded):
+  every node on the board, one column per row, no node / label / narration / legend / doodle overlap, no cut label, no
+  scroll.
+- The Twist panel from the rewards' Continue: both halves of `svam_twist` (exactly the user's line), the cast card = the
+  run's lanes, the goats' "(feat. ???)", his 😈 line, the heal, "Descend to Act IV", the next line's number word, no
+  confetti; animated: Space completes it, Enter descends to the gauntlet.
+- End screens: the four-act victory (kicker, `campaign_won`, no old DM line, `victory_final` with 😈, N / M, the order),
+  a classic win, game over to the floor boss ("(he cheated)", names), to a door, a v2 summary.
+- The Hall: gate shut (no Act IV group, act-4 defs out of every card and count, no act-IV records, no classic label);
+  gate open (records, history titles and "Act IV · 2 / 7" from the entry's own count, the codex group, the goats' 8).
+- Settings: the gated row, Full / Short / Log only from `DD.Meta.CAMEO_SETTINGS`, saved and re-selected.
+- Spoilers: `UI.ACTS[4].sub` count-free; act-1 maps (acts 3 and 4) name no mini-boss, Svammiel or act IV; a 3-act
+  act-3 clear names no act IV; the title's tagline and tips (forced picks) only after the gate.
+- Shop and tavern under the table (sign, the DM, the Bribe bought → `flags.cameo.bribe`, the rug) and not in act 1; the
+  four-service counter fits 1024×640 and 1280×720 (real page).
+- The League's 72-character name wraps in the map tooltip, the rewards banner, the game-over killer and the Hall
+  history (real page).
+- Debug params (real page): `acts=4&act=4` (gate opened), `beaten=` order and seals, `start=4`, `acts=3` clamps,
+  `twist=1` (fits 1280×720), `final=1` (L / L, one stat row), `screen=gameover` in act 4, the codex with and without
+  `gate=1`, `cameo=short`, `cameo=0`, `bosshp=0.5`.
+- The v2 hero suites (made data-driven in phase 0): `V3_HEROES = ['benedick']`, last in `UI.HERO_ORDER`; the fit suite
+  pads the roster with cloned worst-case cards to 17 and 18 while Benedick is a stub (party select, Hall roster and the
+  tavern's recruit pick at four sizes).
+- Full run (Nov 15, acts 3): 1223 suites, 142,866 assertions, 0 failures.
+
+### Known issues
+- Benedick's file is still a stub, so the 17-card layout is proven with padded clones (the worst-case name and role);
+  once he lands the same suite checks the real 17 and pads to 18.
+- The doodles, the coffee ring and the token horns are CSS and inline SVG, not sprites.
+
+## Review (V3) — adversarial review of the render / HUD / META-UI work for act IV and the 17th hero (REVIEWER, Nov 15)
+
+Verified by running code: the four owners' suites, a full `tools/test.sh`, real-page probes (`.tmp/v3/rv/probe.sh`:
+an iframe of the real game at a fixed size, a probe script, `--dump-dom`; `.tmp/v3/rv/montage.sh`: four real pages in
+one capture, e.g. one fight at rot 0 / 90 / 200 / 37.5), the plan §8.5 shots (`.tmp/v3/qa/`, each PNG read) and the
+render-world A/B identity harness against HEAD's renderer.
+
+### Fixed (most severe first)
+1. **The Hall roster overflowed at 1600×900 with the real 17 heroes** (`ui: v2 — party select and the hall roster fit
+   …` failed: 734 / 725, also padded to 18). The padded clones had passed while Benedick was a stub, but his card has a
+   two-line race / class and a two-line role, which no clone modelled. Fix (`css/style.css`): `.hall-heroes.many`
+   (hall.js already set the class above 4 × 4) gives each row a little height back (gap .4rem, card padding .36rem,
+   tighter sub / role lines). Regression: `padHeroes` now builds the worst case from the roster's longest name, race,
+   class, epithet AND role (it took only the longest role and name), and the suite still passes at all four sizes with
+   17 real cards and 18 padded ones.
+2. **Party select at 1024 px: "0 ARMOR" poked out of the details panel** (`ui: playtest first-hour-6 …` failed at
+   1024×768; measured 1002 / 1000 px at 1024×640 too). The V3 `.many` grid narrows the details panel to 19-21rem below
+   1280 px (v2 had 20-24rem), and the four stat boxes no longer fit. Fix: under `.ps-body.many` below 1280 px the stat
+   row tightens (gap .3rem, box padding .36rem, column gap .26rem, label letter-spacing .04em). Regression: the fit
+   suite's `fitRoster` now asserts that the stat boxes and the 🎲 Init chip stay inside the details panel at every size
+   (1024×640 included; first-hour-6 only checked 1024×768).
+3. Twist panel: the deco font's narrow space made "I, SVAMMIEL, CONTROL ALL." read as "CONTROLALL" in the shots;
+   `.tw-control` gets `word-spacing: .22em` (cosmetic).
+
+### Checked and fine
+- Ship dark (acts 3, fresh profile): title (tagline, tips), Settings (no cameo row), the Hall's records, history, heroes
+  and codex (3 act groups; act-4 defs out of every count: "Codex entries 0 / 52"), party select and every hero's
+  details panel name nothing of act IV (the only hit of a name sweep was Betty's "Goatfolk Warrior"). Every act-4
+  enemy def carries `act: 4` (none would fall into "Miscellaneous Horrors"). Benedick is live: party select (last),
+  the Hall (last), the title campfire (the 17th seat on the cobble path), nothing of his mentions act IV.
+- Behind `gate=1` the codex shows the Act IV group: Gardener 5, League 6 (with the note), Galbraith 2, Coven 5, the
+  Rapping Goats 8 (the header "The Rapping Goats (Herd Mentality, feat. Ursa Verse)"), the Floor Boss 4 (The DM
+  (Demoted) is missing: C5's object, the open META-UI request).
+- The act-4 map (seed 7, 1280×720 and 1024×640, with `beaten=` and the goats last): five doors on every door row, 12
+  columns, sealed lanes greyed with "✓ Beaten", only travelled / open links; every door tooltip (probed through real
+  hover) carries the teaser and the hint, the goats' exactly ("… (feat. ???)", 🐐), the League's 72-character name
+  wraps with no overflowing element; the legend lists 😈 Mini-boss only here. Every "N / M" is computed (map, Twist
+  panel "Five mini-bosses", final victory "5 / 5", game over "2 / 5 (League of Villainy, Rapping Goats)", history).
+- The Twist panel, the four-act victory and the act-4 game over ("(he cheated)") at 1280×720; the shop under new
+  management (the Bribe 94), the tavern rug.
+- Real input: on the real page a real Space keydown and a real click (the top element at the board is the see-through
+  `.hud-cameoscrim`) each skip the League's start swoop; deployment stays open, initiative is not rolled, input unlocks.
+
+### Passed on (not in these files)
+- C5 (`svammiel.js`): set `codex: true` on the kids'-table DM object (or export `DD.Svammiel.CODEX`) so "The DM
+  (Demoted)" joins the Floor Boss codex group (plan §5.8; META-UI's request stands).
+- C5 (`svammiel.js twistExtras`): the twist's log reads Svammiel's line first, then "The table shakes…" and the DM's
+  "Oh no. That's my DM."; plan §2.1's script has the table shaking (500 ms) before his line (2800 ms). Low.
+- Lead: META-UI's ARCHITECTURE §10.1 / §8.1 requests stand.
+
+### Tests (review)
+- `tools/test.sh "suite=ui:"` before the fixes: 53 suites, 3 failures in the two fit suites above; after: both pass
+  (party select / Hall fit 100 assertions, first-hour-6 9). `suite=hud:,render,sprites`: 150 suites, 3822 assertions,
+  0 failures.
+- Full run (Nov 15, acts 3, Benedick registered): 1265 suites, 149,172 assertions, 1 failure, not from these files:
+  `kit: finish D1` (tests/content/kit.js) expects the v2 opt-out list and gets `ben_inevitable` too (HERO-BENEDICK /
+  the integrator: add it to the kit's list along with DESIGN §4.2's sentence).
+
+## V3 QA fixes (render-ui, Nov 17)
+HERO-8 (`DD.UI.targetLabel`: tile skills open to anything target "a tile"), HERO-3 (`DD.UI.drainsAp`, "1+ AP" pills) and
+HERO-5 (`statusChip` turns badge with status `showTurns`, `.st-turns` in `css/style.css`); details, requests and tests:
+`hud-v2.md` "V3 QA fixes".

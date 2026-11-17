@@ -1,30 +1,43 @@
 /* Dungeons and Degenerates — tests/sim/sim.js (not a test suite; loaded by tests/sim/sim.html, run by tools/sim.sh)
- * Whole-campaign balance simulation: DD.Run + DD.AutoPlay play full 3-act runs with random 4-hero parties of every
- * hero (all unlocked), items, consumables and Blessings in play, one headless page, seeds one after another.
+ * Whole-campaign balance simulation: DD.Run + DD.AutoPlay play full runs (DD.finalAct() acts: v2's three, or V3's four
+ * with Svammiel's gauntlet) with random 4-hero parties drawn from every registered hero (all unlocked), items,
+ * consumables and Blessings in play, one headless page, seeds one after another.
  * Params (URL query):
  *   seeds=N from=S        runs (seeds S..S+N-1)          diff=casual|normal|brutal
  *   maxr=30               round cap per fight             timeout=victory|defeat (how a capped fight ends)
- *   party=a,b,c,d         fixed party (else random 4 of all 16)
+ *   party=a,b,c,d         fixed party (else random 4 of all N registered heroes)
  *   route=smart|random    node choice: smart = shops when rich, taverns when hurt, elites when healthy (default)
- *   stop=N                end each run after clearing act N (quick act-1 / act-2 checks)
+ *   stop=N                end each run after clearing act N (quick act-1 / act-2 checks; default: the last act)
+ *   acts=N                sugar for bal=campaign.acts:N (acts=3: the v2 comparison after the flip)
+ *   start=N               each run fast-forwards to act N right after newRun (DD.Run.startAtAct: act-4-only sims);
+ *   level=L gold=G          its party level and gold (a gauntlet act defaults to level 5 and 450 gold)
+ *   order=random|fixed:a,b,…|lowhp   the gauntlet's door order: random (default); fixed: the first open lane in that list
+ *                         (lanes left out follow in the registry's order); lowhp: the lane the party has the best record
+ *                         against so far on this page (a weak "smart" player)
+ *   cameo=0               Svammiel stays home: DD.Balance.cameo.off = 1 (no start cameo, no cameo cheat; his own fight's
+ *                         cheats are its mechanics and stay), to measure what the cameo cheats cost
  *   bal=path:value,...    DD.Balance overrides for this page, e.g. bal=act.1.hp:1.3,hype.dealtPer:6,gold.fight.normal:[10,16]
  *   verbose=1             one line per run      json=1   raw per-fight records in #json
  *   healers=a,b           boss results are split by these heroes in the party (default ellaria,josiah)
  *   dump=1                print the units left and the last 40 log lines of every fight that hit the round cap
- * Output (#out): campaign win rate (Wilson 95% interval), act clears, levels at bosses, per-kind table (party HP lost,
- * rounds, short wins, fights with downs, signatures, Hype by source, attacks of opportunity, boss wind-ups), encounter
- * table, downs by cause, per-hero run
- * wins, skill usage, gold flow. Counting wrappers (Combat.useSkill etc.) are installed on this page only.
+ * Output (#out): campaign win rate (Wilson 95% interval) and its 3-act equivalent, act clears, levels at bosses, per-kind
+ * table (party HP lost, rounds, short wins, fights with downs, signatures, Hype by source, attacks of opportunity, boss
+ * wind-ups), encounter table, the gauntlet (per lane with each door's puzzle counters, by position 1..L, order
+ * frequency), the Svammiel table, cameos and cheats per act-4 fight (an error line on any budget violation), act-4
+ * deaths and rounds per run, downs by cause, per-hero run wins, skill usage, gold flow. Counting wrappers
+ * (Combat.useSkill etc.) are installed on this page only.
  * Stalls (balance audit, audit-4): a fight that hits the round cap is a STALL, neither a win nor a loss. timeout= only
- * decides how the run goes on; every win rate (encounters, fight kinds, bosses, the campaign, hero shares) leaves stalls
- * out of both sides, and the "== stalls" section lists each one. A run is a stalled run when its result hangs on a
+ * decides how the run goes on; every win rate (encounters, fight kinds, bosses, lanes, the campaign, hero shares) leaves
+ * stalls out of both sides, and the "== stalls" section lists each one. A run is a stalled run when its result hangs on a
  * stall's call (it won after one, or it ended on one); a run lost to a real fight after a stall is still a loss.
- * The tallies and the report are exposed as window.DD_SIM (tools suite in tests/docs_tests.js); the sim only starts on
- * a page with a <pre id="out"> (tests/sim/sim.html), so the test page can load this file.
- * Policies: level-ups learn until 4 skills then upgrade (15% random); loot by a simple score; gear upgrades equipped;
- * shop: heal under 60% HP, items that beat a hero's gear (best rarity first), tomes for heroes with < 4 skills,
- * consumables with spare gold, a Blessing re-roll when rich; tavern: recruit over the dead, rest under 75% HP or with
- * 2+ scars, else train; events at random; every fight by DD.AutoPlay.runBattle(maxr).
+ * The tallies and the report are exposed as window.DD_SIM (tools suite in tests/docs_tests.js, integration suite); the
+ * sim only starts on a page with a <pre id="out"> (tests/sim/sim.html), so the test page can load this file.
+ * Policies: level-ups learn until 4 skills then upgrade (15% random); a new skill never replaces one tagged 'shapeshift'
+ * (Benedick's shell, Basanos's Transform and Blood Moon, Ellaria's Wild Shape: plan §7.2); loot by a simple score; gear
+ * upgrades equipped; shop: heal under 60% HP, the Bribe with 200+ gold (gauntlet shops), items that beat a hero's gear
+ * (best rarity first), tomes for heroes with < 4 skills, consumables with spare gold, a Blessing re-roll when rich;
+ * tavern: recruit over the dead, rest under 75% HP or with 2+ scars, else train; gauntlet stops: a tavern under 70% HP
+ * or with 2+ scars, a shop with 120+ gold, else an event; events at random; every fight by DD.AutoPlay.runBattle(maxr).
  */
 (function () {
   'use strict';
@@ -34,8 +47,15 @@
   const SEEDS = +(P.seeds || 4), FROM = +(P.from || 0), DIFF = P.diff || 'normal', MAXR = +(P.maxr || 30);
   const ON_TIMEOUT = P.timeout || 'victory';
   const ROUTE = P.route || 'smart';
-  const STOP = +(P.stop || 3);
+  const ORDER = String(P.order || 'random');
+  const START = Math.max(1, Math.floor(+(P.start || 1)) || 1);
+  const LEVEL = P.level ? Math.floor(+P.level) || null : null;
+  const GOLD = P.gold !== undefined && P.gold !== '' && isFinite(+P.gold) ? +P.gold : null;
   const HEALERS = String(P.healers || 'ellaria,josiah').split(',');
+  // the last act and the stop: read from DD.finalAct() once the page's overrides are in (start()); these defaults serve
+  // the tools suite, which calls the tallies without start()
+  let FINAL = DD.finalAct();
+  let STOP = +(P.stop || FINAL);
   const out = [];
   const lines = [];
   const records = [];
@@ -43,6 +63,7 @@
   function r2(x) { return Math.round(x * 100) / 100; }
   function pct(a, b) { return b ? Math.round(100 * a / b) + '%' : '-'; }
   function avg(a) { return a.length ? a.reduce(function (x, y) { return x + y; }, 0) / a.length : 0; }
+  function inc(o, k, n) { o[k] = (o[k] || 0) + (n === undefined ? 1 : n); }
   /** Wilson 95% interval for k successes in n. */
   function wilson(k, n) {
     if (!n) return [0, 0];
@@ -50,11 +71,15 @@
     const c = (p + z * z / (2 * n)) / d, h = z * Math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / d;
     return [Math.max(0, c - h), Math.min(1, c + h)];
   }
+  function ci(k, n) { const w = wilson(k, n); return Math.round(100 * w[0]) + '–' + Math.round(100 * w[1]) + '%'; }
 
   // ---- DD.Balance overrides (bal=path:value,...; values are JSON: numbers or [a,b]) -------------------------------
   function applyOverrides() {
-    if (!P.bal) return [];
     const done = [];
+    // acts=N and cameo=0 are sugar for two knobs (plan §7.2; cameo=0 is lead patch P14's page-wide switch)
+    if (P.acts !== undefined && P.acts !== '') { DD.Balance.set('campaign.acts', +P.acts); done.push('campaign.acts=' + (+P.acts)); }
+    if (String(P.cameo) === '0') { DD.Balance.set('cameo.off', 1); done.push('cameo.off=1'); }
+    if (!P.bal) return done;
     // split on commas that are not inside [ ]
     const parts = [];
     let depth = 0, cur = '';
@@ -78,13 +103,19 @@
 
   // ---- tallies -----------------------------------------------------------------------------------------------------
   // timeouts = stalled fights (they hit the round cap); stalledRuns = runs whose result hangs on one; stalls = the list
+  function zeros() { const a = []; for (let i = 0; i <= Math.max(FINAL, DD.MAX_ACT || 0); i++) a.push(0); return a; }
   function newTally() {
+    const lv = {};
+    for (let a = 1; a <= Math.max(FINAL, DD.MAX_ACT || 0); a++) lv[a] = [];
     return {
-      runs: 0, wins: 0, stalledRuns: 0, actEnter: [0, 0, 0, 0], actClear: [0, 0, 0, 0], lossAt: {}, lossTo: {}, fights: 0, timeouts: 0,
-      levelsAtBoss: { 1: [], 2: [], 3: [] }, enc: {}, downs: {}, downsByAct: [0, 0, 0, 0], deaths: 0, heroes: {}, skills: {},
-      socketed: {}, cons: {}, gold: { earned: 0, shopSpent: 0, shopVisits: 0, shopGoldIn: 0, eventDelta: 0, endGold: [], finalBossGold: [], bought: {}, fined: 0 },
+      runs: 0, wins: 0, stalledRuns: 0, actEnter: zeros(), actClear: zeros(), lossAt: {}, lossTo: {}, fights: 0, timeouts: 0,
+      levelsAtBoss: lv, enc: {}, downs: {}, downsByAct: zeros(), deaths: 0, heroes: {}, skills: {},
+      socketed: {}, cons: {}, gold: { earned: 0, shopSpent: 0, shopVisits: 0, shopGoldIn: 0, eventDelta: 0, endGold: [], endGoldWon: [], finalBossGold: [], bought: {}, fined: 0 },
       failed: 0, rewardsTaken: {}, levelChoices: {}, errors: [], warns: {}, dumps: [], stalls: [], bossFights: {}, fightMs: 0, runMs: [],
       kinds: {}, hypeBy: {}, dmgBy: {},
+      // V3: the gauntlet (per lane, per position 1..L, the order), Svammiel, the cameos, act-4 deaths and run length
+      lanes: {}, pos: {}, firstDoor: {}, orders: {}, svam: null, cameo: { fights: 0, cameos: 0, cheats: 0, starts: 0, over: 0, early: 0, byLane: {} },
+      a4: { runs: 0, deaths: [], rounds: [], twist: 0, dmWins: 0 }, runRounds: [], shapeshiftKept: 0,
     };
   }
   let G = newTally();
@@ -114,6 +145,28 @@
   function K(key) {
     return G.kinds[key] || (G.kinds[key] = { n: 0, wins: 0, hpLost: [], taken: [], rounds: [], short: 0, withDowns: 0, downs: 0, sigs: 0, hype: 0, hype100: 0, timeouts: 0,
       oppHero: 0, oppEnemy: 0, oppDmgH: 0, oppDmgE: 0, wuStart: 0, wuCancel: 0, wuLand: 0, wuHit: 0, wuDmg: 0 });
+  }
+  /** A gauntlet tally row (a lane, a position, Svammiel). */
+  function row() { return { n: 0, wins: 0, timeouts: 0, rounds: [], lost: [], start: [], lvl: [], downs: 0, withDowns: 0, short: 0, eng: {}, engN: 0, bear: 0, bearWins: 0, bearRounds: [], phases: {}, caught: 0, caughtWins: 0 }; }
+  const KINDS = ['normal', 'elite', 'miniboss', 'boss'];
+  /** The fight-kind label: a gauntlet door is a 'miniboss' (the run's node type) though the engine plays it as a boss. */
+  function kindLabel(k) { return k === 'miniboss' ? 'mini' : k; }
+
+  // ---- the shapeshift rule (plan §7.2, addendum-benedick V14) -----------------------------------------------------
+  /** True for a skill tagged 'shapeshift' (a transform the sim must never forget: Benedick's shell, Basanos's Transform
+   *  and Blood Moon, Ellaria's Wild Shape). */
+  function isShapeshift(id) { const d = DD.getSkill(id); return !!(d && Array.isArray(d.tags) && d.tags.indexOf('shapeshift') >= 0); }
+  /** The socket a new skill replaces: the lowest-level skill not tagged 'shapeshift' (ties → the first); -1 when every
+   *  socketed skill is one (then the new skill is skipped). */
+  function replaceIdx(rh) {
+    const list = (rh && rh.skills) || [];
+    let lo = -1, naive = -1;
+    list.forEach(function (s, k) {
+      if (naive < 0 || s.level < list[naive].level) naive = k;
+      if (!isShapeshift(s.id) && (lo < 0 || s.level < list[lo].level)) lo = k;
+    });
+    if (naive >= 0 && naive !== lo) G.shapeshiftKept++;   // v2's rule (lowest level, ties → the first) would have forgotten it
+    return lo;
   }
 
   // ---- counting wrappers (this page only) ----------------------------------------------------------------------------
@@ -202,6 +255,8 @@
     const alive = s.party.filter(function (h) { return !h.dead; });
     return alive.reduce(function (a, h) { return a + h.hp / DD.Run.heroStats(h).maxHp; }, 0) / Math.max(1, alive.length);
   }
+  function scarCount() { return S().party.reduce(function (a, h) { return a + (h.dead ? 0 : (h.scars || []).length); }, 0); }
+  function inGauntlet() { return !!(DD.Run.inGauntlet && DD.Run.inGauntlet()); }
 
   function resolveLevels(r) {
     for (let guard = 0; guard < 200; guard++) {
@@ -223,9 +278,8 @@
         G.levelChoices[c.type] = (G.levelChoices[c.type] || 0) + 1;
         let res = DD.Run.applyLevelChoice(i, c);
         if (!res.ok && res.needsReplace) {
-          let lo = 0;
-          rh.skills.forEach(function (s, k) { if (s.level < rh.skills[lo].level) lo = k; });
-          res = DD.Run.applyLevelChoice(i, c, rh.skills[lo].level >= 2 ? -1 : lo);
+          const lo = replaceIdx(rh);
+          res = DD.Run.applyLevelChoice(i, c, lo < 0 || rh.skills[lo].level >= 2 ? -1 : lo);
         }
         if (!res.ok) { G.errors.push('level choice failed: ' + JSON.stringify(res).slice(0, 120)); break; }
         continue;
@@ -234,7 +288,7 @@
       if (l.length) {
         const rh = S().party[l[0].heroIdx !== undefined ? l[0].heroIdx : 0];
         let ri = -1;
-        if (rh && rh.skills.length >= 4) { let lo = 0; rh.skills.forEach(function (s, k) { if (s.level < rh.skills[lo].level) lo = k; }); ri = rh.skills[lo].level >= 2 ? -1 : lo; }
+        if (rh && rh.skills.length >= 4) { const lo = replaceIdx(rh); ri = lo < 0 || rh.skills[lo].level >= 2 ? -1 : lo; }
         DD.Run.resolveLearn(l[0].index, ri);
         continue;
       }
@@ -288,7 +342,8 @@
       const c = d.choices[order[k]];
       const hero = c.heroId ? s.party[DD.Run.indexOf(c.heroId)] : null;
       let ri;
-      if (c.type === 'skill' && hero && hero.skills.length >= 4) { let lo = 0; hero.skills.forEach(function (x, j) { if (x.level < hero.skills[lo].level) lo = j; }); ri = lo; }
+      // a full hero forgets his lowest-level skill, never a 'shapeshift' one (plan §7.2); with only those, no skill
+      if (c.type === 'skill' && hero && hero.skills.length >= 4) { ri = replaceIdx(hero); if (ri < 0) continue; }
       const res = DD.Run.takeReward(order[k], ri !== undefined ? { replaceIdx: ri } : {});
       took = res && res.ok;
       if (took) G.rewardsTaken[c.type] = (G.rewardsTaken[c.type] || 0) + 1;
@@ -312,6 +367,10 @@
     (inv.services || []).forEach(function (svc, i) {
       if (svc.id === 'heal' && hpFrac < 0.6 && s.gold >= svc.price) tryBuy('services', i);
       if (svc.id === 'scar' && s.gold >= svc.price + 60 && s.party.some(function (h) { return !h.dead && h.scars && h.scars.length; })) tryBuy('services', i);
+    });
+    // V3 gauntlet shops: the Bribe (Svammiel skips the next door's cheat) with 200+ gold (plan §7.2)
+    (inv.services || []).forEach(function (svc, i) {
+      if (svc.id === 'bribe' && s.gold >= 200 && s.gold >= svc.price && tryBuy('services', i)) inc(G.gold.bought, 'bribe');
     });
     // items: best rarity first, if someone can wear it and it beats their gear
     const items = (inv.items || []).map(function (e, i) { return { e: e, i: i }; }).filter(function (x) { const d = DD.getItem(x.e.id); return d && d.rarity !== 'cursed'; });
@@ -352,8 +411,7 @@
       const c = DD.Run.recruitCandidates();
       if (c.length) { DD.Run.tavernRecruit(r.pick(c), deadIdx); curRun.recruits++; return; }
     }
-    const scars = s.party.reduce(function (a, h) { return a + (h.dead ? 0 : (h.scars || []).length); }, 0);
-    if (partyHp() < 0.75 || scars >= 2) { DD.Run.tavernRest(); return; }
+    if (partyHp() < 0.75 || scarCount() >= 2) { DD.Run.tavernRest(); return; }
     const alive = DD.Run.aliveHeroes();
     for (let k = 0; k < alive.length; k++) {
       const hi = r.pick(alive);
@@ -363,9 +421,44 @@
     DD.Run.tavernRest();
   }
 
-  /** Next map node: random, or 'smart' (shops when rich, taverns when hurt, elites only when healthy). */
+  /** A gauntlet door (order=random | fixed:a,b,… | lowhp). */
+  function pickDoor(r, doors) {
+    if (doors.length === 1) return doors[0];
+    if (ORDER.indexOf('fixed:') === 0) {
+      const list = ORDER.slice(6).split(',').map(function (x) { return x.trim(); }).filter(Boolean);
+      const reg = (S().map.lanes || []).map(function (l) { return l.id; });
+      const rank = function (n) { const i = list.indexOf(n.lane); return i >= 0 ? i : list.length + Math.max(0, reg.indexOf(n.lane)); };
+      return doors.slice().sort(function (a, b) { return rank(a) - rank(b); })[0];
+    }
+    if (ORDER === 'lowhp') {
+      // the lane with the best record on this page so far (decided fights; a 1-in-2 prior for an unseen lane)
+      let best = null, bestV = -Infinity;
+      doors.forEach(function (n) {
+        const x = G.lanes[n.lane];
+        const v = x ? (x.wins + 1) / (x.n - x.timeouts + 2) : 0.5;
+        const w = v + r.float(0, 0.001);
+        if (w > bestV) { bestV = w; best = n; }
+      });
+      return best;
+    }
+    return r.pick(doors);
+  }
+  /** A gauntlet stop (plan §7.2): a tavern under 70% HP or with 2+ scars, a shop with 120+ gold, else an event. */
+  function pickStop(r, avail) {
+    const by = function (t) { return avail.filter(function (n) { return n.type === t; })[0]; };
+    const want = partyHp() < 0.7 || scarCount() >= 2 ? ['tavern', 'shop', 'event'] : S().gold >= 120 ? ['shop', 'event', 'tavern'] : ['event', 'tavern', 'shop'];
+    for (let i = 0; i < want.length; i++) if (by(want[i])) return by(want[i]);
+    return r.pick(avail);
+  }
+
+  /** Next map node: random, or 'smart' (shops when rich, taverns when hurt, elites only when healthy); the gauntlet's
+   *  doors follow order=, its stops pickStop. */
   function pickNode(r, avail) {
-    if (ROUTE === 'random' || avail.length === 1) return r.pick(avail);
+    if (avail.length === 1) return avail[0];
+    const doors = avail.filter(function (n) { return n.type === 'miniboss'; });
+    if (doors.length) return pickDoor(r, doors);
+    if (ROUTE === 'random') return r.pick(avail);
+    if (inGauntlet()) return pickStop(r, avail);
     const s = S(), hp = partyHp(), gold = s.gold;
     let best = avail[0], bestScore = -Infinity;
     avail.forEach(function (n) {
@@ -384,21 +477,39 @@
     return best;
   }
 
+  // ---- a door's puzzle counters (each fight file's stats(state)); labels for the gauntlet table --------------------------
+  const LANE_STATS = {
+    gardener: { mod: 'Gardener', cols: [['jams', 'gnome jams'], ['drums', 'drums'], ['vinesKilled', 'vines weeded'], ['gourdsPopped', 'gourds popped'], ['mows', 'mows'], ['mowHits', 'mow hits'], ['overgrowth', 'Overgrowth'], ['healed', 'healed']] },
+    league: { mod: 'League', cols: [['bodies', 'bodies'], ['broken', 'bodies broken'], ['raised', 'raised'], ['songs', 'songs'], ['songHits', 'song hits'], ['lever', 'lever'], ['dropped', 'dropped'], ['expended', 'Expendable']] },
+    galbraith: { mod: 'Galbraith', cols: [['counters', 'Counterspells'], ['rests', 'rests'], ['restDmg', 'rest dmg'], ['crystals', 'crystals broken'], ['encore', 'Encore'], ['meteorHits', 'meteor hits'], ['pwLanded', 'Power Words'], ['regen', 'crystal heal']] },
+    coven: { mod: 'Coven', cols: [['stirs', 'stirs'], ['pies', 'pies'], ['pieLanded', 'pies landed'], ['tipped', 'tipped'], ['spotsHeld', 'spots held'], ['threadHits', 'thread hits'], ['eyeDropped', 'Eye dropped'], ['sleeps', 'sleeps']] },
+    goats: { mod: 'Goats', cols: [['hung', 'bars hung'], ['claps', 'Clap Backs'], ['barNone', 'Bar None landed'], ['cut', 'interrupted'], ['fizzled', 'fizzled'], ['speakers', 'speakers broken'], ['tributes', 'tributes'], ['bassHits', 'bass hits']] },
+  };
+  function laneStats(lane, cs) {
+    const spec = LANE_STATS[lane];
+    const mod = spec ? DD[spec.mod] : null;
+    if (!mod || typeof mod.stats !== 'function') return null;
+    try { return mod.stats(cs) || null; } catch (e) { G.errors.push('stats of lane ' + lane + ' threw: ' + e); return null; }
+  }
+
   function fight() {
     const cs = DD.Combat.state;
     const s = S();
     const pd = s.pending.data;
     const encId = (cs && cs.encounter && cs.encounter.id) || pd.encounterId || '?';
-    const kind = pd.kind || (cs && cs.kind) || '?';
+    const enc = (cs && cs.encounter) || DD.getEncounter(encId) || {};
+    const lane = pd.lane || (enc.gauntlet && enc.gauntlet.lane) || null;
+    const pos = pd.gauntlet && typeof pd.gauntlet.index === 'number' ? pd.gauntlet.index + 1 : null;
+    const kind = lane ? 'miniboss' : (pd.kind || (cs && cs.kind) || '?');
     const heroes0 = cs.units.filter(function (u) { return u.kind === 'hero'; });
     const lvl = heroes0.reduce(function (a, u) { return a + (u.level || 1); }, 0) / Math.max(1, heroes0.length);
     const hp0 = heroes0.reduce(function (a, u) { return a + u.hp; }, 0), max0 = heroes0.reduce(function (a, u) { return a + u.maxHp; }, 0);
     curFight = { downs: 0, hypeMax: cs.hype || 0, sigs: 0, hype: {}, kind: kind,
       opp: { hero: 0, enemy: 0, dmgOnHeroes: 0, dmgOnEnemies: 0 }, wu: { start: 0, cancel: 0, land: 0, hit: 0, dmg: 0 } };
     const act = s.act;
-    const finalBoss = kind === 'boss' && act === 3;
+    const finalBoss = kind === 'boss' && act === FINAL;
     if (finalBoss) G.gold.finalBossGold.push(s.gold);
-    if (kind === 'boss') G.levelsAtBoss[act].push(r1(lvl));
+    if (kind === 'boss' && G.levelsAtBoss[act]) G.levelsAtBoss[act].push(r1(lvl));
     const offHype = DD.Events.on('hype:changed', function (e) {
       if (DD.Act.simulating || !curFight || DD.Combat.state !== cs) return;
       curFight.hypeMax = Math.max(curFight.hypeMax, cs.hype || 0);
@@ -431,15 +542,18 @@
     const st = cs.stats && cs.stats.units || {};
     const taken = heroes1.reduce(function (a, u) { return a + ((st[u.id] && st[u.id].taken) || 0); }, 0);
     const lost = max0 ? (hp0 - hp1) / max0 : 0;
-    const outcome = recordFight({
+    const f = {
       seed: curRun.seed, act: act, kind: kind, encId: encId, result: result, timeout: timeout, round: cs.round,
       lost: lost, taken: max0 ? taken / max0 : 0, start: max0 ? hp0 / max0 : 0, lvl: lvl,
       downs: curFight.downs, sigs: curFight.sigs, hypeMax: curFight.hypeMax, hype: curFight.hype, opp: curFight.opp, wu: curFight.wu,
       healer: heroes0.some(function (u) { return HEALERS.indexOf(u.defId) >= 0; }), runOver: !!DD.Run.state.over,
       left: timeout ? cs.units.filter(function (u) { return !u.dead; }).map(function (u) { return u.name + ' ' + u.hp + '/' + u.maxHp + (u.downed ? ' DOWN' : ''); }).join(', ') : '',
-    });
+    };
+    const outcome = recordFight(f);
+    recordAct4(f, outcome, cs, enc, lane, pos);
     if (outcome === 'stall') curRun.stalls++;
     curRun.lastStalled = outcome === 'stall';
+    curRun.rounds[act] = (curRun.rounds[act] || 0) + cs.round;
     // per-hero numbers from the combat stats (summons credited to their owner)
     cs.units.forEach(function (u) {
       const hid = heroOf(u);
@@ -455,10 +569,71 @@
       if (u.signature) { const kk = u.defId + ':' + u.signature.id; G.socketed[kk] = (G.socketed[kk] || 0) + 1; }
       if (u.basic) { const kk = u.defId + ':' + u.basic.id; G.socketed[kk] = (G.socketed[kk] || 0) + 1; }
     });
-    if (P.json === '1') records.push({ seed: curRun.seed, act: act, kind: kind, enc: encId, result: result, outcome: outcome, rounds: cs.round, lost: r2(lost), downs: curFight.downs, sigs: curFight.sigs, hype: curFight.hype, lvl: r1(lvl) });
+    if (P.json === '1') records.push({ seed: curRun.seed, act: act, kind: kind, enc: encId, lane: lane, pos: pos, result: result, outcome: outcome, rounds: cs.round, lost: r2(lost), downs: curFight.downs, sigs: curFight.sigs, hype: curFight.hype, lvl: r1(lvl) });
     curRun.fightLog.push(encId + (result === 'victory' ? '' : '!') + (timeout ? '(T)' : '') + ':' + cs.round);
     curFight = null;
   }
+
+  /**
+   * V3 tallies of one fight: a gauntlet door (per lane with its puzzle counters, per position), Svammiel (his
+   * phases, CAUGHT, Rulings, dice, falls, pencil, cheats), the cameos of every fight (start cameo, cheats, the budget)
+   * and an error line for a cameo memory outside the acts that may have one (the ship-dark check).
+   */
+  function recordAct4(f, outcome, cs, enc, lane, pos) {
+    const win = outcome === 'win';
+    function add(x) {
+      x.n++; if (win) x.wins++; if (outcome === 'stall') x.timeouts++;
+      x.rounds.push(f.round); x.lost.push(f.lost); x.start.push(f.start); x.lvl.push(f.lvl);
+      x.downs += f.downs; if (f.downs) x.withDowns++; if (f.round <= 2 && win) x.short++;
+    }
+    if (lane) {
+      const x = G.lanes[lane] || (G.lanes[lane] = row());
+      add(x);
+      const p = G.pos[pos || 0] || (G.pos[pos || 0] = row());
+      add(p);
+      if (pos === 1) inc(G.firstDoor, lane);
+      const eng = laneStats(lane, cs);
+      if (eng) {
+        x.engN++;
+        Object.keys(eng).forEach(function (k) { if (typeof eng[k] === 'number') inc(x.eng, k, eng[k]); });
+        if (lane === 'goats' && eng.bear === 'here') { x.bear++; if (win) x.bearWins++; if (eng.bearRound) x.bearRounds.push(eng.bearRound); }
+      }
+    }
+    if (enc.finale) {
+      const x = G.svam || (G.svam = row());
+      add(x);
+      const sv = cs.data && cs.data.svam;
+      if (sv) {
+        inc(x.phases, sv.phase || 1);
+        if (sv.caught) { x.caught++; if (win) x.caughtWins++; }
+        x.engN++;
+        Object.keys(sv.stats || {}).forEach(function (k) { if (typeof sv.stats[k] === 'number') inc(x.eng, k, sv.stats[k]); });
+      }
+    }
+    // cameos: every fight of a gauntlet act (doors and the finale); a cameo memory anywhere else but the act-3 boss is a leak
+    const cm = cs.data && cs.data.cameo;
+    const a4 = !!(lane || enc.finale);
+    if (a4) {
+      const c = G.cameo;
+      c.fights++;
+      c.cameos += (cs.stats && cs.stats.cameos) || 0;
+      c.cheats += (cs.stats && cs.stats.cheats) || 0;
+      if (cm && cm.started) c.starts++;
+      const k = lane || 'finale';
+      const b = c.byLane[k] || (c.byLane[k] = { n: 0, cheats: 0, cameos: 0, starts: 0 });
+      b.n++; b.cheats += (cs.stats && cs.stats.cheats) || 0; b.cameos += (cs.stats && cs.stats.cameos) || 0; if (cm && cm.started) b.starts++;
+    }
+    // the boss right before a gauntlet act may carry one (the twist, his shadow); with the gauntlet off, nobody may
+    const twistBoss = f.kind === 'boss' && f.act === FINAL - 1 && gauntletFinal();
+    if (cm) {
+      const perFight = (DD.Balance.cameo && DD.Balance.cameo.perFight) || 3;
+      if ((cm.used || 0) > perFight) { G.cameo.over++; G.errors.push('seed ' + f.seed + ' ' + f.encId + ': ' + cm.used + ' interjections (budget ' + perFight + ')'); }
+      if (!a4 && !twistBoss) { G.cameo.early++; G.errors.push('seed ' + f.seed + ' ' + f.encId + ' (act ' + f.act + '): a cameo memory outside the gauntlet and the boss before it'); }
+    }
+    if (twistBoss && win) G.a4.dmWins++;
+  }
+  /** True when the campaign's last act is a gauntlet (V3's act 4 with the knob flipped). */
+  function gauntletFinal() { return !!(DD.RunMap && DD.RunMap.isGauntlet && DD.RunMap.isGauntlet(FINAL)); }
 
   /**
    * Count one fight into the tallies. f: { seed, act, kind, encId, result ('victory' | 'defeat'), timeout (it hit the
@@ -500,7 +675,7 @@
       const hb = f.healer ? b.h : b.x;
       hb.n++; if (win) hb.wins++; if (outcome === 'stall') hb.timeouts++;
     }
-    if (outcome === 'loss' && f.kind !== 'boss' && !f.runOver) G.failed++;
+    if (outcome === 'loss' && f.kind !== 'boss' && f.kind !== 'miniboss' && !f.runOver) G.failed++;
     if (outcome === 'stall') {
       G.timeouts++;
       G.stalls.push({ seed: f.seed, act: f.act, kind: f.kind, enc: f.encId, round: f.round, as: f.result, left: f.left || '' });
@@ -511,8 +686,9 @@
 
   /**
    * Count one finished run. r: { seed, party: [ids], won, stalls (its stalled fights), endedOnStall, act, cleared,
-   * lastEnc (the last fight's encounter id), deaths, dead: [ids], goldEarned, gold }. Act clears count progress as the
-   * run went (a stall's call included); the run's win / loss leaves out a stalled run. Returns the run's outcome.
+   * startAct (the act it started in: 1, or start=N), lastEnc (the last fight's encounter id), deaths, dead: [ids],
+   * goldEarned, gold }. Act clears count progress as the run went (a stall's call included), from the act it started
+   * in; the run's win / loss leaves out a stalled run. Returns the run's outcome.
    */
   function finishRun(r) {
     const outcome = runOutcome(r.won, r.stalls || 0, r.endedOnStall);
@@ -524,11 +700,12 @@
       G.lossAt[(r.act || '?') + ''] = (G.lossAt[(r.act || '?') + ''] || 0) + 1;
       G.lossTo[r.lastEnc || '?'] = (G.lossTo[r.lastEnc || '?'] || 0) + 1;
     }
-    for (let a = 1; a <= 3; a++) if ((r.cleared || 0) >= a) G.actClear[a]++;
+    for (let a = r.startAct || 1; a <= FINAL; a++) if ((r.cleared || 0) >= a) G.actClear[a]++;
     G.deaths += r.deaths || 0;
     (r.dead || []).forEach(function (id) { H(id).deaths++; });
     G.gold.earned += r.goldEarned || 0;
     G.gold.endGold.push(r.gold || 0);
+    if (outcome === 'win') G.gold.endGoldWon.push(r.gold || 0);
     return outcome;
   }
 
@@ -539,7 +716,10 @@
         if (!DD.Run.inCombat()) { G.errors.push('pending combat but not in combat (' + JSON.stringify(p.data).slice(0, 100) + ')'); DD.Run.resume(); if (!DD.Run.inCombat()) break; }
         fight();
       } else if (p.type === 'rewards') {
-        if (p.data.actClear) curRun.cleared = p.data.actClear.act;
+        if (p.data.actClear) {
+          curRun.cleared = p.data.actClear.act;
+          if (p.data.actClear.twist) G.a4.twist++;
+        }
         if (p.data.failed) G.gold.fined += p.data.goldLost || 0;
         takeRewards(r, p);
         DD.Run.next();
@@ -564,22 +744,37 @@
     }
   }
 
+  /** Every registered hero but the test fixtures (the random parties draw 4 of them). */
+  function allHeroes() { return Object.keys(DD.defs.heroes).filter(function (id) { return !/^test_/.test(id); }); }
+
   function playRun(seed) {
     const r = DD.RNG('isim:' + seed);
-    const all = Object.keys(DD.defs.heroes).filter(function (id) { return !/^test_/.test(id); });
+    const all = allHeroes();
     const party = P.party ? String(P.party).split(',') : r.shuffle(all.slice()).slice(0, 4);
     DD.Meta.reset(false);
     DD.Meta.data.unlocked = all.slice();
     DD.Run.newRun(party, DIFF, 'isim' + seed);
-    curRun = { seed: seed, party: party, act: 1, cleared: 0, fightLog: [], recruits: 0, stalls: 0, lastStalled: false };
+    curRun = { seed: seed, party: party, act: 1, startAct: 1, cleared: 0, fightLog: [], recruits: 0, stalls: 0, lastStalled: false, rounds: {}, deaths4: null };
+    // start=N: fast-forward to act N (a gauntlet act defaults to level 5 and 450 gold, plan §7.2)
+    if (START > 1) {
+      const gaunt = DD.RunMap.isGauntlet && DD.RunMap.isGauntlet(Math.min(START, FINAL));
+      const opts = { gear: 'auto', noShow: true };
+      if (LEVEL || gaunt) opts.level = LEVEL || 5;
+      if (GOLD !== null || gaunt) opts.gold = GOLD !== null ? GOLD : 450;
+      DD.Run.startAtAct(START, opts);
+      curRun.startAct = S().act;
+      curRun.cleared = S().act - 1;
+    }
     party.forEach(function (id) { H(id).runs++; });
     G.runs++;
-    G.actEnter[1]++;
-    let lastAct = 1;
-    for (let steps = 0; S() && !S().over && steps < 200; steps++) {
+    let lastAct = S().act;
+    G.actEnter[lastAct]++;
+    function entered(a) { if (DD.RunMap.isGauntlet && DD.RunMap.isGauntlet(a) && inGauntlet()) { G.a4.runs++; curRun.deaths4 = S().stats.deaths || 0; } }
+    entered(lastAct);
+    for (let steps = 0; S() && !S().over && steps < 250; steps++) {
       if (!resolveLevels(r)) G.errors.push('seed ' + seed + ': level choices never resolved');
       if (S().act > STOP) break;
-      if (S().act !== lastAct) { lastAct = S().act; G.actEnter[lastAct]++; }
+      if (S().act !== lastAct) { lastAct = S().act; G.actEnter[lastAct]++; entered(lastAct); }
       curRun.act = S().act;
       const avail = DD.Run.availableNodes();
       if (!avail.length) { G.errors.push('seed ' + seed + ': stuck on act ' + S().act + ' node ' + S().nodeId); break; }
@@ -588,17 +783,22 @@
     }
     const s = S();
     const cleared = s ? (s.stats.actsCleared || 0) : 0;
-    const won = !!s && (s.over === 'victory' || (STOP < 3 && cleared >= STOP));
+    const won = !!s && (s.over === 'victory' || (STOP < FINAL && cleared >= STOP));
     const last = curRun.fightLog[curRun.fightLog.length - 1] || '?';
+    // V3: the gauntlet's order (a full one), act-4 deaths and rounds, run length
+    const order = s && Array.isArray(s.flags.gauntlet) ? s.flags.gauntlet.slice() : [];
+    if (s && s.map && s.map.lanes && order.length === s.map.lanes.length && order.length) inc(G.orders, order.join('>'));
+    if (curRun.deaths4 !== null) { G.a4.deaths.push((s.stats.deaths || 0) - curRun.deaths4); G.a4.rounds.push(curRun.rounds[s.act] || 0); }
+    G.runRounds.push(Object.keys(curRun.rounds).reduce(function (a, k) { return a + curRun.rounds[k]; }, 0));
     const outcome = finishRun({
       seed: seed, party: party, won: won, stalls: curRun.stalls, endedOnStall: !won && curRun.lastStalled && !!s && !!s.over,
-      act: s ? s.act : '?', cleared: cleared, lastEnc: last.split(/[!:(]/)[0], deaths: s ? s.stats.deaths || 0 : 0,
+      act: s ? s.act : '?', cleared: cleared, startAct: curRun.startAct, lastEnc: last.split(/[!:(]/)[0], deaths: s ? s.stats.deaths || 0 : 0,
       dead: s ? s.party.filter(function (h) { return h.dead; }).map(function (h) { return h.id; }) : [],
       goldEarned: s ? s.stats.goldEarned || 0 : 0, gold: s ? s.gold : 0,
     });
     const label = outcome === 'stall' ? 'STALL (' + (won ? 'won' : 'lost act ' + s.act) + ' on a capped fight\'s call)' : won ? 'WIN' : 'LOSS act ' + s.act;
     lines.push('seed ' + seed + ' [' + party.join(',') + '] ' + label + ' · levels ' + s.party.map(function (h) { return h.level; }).join('/') +
-      ' · deaths ' + (s.stats.deaths || 0) + ' · gold ' + s.gold + ' (earned ' + (s.stats.goldEarned || 0) + ')' + ' · ' + curRun.fightLog.join(' '));
+      ' · deaths ' + (s.stats.deaths || 0) + ' · gold ' + s.gold + ' (earned ' + (s.stats.goldEarned || 0) + ')' + (order.length ? ' · doors ' + order.join('>') : '') + ' · ' + curRun.fightLog.join(' '));
   }
 
   function kindLine(label, x) {
@@ -616,58 +816,121 @@
 
   /** "w/n" of the decided fights, plus "(+k stalled)" when some hit the round cap. */
   function decided(x) { return x.wins + '/' + (x.n - (x.timeouts || 0)) + (x.timeouts ? ' (+' + x.timeouts + ' stalled)' : ''); }
+  /** One gauntlet row: n, win % (decided), rounds, party HP lost, downs, ≤ 2-round wins, timeouts, level, start HP. */
+  function gauntletCells(x) {
+    return 'n ' + String(x.n).padStart(3) + ' · win ' + winPct(x.wins, x.n, x.timeouts).padStart(4) + ' (' + decided(x) + ', CI ' + ci(x.wins, x.n - x.timeouts) + ')' +
+      ' · rounds ' + r1(avg(x.rounds)) + ' · HP lost ' + Math.round(100 * avg(x.lost)) + '% · downs ' + r2(x.downs / Math.max(1, x.n)) +
+      ' (' + pct(x.withDowns, x.n) + ') · ≤2-round wins ' + pct(x.short, x.n) + ' · timeouts ' + x.timeouts +
+      ' · L' + r1(avg(x.lvl)) + ' · start HP ' + Math.round(100 * avg(x.start)) + '%';
+  }
+
+  /** The V3 report sections: act 4 (the gauntlet per lane and by position, the order, Svammiel, cameos, deaths, length). */
+  function act4Lines() {
+    const lanes = Object.keys(G.lanes);
+    if (!lanes.length && !G.svam && !G.a4.runs && !G.cameo.fights) return;
+    out.push('\n== act 4 (' + FINAL + ' acts): entered ' + G.actEnter[FINAL] + ' · cleared ' + G.actClear[FINAL] + ' (' + pct(G.actClear[FINAL], G.actEnter[FINAL]) + ', CI ' + ci(G.actClear[FINAL], G.actEnter[FINAL]) + ')' +
+      (G.a4.dmWins ? ' · the twist after ' + G.a4.twist + ' of ' + G.a4.dmWins + ' act-' + (FINAL - 1) + ' boss wins' : '') +
+      ' · permanent deaths per act-4 run ' + r2(avg(G.a4.deaths)) + ' (n ' + G.a4.deaths.length + ')' +
+      ' · rounds of fighting per act-4 run ' + r1(avg(G.a4.rounds)) + ' (max ' + (G.a4.rounds.length ? Math.max.apply(null, G.a4.rounds) : '-') + ')');
+    let all = row();
+    lanes.forEach(function (k) { const x = G.lanes[k]; ['n', 'wins', 'timeouts', 'downs', 'withDowns', 'short'].forEach(function (f) { all[f] += x[f]; }); ['rounds', 'lost', 'start', 'lvl'].forEach(function (f) { all[f] = all[f].concat(x[f]); }); });
+    const allPct = (all.n - all.timeouts) ? all.wins / (all.n - all.timeouts) : 0;
+    out.push('== the gauntlet by lane (doors: n, win % of decided fights, rounds, party HP lost, downs/fight (fights with downs), ≤2-round wins, timeouts, avg level, party HP at the start)');
+    out.push('  ' + 'all doors'.padEnd(10) + ' ' + gauntletCells(all));
+    lanes.sort().forEach(function (k) {
+      const x = G.lanes[k];
+      out.push('  ' + k.padEnd(10) + ' ' + gauntletCells(x));
+      const spec = LANE_STATS[k];
+      const n = Math.max(1, x.engN);
+      const cols = spec ? spec.cols : Object.keys(x.eng).map(function (f) { return [f, f]; });
+      if (x.engN) out.push(''.padEnd(13) + 'per fight: ' + cols.map(function (c) { return c[1] + ' ' + r2((x.eng[c[0]] || 0) / n); }).join(' · ') +
+        (k === 'goats' ? ' · the bear arrived in ' + x.bear + '/' + x.n + ' fights (' + x.bearWins + '/' + x.wins + ' wins), round ' + r1(avg(x.bearRounds)) : ''));
+      else out.push(''.padEnd(13) + '(no puzzle counters: ' + (spec ? 'DD.' + spec.mod + '.stats missing' : 'unknown lane') + ')');
+    });
+    out.push('== the gauntlet by position (1..L; the plan: no position worse than −6 points against all doors, ' + Math.round(100 * allPct) + '%)');
+    Object.keys(G.pos).map(Number).sort(function (a, b) { return a - b; }).forEach(function (p) {
+      const x = G.pos[p];
+      const w = (x.n - x.timeouts) ? x.wins / (x.n - x.timeouts) : 0;
+      out.push('  ' + ('door ' + p).padEnd(10) + ' ' + gauntletCells(x) + ' · ' + (w >= allPct ? '+' : '') + Math.round(100 * (w - allPct)) + ' points');
+    });
+    const orders = Object.keys(G.orders).sort(function (a, b) { return G.orders[b] - G.orders[a]; });
+    out.push('== order (' + ORDER + '): first door ' + JSON.stringify(G.firstDoor) + ' · full gauntlets ' + orders.reduce(function (a, k) { return a + G.orders[k]; }, 0) +
+      ' in ' + orders.length + ' orders' + (orders.length ? ': ' + orders.slice(0, 8).map(function (k) { return k + ' ×' + G.orders[k]; }).join(' · ') : ''));
+    if (G.svam) {
+      const x = G.svam, n = Math.max(1, x.engN), e = x.eng;
+      const ph = Object.keys(x.phases).sort().map(function (k) { return 'phase ' + k + ' ' + pct(x.phases[k], x.engN); }).join(', ');
+      out.push('== Svammiel (the finale): ' + gauntletCells(x));
+      out.push(''.padEnd(13) + 'ended in ' + ph + ' · CAUGHT ' + pct(x.caught, x.engN) + ' of fights, ' + pct(x.caughtWins, x.wins) + ' of wins' +
+        ' · per fight: Rulings ' + r2((e.rulings || 0) / n) + ' · Rigged Dice ' + r2((e.rigged || 0) / n) + ' · Master Dice ' + r2((e.master || 0) / n) +
+        ' · falls ' + r2((e.falls || 0) / n) + ' · pencil HP ' + r1((e.pencil || 0) / n) + ' · round cheats ' + r2((e.cheats || 0) / n) + ' · snap cheats ' + r2((e.snaps || 0) / n) +
+        ' · panels dropped ' + r2((e.drops || 0) / n) + ' · imps ' + r2((e.imps || 0) / n));
+      const lv = G.levelsAtBoss[FINAL] || [];
+      out.push(''.padEnd(13) + 'gold at Svammiel ' + r1(avg(G.gold.finalBossGold)) + ' (n ' + G.gold.finalBossGold.length + ') · party level at Svammiel ' + r1(avg(lv)));
+    }
+    const c = G.cameo;
+    out.push('== cameos (act-4 fights): ' + c.fights + ' fights · start cameo in ' + c.starts + ' (' + pct(c.starts, c.fights) + ') · cameos/fight ' + r2(c.cameos / Math.max(1, c.fights)) +
+      ' · cheats/fight ' + r2(c.cheats / Math.max(1, c.fights)) + ' · over budget ' + c.over + ' · cameo memory before act 4 ' + c.early +
+      (Object.keys(c.byLane).length ? ' · by fight: ' + Object.keys(c.byLane).sort().map(function (k) { const b = c.byLane[k]; return k + ' cheats ' + r2(b.cheats / b.n) + ', cameos ' + r2(b.cameos / b.n); }).join(' · ') : ''));
+  }
 
   /** The report lines (also DD_SIM.reportText). Win rates leave stalls out of both sides (audit-4). */
   function reportLines(overrides) {
     out.length = 0;
     const runsDecided = G.runs - G.stalledRuns;
-    const ci = wilson(G.wins, runsDecided);
-    out.push('runs ' + G.runs + ' · difficulty ' + DIFF + ' · route ' + ROUTE + (STOP < 3 ? ' · stop after act ' + STOP : '') +
-      ' · wins ' + G.wins + ' (' + pct(G.wins, runsDecided) + ', 95% CI ' + Math.round(100 * ci[0]) + '–' + Math.round(100 * ci[1]) + '%)' +
+    const cw = wilson(G.wins, runsDecided);
+    const nHeroes = allHeroes().length;
+    out.push('runs ' + G.runs + ' · difficulty ' + DIFF + ' · route ' + ROUTE + ' · ' + FINAL + ' acts' + (START > 1 ? ' · start act ' + START + (LEVEL ? ' level ' + LEVEL : '') + (GOLD !== null ? ' gold ' + GOLD : '') : '') +
+      (STOP < FINAL ? ' · stop after act ' + STOP : '') + ' · parties ' + (P.party ? P.party : 'random 4 of all ' + nHeroes + ' heroes') +
+      (Object.keys(G.lanes).length ? ' · door order ' + ORDER : '') + (DD.Balance.cameo && DD.Balance.cameo.off ? ' · cameos off' : '') +
+      ' · wins ' + G.wins + ' (' + pct(G.wins, runsDecided) + ', 95% CI ' + Math.round(100 * cw[0]) + '–' + Math.round(100 * cw[1]) + '%)' +
+      (gauntletFinal() && START < FINAL && STOP >= FINAL - 1 ? ' · ' + (FINAL - 1) + '-act equivalent (act ' + (FINAL - 1) + ' cleared) ' + G.actClear[FINAL - 1] +
+        ' (' + pct(G.actClear[FINAL - 1], G.runs) + ', CI ' + ci(G.actClear[FINAL - 1], G.runs) + ')' : '') +
       ' · stalled runs ' + G.stalledRuns + ' (in no win rate)' +
       ' · fights ' + G.fights + ' · timeouts ' + G.timeouts + ' (cap ' + MAXR + ', as ' + ON_TIMEOUT + ': stalls, in no win rate) · avg fight ' + r1(G.fightMs / Math.max(1, G.fights)) + ' ms');
     out.push('overrides: ' + (overrides.length ? overrides.join(' ') : 'none'));
-    for (let a = 1; a <= 3; a++) out.push('act ' + a + ': entered ' + G.actEnter[a] + ', cleared ' + G.actClear[a] + ' (' + pct(G.actClear[a], G.actEnter[a]) + ')');
+    for (let a = 1; a <= FINAL; a++) if (G.actEnter[a] || a >= START) out.push('act ' + a + ': entered ' + G.actEnter[a] + ', cleared ' + G.actClear[a] + ' (' + pct(G.actClear[a], G.actEnter[a]) + ')');
     out.push('losses by act: ' + JSON.stringify(G.lossAt) + ' · lost to: ' + JSON.stringify(G.lossTo) + ' · objectives failed: ' + G.failed);
-    [1, 2, 3].forEach(function (a) {
-      const l = G.levelsAtBoss[a];
+    for (let a = 1; a <= FINAL; a++) {
+      const l = G.levelsAtBoss[a] || [];
+      if (!l.length && a < START) continue;
       out.push('party level at act ' + a + ' boss: avg ' + (l.length ? r1(avg(l)) : '-') + ' (n ' + l.length + ', min ' + (l.length ? Math.min.apply(null, l) : '-') + ', max ' + (l.length ? Math.max.apply(null, l) : '-') + ')');
-    });
+    }
     out.push('boss fights: ' + Object.keys(G.bossFights).map(function (k) { return k + ' ' + decided(G.bossFights[k]); }).join(' · '));
     out.push('boss fights by a starting healer (' + HEALERS.join('/') + ') in the party · party HP at the start: ' + Object.keys(G.bossFights).map(function (k) {
       const b = G.bossFights[k];
       return k + ' with ' + decided(b.h) + ' (' + winPct(b.h.wins, b.h.n, b.h.timeouts) + '), without ' + decided(b.x) + ' (' + winPct(b.x.wins, b.x.n, b.x.timeouts) + ') · start HP ' + Math.round(100 * b.hp / Math.max(1, b.n)) + '%';
     }).join(' · '));
-    out.push('\n== by fight kind (party HP lost = start HP − end HP over max, downed = 0; gross = HP damage taken over max)');
-    ['normal', 'elite', 'boss'].forEach(function (k) { if (G.kinds[k]) out.push(kindLine(k, G.kinds[k])); });
-    [1, 2, 3].forEach(function (a) { ['normal', 'elite', 'boss'].forEach(function (k) { const x = G.kinds['a' + a + ' ' + k]; if (x) out.push(kindLine('a' + a + ' ' + k, x)); }); });
+    act4Lines();
+    out.push('\n== by fight kind (party HP lost = start HP − end HP over max, downed = 0; gross = HP damage taken over max; mini = a gauntlet door)');
+    KINDS.forEach(function (k) { if (G.kinds[k]) out.push(kindLine(kindLabel(k), G.kinds[k])); });
+    for (let a = 1; a <= FINAL; a++) KINDS.forEach(function (k) { const x = G.kinds['a' + a + ' ' + k]; if (x) out.push(kindLine('a' + a + ' ' + kindLabel(k), x)); });
     out.push('== Hype gained per fight by source:');
-    ['normal', 'elite', 'boss'].forEach(function (k) {
+    KINDS.forEach(function (k) {
       const n = G.kinds[k] ? G.kinds[k].n : 0;
       if (!n) return;
       const parts = Object.keys(G.hypeBy).filter(function (x) { return x.indexOf(k + ':') === 0; })
         .sort(function (a, b) { return G.hypeBy[b] - G.hypeBy[a]; })
         .map(function (x) { return x.slice(k.length + 1) + ' ' + r1(G.hypeBy[x] / n); });
-      out.push('  ' + k.padEnd(7) + parts.join(' · '));
+      out.push('  ' + kindLabel(k).padEnd(7) + parts.join(' · '));
     });
     out.push('\n== encounters (n, win%, avg rounds, ≤2-round wins, timeouts, avg party HP lost, avg level, downs/fight, fights with downs, signatures/fight)');
     Object.keys(G.enc).sort(function (a, b) { const x = G.enc[a], y = G.enc[b]; return x.act - y.act || (x.kind < y.kind ? -1 : x.kind > y.kind ? 1 : 0) || (a < b ? -1 : 1); }).forEach(function (k) {
       const e = G.enc[k];
       const flag = (e.wins < e.n - e.timeouts ? ' LOSSES' : '') + (e.timeouts ? ' TIMEOUTS' : '') + (e.short / e.n > 0.1 ? ' SHORT' : '') + (e.rounds / e.n > 12 ? ' LONG' : '');
-      out.push('  a' + e.act + ' ' + e.kind.padEnd(6) + ' ' + k.padEnd(28) + ' n ' + String(e.n).padStart(3) + ' · win ' + winPct(e.wins, e.n, e.timeouts).padStart(4) + ' · ' + r1(e.rounds / e.n) + ' rds (max ' + e.maxRounds + ') · short ' + pct(e.short, e.n) +
+      out.push('  a' + e.act + ' ' + kindLabel(e.kind).padEnd(6) + ' ' + k.padEnd(28) + ' n ' + String(e.n).padStart(3) + ' · win ' + winPct(e.wins, e.n, e.timeouts).padStart(4) + ' · ' + r1(e.rounds / e.n) + ' rds (max ' + e.maxRounds + ') · short ' + pct(e.short, e.n) +
         ' · to ' + e.timeouts + ' · HP lost ' + Math.round(100 * e.hpLost / e.n) + '% · L' + r1(e.lvl / e.n) + ' · downs ' + r1(e.downs / e.n) + ' (' + pct(e.withDowns, e.n) + ') · sig ' + r2(e.sigs / e.n) + ' · hype ' + Math.round(e.hypeMax / e.n) + flag);
     });
     let totalDowns = 0;
     Object.keys(G.downs).forEach(function (k) { totalDowns += G.downs[k]; });
-    out.push('\n== hero downs by cause (top 30, share of ' + totalDowns + ') · by act ' + JSON.stringify(G.downsByAct.slice(1)) + ' · permanent deaths ' + G.deaths);
+    out.push('\n== hero downs by cause (top 30, share of ' + totalDowns + ') · by act ' + JSON.stringify(G.downsByAct.slice(1, FINAL + 1)) + ' · permanent deaths ' + G.deaths);
     Object.keys(G.downs).sort(function (a, b) { return G.downs[b] - G.downs[a]; }).slice(0, 30).forEach(function (k) { out.push('  ' + String(G.downs[k]).padStart(4) + ' ' + pct(G.downs[k], totalDowns).padStart(4) + '  ' + k); });
-    ['normal', 'elite', 'boss'].forEach(function (kind) {
+    KINDS.forEach(function (kind) {
       const n = G.kinds[kind] ? G.kinds[kind].n : 0;
       if (!n) return;
       const ks = Object.keys(G.dmgBy).filter(function (k) { return k.indexOf(kind + ' · ') === 0; }).sort(function (a, b) { return G.dmgBy[b] - G.dmgBy[a]; });
       let tot = 0;
       ks.forEach(function (k) { tot += G.dmgBy[k]; });
-      out.push('== HP damage to heroes in ' + kind + ' fights (per fight; total ' + r1(tot / n) + '): ' +
+      out.push('== HP damage to heroes in ' + kindLabel(kind) + ' fights (per fight; total ' + r1(tot / n) + '): ' +
         ks.slice(0, 14).map(function (k) { return k.slice(kind.length + 3) + ' ' + r1(G.dmgBy[k] / n); }).join(' · '));
     });
     const shares = Object.keys(G.heroes).map(function (k) { return G.heroes[k].runs ? G.heroes[k].wins / G.heroes[k].runs : 0; }).sort(function (a, b) { return a - b; });
@@ -692,11 +955,13 @@
       }).join(' · '));
     });
     out.push('\n== consumables used: ' + JSON.stringify(G.cons));
-    out.push('== rewards taken: ' + JSON.stringify(G.rewardsTaken) + ' · level choices: ' + JSON.stringify(G.levelChoices));
+    out.push('== rewards taken: ' + JSON.stringify(G.rewardsTaken) + ' · level choices: ' + JSON.stringify(G.levelChoices) + ' · skill replacements that kept a shapeshift skill ' + G.shapeshiftKept);
     const gg = G.gold, n = Math.max(1, G.runs);
     out.push('== gold per run: earned ' + r1(gg.earned / n) + ' · spent in shops ' + r1(gg.shopSpent / n) + ' · shop visits ' + r1(gg.shopVisits / n) +
       ' (avg gold on entry ' + r1(gg.shopGoldIn / Math.max(1, gg.shopVisits)) + ') · event net ' + r1(gg.eventDelta / n) + ' · fined ' + r1(gg.fined / n) +
-      ' · gold at the final boss ' + r1(avg(gg.finalBossGold)) + ' (n ' + gg.finalBossGold.length + ') · gold left at the end ' + r1(avg(gg.endGold)) + ' · bought ' + JSON.stringify(gg.bought));
+      ' · gold at the final boss ' + r1(avg(gg.finalBossGold)) + ' (n ' + gg.finalBossGold.length + ') · gold left at the end ' + r1(avg(gg.endGold)) +
+      ' (won runs ' + r1(avg(gg.endGoldWon)) + ', n ' + gg.endGoldWon.length + ') · bought ' + JSON.stringify(gg.bought));
+    out.push('== run length: rounds of fighting per run ' + r1(avg(G.runRounds)) + ' (max ' + (G.runRounds.length ? Math.max.apply(null, G.runRounds) : '-') + ')');
     const errs = G.errors.slice(0, 15);
     out.push('\n== errors (' + G.errors.length + '): ' + errs.join(' | '));
     // audit-4: every fight that hit the round cap, for the gate (always printed; dump=1 adds the logs below)
@@ -718,10 +983,12 @@
     if (P.json === '1') document.getElementById('json').textContent = JSON.stringify(records);
   }
 
-  // the tallies and the report, for the tools suite (tests/docs_tests.js): reset() starts a fresh tally
+  // the tallies and the report, for the tools suite (tests/docs_tests.js) and the integration suite: reset() starts a
+  // fresh tally; replaceIdx(runHero) is the socket a new skill would replace (never a 'shapeshift' one, -1 = skip it)
   window.DD_SIM = {
     fightOutcome: fightOutcome, runOutcome: runOutcome, recordFight: recordFight, finishRun: finishRun,
-    reset: function () { G = newTally(); return G; }, tally: function () { return G; },
+    replaceIdx: replaceIdx, isShapeshift: isShapeshift, LANE_STATS: LANE_STATS,
+    reset: function () { FINAL = DD.finalAct(); G = newTally(); return G; }, tally: function () { return G; },
     startRun: function (party) { G.runs++; G.actEnter[1]++; (party || []).forEach(function (id) { H(id).runs++; }); },
     reportText: function (overrides) { return reportLines(overrides || []).join('\n'); },
   };
@@ -733,6 +1000,9 @@
     DD.Run.useUi = false;
     if (DD.UI && DD.UI.settings) DD.UI.settings().unlockAll = true;
     const overrides = applyOverrides();
+    FINAL = DD.finalAct();
+    STOP = +(P.stop || FINAL);
+    G = newTally();
     patch();
     const warn = DD.warn;
     DD.warn = function (msg) { const k = String(msg).replace(/\d+/g, '#').slice(0, 160); G.warns[k] = (G.warns[k] || 0) + 1; return warn.apply(this, arguments); };

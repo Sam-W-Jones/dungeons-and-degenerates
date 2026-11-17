@@ -3,6 +3,8 @@
  * 2 summons, 11 enemies covering every AI style (incl. a custom-planner boss with a WIND-UP and a phase change),
  * encounters for every act × kind, 2 consumables and 4 items (incl. a cursed one). v2: heroes and enemies carry
  * initiative modifiers (stats.init / init; an enemy without one uses its tier default).
+ * V3: act-4 test doors (test_a4_lane_a..d) and a test floor boss (test_a4_finale), a test act-4 event and a test cameo
+ * actor, the Heckler (test_heckler: start / round / heroDowned / victory triggers, three cheats), with its line pools.
  * Loaded by the test harness and by ?fixtures=1 in the game. Registration only (no DD_TEST references).
  */
 (function () {
@@ -576,6 +578,131 @@
     map: { theme: 'hellscape', w: 9, h: 9, features: [], density: 1 },
     enemies: [{ id: 'test_grunt', n: 2 }], objective: { type: 'survive', rounds: 3 },
     reinforcements: [{ round: 2, enemies: [{ id: 'test_minion', n: 2 }], edge: 'E' }] });
+
+  // ---- V3 (act 4): a gauntlet of test doors, a test floor boss, a test act-4 event and a test cameo actor --------
+  // Four doors (lanes test_a..test_d; their gauntlet.order sorts them after any real lane) and a finale, all boss fights
+  // with weight 0. With the five real lanes loaded only one test lane fits under DD.RunMap's cap of 6 (plan §2.2):
+  // suites that need a known lane set run isolated or register their own. Each door names its cameo actor
+  // (`cameo.actor`), so Svammiel's triggers stay out of them and the Heckler stays out of every real fight.
+  function isTestFight(s) { return !!(s && s.encounter && /^test_/.test(s.encounter.id)); }
+  enemy({ id: 'test_heckler_imp', name: 'Test Heckler', act: 4, tier: 'minion', hp: 18, mov: 3, init: 1, pronoun: 'he', tags: ['demon'],
+    sprite: spr('humanoid', { skin: '#c04060', cloth: '#2a1a2a', eye: '#ffe14d' }, { build: 'tiny', outfit: 'robe', head: { horns: 'demon' }, mainhand: 'staff' }),
+    skills: ['test_nibble'], ai: 'default', xp: 2, gold: [1, 2],
+    barks: { spawn: ['Boo! Booooo!'], attack: ['Heckle THIS!'], hurt: ['Rude!'], death: ['I\'ll be in the comments...'] },
+    desc: 'The test suite\'s own critic. Reviews every pull request with a foam finger.' });
+  // E1: no initiative entry of its own while its owner (DD.Act.spawn(id, x, y, { owner })) lives
+  enemy({ id: 'test_creeper', name: 'Test Creeper', act: 4, tier: 'minion', hp: 18, mov: 3, init: 1, actsWithOwner: true, tags: ['plant'],
+    sprite: spr('blob', { skin: '#3a7a2a', cloth: '#2a5a1a' }, { scale: 0.7, shape: { wobble: 1 } }),
+    skills: ['test_nibble'], ai: 'default', xp: 1, gold: [0, 1], desc: 'A test vine. It acts right after whoever planted it.' });
+  function a4(def) {
+    return DD.registerEncounter(Object.assign({ act: 4, kind: 'boss', weight: 0, icon: '🧪', intro: 'A test door creaks open under the table.',
+      map: { theme: 'hellscape', w: 10, h: 9, features: [], density: 1 }, reward: { goldMult: 0.9, itemRarity: 'rare' } }, def));
+  }
+  a4({ id: 'test_a4_lane_a', name: 'The Test Door of Doom', shortName: 'Test Door A', gauntlet: { lane: 'test_a', order: 91, hint: 'A test door. No cheat.' },
+    enemies: [{ id: 'test_boss', n: 1 }, { id: 'test_minion', n: 1 }], objective: { type: 'boss' },
+    cameo: { actor: 'test_heckler', start: 'test_heckle_cameo', cheat: null } });
+  a4({ id: 'test_a4_lane_b', name: 'The Test Door of Flakiness', shortName: 'Test Door B', gauntlet: { lane: 'test_b', order: 92, hint: 'Heroes take 1 more damage.' },
+    enemies: [{ id: 'test_boss', n: 1 }, { id: 'test_minion', n: 1 }], objective: { type: 'boss' },
+    cameo: { actor: 'test_heckler', start: 'test_heckle_cameo', cheat: 'test_cheat_rule' } });
+  a4({ id: 'test_a4_lane_c', name: 'The Test Brute Brigade', shortName: 'The Test Brute Brigade', gauntlet: { lane: 'test_c', order: 93, hint: 'A squad. Mind the crate.' },
+    enemies: [{ id: 'test_boss', n: 1 }, { id: 'test_brute', n: 1 }], objective: { type: 'boss', bossIds: ['test_boss', 'test_brute'], flavor: 'Two bosses walk into a bar.' },
+    cameo: { actor: 'test_heckler', start: 'test_heckle_cameo', cheat: 'test_cheat_crate' } });
+  a4({ id: 'test_a4_lane_d', name: 'The Test Door of Silence', shortName: 'Test Door D', gauntlet: { lane: 'test_d', order: 94, hint: 'One skill is muted.' },
+    enemies: [{ id: 'test_boss', n: 1 }], objective: { type: 'boss' }, banner: false,
+    cameo: { actor: 'test_heckler', start: 'test_heckle_cameo', cheat: 'test_cheat_mute', interjections: false } });
+  a4({ id: 'test_a4_finale', name: 'The Test Floor', shortName: 'The Test Floor', finale: true, icon: '🤡', intro: 'The Heckler is IN the building.',
+    enemies: [{ id: 'test_boss', n: 1 }, { id: 'test_heckler_imp', n: 1 }], objective: { type: 'boss' },
+    cameo: { actor: 'test_heckler', start: 'test_heckle_cameo', cheat: null }, reward: { goldMult: 0, itemRarity: null } });
+  DD.registerEvent({ id: 'test_a4_event', acts: [4], weight: 1, unique: true, icon: '🧪', title: 'A Sticky Note Under the Table',
+    text: function () { return 'A sticky note under the table reads "TODO: write act 4". Somebody already did. It is still sticky.'; },
+    choices: [
+      { label: 'Peel it off.', hint: 'Gain 5 gold.', resolve: function (api) { api.gold(5); return 'It was stuck to 5 gold. Probably a coincidence.'; } },
+      { label: 'Leave it.', resolve: function () { return 'Some TODOs are load-bearing.'; } },
+    ] });
+
+  /** The first damage skill (L.dmg > 0, not the basic, not the signature) of the first hero that has one: the mute's pick. */
+  function muteTarget(s) {
+    const heroes = s.units.filter(function (u) { return u.kind === 'hero' && !u.dead; });
+    for (let i = 0; i < heroes.length; i++) {
+      const sl = heroes[i].skills.filter(function (x) { const d = DD.getSkill(x.id); return d && (DD.skillLevel(d, x.level || 1).dmg || 0) > 0; })[0];
+      if (sl) return { unitId: heroes[i].id, skillId: sl.id, hero: heroes[i].name, skill: DD.getSkill(sl.id).name };
+    }
+    return null;
+  }
+  DD.registerCameo({ id: 'test_heckler', name: 'The Heckler', title: 'Test Critic', icon: '🤡', color: '#c04080', enemy: 'test_heckler_imp',
+    roastPrefix: 'test_heckle_hero_', comebackPrefix: 'test_heckle_back_', linePrefix: 'test_heckle_',
+    // a situation only a test sets up (run.flags.testHeckleSituation), so the roast order stays predictable elsewhere
+    situation: function (state, run, used) {
+      return run && run.flags && run.flags.testHeckleSituation && used.indexOf('test_heckle_sit_flag') < 0
+        ? { key: 'test_heckle_sit_flag', vars: { name: 'Bob from Accounting' } } : null;
+    },
+    triggers: [
+      { on: 'start', act: 4, style: 'swoop', when: isTestFight },
+      { on: 'round', act: 4, from: 2, key: 'test_heckle_round', style: 'bubble', when: isTestFight },
+      { on: 'heroDowned', act: 4, key: 'test_heckle_down', style: 'bubble', when: isTestFight },
+      { on: 'victory', act: 4, style: 'quip', when: isTestFight,
+        keyOf: function (s) { const g = s.encounter.gauntlet; return g ? 'test_heckle_win_' + g.lane : 'test_heckle_win'; } },
+    ],
+    cheats: {
+      // a rule that changes damage, honest for every estimate: a fight rule mirrors itself with estimateDealt (the
+      // attacker's sources include state.rules; estimateTaken only reads the target's own sources)
+      test_cheat_rule: { id: 'test_cheat_rule', name: 'Rigged Tests', icon: '🧪', rounds: -1,
+        desc: 'Heroes take 1 more damage from every hit this fight.',
+        hooks: {
+          modifyIncomingDamage: function (d) { if (d.target && d.target.side === 'hero') d.flat += 1; },
+          estimateDealt: function (e) { if (e.target && e.target.side === 'hero') e.flat += 1; },
+        } },
+      // a one-off effect through DD.Act whose desc apply fills (it draws its tile from the combat RNG: the only place a
+      // cameo may), and a `when` that skips it on a board with no room
+      test_cheat_crate: { id: 'test_cheat_crate', name: 'Mystery Box', icon: '📦', rounds: 2,
+        desc: 'A crate lands on <tile>.',
+        when: function (s) { return DD.Grid.allTiles().some(function (t) { return DD.Grid.isFree(t.x, t.y) && !t.zone && !t.obj; }); },
+        apply: function (s, ctx) {
+          const free = DD.Grid.allTiles().filter(function (t) { return DD.Grid.isFree(t.x, t.y) && !t.zone && !t.obj && !DD.Grid.isDrop(t.x, t.y); });
+          if (!free.length) return false;
+          const t = free[s.rng.int(0, free.length - 1)];
+          DD.Act.placeObject(t.x, t.y, 'crate');
+          s.data.testCrate = { x: t.x, y: t.y };
+          return 'A crate lands on (' + t.x + ', ' + t.y + ').';
+        },
+        onRemove: function (s) { s.data.testCrateRuleEnded = true; } },
+      // a whole-fight ban through the E13 veto (the Radio Edit's shape): the first hero damage skill can't be used
+      test_cheat_mute: { id: 'test_cheat_mute', name: 'Muted Test', icon: '🔇', rounds: -1,
+        desc: '<Skill> (<Hero>) is muted: it can\'t be used this fight.',
+        apply: function (s) {
+          const p = muteTarget(s);
+          if (!p) return false;
+          s.data.testMute = { unitId: p.unitId, skillId: p.skillId };
+          return p.skill + ' (' + p.hero + ') is muted: it can\'t be used this fight.';
+        },
+        hooks: { modifyUse: function (q) {
+          const m = DD.Combat.state && DD.Combat.state.data.testMute;
+          if (m && q.unit.id === m.unitId && q.skill.id === m.skillId) q.why = 'Muted by the Heckler (Muted Test).';
+        } } },
+    } });
+  DD.registerNarration('test_heckle_cameo', ['Welcome to the show! Tonight: a test.', 'Ladies and gentlemen, the build is RED.', 'Another door, another flaky test.']);
+  DD.registerNarration('test_heckle_generic', ['Your coverage is showing.', 'I have seen better tests in a fortune cookie.', 'Boo. Just, generally, boo.']);
+  DD.registerNarration('test_heckle_hero_test_knight', ['Testsalot! Your armour has more coverage than your tests.', '{hero}, assert THIS.']);
+  DD.registerNarration('test_heckle_hero_test_mage', ['Wizzy! Your spells are mocks.', '{hero}, nice hat. Is it load-bearing?']);
+  DD.registerNarration('test_heckle_hero_test_cleric', ['Father Unittest prays for green builds. Nobody answers.', '{hero} heals like a retry loop.']);
+  DD.registerNarration('test_heckle_hero_test_rogue', ['Shady, I saw that. Everyone saw that.', '{hero} sneaks like a stack trace.']);
+  DD.registerNarration('test_heckle_hero_test_summoner', ['Mocha brought pets. Mocked pets.', '{hero}, your stubs bite.']);
+  ['test_knight', 'test_mage', 'test_cleric', 'test_rogue', 'test_summoner'].forEach(function (id) {
+    DD.registerNarration('test_heckle_back_' + id, ['Heckle harder, I dare you.', 'I have read your reviews. All one of them.']);
+  });
+  DD.registerNarration('test_heckle_sit_flag', ['{name} owes me a code review.']);
+  DD.registerNarration('test_heckle_round', ['Round {n}! Still red.', 'Round {n}. I brought popcorn.', 'Round {n}. This is my favourite part.']);
+  DD.registerNarration('test_heckle_down', ['{hero} is down! Writing that in the minutes.', '{hero} fell over. Classic {hero}.']);
+  DD.registerNarration('test_heckle_win', ['Fine. FINE. Green build.']);
+  ['test_a', 'test_b', 'test_c', 'test_d'].forEach(function (lane) {
+    DD.registerNarration('test_heckle_win_' + lane, ['My favourite test door! Who broke it?', 'That door had tenure.']);
+  });
+  DD.registerNarration('test_heckle_reason', ['the tests said so', 'flaky', 'none']);
+  DD.registerNarration('test_heckle_bribe', ['A bribe? For ME? ...No rule this time.']);
+  ['test_cheat_rule', 'test_cheat_crate', 'test_cheat_mute'].forEach(function (id) {
+    DD.registerNarration('test_heckle_quip_' + id, ['Rules are just suggestions with a badge.', 'I am allowed. I checked. With me.']);
+    DD.registerNarration('test_heckle_counter_' + id, ['DM (whispering): "It is only a test. Play around it."']);
+  });
 
   // ---- consumables & items (exercise the item hook source and the consumable flow) ----------------------
   DD.registerConsumable({ id: 'test_potion', name: 'Test Potion', icon: '🧪', rarity: 'common', ap: 1,

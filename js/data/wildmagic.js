@@ -19,6 +19,9 @@
     dmg: [5, 7, 9], small: [2, 3, 4], heal: [6, 9, 12], block: [6, 8, 10], bigBlock: [10, 13, 16],
     gold: [10, 15, 20], fee: [5, 8, 10], hype: [15, 15, 15], regen: [2, 3, 4],
   };
+  // one row per act; a later act (V3: act 4) reads the last row
+  const SCALE_ROWS = SCALE.dmg.length;
+  function scaleRow(a) { return Math.max(1, Math.min(SCALE_ROWS, Math.round(+a) || 1)); }
   const GOOD_COLOR = { true: '#7dffb0', false: '#ff7b6b', null: '#d9a8ff' };
   const SOUTH = { x: 0, y: 1 };
 
@@ -52,7 +55,7 @@
   function combatState() { return DD.Combat && DD.Combat.state ? DD.Combat.state : null; }
   function actOf(state) {
     const a = (state && state.run && state.run.act) || (state && state.encounter && state.encounter.act) || 1;
-    return Math.max(1, Math.min(3, Math.round(+a) || 1));
+    return scaleRow(a);
   }
   function active(u) { return !!u && !u.dead && !u.downed; }
   function dist(a, b) { return Math.abs(a.x - b.x) + Math.abs(a.y - b.y); }
@@ -151,7 +154,7 @@
   WM.describe = function (idOrDef, act) {
     const d = typeof idOrDef === 'string' ? defs[idOrDef] : idOrDef;
     if (!d) return '';
-    const i = Math.max(1, Math.min(3, Math.round(+act) || 1)) - 1, n = {};
+    const i = scaleRow(act) - 1, n = {};
     for (const k in SCALE) n[k] = SCALE[k][i];
     return fill(d.text, n);
   };

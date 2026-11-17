@@ -27,6 +27,11 @@
  * tiles, wind-up focus, turnUnitId, threat, reach) and drives DD.Combat. Player input is ignored while DD.FX.busy().
  * When the fight is over and the FX are idle, the result goes to DD.Run.finishCombat (runs) or a result modal with
  * Restart / Title (debug fights). DD.HUD exposes the same actions for tests and debugging.
+ * V3 (act IV, plan §4.8): the HUD hosts Svammiel's blocking cameos (DD.FXRender.moments.cameo: input waits, Space /
+ * Enter / Esc / a click skip, AutoPlay shortens them); cameo log lines carry a speaker chip and his lines can take the
+ * caption; cheat rules get a 😈 chip with the exact desc (chips refresh when a rule's name or desc changes live), "Next
+ * round" chips, the act-4 kind labels (Mini-boss, Floor Boss) and short names, and a BLEEP sticker on a skill a rule
+ * refused with "Bleeped …" (the goats' Radio Edit).
  */
 (function () {
   'use strict';
@@ -73,6 +78,7 @@
   const ORDINAL = ['1st', '2nd', '3rd'];
   const TRACK_MAX = 16;       // initiative tracker chips shown at most (one full cycle from the acting unit)
   const MOMENT_MS = 2700;     // the initiative dice moment at speed 1 (+ per unit), skippable
+  const CAMEO_AUTO = 0.35;    // V3: AutoPlay plays a blocking cameo (Svammiel) at this share of its length
 
   let M = null;           // the mounted HUD instance (null when the combat screen is not shown)
   let cssDone = false;
@@ -171,6 +177,34 @@
   function ordinal(n) { return n >= 1 && n <= 3 ? ORDINAL[n - 1] : n + 'th'; }
   function isRunFight(s) { return !!(s && s.run && DD.Run && DD.Run.state === s.run && typeof DD.Run.finishCombat === 'function'); }
 
+  // ---- V3: cameo actors (Svammiel), act-4 labels ---------------------------------------------------------------------
+  function cameoDef(id) { return id && typeof DD.getCameo === 'function' ? DD.getCameo(id) || null : null; }
+  /** Settings "Svammiel's cameos" as the engine reads it: 'full' | 'short' | 'log' (Log only: no cameo FX at all). */
+  function cameoSetting() {
+    const v = DD.Cameo && typeof DD.Cameo.setting === 'function' ? DD.safe('HUD cameo setting', DD.Cameo.setting, DD.Cameo) : settings().cameos;
+    return v === 'short' || v === 'log' ? v : 'full';
+  }
+  /** Svammiel's floor (a gauntlet door or the finale): down there the DM is demoted. */
+  function underTheTable(s) { const e = s && s.encounter; return !!(e && (e.gauntlet || e.finale)); }
+  function dmTitle() { return underTheTable(S()) ? 'The DM (demoted)' : 'The Dungeon Master'; }
+  /** The fight's kind as the round box says it: Mini-boss (a gauntlet door), Floor Boss (the finale), Boss, Elite, Skirmish. */
+  function kindLabel(s) {
+    const e = (s && s.encounter) || {};
+    if (e.finale) return 'Floor Boss';
+    if (e.gauntlet) return 'Mini-boss';
+    return s && s.kind === 'boss' ? 'Boss' : s && s.kind === 'elite' ? 'Elite' : 'Skirmish';
+  }
+  /** The name the HUD prints in tight spots (the League's 72-character name has a short one). */
+  function encShort(e) { return e ? String(e.shortName || e.name || '') : ''; }
+  /** A member of this fight's squad (objective.bossIds: the League, the Coven, the goats). */
+  function squadOf(u, s) { const ids = s && s.objective && s.objective.bossIds; return !!u && Array.isArray(ids) && ids.indexOf(u.defId) >= 0; }
+  /** Who speaks a cameo log line: { actor, name, icon, color, title } from the entry's speaker / actor and the cameo def. */
+  function speakerOf(entry) {
+    const cam = cameoDef(entry && entry.actor);
+    return { actor: (entry && entry.actor) || null, name: String((entry && entry.speaker) || (cam && cam.name) || 'Svammiel'),
+      icon: (cam && cam.icon) || '😈', color: (cam && cam.color) || '#c0213a', title: (cam && cam.title) || '', enemy: (cam && cam.enemy) || null };
+  }
+
   /** Why player input is ignored right now (null = accept input; deployment accepts deploy moves and the roll). */
   function lockReason() {
     const s = S();
@@ -186,15 +220,17 @@
   function shownLock() {
     const l = lockReason();
     if (M && (M.enemyPlayback || M.moment)) return 'enemy';
+    if (M && M.cameo) return 'cameo';
     return l === 'busy' || l === 'modal' ? null : l;
   }
   function lockText(l) {
+    if (l === 'cameo') return (M && M.cameo ? M.cameo.name : 'Svammiel') + ' has the floor. Space skips.';
     return { enemy: 'Not your turn.', over: 'The fight is over.', autoplay: 'Autoplay is driving.', busy: 'Wait for the animation to finish.', none: 'No fight in progress.' }[l] || 'Not now.';
   }
-  /** Picking a hero is harmless during own animations; AI turns, the dice moment, autoplay and the end block it. */
+  /** Picking a hero is harmless during own animations; AI turns, the dice moment, a cameo, autoplay and the end block it. */
   function canSelectNow() {
     const s = S();
-    return !!(M && s && !s.result && !M.enemyPlayback && !M.moment && !autoplayOn());
+    return !!(M && s && !s.result && !M.enemyPlayback && !M.moment && !M.cameo && !autoplayOn());
   }
 
   // ---- v2 turn state: initiative order, the turn playback has reached ------------------------------------------------
@@ -681,14 +717,33 @@
         return def ? DD.safe('HUD preview', DD.Targeting.preview, DD.Targeting, [u, def, { x: t.x, y: t.y }]) : null;
       };
       const e = armedEntry(u, t);
-      if ((!e || !e.obj) && !volatileObj(t.x, t.y)) return run();
+      if ((!e || !e.obj) && !volatileObj(t.x, t.y)) return markCustom(run());
       // aimed at an explosive object: also note what each blast is ("8 fire damage within 1 tile"); a broken object's
       // loot (the gold its onDestroyed hands out in the dry run)
       const w = watchBlasts(run);
       if (w.value && !w.value.explosions) w.value.hudBlasts = w.blasts;
       if (w.value && w.gold > 0 && !w.value.uncertain) w.value.hudGold = w.gold;
-      return w.value;
+      return markCustom(w.value);
     });
+  }
+  /**
+   * [QA HERO-1] A def's own preview (Snail Mail's "📦 11 next turn", the Mystery Potion's "? (d6)") is the whole story for
+   * its units, so its text leads the badge and the hint. Those entries: the engine's `custom` flag, or (until it sends
+   * one) the armed def has a preview and the aim is no object or revive — the only aims the engine runs it for — and
+   * the entry has none of a dry run's fields (`revived`). Marks them `hudCustom` when they carry a text of their own.
+   */
+  function markCustom(p) {
+    if (!p || !p.perUnit) return p;
+    const def = armedDef();
+    const own = !!def && typeof def.preview === 'function' && !p.breaks && !p.detonates && !p.revives;
+    Object.keys(p.perUnit).forEach(function (id) {
+      const e = p.perUnit[id];
+      if (!e || !(e.custom === true || (own && e.revived === undefined))) return;
+      const txt = String(e.text || '').trim();
+      // the engine's fill-in for a preview without a text ("−5", "+4") says nothing the badge does not
+      if (txt && txt !== '−' + num(e.dmg) && txt !== '+' + num(e.heal)) e.hudCustom = txt;
+    });
+    return p;
   }
   /** Engine preview → renderer badges: dmg counts Block absorbed too (the HP bar splits it), extras as icons. */
   function overlayPreviews(p) {
@@ -697,7 +752,9 @@
     Object.keys(per).forEach(function (id) {
       const e = per[id] || {};
       const parts = [];
-      if (e.uncertain) parts.push('?');
+      // [QA HERO-1] a def's own preview text leads (after the "?", unless it carries its own)
+      if (e.uncertain && !(e.hudCustom && e.hudCustom.charAt(0) === '?')) parts.push('?');
+      if (e.hudCustom) parts.push(e.hudCustom);
       // v2: a heal aimed at a downed ally gets it up: "UP! 7 HP" (the renderer's green revive badge)
       const up = revivedIn(e);
       if (up) parts.push(upText(e));
@@ -740,9 +797,14 @@
     const brk = previewBreaks(p, at);
     const per = p.perUnit || {};
     let foes = 0, kos = 0, heals = 0, total = 0;
-    const allies = [], ups = [];
+    const allies = [], ups = [], custom = {}, customOrder = [];
     Object.keys(per).forEach(function (id) {
       const t = byId(id), e = per[id];
+      // [QA HERO-1] a def's own preview text, grouped by text: "📦 11 next turn → Test Grunt"
+      if (t && e && e.hudCustom) {
+        if (!custom[e.hudCustom]) { custom[e.hudCustom] = []; customOrder.push(e.hudCustom); }
+        custom[e.hudCustom].push(t.name);
+      }
       if (!t || t === u) return;
       if (revivedIn(e)) { ups.push('🆘 ' + upText(e).replace('UP! ', 'UP! ' + t.name + ' gets back up with ') + ' (0 AP now; ' + upWhen(t) + ')'); return; }
       const hostile = DD.Grid.hostile(u, t);
@@ -767,6 +829,10 @@
       }
     }
     ups.forEach(function (x) { parts.push(x); });
+    customOrder.forEach(function (txt) {
+      const who = custom[txt];
+      parts.push(txt + ' → ' + (who.length <= 3 ? who.join(', ') : who.slice(0, 2).join(', ') + ' and ' + (who.length - 2) + ' more'));
+    });
     if (foes) parts.push('Hits ' + plural(foes, 'foe') + ' for ' + total + (p.uncertain ? '?' : ''));
     if (kos) parts.push('💀 ' + kos + ' KO');
     if (heals) parts.push('💚 heals ' + plural(heals, 'ally', 'allies'));
@@ -1244,9 +1310,13 @@
 .hud-obj .ho-flavor { font-size: .76rem; font-style: italic; color: var(--text-2); line-height: 1.25; }
 .hud-obj .ho-chips { display: flex; flex-wrap: wrap; justify-content: center; gap: .3rem; margin-top: .18rem; }
 .hud-obj .ho-chips:empty { display: none; }
-.hud-obj { transition: opacity .25s ease; }
-.hud-obj.peek, .hud-obj.peek * { pointer-events: none !important; }
-.hud-obj.peek { opacity: .32; }
+.hud-obj, .hud-obj .ho-main, .hud-obj .ho-flavor, .hud-obj .hud-chip { transition: opacity .25s ease; }
+.hud-obj.peek, .hud-obj.peek .ho-main, .hud-obj.peek .ho-flavor, .hud-obj.peek .ho-chips { pointer-events: none !important; }
+.hud-obj.peek { background: none; border-color: rgba(230,194,108,.22); box-shadow: none; }
+.hud-obj.peek::before { opacity: 0; }
+.hud-obj.peek .ho-main, .hud-obj.peek .ho-flavor { text-shadow: 0 1px 2px #000, 0 0 5px rgba(0,0,0,.9); }
+.hud-obj.peek .ho-under { opacity: .32; }
+.hud-obj.peek .hud-chip.ho-under { opacity: .5; pointer-events: none !important; }
 .hud-chip { pointer-events: auto; display: inline-flex; align-items: center; gap: .3em; padding: .06em .55em; border-radius: 999px; font-size: .7rem; font-weight: 700; color: var(--text); background: rgba(0,0,0,.38); border: 1px solid rgba(198,156,75,.45); cursor: help; white-space: nowrap; }
 .hud-chip.rule { border-color: rgba(190,150,255,.6); color: #ece2ff; }
 .hud-chip.wave { border-color: rgba(255,120,100,.65); color: #ffd6cc; }
@@ -1645,6 +1715,32 @@
   .hud-card { padding-top: .3rem; padding-bottom: .3rem; }
 }
 .static-ui .hud-dm { transition: none; }
+
+/* ---- V3: Svammiel's cameos (speaker chips, the caption, the moment), cheat chips, the BLEEP sticker ------------------ */
+.hud-log .log-line { overflow-wrap: anywhere; }
+.hud-round .hr-sub { display: flex; }
+.hud-round .hr-sub .hr-enc { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.hud-round .hr-sub .hr-kind { flex: 0 0 auto; white-space: pre; }
+.hud-log .log-line.cameo { display: flex; gap: .35rem; align-items: flex-start; color: #ffd9cf; font-style: italic; }
+.hud-log .log-line.cameo.cheat { font-style: normal; font-weight: 700; padding: .06rem .3rem; border-radius: 4px; background: linear-gradient(90deg, rgba(140,14,24,.5), rgba(70,8,12,.12)); border-left: 3px solid var(--sc, #c0213a); }
+.hud-log .log-line .hl-dm.hl-cameo { --sc: #c0213a; white-space: nowrap; letter-spacing: .06em; color: #ffe7a3; background: linear-gradient(180deg, var(--sc), #4a0610); box-shadow: 0 0 0 1px rgba(240,192,96,.75); }
+.hud-dm .dm-body { min-width: 0; overflow-wrap: anywhere; }
+.hud-dm .dm-who { display: none; margin-right: .3em; font-style: normal; font-family: var(--f-display); font-weight: 900; font-size: .7rem; letter-spacing: .08em; text-transform: uppercase; color: #ffe7a3; }
+.hud-dm.cameo { border-color: rgba(255,110,90,.7); color: #ffd9cf; background: linear-gradient(180deg, rgba(72,14,16,.95), rgba(28,7,8,.95)); box-shadow: 0 6px 16px rgba(0,0,0,.5), 0 0 14px rgba(200,30,40,.3); }
+.hud-dm.cameo .dm-who { display: inline; }
+.hud-dm .dm-port { flex: 0 0 auto; --sc: #c0213a; width: 1.75rem; height: 1.75rem; margin-top: -.1rem; border-radius: 50%; overflow: hidden; display: flex; align-items: center; justify-content: center; background: radial-gradient(circle at 35% 30%, #ff9a8a, var(--sc) 60%, #4a0610); box-shadow: 0 0 0 1px #1a0f08, 0 0 0 2.5px #f0c060; }
+.hud-dm .dm-port .portrait { width: 100% !important; height: 100% !important; box-shadow: none; background: none; border-radius: 50%; }
+.hud-phase.p-cameo { color: #ffe7a3; background: rgba(140,14,24,.6); border-color: #ff6a5a; animation: hud-pulse 1s ease-in-out infinite; }
+.hud-cameoscrim { position: absolute; inset: 0; pointer-events: auto; z-index: 6; cursor: pointer; background: transparent; }
+.hud-chip.rule { max-width: 100%; }
+.hud-chip.rule .rl-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.hud-chip.rule.cheat { border-color: #ff5a4a; color: #ffe0d8; background: linear-gradient(180deg, rgba(120,14,20,.78), rgba(56,6,10,.72)); box-shadow: 0 0 8px rgba(255,60,50,.35); }
+.hud-chip .rl-cheat { font-size: .78rem; line-height: 1; margin-left: -.25em; filter: drop-shadow(0 0 3px rgba(255,80,60,.85)); }
+.hud-chip.rule.next { border-style: dashed; font-style: italic; }
+.hi-line.cheat { color: #ffd2c8; }
+.hi-intent .hii-hint { font-size: .74rem; font-weight: 700; color: #ffe7a3; }
+.hud-skill .hs-bleep { position: absolute; left: -.3rem; right: -.3rem; top: 1.5rem; z-index: 2; transform: rotate(-11deg); padding: .05rem 0; text-align: center; font-family: var(--f-display); font-weight: 900; font-size: .62rem; line-height: 1.3; letter-spacing: .2em; color: #ff7ad9; background: #0b0508; border: 1px solid #ff7ad9; box-shadow: 0 2px 6px rgba(0,0,0,.7), 0 0 8px rgba(255,90,200,.35); pointer-events: none; }
+.hud-skill.bleeped .hs-icon { filter: blur(1.5px) grayscale(.6); }
 `;
 
   function injectCss() {
@@ -1846,7 +1942,10 @@
     E.trackList = el('div.ti-list');
     E.track = el('div.hud-init.panel.slim', null, E.trackLabel, E.trackList);
     DD.UI.tooltip(E.trackLabel, function () { return trackerHelp(); }, { pos: 'bottom' });
-    E.dm = el('div.hud-dm', null, el('span.dm-badge', { title: 'The Dungeon Master' }, 'DM'), E.dmText = el('span.dm-text'));
+    // the caption: the DM's lines (a "DM" badge) or a cameo actor's (his portrait, his name: showCaption)
+    E.dmBadge = el('span.dm-badge', { title: 'The Dungeon Master' }, 'DM');
+    E.dmWho = el('b.dm-who');
+    E.dm = el('div.hud-dm', null, E.dmBadge, el('span.dm-body', null, E.dmWho, E.dmText = el('span.dm-text')));
     E.center = el('div.hud-center', null, E.track, E.obj, E.dm);
     E.speed = DD.UI.button(speedLabel(), cycleSpeed, { cls: 'small ghost hud-speed', tooltip: '<div class="tt"><div class="tt-title">Animation speed</div><div class="tt-desc">Click to cycle 1× / 1.5× / 2× / 3×. Also in Settings. Space skips the enemy turn animations.</div></div>' });
     E.menu = DD.UI.button('Menu', openMenu, { cls: 'small ghost', icon: '☰', tooltip: '<div class="tt"><div class="tt-title">Menu (Esc)</div><div class="tt-desc">Speed, sound, controls, and the dignified exits.</div></div>' });
@@ -1909,6 +2008,10 @@
     E.rollTray = el('div.hud-rolltray.panel.hud-hidden');
     E.rollScrim.addEventListener('click', function () { if (!actHeld()) skipMoment(); });
     E.rollTray.addEventListener('click', function () { if (!actHeld()) skipMoment(); });
+    // V3: a blocking cameo (DD.FXRender.moments.cameo) draws on the canvas; this see-through layer takes the click that
+    // skips it (the panels stay visible under it)
+    E.cameoScrim = el('div.hud-cameoscrim.hud-hidden');
+    E.cameoScrim.addEventListener('click', function () { if (!actHeld()) skipCameo(); });
     root.appendChild(E.top);
     root.appendChild(E.party);
     root.appendChild(E.inspect);
@@ -1917,6 +2020,7 @@
     root.appendChild(E.ribbon);
     root.appendChild(E.rollScrim);
     root.appendChild(E.rollTray);
+    root.appendChild(E.cameoScrim);
     // clicking the end-of-fight ribbon skips the short wait before the hand-off
     E.ribbon.addEventListener('click', function () { if (M && M.endSkip) M.endSkip(); });
     // a right-click over a HUD panel cancels targeting / unpins, exactly like one on the board
@@ -1930,6 +2034,7 @@
   function phaseInfo(s) {
     if (s.result) return { cls: 'p-over', text: s.result === 'victory' ? '🏆 Victory' : '💀 Defeat', who: '' };
     if (M.moment) return { cls: 'p-roll', text: '🎲 Initiative!', who: 'Rolling the d20s…' };
+    if (M.cameo) return { cls: 'p-cameo', text: M.cameo.icon + ' ' + M.cameo.name + '!', who: 'Heckling the party…' };
     if (deploying(s)) return { cls: 'p-deploy', text: '⛺ Deployment', who: 'Arrange, then roll' };
     const u = shownTurnUnit();
     const ii = u ? initInfo(u) : null;
@@ -1964,12 +2069,38 @@
     });
   }
 
+  /** A rule's name with its icon once (DD.Cameo's cheat names already start with it) and no "Next round: " prefix. */
+  function ruleName(r) {
+    let name = String(r.name || 'House Rule').trim();
+    if (r.icon && name.indexOf(r.icon) === 0) name = name.slice(r.icon.length).trim();
+    name = name.replace(/^next round:\s*/i, '');
+    return (r.icon || '📜') + ' ' + (name || 'House Rule');
+  }
+  /** The chip label: an announced rule (next: true) says "Next round: " once. */
+  function ruleLabel(r) {
+    const n = ruleName(r);
+    if (!r.next) return n;
+    const sp = n.indexOf(' ');
+    return n.slice(0, sp) + ' Next round: ' + n.slice(sp + 1);
+  }
+  function ruleDesc(r) { return typeof r.desc === 'string' && r.desc ? r.desc : 'A rule is in effect.'; }
+  /**
+   * The rules in play as chips. V3 (E7): a cheat (rule.cheat, Svammiel's) gets a 😈 badge and its source in the
+   * tooltip, an announced one (rule.next) the "Next round" style; the tooltip reads the rule's desc live, and renderTop
+   * re-renders the chips whenever a rule's name or desc changes (the goats' "📝 Verse 2/3 → Betty").
+   */
   function ruleChips(s) {
     return (s.rules || []).filter(Boolean).map(function (r) {
-      const chip = el('span.hud-chip.rule', null, (r.icon || '📜') + ' ' + (r.name || 'House Rule'));
+      const label = ruleLabel(r);
+      const chip = el('span.hud-chip.rule' + (r.cheat ? '.cheat' : '') + (r.next ? '.next' : ''), null,
+        r.cheat ? el('span.rl-cheat', null, '😈') : null, el('span.rl-name', null, label));
+      chip.dataset.rule = String(r.id || '');
       DD.UI.tooltip(chip, function () {
         const turns = num(r.turns, -1);
-        return '<div class="tt"><div class="tt-title">' + esc((r.icon || '📜') + ' ' + (r.name || 'House Rule')) + '</div><div class="tt-desc">' + esc(r.desc || 'A rule is in effect.') + '</div><div class="tt-foot">' + (turns > 0 ? esc(plural(turns, 'round')) + ' left' : 'In effect for the whole fight') + '</div></div>';
+        const cam = r.cheat ? cameoDef(r.source) : null;
+        const who = r.cheat ? '<div class="tt-why">😈 ' + esc(cam ? cam.name + ' cheats. Out loud, on purpose.' : 'A cheat.') + '</div>' : '';
+        const foot = r.next ? 'Announced a round ahead: it goes live next round.' : turns > 0 ? esc(plural(turns, 'round')) + ' left' : 'In effect for the whole fight';
+        return '<div class="tt"><div class="tt-title">' + esc(label) + '</div>' + who + '<div class="tt-desc">' + esc(ruleDesc(r)) + '</div><div class="tt-foot">' + foot + '</div></div>';
       }, { pos: 'bottom' });
       return chip;
     });
@@ -1989,7 +2120,9 @@
     const ob = s.objective || {};
     const enc = s.encounter || {};
     const round = shownRound(s);
-    const sig = [round, ph.cls, ph.text, ph.who, ph.pos, ob.text, ob.flavor, enc.name, s.kind, (s.rules || []).map(function (r) { return r.id + ':' + r.turns; }).join(','),
+    // V3 (E7): a rule's live name / desc is part of the signature, so its chip refreshes when content rewrites it
+    const sig = [round, ph.cls, ph.text, ph.who, ph.pos, ob.text, ob.flavor, enc.name, encShort(enc), kindLabel(s), s.kind,
+      (s.rules || []).filter(Boolean).map(function (r) { return [r.id, r.turns, r.icon, r.name, ruleDesc(r), !!r.cheat, !!r.next].join('|'); }).join('¦'),
       (s.reinforcements || []).map(function (w) { return w.round + ':' + w.done; }).join(','), s.round, autoplayOn(), s.difficultyName].join('§');
     M.els.auto.classList.toggle('hud-hidden', !autoplayOn());
     M.els.speed.querySelector('.btn-label').textContent = speedLabel();
@@ -1998,10 +2131,10 @@
     const E = M.els;
     E.round.innerHTML = '';
     E.round.appendChild(el('div.hr-box', null, el('span.hr-label', null, 'Round'), el('span.hr-num', null, round > 0 ? String(round) : '–')));
-    const kindTxt = s.kind === 'boss' ? 'Boss' : s.kind === 'elite' ? 'Elite' : 'Skirmish';
+    const kindTxt = kindLabel(s);
     const diff = s.difficultyName && s.difficultyName !== 'normal' ? ' · ' + U.capitalize(s.difficultyName) : '';
     const who = ph.who ? el('span.hr-who', null, el('span', null, ph.who), ph.pos ? el('span.hr-pos', null, '#' + ph.pos) : null)
-      : el('span.hr-sub', null, (enc.name ? enc.name + ' · ' : '') + kindTxt + diff);
+      : el('span.hr-sub', null, encShort(enc) ? el('span.hr-enc', null, encShort(enc)) : null, el('span.hr-kind', null, (encShort(enc) ? ' · ' : '') + kindTxt + diff));
     E.round.appendChild(el('div.hr-right', null, el('span.hud-phase.' + ph.cls, null, ph.text), who));
     DD.UI.tooltip(E.round, function () {
       return '<div class="tt"><div class="tt-title">' + (round > 0 ? 'Round ' + round : 'Deployment') + (enc.name ? ' — ' + esc(enc.name) : '') + '</div>' +
@@ -2013,6 +2146,8 @@
     if (ob.flavor) E.obj.appendChild(el('div.ho-flavor', null, ob.flavor));
     E.obj.appendChild(el('div.ho-chips', null, ruleChips(s), waveChips(s)));
     DD.UI.tooltip(E.obj, function () { return objectiveTip(s); }, { pos: 'bottom' });
+    // the new lines and chips fade where something is under them straight away (not at the next check)
+    if (E.obj.classList.contains('peek')) updateObjPeek();
   }
 
   // ---- initiative tracker ------------------------------------------------------------------------------------------
@@ -2026,7 +2161,10 @@
   function trackerTip(it) {
     const u = it.unit, e = it.entry;
     const def = defOf(u) || {};
-    let h = '<div class="tt"><div class="tt-title">' + esc(u.name) + '</div><div class="tt-sub">' + esc(u.side === 'hero' ? (u.kind === 'hero' ? 'Hero' : 'Summon') : (def.boss && def.boss.title) || ({ minion: 'Minion', normal: 'Enemy', elite: 'Elite', boss: 'Boss' }[u.tier] || 'Enemy')) + '</div>';
+    const s = S();
+    // V3: a squad member (the League, the Coven, the goats) names its squad by the encounter's short name
+    const tier = ({ minion: 'Minion', normal: 'Enemy', elite: 'Elite', boss: 'Boss' }[u.tier] || 'Enemy') + (squadOf(u, s) && encShort(s.encounter) ? ' · ' + encShort(s.encounter) : '');
+    let h = '<div class="tt"><div class="tt-title">' + esc(u.name) + '</div><div class="tt-sub">' + esc(u.side === 'hero' ? (u.kind === 'hero' ? 'Hero' : 'Summon') : (def.boss && def.boss.title) || tier) + '</div>';
     if (e) {
       const math = e.fixed || !(e.roll > 0) ? 'Initiative ' + e.total : 'Initiative ' + e.total + ' (d20 ' + e.roll + ' ' + signed(e.init) + ')';
       h += '<div class="tt-desc">' + esc(math) + '</div>';
@@ -2039,7 +2177,7 @@
     if (u.downed) when += ' Downed: the turn is skipped until a Help Up or a heal.';
     else if (isStunnedU(u)) when += ' Incapacitated: loses the next turn.';
     if (when) h += '<div class="tt-target">' + esc(when.trim()) + '</div>';
-    if ((u.intents || []).length) h += '<div class="tt-aura">⏳ Winding up ' + esc(u.intents.map(function (i) { return i.label || '?'; }).join(', ')) + '</div>';
+    if ((u.intents || []).length) h += '<div class="tt-aura">⏳ Winding up ' + esc(u.intents.map(function (i) { const hi = windupHint(i); return (i.label || '?') + (hi ? ' (' + hi + ')' : ''); }).join(', ')) + '</div>';
     return h + '<div class="tt-foot">Click to inspect</div></div>';
   }
 
@@ -2083,7 +2221,7 @@
       if (it.cur) cls.push('cur');
       if (u.downed) cls.push('downed');
       if (it.joiner) cls.push('joiner');
-      const chip = el('div', { class: cls, style: { '--tc': foe ? (u.tier === 'boss' || u.isBoss ? '#ff7a4a' : '#e2483c') : (d.color || '#c9a24f') } });
+      const chip = el('div', { class: cls, style: { '--tc': foe ? (u.tier === 'boss' || u.isBoss || squadOf(u, s) ? '#ff7a4a' : '#e2483c') : (d.color || '#c9a24f') } });
       chip.dataset.unit = u.id;
       chip.appendChild(portraitOf(u, 40, { fallback: foe ? '👹' : '🐾' }));
       chip.appendChild(el('span.tk-tot', null, it.unrolled ? '?' : String(it.entry ? it.entry.total : '?')));
@@ -2421,9 +2559,15 @@
     const ok = lock ? lockText(lock) : DD.safe('HUD canUse', C().canUse, C(), [u, sl]);
     const payer = DD.safe('HUD hpPayer', hpPayer, null, [u, def, r.level, cost]) || null;
     const gold = typeof DD.UI.skillGold === 'function' ? DD.safe('UI.skillGold', DD.UI.skillGold, DD.UI, [def, r.level, u]) : null;
+    // V3 (E13): a rule's veto (modifyUse) holds whatever the turn checks say first: the button shows it all the time (the
+    // goats' Radio Edit: "Bleeped by Svammiel (Radio Edit)." → a BLEEP sticker)
+    const veto = typeof C().vetoOf === 'function' ? DD.safe('HUD vetoOf', C().vetoOf, C(), [u, sl]) : null;
+    const why = ok === true ? '' : String(ok || '');
     return {
+      veto: veto ? String(veto) : null, bleep: /^Bleeped\b/.test(why) || /^Bleeped\b/.test(veto ? String(veto) : ''),
       pos: pos, role: item.role, key: SKILL_KEYS[pos], slot: sl, def: def, level: r.level, maxLevel: def.maxLevel || (def.levels ? def.levels.length : 1),
       ap: cost.ap, hp: cost.hp, cd: num(sl.cd), charges: num(def.charges), uses: num(sl.uses), hype: num(def.hype),
+      drains: !!DD.UI.drainsAp(def, r.level, u),
       payer: payer, listedHp: payer ? num(DD.resolve(def.hpCost, DD.skillLevel(def, r.level), u, 0)) : 0,
       goldCost: gold && gold.cost > 0 ? gold.cost : 0,
       ok: ok === true ? true : String(ok || 'Can\'t use that now.'),
@@ -2449,7 +2593,7 @@
     if (controllable(u) && !lock) interactionsOf(u).forEach(function (ia, i) { m.acts.push({ ia: ia, i: i, ok: num(u.ap) >= num(ia.ap, 1) && !stunned(u) && !hasSt(u, 'sheep') }); });
     const gold = num(DD.Act && DD.Act.gold ? DD.Act.gold() : 0);
     m.sig = JSON.stringify([u.id, u.ap, u.maxAp, s.hype, lock, M.mode, statusSig(u), gold, s.turn, s.phase, s.turnIndex, !!M.moment, !!M.enemyPlayback,
-      m.slots.map(function (x) { return x.empty ? '-' + (x.missing || '') : [x.slot.id, x.level, x.ap, x.hp, x.cd, x.uses, x.ok, x.armed, x.payer ? x.payer.id : 0, x.goldCost]; }),
+      m.slots.map(function (x) { return x.empty ? '-' + (x.missing || '') : [x.slot.id, x.level, x.ap, x.hp, x.cd, x.uses, x.ok, x.armed, x.payer ? x.payer.id : 0, x.goldCost, x.veto, x.bleep]; }),
       m.cons.map(function (x) { return [x.id, x.ok, x.armed]; }),
       m.acts.map(function (x) { return [x.ia.kind, x.ia.x, x.ia.y, x.ia.label, x.ia.ap, x.ok]; })]);
     return m;
@@ -2457,7 +2601,7 @@
 
   function skillTip(u, x) {
     let h = '';
-    if (x.ok !== true) h += '<div class="tt"><div class="tt-why">⛔ ' + esc(x.ok) + '</div></div>';
+    if (x.ok !== true) h += '<div class="tt"><div class="tt-why">⛔ ' + esc(x.ok) + '</div>' + (x.veto && x.veto !== x.ok ? '<div class="tt-why">⛔ ' + esc(x.veto) + '</div>' : '') + '</div>';
     else h += '<div class="tt"><div class="tt-ok">✓ Ready — press ' + esc(x.key) + ' or click, then pick a target</div></div>';
     h += DD.UI.skillTooltipHtml(x.slot.id, x.level, u, {
       slot: x.slot, role: x.role === 'basic' ? 'basic' : x.role === 'signature' ? 'signature' : null, cdLeft: x.cd, showNext: false,
@@ -2482,12 +2626,15 @@
     if (x.armed) cls.push('armed');
     if (x.ok !== true) cls.push('is-disabled');
     if (x.cd > 0) cls.push('on-cd');
+    if (x.bleep) cls.push('bleeped');
     const s = S();
     if (x.role === 'signature' && num(s.hype) >= x.hype && x.ok === true) cls.push('ready');
     const b = el('button', { type: 'button', class: cls });
     if (x.role === 'signature') b.style.setProperty('--fill', U.clamp(num(s.hype), 0, 100) + '%');
     b.appendChild(el('span.kbd.hs-key', null, x.key));
-    b.appendChild(el('span.hs-ap' + (x.ap === 0 ? '.free' : ''), { title: x.ap + ' AP' }, String(x.ap)));
+    // [QA HERO-3] "1+": a skill that spends every AP left (Power Nap, Coming Out of My Shell)
+    b.appendChild(el('span.hs-ap' + (x.ap === 0 ? '.free' : '') + (x.drains ? '.drain' : ''),
+      { title: x.drains ? x.ap + ' AP, then every AP you have left' : x.ap + ' AP' }, String(x.ap) + (x.drains ? '+' : '')));
     if (x.hp > 0) b.appendChild(el('span.hs-hp', null, '−' + x.hp + '♥'));
     else if (x.payer) b.appendChild(el('span.hs-hp.paid', { title: 'Paid by ' + x.payer.name }, '🩸' + x.listedHp));
     if (x.goldCost > 0) {
@@ -2503,6 +2650,7 @@
     }
     if (x.charges > 0) b.appendChild(el('span.hs-ch', null, '×' + Math.max(0, x.charges - x.uses)));
     if (x.cd > 0) b.appendChild(el('span.hs-cd', { title: 'Ready in ' + plural(x.cd, 'turn') }, el('b', null, el('small', null, '⟳'), String(x.cd))));
+    if (x.bleep) b.appendChild(el('span.hs-bleep', null, 'BLEEP'));
     DD.UI.tooltip(b, function () { return skillTip(u, x); }, { pos: 'top' });
     b.addEventListener('click', function () { b.blur(); pressSlot(x.pos, { click: true }); });
     b.addEventListener('mouseenter', function () { M.hoverSlot = x.pos; computeOverlay(); });
@@ -2659,7 +2807,7 @@
     if (deploy) { label = '🎲 Roll!'; sub = 'Start the fight'; }
     // the dice moment / AI turns on screen: "Next: X" would be a spoiler or stale — say what Space does instead
     else if (M.moment) sub = '🎲 Rolling…';
-    else if (M.enemyPlayback && !s.result) sub = '⏩ Space skips';
+    else if ((M.enemyPlayback || M.cameo) && !s.result) sub = '⏩ Space skips';
     else if (!s.result) {
       const next = upcoming();
       const n = next[0];
@@ -2709,15 +2857,38 @@
   }
 
   /** A wind-up (bosses, a few elites) in the inspect panel: ⏳ label, damage, when it lands and how to stop it (DD.AI.describe). */
+  /** V3 (E7): a wind-up's own hint line (intent.data.hint: "Bar None → Betty", "Bass → gold squares"), unless its label
+   *  already says it. */
+  function windupHint(it) {
+    const h = it && it.data && typeof it.data.hint === 'string' ? it.data.hint.trim() : '';
+    return h && String((it && it.label) || '').indexOf(h) < 0 ? h : '';
+  }
   function windupRow(u, it) {
     const d = DD.safe('HUD describe wind-up', DD.AI.describe, DD.AI, [u, it]) || { label: '?', icon: '❔', dmg: 0, text: '' };
     const left = num(d.turnsLeft || d.delay, 1);
     const pills = [];
     if (d.dmg) pills.push(el('span.pill', { style: { color: '#fff', background: 'rgba(170,40,30,.75)', borderColor: '#ff9d90' } }, d.dmg + (d.uncertain ? '?' : '') + ' dmg'));
     pills.push(el('span.pill', { style: { color: '#2a180a', background: '#ffcf7a', borderColor: '#ffe7b0' }, title: left > 1 ? 'Lands in ' + left + ' of ' + u.name + '\'s turns' : 'Lands at the start of ' + u.name + '\'s next turn' }, '⏳ ' + (left > 1 ? left + ' turns' : 'next turn')));
+    const hint = windupHint(it);
     return el('div.hi-intent.windup', null,
       el('div.hii-top', null, el('span', null, d.icon || '⚔️'), el('span', null, d.label || '?'), pills),
+      hint ? el('div.hii-hint', null, '👉 ' + hint) : null,
       d.text ? el('div.hii-text', null, d.text) : null);
+  }
+
+  /**
+   * V3: the cheats in play (Svammiel's 😈 rules) on the inspect panel of the fight's boss, its squad or the cheating
+   * actor himself: this round's and next round's, always both ("none announced" when nothing is coming).
+   */
+  function cheatsLine(u, s) {
+    const cheats = (s.rules || []).filter(function (r) { return r && r.cheat; });
+    if (!cheats.length) return null;
+    const own = cheats.some(function (r) { return r.source && DD.Cameo && typeof DD.Cameo.present === 'function' && DD.Cameo.present(s, r.source) === u; });
+    if (!own && !(u.isBoss || u.tier === 'boss' || squadOf(u, s))) return null;
+    const now = cheats.filter(function (r) { return !r.next; }), next = cheats.filter(function (r) { return r.next; });
+    const names = function (list) { return list.map(function (r) { return ruleName(r) + (num(r.turns, -1) < 0 && !r.next ? ' (all fight)' : ''); }).join(', '); };
+    const tip = cheats.map(function (r) { return ruleLabel(r) + ': ' + ruleDesc(r); }).join('\n');
+    return el('div.hi-line.cheat', { title: tip }, '😈 Cheats this round: ' + (names(now) || 'none') + ' · next round: ' + (names(next) || 'none announced') + '.');
   }
 
   /** An ability in the inspect panel: icon, name, range / area, cooldown, the exact desc for this unit. */
@@ -2803,6 +2974,7 @@
     let sub;
     if (u.kind === 'hero') sub = [d.race, d.cls].filter(Boolean).join(' ') + ' · Lv ' + num(u.level, 1);
     else if (u.kind === 'summon') { const o = byId(u.ownerId); sub = 'Summon' + (o ? ' of ' + o.name : ''); }
+    else if (!boss && squadOf(u, S()) && encShort(S().encounter)) sub = ({ minion: 'Minion', normal: 'Enemy', elite: 'Elite' }[u.tier] || 'Enemy') + ' · ' + encShort(S().encounter);
     else sub = boss ? ((d.boss && d.boss.title) || 'Boss') : ({ minion: 'Minion', normal: 'Enemy', elite: 'Elite' }[u.tier] || 'Enemy') + (d.act ? ' · Act ' + U.roman(d.act) : '');
     const head = el('div.hi-head', null, port, el('div.hi-titles', null, el('div.hi-name', null, u.name), el('div.hi-sub', null, sub + (pinned ? ' · 📌 pinned' : ''))));
     const ib = initBadge(u);
@@ -2859,6 +3031,8 @@
         const pdesc = typeof pv.desc === 'function' ? DD.safe('passive desc of ' + u.defId, pv.desc, pv, [u]) : pv.desc;
         box.push(el('div.hi-line.passive', { html: '<b>' + esc((pv.icon ? pv.icon + ' ' : '') + (pv.name || 'Passive')) + ':</b> ' + esc(pdesc || '') }));
       }
+      const cl = cheatsLine(u, S());
+      if (cl) box.push(cl);
       // its aura (threatAt): who it hits, from where they stand now
       const hits = [];
       partyUnits().forEach(function (h) {
@@ -3109,6 +3283,7 @@
     if (!s) return { text: '' };
     if (M.hintMsg && now() < M.hintMsg.until && M.hintMsg.sel === M.sel && M.hintMsg.turn === s.turn) return { text: esc(M.hintMsg.text), cls: M.hintMsg.cls };
     M.hintMsg = null;
+    if (M.cameo) return { text: esc(M.cameo.icon + ' ' + M.cameo.name) + ' has the floor… <b>Click</b> or <b>Space</b> to skip.', cls: 'warn' };
     if (s.result) return { text: '' };
     if (M.moment) return { text: '🎲 Rolling for initiative… <b>Click</b> or <b>Space</b> to skip.', cls: 'deploy' };
     if (M.enemyPlayback) {
@@ -3137,13 +3312,16 @@
         if ((who && who !== u && !who.dead) || (ht && ht.obj)) sum = '✖ ' + invalidReason(u, M.hover);
       }
       // Blood Price: who pays the HP cost instead
+      let drain = '';
       if (M.mode.kind === 'skill') {
         const lvl = armedLevel();
         const cost = DD.safe('HUD costOf', C().costOf, C(), [u, def, lvl]);
         const payer = cost ? DD.safe('HUD hpPayer', hpPayer, null, [u, def, lvl, cost]) : null;
         if (payer) sum = (sum ? sum + ' · ' : '') + '🩸 ' + payer.name + ' pays the ' + num(DD.resolve(def.hpCost, DD.skillLevel(def, lvl), u, 0)) + ' HP';
+        // [QA HERO-3] a skill that spends every AP left says so before the click (not only as a "−2 AP" pop-up after)
+        if (num(u.ap) > num(cost ? cost.ap : def.ap) && DD.UI.drainsAp(def, lvl, u)) drain = ' — <b>spends all ' + num(u.ap) + ' AP</b>';
       }
-      return { text: esc((def.icon || '✦') + ' ' + def.name) + ' — ' + esc(targetInstruction(def, u)) + ' · <b>Right-click</b> cancels' + (sum ? '<span class="hh-sum">' + esc(sum) + '</span>' : ''), cls: 'target' };
+      return { text: esc((def.icon || '✦') + ' ' + def.name) + ' — ' + esc(targetInstruction(def, u)) + drain + ' · <b>Right-click</b> cancels' + (sum ? '<span class="hh-sum">' + esc(sum) + '</span>' : ''), cls: 'target' };
     }
     const h = M.hover;
     if (h && !M.cardHover && !M.trackHover) {
@@ -3587,6 +3765,7 @@
   function lockedFeedback(lock) {
     const t = M ? shownTurnUnit() : null;
     if (M && M.moment) hint('Rolling for initiative… click or Space to skip.', 'warn');
+    else if (M && M.cameo) hint(M.cameo.name + ' has the floor… click or Space to skip.', 'warn');
     else if (lock === 'enemy' || (M && M.enemyPlayback)) hint('It\'s ' + (t && !playerSide(t) ? t.name + '\'s' : 'the enemies\'') + ' turn. Space skips their animations.', 'warn');
     else if (lock === 'busy') hint('Hold on — the dice are still rolling. (Space skips animations.)', 'warn');
     else if (lock === 'autoplay') hint('Autoplay is driving. Click the 🤖 Autoplay button to take over.', 'warn');
@@ -3661,8 +3840,9 @@
     if (!M) return false;
     const s = S();
     if (actHeld()) return false;
-    // the dice moment: Space / click skips it (only it: the turns after it still play)
+    // the dice moment / a cameo: Space / click skips it (only it: the turns after it still play)
     if (M.moment) { skipMoment(); return false; }
+    if (M.cameo) { skipCameo(); return false; }
     const lock = lockReason();
     // Space always skips playing animations — also the final ones of a finished fight (the hand-off waits for them).
     if (fxBusy() && (lock === 'busy' || lock === 'over')) { skipAnimations(); return false; }
@@ -3839,6 +4019,7 @@
     // the end-of-fight ribbon: Space / Enter hurries the hand-off — not the press that skipped the last animations
     if (M.endHandled && M.endSkip && (k === ' ' || k === 'Enter')) { if (!e.repeat && now() >= M.graceUntil) M.endSkip(); return true; }
     if (M.moment && (k === ' ' || k === 'Spacebar' || k === 'Enter' || k === 'Escape')) { if (!e.repeat && !actHeld()) skipMoment(); return true; }
+    if (M.cameo && (k === ' ' || k === 'Spacebar' || k === 'Enter' || k === 'Escape')) { if (!e.repeat && !actHeld()) skipCameo(); return true; }
     if (k === 'Escape') {
       if (M.mode.kind !== 'move') onRightClick();
       else if (M.pinned) onRightClick();
@@ -3916,16 +4097,42 @@
       return;
     }
     const cls = entry.cls || 'system';
-    const line = cls === 'narrator'
-      ? el('div.log-line.narrator', null, el('span.hl-dm', null, 'DM'), el('span', null, entry.text))
-      : el('div.log-line.' + cls + (aoo ? '.aoo' : ''), null, entry.text);
+    let line;
+    if (cls === 'narrator') line = el('div.log-line.narrator', null, el('span.hl-dm', { title: dmTitle() }, 'DM'), el('span', null, entry.text));
+    else if (cls === 'cameo') {
+      // V3: a cameo actor's line (Svammiel) carries his chip instead of the DM's; a cheat's line is marked
+      const sp = speakerOf(entry);
+      line = el('div.log-line.cameo' + (entry.cheat ? '.cheat' : ''), { style: { '--sc': sp.color } }, speakerChip(sp), el('span', null, cameoText(entry, sp)));
+    } else line = el('div.log-line.' + cls + (aoo ? '.aoo' : ''), null, entry.text);
     if (instant) line.style.animation = 'none';
     list.appendChild(line);
     while (list.children.length > LOG_MAX) list.removeChild(list.firstChild);
     if (stick) list.scrollTop = list.scrollHeight;
     // the initiative moment shows its DM line in the tray: no second copy in the caption
     if (cls === 'narrator' && !instant && entry.text !== M.momentLine) showDm(entry.text);
+    if (cls === 'cameo' && !instant && cameoCaptioned(entry)) showCaption(entry.text, speakerOf(entry));
     if (aoo && !instant) aooShown(aoo);
+  }
+
+  /** "😈 SVAMMIEL": a cameo actor's chip in the log (his colour, crimson-gold). */
+  function speakerChip(sp) {
+    return el('span.hl-dm.hl-cameo', { title: sp.name + (sp.title ? ', ' + sp.title : ''), style: { '--sc': sp.color } }, sp.icon + ' ' + sp.name.toUpperCase());
+  }
+  /** A cheat's log line starts with the actor's icon ("😈 Svammiel cheats: …"): the chip already shows it. */
+  function cameoText(entry, sp) {
+    const t = String(entry.text || '');
+    return sp.icon && t.indexOf(sp.icon + ' ') === 0 ? t.slice(sp.icon.length + 1) : t;
+  }
+  /**
+   * Does a cameo line also take the caption? A quip (the victory sulk: log + caption only, plan §4.1) always; with
+   * Settings "Log only" (no cameo FX at all) every line, unless the actor stands on the board (his lines are barks there).
+   * Otherwise the canvas already shows it (the swoop's bubble, an interjection's bust).
+   */
+  function cameoCaptioned(entry) {
+    if (entry.style === 'quip') return true;
+    if (cameoSetting() !== 'log') return false;
+    const s = S();
+    return !(s && entry.actor && DD.Cameo && typeof DD.Cameo.present === 'function' && DD.Cameo.present(s, entry.actor));
   }
 
   /** An attack of opportunity reached the screen: the first one of a fight explains the rule (in step with playback). */
@@ -3944,13 +4151,37 @@
     while (M.logQueue.length && M.logQueue[0].fxId < head) { const x = M.logQueue.shift(); appendLog(x.entry, false, x.turn, x.aoo); }
   }
 
-  function showDm(text) {
+  function showDm(text) { showCaption(text, null); }
+  /**
+   * The caption under the objective: a DM line (speaker null: the "DM" badge, "The DM (demoted)" under the table) or a
+   * cameo actor's (speaker = speakerOf(entry): his portrait and name). While a blocking cameo plays it waits, and shows
+   * when the cameo is over.
+   */
+  function showCaption(text, speaker) {
+    if (!M || !text) return;
     const E = M.els;
+    if (M.cameo) { M.cameoCaption = { text: text, speaker: speaker || null }; return; }
+    const badge = speaker
+      ? el('span.dm-port', { title: speaker.name + (speaker.title ? ', ' + speaker.title : ''), style: { '--sc': speaker.color } },
+        speaker.enemy ? DD.UI.portrait(speaker.enemy, 28, { fallback: speaker.icon }) : el('span', null, speaker.icon))
+      : el('span.dm-badge', { title: dmTitle() }, 'DM');
+    if (E.dmBadge && E.dmBadge.parentNode === E.dm) E.dm.replaceChild(badge, E.dmBadge);
+    else E.dm.insertBefore(badge, E.dm.firstChild);
+    E.dmBadge = badge;
+    E.dmWho.textContent = speaker ? speaker.name + ':' : '';
+    E.dm.classList.toggle('cameo', !!speaker);
     E.dmText.textContent = text;
+    M.caption = { text: String(text), speaker: speaker || null };
     E.dm.classList.add('show');
     clearTimeout(M.dmTimer);
     M.dmTimer = later(function () { if (M) { E.dm.classList.remove('show'); E.dm.classList.remove('peek'); } }, Math.min(9000, 3200 + String(text).length * 45));
     placeDm();
+  }
+  function hideCaption() {
+    if (!M) return;
+    clearTimeout(M.dmTimer);
+    M.els.dm.classList.remove('show');
+    M.els.dm.classList.remove('peek');
   }
 
   /**
@@ -4012,8 +4243,10 @@
   }
 
   /**
-   * The objective panel sits over the back of the board: when a unit (or the hovered tile) is under it, it fades and
-   * lets clicks through, so nobody hides behind "Defeat all enemies" (a first-time player could not find the spider).
+   * The objective panel sits over the back of the board: when a unit (or the hovered tile) is under it, its background
+   * goes and the panel lets clicks through, so nobody hides behind "Defeat all enemies" (a first-time player could not
+   * find the spider). [QA FIGHTS-04] Only the parts over something fade (the title, the flavour line, each chip): the
+   * rest stays readable, and a chip that is clear of the units keeps its tooltip (Svammiel's cheats, flying at the back).
    */
   function updateObjPeek(force) {
     if (!M || (DD.headless && !force) || !DD.Render || typeof DD.Render.worldToScreen !== 'function' || !S()) return;
@@ -4021,13 +4254,18 @@
     if (E.obj.classList.contains('hud-hidden')) return;
     const r = E.obj.getBoundingClientRect();
     if (!r.width) return;
-    // the panel's own box, not the faded one (opacity does not change it)
-    let peek = coverCost(r, unitBoxes().map(function (b) { return Object.assign({}, b, { w: 1 }); })) > 0;
-    if (!peek && M.hover) {
+    // the boxes' own geometry, not the faded one (opacity does not change it)
+    const boxes = unitBoxes().map(function (b) { return Object.assign({}, b, { w: 1 }); });
+    if (M.hover) {
       const q = DD.Render.worldToScreen(M.hover.x, M.hover.y);
-      peek = q.x > r.left && q.x < r.right && q.y > r.top && q.y - 20 < r.bottom;
+      boxes.push({ x0: q.x, x1: q.x, y0: q.y - 20, y1: q.y, w: 1 });
     }
+    const peek = coverCost(r, boxes) > 0;
     if (E.obj.classList.contains('peek') !== peek) E.obj.classList.toggle('peek', peek);
+    Array.prototype.forEach.call(E.obj.querySelectorAll('.ho-main, .ho-flavor, .hud-chip'), function (n) {
+      const under = peek && coverCost(n.getBoundingClientRect(), boxes) > 0;
+      if (n.classList.contains('ho-under') !== under) n.classList.toggle('ho-under', under);
+    });
   }
 
   // ---- the board fit keeps out of the panels -----------------------------------------------------------------------
@@ -4255,6 +4493,52 @@
     E.rollTray.innerHTML = '';
     M.trackFresh = true;
     M.trackSig = '';
+    M.topSig = '';
+    refreshView();
+  }
+
+  // ---- V3: a blocking cameo (Svammiel; hosted for fx_render's 'cameo' event) -------------------------------------------
+  // fx_render draws it on the canvas (entrance / swoop / shadow) and asks the host how long it lasts; the HUD holds input
+  // meanwhile, lets Space / Enter / Esc / a click skip it (elapsed = ms, the dice moment's path), and AutoPlay shortens it.
+  // Bubbles and quips never block and are never asked.
+  function cameoWants(evt) { return !!M && !M.flushing && !!evt; }
+  /** A blocking cameo starts: → how long playback waits for it (ms at speed 1; 0 = skip it and draw nothing). */
+  function startCameo(evt) {
+    if (!M || !evt) return evt ? num(evt.ms) : 0;
+    const ms = Math.max(0, Math.round(num(evt.ms) * (autoplayOn() ? CAMEO_AUTO : 1)));
+    if (!ms) return 0;
+    const cam = cameoDef(evt.actor);
+    M.cameo = { evt: evt, style: String(evt.style || ''), actor: evt.actor || null, name: String(evt.name || (cam && cam.name) || 'Svammiel'),
+      icon: String(evt.icon || (cam && cam.icon) || '😈'), ms: ms };
+    // he has the floor: the caption waits and comes back when he is done
+    if (M.els.dm.classList.contains('show') && M.caption) { M.cameoCaption = M.caption; hideCaption(); }
+    M.els.cameoScrim.classList.remove('hud-hidden');
+    M.topSig = '';
+    refreshView();
+    return ms;
+  }
+  /** Follow the event: once fx_render is done with it (played out, skipped or flushed) the HUD takes over again. */
+  function tickCameo() {
+    const c = M && M.cameo;
+    if (!c) return;
+    const F = DD.FX;
+    if (!F || (F.active.indexOf(c.evt) < 0 && F.queue.indexOf(c.evt) < 0) || c.evt.done) endCameo();
+  }
+  /** Skip it (Space / Enter / Esc / a click): the event finishes on the next frame; the same press never also acts. */
+  function skipCameo() {
+    const c = M && M.cameo;
+    if (!c) return;
+    holdAfterSkip();
+    c.evt.elapsed = Math.max(num(c.evt.elapsed), num(c.evt.ms));
+    endCameo();
+  }
+  function endCameo() {
+    if (!M || !M.cameo) return;
+    M.cameo = null;
+    M.els.cameoScrim.classList.add('hud-hidden');
+    const cap = M.cameoCaption;
+    M.cameoCaption = null;
+    if (cap && cap.text) showCaption(cap.text, cap.speaker);
     M.topSig = '';
     refreshView();
   }
@@ -4488,6 +4772,7 @@
     if (!M) return;
     const busy = fxBusy();
     if (M.moment) tickMoment();
+    if (M.cameo) tickCameo();
     if (busy !== M.busy) {
       M.busy = busy;
       M.busySince = now();
@@ -4550,6 +4835,8 @@
     M.trackSig = ''; M.shownTurnSig = null; M.turns = []; M.logTurn = null; M.logTurnShown = null; M.rollLine = null;
     M.aooTaught = false; M.provokedTurn = -1;
     if (M.moment) { M.moment = null; M.els.rollTray.classList.add('hud-hidden'); M.els.rollScrim.classList.add('hud-hidden'); }
+    if (M.cameo) { M.cameo = null; M.els.cameoScrim.classList.add('hud-hidden'); }
+    M.cameoCaption = null;
     M.logQueue = [];
     M.logRound = null;
     M.endHandled = false;
@@ -4562,8 +4849,8 @@
     const log = s.log || [];
     if (!log.length) M.els.logList.appendChild(el('div.hl-empty', null, 'Nothing has happened yet. Savor it.'));
     log.slice(-LOG_MAX).forEach(function (entry) { appendLog(entry, true); });
-    const lastNarr = log.filter(function (e) { return e.cls === 'narrator'; }).pop();
-    if (lastNarr && s.round <= 1) showDm(lastNarr.text);
+    const lastNarr = log.filter(function (e) { return e.cls === 'narrator' || (e.cls === 'cameo' && cameoCaptioned(e)); }).pop();
+    if (lastNarr && s.round <= 1) showCaption(lastNarr.text, lastNarr.cls === 'cameo' ? speakerOf(lastNarr) : null);
     const d = defaultSelection();
     M.sel = d ? d.id : null;
     // a fight already under way (mounted mid-fight, Continue): the current turn is the first one the HUD knows
@@ -4690,6 +4977,8 @@
       turns: [], trackSig: '', trackFresh: false, chipHl: undefined, shownTurnSig: null, logTurn: null, logTurnShown: null,
       moment: null, rollLine: null, threatHold: false, threatSticky: !!(DD.Storage.get('hud', {}) || {}).threat,
       flushing: false, realInput: false, objCheckAt: 0,
+      // V3: the blocking cameo on screen, the caption it holds back, the caption as shown
+      cameo: null, cameoCaption: null, caption: null,
     };
     buildLayout(root);
     installFitAvoid();
@@ -4701,6 +4990,8 @@
     INPUT_EVENTS.forEach(function (n) { window.addEventListener(n, M.onInput, { capture: true, passive: true }); });
     // host the initiative dice moment for fx_render's 'initiative' marker
     if (DD.FXRender && DD.FXRender.moments) DD.FXRender.moments.initiative = MOMENT_HOST;
+    // V3: and Svammiel's blocking cameos (fx_render's 'cameo' event)
+    if (DD.FXRender && DD.FXRender.moments) DD.FXRender.moments.cameo = CAMEO_HOST;
     adoptState(S());
     M.busy = fxBusy();
     refresh();
@@ -4708,6 +4999,7 @@
   }
 
   const MOMENT_HOST = { wants: function (evt) { return momentWants(evt); }, start: function (evt) { return startMoment(evt); } };
+  const CAMEO_HOST = { wants: function (evt) { return cameoWants(evt); }, start: function (evt) { return startCameo(evt); } };
 
   function unmount() {
     if (!M) return;
@@ -4717,6 +5009,7 @@
     if (M.onAltUp) window.removeEventListener('keyup', M.onAltUp, true);
     if (M.onBlur) window.removeEventListener('blur', M.onBlur);
     if (DD.FXRender && DD.FXRender.moments && DD.FXRender.moments.initiative === MOMENT_HOST) delete DD.FXRender.moments.initiative;
+    if (DD.FXRender && DD.FXRender.moments && DD.FXRender.moments.cameo === CAMEO_HOST) delete DD.FXRender.moments.cameo;
     M.offs.forEach(function (off) { DD.safe('HUD unsubscribe', off); });
     clearTimeout(M.endTimer); clearTimeout(M.ribbonTimer); clearTimeout(M.dmTimer);
     if (DD.UI && DD.UI.hideTooltip) DD.UI.hideTooltip();
@@ -4823,6 +5116,20 @@
       return { active: true, progress: M.moment.p, line: M.moment.line, cards: M.moment.cards.map(function (c) { return { unitId: c.r.unitId, roll: c.r.roll, total: c.r.total, rank: c.to + 1, from: c.from, landed: c.landed }; }) };
     },
     skipMoment: function () { skipMoment(); },
+    // ---- V3 ----
+    /** The blocking cameo the HUD hosts now: { active, style, actor, name, ms, progress } or null. */
+    cameo: function () {
+      const c = M && M.cameo;
+      return c ? { active: true, style: c.style, actor: c.actor, name: c.name, ms: c.ms, progress: U.clamp(num(c.evt.elapsed) / Math.max(1, num(c.evt.ms, 1)), 0, 1) } : null;
+    },
+    /** Skip it (as Space / Enter / Esc / a click do). */
+    skipCameo: function () { skipCameo(); },
+    /** The caption as shown: { text, speaker (null = the DM; else the actor's name), actor, title } or null when hidden. */
+    caption: function () {
+      if (!M || !M.caption || !M.els.dm.classList.contains('show')) return null;
+      const sp = M.caption.speaker;
+      return { text: M.caption.text, speaker: sp ? sp.name : null, actor: sp ? sp.actor : null, title: M.els.dmBadge ? M.els.dmBadge.title : '' };
+    },
     /** Tests: host the dice moment even headless (FX must not be instant for the marker to play). */
     forceMoments: function (on) { if (M) M.forceMoments = on !== false; },
     /** Tests: apply the real-input guard windows headless too (after a skip / when control returns). */

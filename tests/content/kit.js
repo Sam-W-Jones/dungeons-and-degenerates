@@ -1799,7 +1799,10 @@
     t.ok(DD.Targeting.isValidTarget(k, sand, 3, 3) && DD.Combat.useSkill(k, sand, 3, 3), 'Sand in Your Eye I can be aimed at a totem');
     t.eq(hp0 - tot.hp, DD.skillLevel(DD.getSkill('gen_pocket_sand'), 1).dmg, 'it takes the listed ' + DD.skillLevel(DD.getSkill('gen_pocket_sand'), 1).dmg + ' damage');
     // the opt-outs are the listed few, each with its reason (docs/notes/kit.md "Finish (Nov 14)")
-    const OPT_OUT = ['bas_pounce', 'bet_horn_toss', 'ell_fetch', 'kir_beyond', 'sla_hold_still', 'sla_rock_bottom', 'sla_stress_ball', 'spa_veinglory', 'zar_bling_throw'];
+    // V3 (the integrator, blocking the flip's full run): Benedick's The Inevitable (he arrives next to a foe, so a crate is
+    // not worth the trip, and his basic still bites one; DESIGN §4.2 names it; reason requested for docs/notes/kit.md)
+    const OPT_OUT = ['bas_pounce', 'bet_horn_toss', 'ell_fetch', 'kir_beyond', 'sla_hold_still', 'sla_rock_bottom', 'sla_stress_ball', 'spa_veinglory', 'zar_bling_throw',
+      'ben_inevitable'];
     // [finish review] Head Over Heels (a throw; 5 damage at III only) was a SILENT opt-out (a 'custom' area on a utility):
     // now it says objects: false, so every damaging single-target skill either aims at objects or is on this list
     const hoh = DD.getSkill('bet_horn_toss');

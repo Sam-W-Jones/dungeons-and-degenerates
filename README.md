@@ -14,9 +14,11 @@ collectors, overdue liches, a beholder optometrist and, finally, the Dungeon Mas
 
 ## How it plays
 
-- **Party:** pick 4 of 16 heroes, all available from the start: Zarathor, Syllamin, Professor Marbles, Marwyn the
+- **Party:** pick 4 of 17 heroes, all available from the start: Zarathor, Syllamin, Professor Marbles, Marwyn the
   Magnificent, Ellaria, Josiah (and Onyx, his raven), Sparrow, Corelos, Slate, Mayor Buga, Kiri, Betty, Basanos,
-  Valdris, Hjalmar and Pebbles.
+  Valdris, Hjalmar, Pebbles and Benedick the Inevitable, a courteous snail knight from the margins of old manuscripts
+  who leaves a slime trail that stops monsters in their tracks and, given a turn in his shell, bursts out as a
+  Dragonsnail. He is the slowest hero in the dungeon. He always gets there.
 - **Combat:** deploy your party, then **roll for initiative**. Every hero and monster acts in turn order. On a
   hero's turn you get 3 AP for moving, skills, consumables and interactions; unused AP is lost. Enemies act
   without warning (hold Alt to shade every tile they could reach); only bosses and a few elites wind up their

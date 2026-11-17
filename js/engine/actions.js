@@ -8,6 +8,7 @@
  * gainAp outside the unit's turn is banked for its next turn, units arriving after initiative roll for a slot, and a
  * stun-like or polymorph interrupts pending wind-ups. Attacks of opportunity: a move action (moveAlong with provoke)
  * leaving a tile next to an opposing melee unit lets it strike once (once per round per attacker; opportunityOf).
+ * V3: log(text, cls, extra) (cameo lines carry their speaker), addRule honours rule.silent, spawn's { owner } (E1).
  */
 (function () {
   'use strict';
@@ -192,10 +193,14 @@
     return def.core || /(ed|ing|y|ble|ous|ive|al|ent|ful|less)$/i.test(last) || /^(in|on|at|under|out|off|up)$/i.test(words[0] || '') ? 'is' : 'gains';
   }
   let logCount = 0;   // lines logged so far (any fight): "did that callback log anything?"
-  Act.log = function (text, cls) {
+  /**
+   * A combat log line. V3: `extra` fields are merged into the entry (and carried by 'combat:log'), e.g. a cameo line's
+   * { speaker: 'Svammiel', actor: 'svammiel' } with cls 'cameo'; round / text / cls stay the engine's.
+   */
+  Act.log = function (text, cls, extra) {
     const s = S();
     if (!s || Act.simulating || Act.muted || !text) return;
-    const entry = { round: s.round, text: String(text), cls: cls || 'system' };
+    const entry = Object.assign({}, extra && typeof extra === 'object' ? extra : null, { round: s.round, text: String(text), cls: cls || 'system' });
     logCount++;
     s.log.push(entry);
     if (s.log.length > 400) s.log.splice(0, s.log.length - 400);
@@ -1016,7 +1021,7 @@
       const f = side[i];
       if (f !== target && active(f) && f.side === target.side) DD.Hooks.fire('onAllyDowned', f, f, target, d);
     }
-    emit('unit:downed', { unitId: target.id, unit: target });
+    emit('unit:downed', { unitId: target.id, unit: target, killerId: cr && cr !== target ? cr.id : null, cause: d.cause || null });
     if (DD.Combat && DD.Combat.checkEnd) DD.Combat.checkEnd();
   }
 
@@ -2230,7 +2235,11 @@
     if (!u.dead && DD.Combat && DD.Combat.noteArrival) DD.Combat.noteArrival(u);
   }
 
-  /** Spawn an enemy-side unit (difficulty HP scaling applies). opts: side, hpMult, noScale, noFx, silent, level. */
+  /**
+   * Spawn an enemy-side unit (difficulty HP scaling applies). opts: side, hpMult, noScale, noFx, silent, level.
+   * V3 E1: opts.owner (a unit or unit id) sets ownerId before the unit rolls initiative, so an `actsWithOwner` unit (def,
+   * or opts.actsWithOwner for this unit) takes no entry of its own and acts on its owner's turn, right after it.
+   */
   Act.spawn = function (enemyId, x, y, opts) {
     opts = opts || {};
     const s = S();
@@ -2240,6 +2249,10 @@
     const pos = place(probe, x, y);
     if (!pos) return null;
     probe.x = pos.x; probe.y = pos.y;
+    if (opts.owner) {
+      probe.ownerId = typeof opts.owner === 'object' ? opts.owner.id : opts.owner;
+      if (opts.actsWithOwner) probe.actsWithOwner = true;
+    }
     arrive(probe, opts);
     if (!opts.silent) {
       Act.log(probe.name + ' joins the fight!', 'enemy');
@@ -2281,7 +2294,8 @@
     for (let i = s.rules.length - 1; i >= 0; i--) if (s.rules[i].id === r.id) s.rules.splice(i, 1);
     s.rules.push(r);
     bump();
-    Act.log('New rule: ' + r.name + (r.desc ? ' (' + (typeof r.desc === 'function' ? r.desc() : r.desc) + ')' : ''), 'system');
+    // V3: rule.silent (a cheat announces itself through DD.Cameo); cheat / source / next ride along for the HUD's chips
+    if (!r.silent) Act.log('New rule: ' + r.name + (r.desc ? ' (' + (typeof r.desc === 'function' ? r.desc() : r.desc) + ')' : ''), 'system');
     if (typeof r.onAdd === 'function') DD.safe('rule ' + r.id + ' onAdd', r.onAdd, r, [s, r]);
     return r;
   };

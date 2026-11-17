@@ -1,6 +1,6 @@
 /* Dungeons and Degenerates — js/ui/screens/party_select.js
- * Party select: roster of every hero (v2: all sixteen are available from the start; the lock UI only shows for a hero
- * def with an unlock condition, none today), a details panel (portrait, blurb, role,
+ * Party select: roster of every hero (V3: all seventeen are available from the start — the count is the registry's; the
+ * lock UI only shows for a hero def with an unlock condition, none today), a details panel (portrait, blurb, role,
  * complexity, stats, passive, basic, signature, starting skills and skill pool with tooltips), four party slots,
  * difficulty picker, "Roll for Party" and Start → DD.Run.newRun(heroIds, difficulty). Remembers the last party.
  */
@@ -10,6 +10,8 @@
 
   const FLAG_LABEL = { flying: ['🪽', 'Flying', 'Ignores height, pits, liquids and terrain cost.'], hop: ['🐇', 'Hop', 'Can climb 2 levels in one step.'], large: ['🐘', 'Large', 'A big target. Hard to miss.'], immovable: ['🗿', 'Immovable', 'Cannot be pushed or pulled.'] };
   const EMPTY_SEAT = ['Empty Chair', 'Bring Snacks', 'Seat Reserved', 'Probably Late'];
+  // the classic 4-column roster holds a 4 × 4 grid; a bigger registry switches to the wider `.many` grid (CSS)
+  const GRID4_CAP = 4 * 4;
 
   let st = null; // { selected: [], focus, difficulty, refs }
 
@@ -214,8 +216,9 @@
         root.appendChild(UI.header('Assemble Your Degenerates', 'Pick four heroes for the campaign. Choose wisely. Or don\'t — that\'s the fun part.',
           [diff, UI.button('Back', function () { UI.show('title'); }, { cls: 'ghost', icon: '←', hotkey: 'Escape', showKey: false })]));
 
-        const body = el('div.ps-body');
-        const roster = el('div.ps-roster');
+        // V3: more heroes than a 4 × 4 grid holds (17 is prime) take a wider grid: 5 columns below 1280 px wide, 6 above
+        const body = el('div.ps-body', { class: ids.length > GRID4_CAP ? 'many' : null });
+        const roster = el('div.ps-roster', { class: ids.length > GRID4_CAP ? 'many' : null, dataset: { n: String(ids.length) } });
         if (!ids.length) {
           roster.appendChild(el('div.empty-state', null, el('div.es-icon', null, '🪑'), el('div', null, 'No heroes have shown up to Session Zero yet.')));
         }

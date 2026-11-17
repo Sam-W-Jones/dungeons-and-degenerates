@@ -10,6 +10,12 @@
   const DD = window.DD;
 
   const B = (DD.Balance = {
+    // ---- the campaign (V3) ------------------------------------------------------------------------------------------
+    // How many acts a campaign has. DD.finalAct() reads it (clamped 3..DD.MAX_ACT); every module asks DD.finalAct().
+    // Act 4 "Under the Table" shipped dark at 3 (v2's campaign) until the V3 integrator flipped it to 4 (Nov 15): act 4
+    // is live after the act-3 boss. bal=campaign.acts:3 (sims: acts=3) still plays the v2 campaign.
+    campaign: { acts: 4 },
+
     // ---- enemy scaling (DD.Combat.start → state.difficulty = { hp, dmg }) -----------------------------------------
     // A fight's enemy multipliers = difficulty × act × kind (normal / elite / boss fight). Sandbox fights (tests,
     // debug) use the difficulty factor alone, so 'normal' stays neutral there. `dmg` is the one attacker multiplier
@@ -34,8 +40,16 @@
       1: { hp: 1, dmg: 1, normal: { hp: 1.15, dmg: 1.3 }, elite: { hp: 1.05, dmg: 1.2 }, boss: { hp: 0.9, dmg: 1.35 } },
       2: { hp: 1, dmg: 1 },
       3: { hp: 1, dmg: 1 },
+      // V3: act 4 (the gauntlet: every fight a boss-kind fight); read once DD.finalAct() is 4. BAL (Nov 15): at ×1 campaign
+      // parties (three acts of items and Blessings, a tavern between doors) won the doors ~99% and Svammiel ~95-100%, a 35%
+      // four-act campaign against the user's "about 25%"; ×1.3 damage (HP unchanged: the doors already ran 9-11 rounds)
+      // plus the per-door rows below aim the doors at ~97% and Svammiel at ~85% (docs/notes/balance.md "V3")
+      4: { hp: 1, dmg: 1.3 },
     },
     kind: { normal: { hp: 1, dmg: 1 }, elite: { hp: 1, dmg: 1 }, boss: { hp: 1, dmg: 1 } },
+    // V3: order scaling of the act-4 doors, applied by B.scale(…, { gauntlet: { index } }) (index = lanes beaten before
+    // this door): HP × (1 + hpPerBeaten × index), damage × (1 + dmgPerBeaten × index). Off: the order stays a free choice.
+    gauntlet: { hpPerBeaten: 0, dmgPerBeaten: 0 },
     // Outlier fixes for single encounters (× on top of the above), keyed by encounter id.
     // The late bosses (sustain refit 2, Nov 13): at ×1 a campaign party won them 95-100%. Damage-heavy rows (shorter,
     // deadlier fights split less by healer than longer ones; HP mostly stretches the Lich's fee clock and Iris's fights)
@@ -54,6 +68,21 @@
       // win rate (paired 500 boss fights 63% -> 65%; balance.md "Finish")
       boss_dr_iris: { hp: 1.1, dmg: 1.45 },
       boss_dm: { hp: 1.35, dmg: 1.6 },
+      // V3 act 4 (BAL, Nov 15), on top of act[4]: each door tuned on its own to the same campaign band (no order scaling,
+      // the order stays a free choice). The long doors trade HP for damage (the Gardener ran 11-13 rounds and stalled once,
+      // the goats 10-11); Galbraith and the Coven, the doors that bite hardest, step back a little. Svammiel, the finale,
+      // carries the hardest row, ~11-12 rounds (docs/notes/balance.md "V3").
+      // V3 balance audit (Nov 16-17): at the pass's rows (500 campaign runs) the goats were the costliest door (95.4%, 1.17
+      // downs against ≤ 1.1; the Radio Edit, a whole-fight ban, costs ~4 points in act-4-only sims) and Svammiel won 91.5%
+      // of 142 fights (plan 80-85%). The goats' ×1.1 damage -> ×1 pays the Radio Edit back on their own row; Svammiel ×1.1 HP
+      // / ×1.3 damage (×1.69 in all). 600 fresh runs: campaign 24.0%, every door 97-98% (the goats 97.8%, 0.89 downs),
+      // Svammiel 86% (docs/notes/balance.md "V3 balance audit")
+      boss_gardener: { hp: 0.75, dmg: 1.45 },
+      boss_league: { dmg: 1.05 },
+      boss_galbraith: { dmg: 0.95 },
+      boss_coven: { dmg: 0.9 },
+      boss_goats: { hp: 0.8 },
+      boss_svammiel: { hp: 1.1, dmg: 1.3 },
     },
     tierHp: { minion: 1, normal: 1, elite: 1, boss: 1 },
     enemyMov: { minion: 0, normal: 0, elite: 0, boss: 0 },   // + move for enemies that move at all (real fights)
@@ -109,8 +138,10 @@
       treasure: [20, 35], treasurePerAct: 10,                             // treasure nodes
     },
     // Shop prices (items without their own price use their rarity's; consumables carry their own).
-    prices: { common: 40, rare: 80, legendary: 150, cursed: 25, consumable: 25, tome: 60, scar: 45, heal: 30, reroll: 40 },
-    priceAct: { 1: 1, 2: 1, 3: 1 },   // shop price multiplier per act (consumables, items, tomes and services)
+    // V3: bribe = "Bribe the Floor Boss" (act-4 shops only: Svammiel skips his cameo cheat in the next fight)
+    prices: { common: 40, rare: 80, legendary: 150, cursed: 25, consumable: 25, tome: 60, scar: 45, heal: 30, reroll: 40, bribe: 75 },
+    // shop price multiplier per act (consumables, items, tomes and services); V3: act 4 is "Svammiel's markup"
+    priceAct: { 1: 1, 2: 1, 3: 1, 4: 1.25 },
 
     // ---- healing outside fights (fractions of max HP) -------------------------------------------------------------
     // reward: Mystery Stew, a pick-1-of-3 choice offered only when someone is hurt (0.3 -> 0.35 by sustain refit 3: the
@@ -121,7 +152,17 @@
     map: {
       weights: { combat: 44, event: 24, elite: 14, shop: 9, treasure: 7, tavern: 3 },   // node types, rows 1-5
       minShops: 2,   // shops guaranteed per act map (rows 1-5, never two in a row; sustain refit 3: 1 -> 2)
+      // V3: the act-4 gauntlet's stops (DD.RunMap: lobby → door → intermission → … → door → last stop → the floor boss);
+      // minShops is not read there
+      gauntlet: { lobby: ['shop', 'event'], between: ['tavern', 'shop', 'event'], last: ['tavern', 'shop'] },
     },
+
+    // ---- V3: Svammiel's cameos (DD.Cameo) ------------------------------------------------------------------------------
+    // Interjections (bubble / quip cameos) per fight: at most perFight, perRound a round, minGap rounds apart; the start
+    // cameo, the twist and forced lines never count. comeback: the chance a roasted hero answers back. off: 1 = no
+    // cameo (and no cameo cheat) in any fight of this page — Combat.start sets state.noCameo (sims' and debug cameo=0,
+    // bal=cameo.off:1); the shipped game keeps 0.
+    cameo: { perFight: 3, perRound: 1, minGap: 2, comeback: 0.6, off: 0 },
 
     // ---- the Table of Questionable Blessings (DD.Passives) -------------------------------------------------------------
     passives: {
@@ -138,12 +179,14 @@
 
   // ---- helpers (pure: they only combine the data above) ---------------------------------------------------------------
   function num(v, fb) { return typeof v === 'number' && isFinite(v) ? v : fb; }
-  function actKey(act) { return Math.max(1, Math.min(3, Math.floor(+act) || 1)); }
+  // the act row of a fight: 1..DD.finalAct() (an act past the campaign's end reads the last act's row)
+  function actKey(act) { return Math.max(1, Math.min(DD.finalAct(), Math.floor(+act) || 1)); }
   function kindKey(kind) { return kind === 'elite' || kind === 'boss' ? kind : 'normal'; }
   function diffKey(d) { return typeof d === 'string' && B.difficulty[d] ? d : 'normal'; }
 
   /** Enemy multipliers of a fight: { id, hp, dmg }. opts.neutral: the difficulty factor alone (sandbox fights);
-   *  opts.encounter: an encounter id with its own entry in B.encounters. */
+   *  opts.encounter: an encounter id with its own entry in B.encounters; V3 opts.gauntlet: an act-4 door's
+   *  { index } (lanes beaten before it), scaled by B.gauntlet (the callers pass setup.gauntlet / state.data.gauntlet). */
   B.scale = function (difficulty, act, kind, opts) {
     const id = diffKey(difficulty);
     const d = B.difficulty[id];
@@ -154,6 +197,12 @@
       const e = (opts && opts.encounter && B.encounters && B.encounters[opts.encounter]) || {};
       hp *= num(a.hp, 1) * num(ak.hp, 1) * num(k.hp, 1) * num(e.hp, 1);
       dmg *= num(a.dmg, 1) * num(ak.dmg, 1) * num(k.dmg, 1) * num(e.dmg, 1);
+      const gi = opts && opts.gauntlet ? Math.max(0, Math.floor(num(+opts.gauntlet.index, 0))) : 0;
+      if (gi) {
+        const g = B.gauntlet || {};
+        hp *= Math.max(0, 1 + num(g.hpPerBeaten, 0) * gi);
+        dmg *= Math.max(0, 1 + num(g.dmgPerBeaten, 0) * gi);
+      }
     }
     return { id: id, hp: Math.round(hp * 1000) / 1000, dmg: Math.round(dmg * 1000) / 1000 };
   };

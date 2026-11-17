@@ -5,12 +5,20 @@
  * levels up per won fight, the lowest level first), consumables, gold, Party / Settings / Save & Quit.
  * Shows a big act title banner the first time an act's map is opened. At the start of act 1 the banner and the
  * narration box also name each hero's Session Zero quirk (the Blessing rolled at run start).
+ * V3 (plan §2.2, §4.10): a gauntlet map (Svammiel's floor, map.shape 'gauntlet') is drawn as his floor plan — graph
+ * paper, red ink, table legs — with every node on a lane track (a door per lane on each door row, the stops between,
+ * the floor boss last), only travelled and open links (plus a dotted stub: "leads on"), door portraits with the lane's
+ * icon and shortName, sealed doors greyed out ("✓ Beaten"). Node size and label width follow the board size and the
+ * row / track counts (read from the map, never a literal), so any number of lanes (0-6) fits without overlap.
  */
 (function () {
   'use strict';
   const DD = window.DD;
 
   const LEGEND = ['combat', 'elite', 'event', 'shop', 'tavern', 'treasure', 'boss'];
+  // V3: the gauntlet's legend lists only what its board shows (the 😈 Mini-boss entry never appears on an act 1-3 map)
+  const GAUNTLET_LEGEND = ['miniboss', 'event', 'shop', 'tavern', 'boss'];
+  const GX0 = 9, GX1 = 92;   // the gauntlet's first and last column (% of the board width); CSS --g-cols spans them
   const SVGNS = 'http://www.w3.org/2000/svg';
   const MAP_ENTER_FALLBACK = [
     'The party consults the map. The map consults the party. Nobody is reassured.',
@@ -20,6 +28,7 @@
 
   let bannerShownFor = null;
   let timers = [];
+  let onResize = null;
 
   function nodeList(map) {
     const out = [];
@@ -109,11 +118,228 @@
     DD.safe('Run.travel', DD.Run.travel, DD.Run, [nodeId]);
   }
 
+  // ---- V3: the gauntlet (Svammiel's floor) ---------------------------------------------------------------------------
+  function isGauntletMap(map) { return !!map && map.shape === 'gauntlet'; }
+
+  /** Track index of item i of n spread over T tracks (n ≤ T: distinct, centred). */
+  function spread(i, n, T) {
+    if (n >= T) return Math.min(i, T - 1);
+    return DD.util.clamp(Math.round((i + 0.5) / n * T - 0.5), 0, T - 1);
+  }
+
+  /**
+   * The gauntlet's grid: columns = the map's rows (left → right), every node on one of T horizontal tracks (T = the
+   * lane count, at least the widest stop row): a lane's doors share its track, stops sit on tracks too, so a door's
+   * label (under it, between two tracks) never meets a node. → { pos: { id: { x, y } } (% of the nodes layer), cols,
+   * tracks }. No jitter: it's a floor plan.
+   */
+  function gauntletLayout(map) {
+    const nodes = nodeList(map);
+    const lanes = Array.isArray(map.lanes) ? map.lanes : [];
+    const L = lanes.length;
+    const laneIdx = {};
+    lanes.forEach(function (l, i) { laneIdx[l.id] = i; });
+    let maxRow = 0;
+    const perRow = {};
+    nodes.forEach(function (n) {
+      const r = n.row || 0;
+      maxRow = Math.max(maxRow, r);
+      (perRow[r] = perRow[r] || []).push(n);
+    });
+    let widest = 1;
+    Object.keys(perRow).forEach(function (r) {
+      const list = perRow[r].filter(function (n) { return n.type !== 'miniboss' && n.type !== 'boss'; });
+      widest = Math.max(widest, list.length);
+    });
+    const T = Math.max(L, widest, 1);
+    const pos = {};
+    nodes.forEach(function (n) {
+      const r = n.row || 0;
+      const x = GX0 + (maxRow ? r / maxRow : 0.5) * (GX1 - GX0);
+      let y = 50;
+      if (n.type === 'miniboss' && laneIdx[n.lane] !== undefined) y = (spread(laneIdx[n.lane], L, T) + 0.5) / T * 100;
+      else if (n.type !== 'boss' && n.id !== map.boss) {
+        const list = perRow[r].filter(function (m) { return m.type !== 'miniboss'; }).sort(function (a, b) { return (a.col || 0) - (b.col || 0); });
+        y = (spread(list.indexOf(n), list.length, T) + 0.5) / T * 100;
+      }
+      pos[n.id] = { x: x, y: y };
+    });
+    return { pos: pos, cols: Math.max(1, maxRow), tracks: T };
+  }
+
+  /** The door's tooltip: its full name (the League's stretches: the wrap is the joke), the teaser, the hint, the state. */
+  function doorTooltip(node, state, lane) {
+    const UI = DD.UI;
+    const info = DD.RunMap && DD.RunMap.nodeInfo ? DD.safe('RunMap.nodeInfo', DD.RunMap.nodeInfo, DD.RunMap, [node]) || {} : {};
+    const isBoss = node.type === 'boss';
+    const lead = lane.portrait ? DD.getEnemy(lane.portrait) : null;
+    const title = isBoss && lead ? UI.bossWithTitle(lead.name, lead.boss && lead.boss.title) : lane.name;
+    const sub = isBoss ? 'Floor Boss' : 'Mini-boss' + (node.sealed ? ' · sealed' : '');
+    const sealed = !!(node.sealed || info.sealed);
+    const status = sealed ? '<div class="tt-foot good">✓ Beaten. This door is sealed on every row.</div>' :
+      state === 'reachable' ? '<div class="tt-foot good">' + (isBoss ? 'The last door. Click to face him.' : 'Choose your next floor boss: click to travel here.') + '</div>' :
+        state === 'current' ? '<div class="tt-foot">The party is here.</div>' :
+          '<div class="tt-foot">' + (isBoss ? 'Behind every other door. Then him.' : 'A door of this lane. Beat it once and every door of the lane is sealed.') + '</div>';
+    return '<div class="tt tt-node tt-door"><div class="tt-head"><span class="tt-icon">' + lane.icon + '</span><div class="tt-titles"><div class="tt-title">' + UI.esc(title) + '</div><div class="tt-sub">' + UI.esc(sub) + '</div></div></div>' +
+      (lane.teaser ? '<div class="tt-desc">' + UI.esc(lane.teaser) + '</div>' : '') +
+      (lane.hint ? '<div class="tt-target">🧭 ' + UI.esc(lane.hint) + '</div>' : '') +
+      '<div class="tt-target">' + UI.esc(info.desc || (UI.NODE_TYPES[node.type] || {}).desc || '') + '</div>' + status + '</div>';
+  }
+
+  /** Svammiel's floor plan (see the file comment). */
+  function renderGauntlet(board, run) {
+    const UI = DD.UI, el = UI.el;
+    const map = run.map;
+    const nodes = nodeList(map);
+    const g = gauntletLayout(map);
+    const pos = g.pos;
+    board.classList.add('gauntlet');
+    board.style.setProperty('--g-cols', String(g.cols));
+    board.style.setProperty('--g-tracks', String(g.tracks));
+    const visited = (run.visited || []).slice();
+    const avail = availableIds(run);
+    const current = run.nodeId;
+    const visitedSet = {};
+    visited.forEach(function (id) { visitedSet[id] = true; });
+    if (current) visitedSet[current] = true;
+    const curNode = current && map.nodes ? map.nodes[current] : null;
+    const curRow = curNode ? curNode.row || 0 : -1;
+    const start = { x: 3.4, y: 50 };
+
+    // only the travelled and the open links (complete rows would be a hairball)
+    const links = svg('svg', { class: 'map-links', viewBox: '0 0 100 100', preserveAspectRatio: 'none' });
+    function addLink(a, b, cls) {
+      const d = curve(a, b);
+      links.appendChild(svg('path', { d: d, class: 'link-shadow ' + cls, 'vector-effect': 'non-scaling-stroke' }));
+      links.appendChild(svg('path', { d: d, class: 'link ' + cls, 'vector-effect': 'non-scaling-stroke' }));
+    }
+    const traveled = {};
+    for (let i = 1; i < visited.length; i++) traveled[visited[i - 1] + '>' + visited[i]] = true;
+    if (current && visited.length && visited[visited.length - 1] !== current) traveled[visited[visited.length - 1] + '>' + current] = true;
+    const firstVisited = visited[0] || current;
+    (map.start || []).forEach(function (id) {
+      if (!pos[id]) return;
+      if (id === firstVisited) addLink(start, pos[id], 'done');
+      else if (!current) addLink(start, pos[id], 'open');
+    });
+    nodes.forEach(function (n) {
+      (n.links || []).forEach(function (to) {
+        if (!pos[to] || !pos[n.id]) return;
+        if (traveled[n.id + '>' + to]) addLink(pos[n.id], pos[to], 'done');
+        else if (n.id === current && avail.indexOf(to) >= 0) addLink(pos[n.id], pos[to], 'open');
+      });
+    });
+    board.appendChild(links);
+
+    // the camp, the nodes, the doodle and the token share the nodes layer (inset below the narration box)
+    const layer = el('div.map-nodes');
+    const startMark = el('div.map-start', { style: { left: start.x + '%', top: start.y + '%' } }, el('span', null, '🚪'));
+    UI.tooltip(startMark, '<div class="tt"><div class="tt-title">Svammiel\'s Lobby</div><div class="tt-desc">Where his floor begins. There is a doormat. It says GO AWAY in very small letters.</div></div>', { pos: 'right' });
+    layer.appendChild(startMark);
+    nodes.forEach(function (n) {
+      const p = pos[n.id];
+      if (!p) return;
+      const isCur = n.id === current;
+      const isAvail = avail.indexOf(n.id) >= 0;
+      const isVisited = !isCur && (visitedSet[n.id] || (n.done && n.type !== 'miniboss'));
+      const sealed = n.type === 'miniboss' && !!n.sealed;
+      const skipped = !isCur && !isVisited && !isAvail && !sealed && ((n.row || 0) <= curRow);
+      const state = isCur ? 'current' : isAvail ? 'reachable' : sealed ? 'sealed' : isVisited ? 'visited' : skipped ? 'skipped' : 'locked';
+      const door = n.type === 'miniboss' || (n.type === 'boss' && n.encounterId && (DD.getEncounter(n.encounterId) || {}).finale);
+      const cls = ['t-' + (n.type || 'unknown'), 's-' + state, door ? 'door' : ''];
+      if (sealed && n.result === 'victory') cls.push('fought');
+      let kids;
+      let lane = null;
+      if (door) {
+        lane = n.type === 'miniboss' ? UI.laneInfo((map.lanes || []).filter(function (l) { return l.id === n.lane; })[0] || { id: n.lane, encounterId: n.encounterId }) : UI.laneInfo(n.encounterId);
+        const label = n.type === 'boss' ? 'Floor Boss' : sealed ? (n.result === 'victory' ? '✓ ' + lane.shortName : '✓ Beaten') : lane.shortName;
+        kids = [el('span.mn-ring'),
+          lane.portrait ? UI.portrait(lane.portrait, 64, { frame: false, cls: 'mn-portrait' }) : el('span.mn-icon', null, lane.icon),
+          el('span.mn-badge', null, lane.icon),
+          el('span.' + (n.type === 'boss' ? 'mn-label' : 'mn-lane'), null, label)];
+      } else {
+        const info = UI.NODE_TYPES[n.type] || { icon: '❔', name: n.type };
+        kids = [el('span.mn-ring'), el('span.mn-icon', null, info.icon), isVisited ? el('span.mn-check', null, '✓') : null];
+      }
+      const node = el('button.map-node', { type: 'button', class: cls, style: { left: p.x + '%', top: p.y + '%' }, dataset: { id: n.id, lane: n.lane || '' } }, kids);
+      UI.tooltip(node, function () { return door ? doorTooltip(n, state, lane) : nodeTooltip(n, state); }, { pos: p.y < 30 ? 'bottom' : 'top' });
+      node.addEventListener('click', function () {
+        if (state !== 'reachable') { UI.sound('error'); return; }
+        travel(n.id);
+      });
+      layer.appendChild(node);
+    });
+    // the smug doodle over the floor boss (decor, never clickable)
+    const bossPos = pos[map.boss];
+    if (bossPos) layer.appendChild(el('div.g-doodle-svam', { style: { left: bossPos.x + '%', top: bossPos.y + '%' }, html: SVAM_DOODLE }));
+
+    const tokenAt = curNode && pos[current] ? pos[current] : start;
+    const lead = (run.party || []).filter(function (h) { return !h.dead; })[0] || (run.party || [])[0];
+    const token = el('div.party-token', { style: { left: tokenAt.x + '%', top: tokenAt.y + '%' } },
+      el('span.tok-horns', { html: HORNS }), lead ? UI.portrait(lead.id, 30) : el('span', null, '🛡️'));
+    UI.tooltip(token, '<div class="tt"><div class="tt-desc">Your party. Svammiel has drawn horns on the token. Allegedly heroes.</div></div>');
+    layer.appendChild(token);
+    board.appendChild(layer);
+
+    const types = {};
+    nodes.forEach(function (n) { types[n.type] = true; });
+    board.appendChild(el('div.map-legend', null, GAUNTLET_LEGEND.filter(function (t) { return types[t]; }).map(function (t) {
+      const i = UI.NODE_TYPES[t];
+      return el('span.lg-item', null, el('span.lg-icon', null, i.icon), t === 'boss' ? 'Floor Boss' : i.name);
+    })));
+    // the margin: the DM, demoted, asking for help
+    board.appendChild(el('div.g-doodle-dm', { html: DM_DOODLE }));
+  }
+
+  // ink doodles of Svammiel's floor plan (V §5.2): smug Svammiel over the last node, the sad DM in the margin
+  const SVAM_DOODLE = '<svg viewBox="0 0 64 48" aria-hidden="true"><g fill="none" stroke="#c0213a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">' +
+    '<path d="M18 30 Q6 22 4 10 Q12 16 20 20"/><path d="M46 30 Q58 22 60 10 Q52 16 44 20"/>' +
+    '<circle cx="32" cy="28" r="11"/><path d="M24 19 L21 9 L28 17"/><path d="M40 19 L43 9 L36 17"/>' +
+    '<path d="M27 26 l3 1.5"/><path d="M37 26 l-3 1.5"/><path d="M26 32 Q32 37 38 31"/></g>' +
+    '<text x="32" y="47" text-anchor="middle" font-size="8.5" font-family="Signika, sans-serif" fill="#c0213a">mine.</text></svg>';
+  const DM_DOODLE = '<svg viewBox="0 0 70 54" aria-hidden="true"><g fill="none" stroke="#3a4c7a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' +
+    '<circle cx="18" cy="30" r="7"/><path d="M15 29 v.5 M21 29 v.5"/><path d="M15 34 Q18 32 21 34"/><path d="M18 37 v9 M18 40 l-6 4 M18 40 l6 4 M18 46 l-4 6 M18 46 l4 6"/>' +
+    '<path d="M30 4 h34 a4 4 0 0 1 4 4 v10 a4 4 0 0 1 -4 4 h-22 l-8 7 l2 -7 h-6 a4 4 0 0 1 -4 -4 v-10 a4 4 0 0 1 4 -4 z"/></g>' +
+    '<text x="47" y="17" text-anchor="middle" font-size="10" font-family="Signika, sans-serif" fill="#3a4c7a">help</text></svg>';
+  const HORNS = '<svg viewBox="0 0 40 14" aria-hidden="true"><path d="M9 13 Q3 7 6 1 Q9 7 15 10 Z M31 13 Q37 7 34 1 Q31 7 25 10 Z" fill="#c0213a" stroke="#5a0a14" stroke-width="1"/></svg>';
+
+  /** The gauntlet keeps its nodes clear of the narration box (top) and the legend (bottom): measured, set as CSS vars. */
+  function fitGauntlet(board) {
+    if (!board || !board.classList.contains('gauntlet')) return;
+    const fit = function () {
+      if (!board.isConnected || !board.clientHeight) return;
+      const narr = board.querySelector('.map-narration');
+      const legend = board.querySelector('.map-legend');
+      let top = 8, bottom = 8;
+      if (narr) top = Math.ceil(narr.offsetTop + narr.offsetHeight + 6);
+      if (legend && legend.offsetHeight) bottom = Math.ceil(board.clientHeight - legend.offsetTop + 4);
+      if (top + bottom > board.clientHeight * 0.45) top = Math.max(8, Math.round(board.clientHeight * 0.45) - bottom);
+      board.style.setProperty('--g-top', top + 'px');
+      board.style.setProperty('--g-bottom', bottom + 'px');
+      // the lane labels hang below the bottom track's doors: lift the layer until they clear the legend (the node size
+      // follows the layer height, so measure again; two rounds settle it)
+      if (!legend || !legend.offsetHeight) return;
+      for (let i = 0; i < 3; i++) {
+        const lt = legend.getBoundingClientRect().top;
+        let low = -Infinity;
+        board.querySelectorAll('.mn-lane, .mn-label').forEach(function (l) { low = Math.max(low, l.getBoundingClientRect().bottom); });
+        const over = Math.ceil(low - lt + 3);
+        if (!(over > 0) || bottom + over > board.clientHeight * 0.3) break;
+        bottom += over;
+        board.style.setProperty('--g-bottom', bottom + 'px');
+      }
+    };
+    fit();
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(fit, function () { /* no fonts API */ });
+  }
+
   function renderBoard(board, run) {
     const UI = DD.UI, el = UI.el;
     board.innerHTML = '';
     const map = run.map;
     const nodes = nodeList(map);
+    board.classList.remove('gauntlet');
+    if (nodes.length && isGauntletMap(map)) { renderGauntlet(board, run); return; }
     if (!nodes.length) {
       board.appendChild(el('div.empty-state', null, el('div.es-icon', null, '🗺️'), el('div', null, 'The map is blank. The DM is still drawing it.')));
       return;
@@ -271,7 +497,7 @@
     const act = UI.ACTS[run.act] || { roman: DD.util.roman(run.act || 1), name: '', sub: '' };
     const intro = UI.narrate('act_intro_' + (run.act || 1), {}, []);
     const quirks = !run.nodeId && !(run.visited && run.visited.length) ? quirkHeroes(run) : [];
-    const banner = el('div.act-banner', null,
+    const banner = el('div.act-banner', { class: 'act-' + (run.act || 1) },
       el('div.ab-act', null, 'Act ' + act.roman),
       el('div.ab-name', null, act.name),
       intro ? el('div.ab-intro', null, intro) : el('div.ab-intro', null, act.sub),
@@ -326,6 +552,11 @@
       board.appendChild(narr);
       if (quirks) clearIntro(board, narr);
     }
+    if (isGauntletMap(run.map)) {
+      fitGauntlet(board);
+      onResize = function () { fitGauntlet(board); };
+      window.addEventListener('resize', onResize);
+    }
     const bannerKey = (run.seed || '') + ':' + (run.act || 1);
     if ((atStart || params.intro) && bannerShownFor !== bannerKey && !DD.headless) {
       bannerShownFor = bannerKey;
@@ -371,6 +602,7 @@
         const narr = board.querySelector('.map-narration');
         renderBoard(board, run);
         if (narr) board.appendChild(narr);
+        fitGauntlet(board);
         // [release gate] the party moved on without leaving the map: the quirks line and the intro squeeze go
         if (run.nodeId || (run.visited && run.visited.length)) {
           board.classList.remove('intro');
@@ -381,6 +613,8 @@
       unmount: function () {
         timers.forEach(function (t) { clearTimeout(t); });
         timers = [];
+        if (onResize) window.removeEventListener('resize', onResize);
+        onResize = null;
       },
     });
   });

@@ -3,6 +3,9 @@
 Files: `js/engine/{grid,targeting,hooks,actions,ai,combat,autoplay}.js`, `js/data/{statuses,terrain}.js`,
 `tests/{fixtures,engine_tests,content_tests}.js` (suites `engine: …` and `content: …`).
 
+> **V3 (act 4, Nov 14): READY: DD.Cameo core + E1 + E2 · READY: E13 modifyUse** — see the section "V3 — act 4 'Under the
+> Table': DD.Cameo and the engine needs (RULES)" at the end of this file (the API as built, content recipes, deviations).
+
 > **v2 (initiative, per-unit turns, no telegraphs, no Guard) supersedes everything below about the round flow, enemy
 > planning / telegraphs / intents, Guard, combat-start Block and status timing.** See the "v2" section at the end and
 > `docs/notes/v2-migration.md` (the content conversion guide).
@@ -1870,3 +1873,255 @@ cannot produce); every other new or extended suite was.
 - The HUD side of the review's changes (the statue's refusal and the Stealth tooltip are shown as the engine words them;
   the UI reviewer covers the HUD).
 - A human playtest of Slate's tempo (move 4) and of AutoPlay-free Bone Pile play.
+
+## V3 — act 4 "Under the Table": DD.Cameo and the engine needs (RULES)
+
+READY: DD.Cameo core + E1 + E2
+READY: E13 modifyUse
+
+Plan `.tmp/v3/design.md` §4.1, §4.5, §3.6 (E1, E2, E10-E13), §0.3 V3 / V4 / V11; contract ARCHITECTURE §3.13, §5.3,
+§5.4, §5.5, §5.11 (as amended by wave 0 and its review, `docs/notes/v3-contract.md` P10-P15). Files: `js/engine/cameo.js`
+(new), `js/engine/{combat,actions}.js`, `tests/{engine_tests,fixtures}.js`, and two spots of `tests/content_tests.js`
+(RULES-owned since v2: the `modifyUse` hook name and the squad boss-on-board check, see Deviations).
+
+### For content authors (C1-C6, NARRATIVE, HUD, META-RUN, META-UI)
+- **E1 `actsWithOwner`**: `DD.Act.spawn(id, x, y, { owner })` (a unit or a unit id) sets `ownerId` before the unit rolls
+  initiative. If the def (or `opts.actsWithOwner: true` for that one unit) says `actsWithOwner`, it gets **no entry of its
+  own while its owner lives** and acts on the owner's turn, right after it (`Combat.groupOf(owner)` = owner first, then
+  its riders in board order); `beginTurn` / `finishTurn` tick it with the owner. When the owner dies it rolls its own
+  entry at the next round start (the split). Spawning with `{ owner }` works before initiative (`onStart`, a cheat's
+  `apply`: the first roll checks the owner directly) and mid-fight (no joiner entry). An enemy spawned with an owner but
+  WITHOUT the flag rolls its own entry (`turnOwnerOf` now follows `ownerId` only for summons and `actsWithOwner` units).
+  `DD.Combat.actsWithOwner(u)` answers.
+- **E2 `unit.turnsPerRound`**: set it on the instance (a phase that gains or loses a turn); `Combat.entriesPerRound(u)` =
+  the unit's own (1-4) else its def's; heroes 1. At the next round start the unit gets exactly that many entries (a
+  missing one is rolled like a joiner with the combat RNG and `modifyInitiative`, logged "X now takes N turns a round
+  (rolls …)." and announced with `initiative:joined`; extras are dropped from the highest `k`). Never mid-round.
+- **Events** (`DD.Events`, muted in previews / dry runs): `combat:ready { state }` — once, in `Combat.start` after
+  `encounter.onStart`, before deployment and the roll (phase `'setup'`, round 0); `skill:used { unit, skill, ctx }` —
+  after `onSkillUsed`, real uses only (never a preview, a dry run or an attack of opportunity; consumables count).
+  `unit:downed` now also carries `killerId` and `cause`.
+- **`DD.Act.log(text, cls, extra)`**: `extra` fields are merged into the entry and ride on `combat:log` (round / text / cls
+  stay the engine's). Cameo lines: `cls 'cameo'`, `{ speaker, actor, style, key }` (+ `cheat: id` on a cheat line,
+  `bribe: true` on a bribe line).
+- **`DD.Act.addRule({ silent: true })`** logs no "New rule: …"; `cheat`, `source`, `next` and any other field are kept
+  (the HUD reads them). `removeRule` still logs "Rule ended: …".
+- **E10 squads**: `objective: { type: 'boss', bossIds: [defIds] }`: victory when every unit of those defs is dead (one
+  spawned mid-fight counts; `bossId` and boss-tier units still count too); the rest flee. `objectiveText`: "Defeat the
+  League of Villainy (3 left)" (`encounter.shortName`, else `name`; a leading "The" lower-cased).
+  `DD.Combat.bossUnits(state?)` is public. Until MAPGEN's `buildObjective` copies `bossIds`, a squad without a boss-tier
+  unit falls back to killAll in `Encounter.build` (MAPGEN's contract item, §5.8).
+- **E11** `encounter.banner === false`: the boss intros are still logged, the per-boss banners are skipped.
+- **E12** `state.stats.swaps`: +1 per hero swap move, −1 when that swap is undone. `stats.cameos` / `stats.cheats` start at
+  0 in every fight.
+- **E13 `modifyUse(q)`** (any hook source, rules included): `q = { unit, skill (def), slot (or null), level, why: null }`;
+  set `q.why` to the reason. Fired in `Combat.canUse` right after the turn checks (before sleep / stun / cooldown / AP,
+  so "Bleeped by Svammiel (Radio Edit)." wins over "On cooldown (2)."), wrapped in `DD.Targeting.pure` (dice a hook rolls
+  are put back; never change state there). `useSkill`, the HUD's ⛔ line and AutoPlay's `usableSlots` all go through
+  `canUse`. `DD.Combat.vetoOf(unit, slotOrDef)` returns just the veto (or null). AutoPlay's `usableSlots` keeps slots
+  whose refusal mentions "target" (it reads that as "no target from here"): never put the word "target" in a reason.
+  Enemy AI does not ask `canUse` (the veto is for the party's skills, which is what R11 and the Radio Edit need).
+- **`state.noCameo`**: a sandbox's `cameo: false` (`Combat.sandbox` forwards it) or a truthy `DD.Balance.cameo.off`
+  (P14). `state.data.gauntlet`: a copy of `setup.gauntlet` (`Combat.sandbox({ gauntlet })` too). `difficultyOf` passes
+  `gauntlet: setup.gauntlet` to `DD.Balance.scale` (P11).
+
+### DD.Cameo (js/engine/cameo.js) as built
+- **API**: `fire(event, payload) → n` (an engine event name or a trigger name), `play(actorId, keyOrText, opts) → text`
+  (opts `{ style, vars, cheat, force, speaker, banner, bubble }`; a lower-case key with a pool is a key, anything else is
+  literal text), `say(actorId, key, vars, opts) → text` (a bubble, budgeted unless `opts.force`), `cheat(actorId,
+  cheatId, opts) → rule | null`, `campaignGoesOn(state)`, `present(state, actorId) → unit | null`, `history(state)`,
+  `budget(state) → { used, left, lastRound }`, `keyOf(actorId, name)` (an actor's own pool key, below), `setting()`
+  (`'full' | 'short' | 'log'`), `STYLES`, `TOKENS`, `EVENTS`, `stub: false`. Subscribed in `DD.afterLoad` to
+  `combat:ready → start`, `round:start → round`, `unit:downed → heroDowned`, `unit:died → kill`, `skill:used →
+  signature`, `windup:cancel → windupCancel`, `combat:end → victory`.
+- **Guards**: nothing while `DD.Act.simulating`, with `state.noCameo`, or with `encounter.cameo === false`; lines after
+  the fight's end only from `victory` triggers. A direct `DD.Cameo.cheat` call (Svammiel's own fight mechanics) is NOT
+  stopped by `noCameo` (a mechanic, not flavour); in a preview / dry run it applies its effect and rule only (no log,
+  no memory, no stats).
+- **Trigger filters** (in this order): `encounter.cameo.actor` (an addition: only that actor serves the fight), `start`
+  vs `cameo.start === false` / interjections vs `cameo.interjections === false`, `once` (per fight, set only when it
+  played), `act` (the run's act, else the encounter's; a number or a list), `kind` (`encounter.kind`, else the fight's),
+  `encounter` (id or list), `from` (round ≥), `squad` (the dead unit's def in `objective.bossIds`), `when(state,
+  payload)`; then `keyOf(state, payload)` (a falsy key skips; `shadow` needs no key). Event level: `heroDowned` once per
+  hero per fight; `signature` only `skill.hype >= 100`; `windupCancel` not `reason === 'death'`; `victory` only a won
+  fight; `start` once per fight. A throwing `when` / `keyOf` counts as false (reported by `DD.safe`).
+- **Trigger extras** (additions, all optional): `banner: { title, sub }` and `bubble: 'text'` (the FX event's banner /
+  bubble while the log keeps the full line: the twist's "YOU THOUGHT THIS WAS OVER?" + "I, SVAMMIEL, CONTROL ALL."),
+  `cheat` (a start trigger's default cheat), `then(state, payload, played)` (after a played cameo, never in previews:
+  C5's twist extras — the DM's "Oh no. That's my DM." line, a hero reaction, `DD.Meta.markSeen('bosses', 'svammiel')`),
+  `id` (the `once` key; default `<actor>:<index>`).
+- **Start cameo** (any `start` trigger; style `swoop` unless the trigger names another blocking style): announcer = the
+  encounter's `cameo.start` key (else the trigger's `key`); roast = `def.situation(state, run, usedSituations)` →
+  `{ key, vars, heroId | unitId | unit }` (skipped once that key was used this run) → else a hero in the fight not
+  roasted this run (`roastPrefix + defId`, picked with `DD.rng`) → else `<prefix>generic`; that hero's comeback
+  (`comebackPrefix + defId`) is a bark on the hero with chance `DD.Balance.cameo.comeback`; then the cheat
+  (`cameo.cheat`, else the trigger's `cheat`) unless `run.flags.cameo.bribe` (spent; a `<prefix>bribe` line instead; a
+  fight without a cheat leaves the bribe alone). The cheat applies even when no line pool exists yet. One FX event
+  `{ type: 'cameo', actor, name, title, icon, color, enemy, style, banner: { title: encounter.name, sub: 'Svammiel:
+  "<announcer>"', fit: true, frames }, text: <roast>, speaker, cheat: { id, name, icon, desc, quip } | null, bribe, ms,
+  parallel }` (`frames`: the encounter's `cameo.frames`, an array or `fn(state)`: the League's stretching name). Logged:
+  the announcer, the roast, the cheat line, the DM's counter (narrator). Present (his unit on the board): every line is
+  a bark on it, no cameo FX.
+- **Actor pool keys**: `def.linePrefix` (default: the `roastPrefix` up to its first `_`, so `svam_`): `svam_generic`,
+  `svam_bribe`, `svam_reason` (the cheat's Reason; fallback "none"), `svam_quip_<cheatId>` (the card's quip / his bark; else the cheat's own `quips` list),
+  `svam_counter_<cheatId>` (a narrator line). `DD.Cameo.keyOf('svammiel', 'reason')` → `'svam_reason'`.
+- **Lines**: the act variant pool (`DD.narrationKey`), minus lines naming a hero missing from the fight
+  (`DD.Act.partyLines`), minus lines with a token the trigger doesn't fill, minus indices used this run
+  (`run.flags.cameo.lines[key]`, reset per key when its eligible lines are used up); `DD.rng` picks. No run (a sandbox):
+  the same memory lives in `state.data.cameo.mem`. Tokens: `{n}` the round, `{enemy}` the opponent (`shortName` /
+  `name`) or the foe the event is about, `{hero}` the hero it is about (start: the roasted hero, else the first hero),
+  `{name}` only from a situation's `vars`.
+- **Budget** (`DD.Balance.cameo`): bubbles and quips only, unless forced: ≤ `perFight` a fight, ≤ `perRound` in one
+  round, else ≥ `minGap` rounds after the last; first come (within one event: the first trigger listed) first served.
+  Start, entrance, shadow and forced lines never count and are never refused.
+- **Cheats**: `when(state)` → `apply(state, ctx)` (`ctx = { state, actor, cheat, id, name, desc, opts }`; may return the
+  filled desc string or set `ctx.desc`; `false` = no cheat at all) → `DD.Act.addRule({ id: 'cameo:<id>', name: icon + ' ' +
+  name, icon, desc, turns: rounds (default −1), hooks, cheat: true, source, silent: true, next, cheatId, onAdd?,
+  onRemove?, telegraphFlat? })` → log "😈 Svammiel cheats: <name>. <desc> Reason: <reason>." (cls cameo, `cheat: id`) →
+  the counter → `stats.cheats++`, `run.flags.cameo.cheats` → presentation: folded into the start cameo's card, else its
+  own banner "SVAMMIEL'S RULE: <name>" (sub = desc, `#ff4a3a`) plus his quip (a bark when present, else a bubble FX
+  carrying the card). **Honesty for a rule**: mirror a damage hook with `estimateDealt` in the rule's hooks (rules are
+  the attacker's sources; `DD.AI.estimate` asks `estimateTaken` of the target's OWN sources only, so a rule's
+  `estimateTaken` is never read), `threatAt`, or the cheat's `telegraphFlat` field (the fixtures' Rigged Tests).
+- **Presentation numbers** (`STYLES`): entrance 4500 / short 2000, swoop 2500 (3300 with a cheat card) / short 1200,
+  bubble 0 ms parallel (life 2600), quip no FX, shadow 900 / short 500 (no line). Settings `cameos: 'log'` → no FX.
+  Instant mode (tests, sims) applies the event at once.
+- **Fixtures** (`tests/fixtures.js`): doors `test_a4_lane_a..d` (lanes `test_a..test_d`, orders 91-94): a no-cheat door;
+  Rigged Tests (+1 damage to heroes, `estimateDealt`); a squad door (`bossIds`) with the Mystery Box crate (an `apply`
+  that rolls `state.rng`, fills the desc, `onRemove`); a `banner: false`, `interjections: false` door with the Muted Test,
+  a whole-fight `modifyUse` ban built like the Radio Edit. `test_a4_finale` (the Heckler on the board: present
+  routing), `test_a4_event` (`acts: [4]`, no fight), the cameo actor `test_heckler` (start / round / heroDowned / victory
+  triggers on `test_` encounters only), `test_heckler_imp` and `test_creeper` (an `actsWithOwner` minion). Each door names
+  `cameo.actor: 'test_heckler'`, so Svammiel never serves them.
+
+### Deviations (from the plan, with reasons)
+- **`encounter.cameo.actor`** (new optional field): the fixtures' doors must not get Svammiel's start cameo and cheats once
+  C5 lands (and his act-4 triggers must not fire in the Heckler's test fights); a door names the actor that serves it.
+  Real doors need not set it (Svammiel is the only real actor).
+- **Trigger extras** `banner`, `bubble`, `cheat`, `then`, `id`, the def's `linePrefix` and the situation's third
+  argument (`used`): the twist script needs a banner and a bubble other than the logged line and a place for its extras
+  (markSeen, the DM's line, a hero reaction) that runs only when the cameo really played; the generic / bribe / reason /
+  quip / counter keys needed a prefix rule.
+- **`turnOwnerOf` follows `ownerId` only for summons and `actsWithOwner` units** (it followed any `ownerId`): otherwise
+  an enemy spawned with an owner but without the flag would act on its owner's turn AND roll its own entry. No shipped
+  content sets `ownerId` on an enemy.
+- **`DD.Cameo.cheat` ignores `noCameo`** when content calls it directly (Svammiel's round / snap / phase cheats are his
+  fight's mechanics; the `cameo=0` sims measure the start cheats). The start cameo's cheat respects it.
+- **The test cameo's damage cheat declares `estimateDealt`**, not `estimateTaken` as plan §4.5 says: a fight rule's
+  `estimateTaken` is never asked by `DD.AI.estimate`.
+- **`unit:downed` gained `killerId` / `cause`** (for `{enemy}` in `svam_down`); ARCHITECTURE §5.11's payload list says so.
+- **`tests/content_tests.js`** (RULES-owned since v2, ARCHITECTURE §1; §3.13 gives RULES the hook row): `'modifyUse'` added
+  to the hook list; the auto-battle's "the boss is on the board" accepts a squad in `objective.bossIds` (the League, the
+  Coven and the goats have no boss-tier unit: it would have failed every squad door).
+- **E11 keeps the boss intro log line** (only the banner FX is skipped): the log should still say who walked in.
+
+### Requests
+- **Everyone who reads the act-4 registry** (FYI, nothing failing today): the fixtures register act-4 content (plan
+  §4.5: four `test_a4_lane_*` doors, `test_a4_finale`, `test_a4_event`, `test_heckler_imp`, `test_creeper`). With the
+  five real lanes loaded only one test door fits under the cap of 6. `run_tests` swaps the registries out in its sandbox,
+  so its registry checks don't see them (verified in the full run).
+- **Lead (ARCHITECTURE §3.8 / §3.13, not RULES sections)**: mirror the optional `encounter.cameo.actor` and the trigger
+  extras (`banner`, `bubble`, `cheat`, `then`, `id`; `linePrefix`; `situation`'s third argument; a cheat's `quips`) from
+  §5.11's "As built" paragraph if you want them in the data sections too.
+- **MAPGEN (`encounter.js buildObjective`)**: keep `objective.type 'boss'` when `bossIds` names enemies of the line-up (no
+  boss-tier unit needed); today it warns and falls back to killAll (contract §5.8). The fixtures' squad door also has a
+  boss, so it builds either way.
+- **HUD**: cameo log entries carry `speaker`, `actor`, `style`, `key` (and `cheat` / `bribe`); a refused skill's reason
+  is `Combat.canUse`'s string (`Combat.vetoOf` gives the veto alone, for the "BLEEP" sticker).
+- **C5 (Svammiel)**: the trigger extras for the twist (`banner: { title: 'YOU THOUGHT THIS WAS OVER?' }`, `bubble: 'I,
+  SVAMMIEL, CONTROL ALL.'`, `then` for the DM's line, a hero reaction and `markSeen`); the Radio Edit and R11 can use E13
+  (`hooks.modifyUse`; the fixtures' `test_cheat_mute` is a working template); damage cheats mirror themselves with
+  `estimateDealt` in the rule's hooks.
+- **AUTOPLAY (`autoplay.js comboSkills`)**: a summon's combo planner reads its owner's self-area skills without
+  `canUse`, so a vetoed self-area skill could be planned for a combo and then refused at use (harmless: the use fails and
+  the turn goes on; a `DD.Combat.vetoOf(own, sl)` check there closes it).
+
+### Also done
+- Optional ask (Benedick's slime trail): `Combat.undo` emits **`move:undone { unit, unitId, kind: 'move' | 'swap', from,
+  to, path | allyId }`** (ARCHITECTURE §5.5 events).
+- `Combat.giveTurnTo` (sandbox) refuses a unit that is not in the current fight (a stale unit from an earlier fight used
+  to crash `beginTurn`; seen while C5's suite was mid-edit).
+
+### Tests
+- 16 new suites "engine: V3 …" (E1 ×2, E2, the events / log / silent rules, E10-E12 + `move:undone`, E13 incl. AutoPlay
+  and the fixtures' Muted Test, and DD.Cameo: the start cameo, a start cheat before the roll + `apply` / `onRemove` + a
+  direct cheat with its own banner and `quips`, previews / dry runs, the budget and priority, routing (absent / present /
+  Log only / Short / instant / `cameo: false` / `cameo.off`), determinism, lines, the Bribe, triggers and their payload,
+  `campaignGoesOn` + an entrance on a victory + a fixture door end to end under AutoPlay).
+- Iterated with `tools/test.sh "suite=engine: V3&isolate=zz_none"` (and with `isolate=svammiel` for C5's suites).
+- Full `bash tools/test.sh` (Nov 14, with C5's `svammiel.js` landed): **PASS — 1092 suites, 125,388 assertions, 0
+  failures**, 0 swallowed "Error in" lines (missing scripts 12: the V3 files not created yet).
+
+## Review (V3) — adversarial review of RULES' V3 work (REVIEWER, core cluster, Nov 15)
+Scope: `js/engine/cameo.js`, the V3 parts of `combat.js` / `actions.js`, `tests/{engine_tests,fixtures}.js`; plan §4.1,
+§4.5, §3.6 E1 / E2 / E10-E13, the LEAD PATCHES P10-P14. Scratch harness (not project files): `.tmp/rvcore/` (a test page
+with the real content and no fixtures, a probe that plays the twist and the whole gauntlet through `DD.Run` with the
+real engine and AutoPlay, and a sim page without Benedick).
+
+### Verified by running
+- **The real thing, end to end** (acts 4, 20 runs, `startAtAct(3, level 6)` → the DM → the gauntlet → Svammiel): the
+  DM's victory plays the entrance on his board (Svammiel's line logged as a `cameo` entry, the gate opens), every door
+  opens with its start cameo (announcer, roast, then its exact cheat: Green Thumb, Nepotism, That's a 1 Now, The Floor Is
+  Lava, the Radio Edit), a Bribe skips the next door's cheat, the interjection budget never passed 3, the finale's
+  lines are barks on his unit (present routing), and 0 errors / 0 swallowed "Error in" lines over 100+ real fights.
+- **Determinism**: a whole act-4 run replayed with the cosmetic RNG shifted gives the same fights (results, rounds, hero
+  HP, cheat descs); seeds 11-14 replayed after my cameo.js edits and other owners' pool edits: identical.
+- **Ship dark**: `tools/sim.sh` 50 seeds from 1000 with `acts` 3 on a page without Benedick reproduces the wave-0
+  re-baseline report line for line (12/50, the same 465 fights): the V3 engine and every act-4 file leave v2 unchanged.
+- E1 (the Coven's hags and the vines ride their owner's turn; a stunned owner doesn't take the riders' turns away:
+  `aiTurn` runs member by member), E2, E10-E13, `combat:ready` / `skill:used`, `Act.log` extra, `addRule` silent, P11
+  (`difficultyOf` passes the gauntlet), P14 (`cameo.off`): suites and code read; the knob-flipped harness
+  (`.tmp/metarun/test4.sh`) passes `engine: V3` too.
+- Shots (Read): the goats' start cameo (banner, roast bubble, the Radio Edit chip and log line) and the finale's opening.
+
+### Fixed (most severe first; regression suites in `engine_tests.js` / `run_tests.js`)
+1. **Ship-dark leak of cameo memory**: `DD.Cameo.fire` created `state.data.cameo` as soon as a trigger matched on act /
+   kind / encounter, before its `when` ran, so the act-3 DM's fight under a 3-act knob got an empty cameo memory (the
+   twist and the shadow match, `campaignGoesOn` says no) — the notes above claimed it never does. Now the event-level
+   checks read the memory without creating it, `once` + `when` pick the live triggers first (pure), and the memory starts
+   with the first live one. Suites: `engine: V3 cameo review — triggers whose when refuses…`, and the real-content
+   `run: V3 review — the real twist from a v2-shaped act-3 save…`.
+2. **NARRATIVE's ask: a hero stood back up is no down** — `unit:downed` is emitted after the `onDowned` /
+   `onAllyDowned` hooks, so a hook that revives the hero at once still drew a `svam_down` heckle ("X is napping on my
+   floor") and used up that hero's one down. `heroDowned` now skips a hero that is no longer `downed`; the first real
+   down still plays. Also `{enemy}` of a down is the foe only: friendly fire or a self-own keeps the opponent (as
+   `actions.js` narrates `hero_downed_friendly`). Suite: `engine: V3 cameo review — heroDowned skips a hero a hook stood
+   back up…`.
+
+### Deviations (review)
+- `heroDowned` "once per hero per fight" now means the hero's first real down (a refused-by-the-budget one still
+  counts; a hook revive doesn't). A trigger's `when` runs before the event's bookkeeping (it must be pure anyway).
+
+### Passed on (not this area's files)
+- **C5 / lead — the finale has no opponent banner**: `boss_svammiel` has `banner: false` (E11 skips the boss banner
+  because "the cameo shows it"), but Svammiel is present in his own fight, so the start cameo becomes barks and no
+  banner shows the opponent at all (the first banner is his round cheat). Either drop `banner: false` on the finale (the
+  v2 "Svammiel / The Floor Boss" banner) or the lead amends §3.0.1.
+- **C5 — the door sulks are budgeted** (plan §4.1 counts a `quip` as an interjection): in the probe 2 of 5 doors per run
+  played their `svam_sulk_<lane>`; NARRATIVE measured ~10 in 55. `force: true` on the `sulk` trigger works today (a
+  victory quip with force is never refused); a C5 / lead call.
+- **C5 — `situation()` starves the hero roasts** (NARRATIVE's measure: 0 hero roasts in 72 start cameos): cameo.js
+  follows plan §4.1 (a situation first); the fix is in `situation()` (or the plan's order).
+- **C5 — the finale's `shortName` is "The Last Floor"**, so a run lost to him reads "Killed by The Last Floor (he
+  cheated)" (run.js uses `shortName || name` for `killedBy`, plan §2.4). `shortName: 'Svammiel'` would read better.
+- **Lead (ARCHITECTURE §5.11)**: mirror the `heroDowned` refinement above if wanted.
+
+### Tests (review)
+- `bash tools/test.sh "suite=engine: V3&isolate=zz_none"`: 19 suites PASS (2 new). Knob flipped
+  (`.tmp/metarun/test4.sh "suite=run:,engine: V3,mapgen: V3,core:"`): 74 suites PASS.
+- Full `bash tools/test.sh` (Nov 15, after the fixes): **PASS — 1232 suites, 143,189 assertions, 0 failures**, 0
+  swallowed "Error in" lines, missing scripts 0.
+
+## QA fixes (V3, Nov 17) — QA FIXER, core cluster (`combat.js`)
+- **FIGHTS-12 (polish), fixed**: `Combat.objectiveText` titled every non-squad boss fight "Defeat X (the minions will
+  flee)", so Grand Magister Galbraith and the finale (no minions at the start) read it too (the open request in
+  `boss-galbraith.md`). The suffix now shows only while someone is there to flee: any other active enemy unit (summons
+  too: `finalize` sends every active enemy) or a reinforcement wave still pending (`wavesPending`). The bar is refreshed
+  after every action, so it appears when the finale's imps or the Gardener's vines arrive and goes when the last minion
+  drops. Squads (`bossIds`) keep "(N left)". Shots (`tools/shot.sh`, acts 4): "Defeat Grand Magister Galbraith",
+  "Defeat Svammiel". Suite: `engine: a boss objective mentions fleeing minions only while there are some (qa
+  FIGHTS-12)` (engine_tests.js).
+- Not changed: `encounter.js`'s boss joke "The minions flee once the boss drops." (`objective.flavor` from
+  `Encounter.build`): every solo act-4 boss replaces its flavor with its own line (Galbraith, Svammiel, the Gardener).
+  The HUD tooltip's generic "the minions flee the moment it drops" is HUD's (`combat_hud.js objectiveTip`); I did not
+  file a request for it.

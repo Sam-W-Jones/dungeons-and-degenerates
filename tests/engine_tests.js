@@ -1579,6 +1579,33 @@
     t.eq(DD.Combat.state.rules.length, 0, 'rule with turns 1 expired');
   });
 
+  // [qa FIGHTS-12] Galbraith and the finale read "Defeat X (the minions will flee)" with nobody there to flee
+  T.suite('engine: a boss objective mentions fleeing minions only while there are some (qa FIGHTS-12)', function (t) {
+    const text = function () { DD.Combat.refreshObjective(); return DD.Combat.state.objective.text; };
+    const WITH = 'Defeat The Test Overlord (the minions will flee)', SOLO = 'Defeat The Test Overlord';
+    // a solo boss: just "Defeat X", and he still wins the fight alone
+    sb({ w: 9, h: 9, heroes: [H(1, 1)], enemies: [E(7, 7, 'test_boss')], objective: { type: 'boss' } });
+    t.eq(DD.Combat.state.objective.text, SOLO, 'a solo boss at the start');
+    // one appears mid-fight (an imp, a vine): the suffix comes with it, and it flees when the boss drops
+    const imp = DD.Act.spawn('test_minion', 3, 3, { silent: true });
+    t.ok(imp && text() === WITH, 'a spawned minion brings the suffix: ' + DD.Combat.state.objective.text);
+    DD.Act.kill(foe(0), hero());
+    t.ok(DD.Combat.state.result === 'victory' && imp.fled, 'the boss drops: victory, the minion flees');
+    // with a minion: the suffix, gone once the minion is gone, and the fight goes on
+    sb({ w: 9, h: 9, heroes: [H(1, 1)], enemies: [E(7, 7, 'test_boss'), E(6, 2)], objective: { type: 'boss' } });
+    t.eq(DD.Combat.state.objective.text, WITH, 'a boss with a minion');
+    DD.Act.kill(foe(1), hero());
+    t.ok(text() === SOLO && !DD.Combat.state.result, 'the minion down: "' + DD.Combat.state.objective.text + '", the fight goes on');
+    // a wave still coming counts: someone will be there to flee
+    sb({ w: 9, h: 9, heroes: [H(1, 1)], enemies: [E(7, 7, 'test_boss')], objective: { type: 'boss' },
+      reinforcements: [{ round: 3, enemies: [{ id: 'test_minion', n: 1 }], edge: 'E' }] });
+    t.eq(DD.Combat.state.objective.text, WITH, 'a pending wave: the suffix');
+    // a squad keeps its "(N left)" count
+    sb({ w: 9, h: 9, heroes: [H(1, 1)], enemies: [E(7, 7, 'test_boss'), E(6, 2, 'test_brute')], objective: { type: 'boss', bossIds: ['test_boss', 'test_brute'] },
+      encounter: { id: 'test_fights12_squad', shortName: 'The Test Squad' } });
+    t.eq(DD.Combat.state.objective.text, 'Defeat the Test Squad (2 left)', 'a squad: unchanged');
+  });
+
   T.suite('engine: preview simulation', function (t) {
     quiet({ heroes: [H(1, 3), H(1, 5, 'test_cleric')], enemies: [E(4, 3), E(4, 4), E(7, 7)] });
     const s = DD.Combat.state;
@@ -5224,5 +5251,732 @@
     t.ok(!has(g, 'burn') && !/Test Grunt is Burning/.test(logFrom(n0)), 'stepping into fire: no Burning, no log line (' + logFrom(n0) + ')');
     g.resist = { fire: 0.5 };
     t.ok(!!A.addStatus(g, 'burn', { stacks: 1 }), 'a resistant (not immune) unit still burns');
+  });
+})();
+
+// ---- V3 (act 4): E1 shared turns, E2 a unit's own entries, the new events, squads, banners, swaps, the modifyUse veto
+// and DD.Cameo (js/engine/cameo.js). The fixtures' act-4 doors name their cameo actor (the Heckler), so these fights never
+// meet Svammiel's triggers, loaded or not.
+(function () {
+  'use strict';
+  const T = window.DD_TEST;
+  const DD = window.DD;
+  const H = T.helpers.H, E = T.helpers.E, hero = T.helpers.hero, foe = T.helpers.foe, sb = T.helpers.sb;
+  function orderDefs() { return DD.Combat.order().map(function (e) { return e.unit.defId; }).join(' '); }
+  function grab(defId) { return DD.Combat.state.units.filter(function (u) { return u.defId === defId && !u.dead; })[0] || null; }
+  function entriesOf(u) { return DD.Combat.state.order.filter(function (e) { return e.unitId === u.id; }); }
+  function custom(extra) { return Object.assign({ objective: { type: 'custom', text: 'Testing' } }, extra || {}); }
+  function withAiLog(fn) {
+    const acts = [], orig = DD.AI.act;
+    DD.AI.act = function (u) { acts.push({ round: DD.Combat.state.round, id: u.defId }); return orig.apply(DD.AI, arguments); };
+    try { fn(); } finally { DD.AI.act = orig; }
+    return acts;
+  }
+
+  T.suite('engine: V3 E1 — an actsWithOwner unit takes no entry while its owner lives: it acts right after the owner, then splits off', function (t) {
+    let creeper = null;
+    sb({ w: 9, h: 7, seed: 11, initiative: 'roll', noPlan: false, heroes: [H(1, 3, 'test_knight')],
+      enemies: [E(7, 3, 'test_grunt'), E(7, 5, 'test_archer')], objective: { type: 'custom', text: 'Testing' },
+      encounter: { id: 'test_e1', checkObjective: function () { return null; }, onStart: function () {
+        creeper = DD.Act.spawn('test_creeper', 6, 1, { owner: grab('test_grunt'), noFx: true, silent: true });
+      } } });
+    const s = DD.Combat.state, grunt = grab('test_grunt'), archer = grab('test_archer');
+    t.ok(!!creeper && creeper.ownerId === grunt.id, 'spawned with { owner } before initiative: ownerId set');
+    t.eq(entriesOf(creeper).length, 0, 'no entry of its own (the first roll checks the owner directly)');
+    t.ok(entriesOf(grunt).length === 1 && entriesOf(archer).length === 1, 'its owner and the others rolled');
+    t.eq(DD.Combat.turnOwner(creeper), grunt, 'it acts on its owner\'s turn');
+    t.eq(DD.Combat.groupOf(grunt).map(function (u) { return u.defId; }).join(' '), 'test_grunt test_creeper', 'the owner first, then the creeper');
+    t.ok(DD.Combat.actsWithOwner(creeper) && !DD.Combat.actsWithOwner(archer), 'Combat.actsWithOwner reads the def');
+    // round 2 is played whole inside these two calls (round 1's AI turns before the knight resolved inside start)
+    const acts = withAiLog(function () { DD.Combat.endRound(); DD.Combat.endRound(); });
+    const r2 = acts.filter(function (a) { return a.round === 2; }).map(function (a) { return a.id; });
+    const gi = r2.indexOf('test_grunt');
+    t.ok(gi >= 0 && r2[gi + 1] === 'test_creeper', 'round 2: the creeper acts right after the grunt (' + r2.join(', ') + ')');
+    t.eq(r2.filter(function (x) { return x === 'test_creeper'; }).length, 1, 'once a round');
+    // after initiative: a spawn with { owner } joins its owner's turn at once; one without the flag rolls for itself
+    const c2 = DD.Act.spawn('test_creeper', 6, 5, { owner: archer, noFx: true, silent: true });
+    t.ok(!!c2 && !(s.joining || []).some(function (e) { return e.unitId === c2.id; }) && DD.Combat.turnOwner(c2) === archer, 'mid-fight: no joining entry, it acts on its owner\'s turn');
+    const m = DD.Act.spawn('test_minion', 5, 1, { owner: grunt, noFx: true, silent: true });
+    t.ok(!!m && (s.joining || []).some(function (e) { return e.unitId === m.id; }) && DD.Combat.turnOwner(m) === null, 'an enemy without actsWithOwner rolls its own entry even with an owner');
+    const c3 = DD.Act.spawn('test_minion', 4, 1, { owner: grunt, actsWithOwner: true, noFx: true, silent: true });
+    t.ok(!!c3 && DD.Combat.turnOwner(c3) === grunt && !(s.joining || []).some(function (e) { return e.unitId === c3.id; }), 'opts.actsWithOwner flags one unit');
+    // the owner dies: its creeper gets an entry of its own at the next round start
+    DD.Act.kill(grunt, null, { cause: 'other' });
+    t.eq(DD.Combat.turnOwner(creeper), null, 'the owner is dead: the creeper no longer acts on its turn');
+    const acts2 = withAiLog(function () { DD.Combat.endRound(); });
+    t.eq(entriesOf(creeper).length, 1, 'next round start: it rolled an entry of its own (split)');
+    t.ok(acts2.some(function (a) { return a.id === 'test_creeper' && a.round === s.round; }) || acts2.some(function (a) { return a.id === 'test_creeper'; }), 'and it keeps acting');
+    t.ok(entriesOf(c2).length === 0 && DD.Combat.turnOwner(c2) === archer, 'the other creeper still rides with its living owner');
+  });
+
+  T.suite('engine: V3 E1 — a sandbox in fixed order and a run of turns: the shared turn holds through rounds', function (t) {
+    let creeper = null;
+    sb({ w: 9, h: 7, noPlan: false, heroes: [H(1, 3, 'test_knight')], enemies: [E(7, 3, 'test_grunt')], objective: { type: 'custom', text: 'Testing' },
+      encounter: { id: 'test_e1b', checkObjective: function () { return null; }, onStart: function () {
+        creeper = DD.Act.spawn('test_creeper', 7, 1, { owner: grab('test_grunt'), noFx: true, silent: true });
+      } } });
+    t.eq(orderDefs(), 'test_knight test_grunt', 'heroesFirst: the knight, then the grunt — the creeper has no slot');
+    const acts = withAiLog(function () { for (let i = 0; i < 3; i++) DD.Combat.endRound(); });
+    [1, 2, 3].forEach(function (r) {
+      const ids = acts.filter(function (a) { return a.round === r; }).map(function (a) { return a.id; }).join(' ');
+      t.eq(ids, 'test_grunt test_creeper', 'round ' + r + ': ' + ids);
+    });
+    t.ok(!creeper.dead, 'the creeper is alive and well');
+  });
+
+  T.suite('engine: V3 E2 — a unit\'s own turnsPerRound adds or drops an entry at the next round start (rolled like a joiner)', function (t) {
+    function fight(seed) {
+      sb({ w: 8, h: 6, seed: seed, initiative: 'roll', enemyAi: false, heroes: [H(1, 2, 'test_knight')], enemies: [E(6, 2, 'test_grunt')],
+        objective: { type: 'custom', text: 'Testing' }, encounter: { id: 'test_e2', checkObjective: function () { return null; } } });
+      return foe(0);
+    }
+    const g = fight(5), s = DD.Combat.state;
+    t.eq(DD.Combat.entriesPerRound(g), 1, 'a grunt: 1 entry a round');
+    g.turnsPerRound = 2;
+    t.eq(DD.Combat.entriesPerRound(g), 2, 'the unit\'s own turnsPerRound wins over its def');
+    t.eq(entriesOf(g).length, 1, 'nothing changes mid-round');
+    let turns = {};
+    const off = DD.Events.on('turn:start', function (e) { if (e.unit === g) turns[e.round] = (turns[e.round] || 0) + 1; });
+    const n0 = s.log.length;
+    try {
+      DD.Combat.endRound();
+      t.eq(entriesOf(g).map(function (e) { return e.k; }).sort().join(','), '0,1', 'round ' + s.round + ' starts with two entries (k 0 and 1)');
+      t.eq(DD.Combat.order().filter(function (e) { return e.unit === g; }).length, 2, 'Combat.order (the tracker) shows both');
+      t.ok(s.log.slice(n0).some(function (l) { return /Test Grunt now takes 2 turns a round \(rolls \d+\)\./.test(l.text); }), 'the extra entry is rolled and logged');
+      const r2 = s.round;
+      DD.Combat.endRound();
+      t.eq(turns[r2], 2, 'two turns in round ' + r2);
+      g.turnsPerRound = 1;
+      DD.Combat.endRound();
+      t.eq(entriesOf(g).length, 1, 'back to 1: the extra entry is dropped at the next round start');
+      t.eq(entriesOf(g)[0].k, 0, '... the first one stays');
+      const r4 = s.round;
+      DD.Combat.endRound();
+      t.eq(turns[r4], 1, 'one turn in round ' + r4);
+      g.turnsPerRound = 9;
+      t.eq(DD.Combat.entriesPerRound(g), 4, 'clamped to 4');
+      g.turnsPerRound = 'junk';
+      t.eq(DD.Combat.entriesPerRound(g), 1, 'junk → the def\'s (1)');
+      t.eq(DD.Combat.entriesPerRound(hero(0)), 1, 'heroes: always 1');
+    } finally { off(); }
+    // rolled with the combat RNG: the same seed gives the same extra roll
+    const totals = [];
+    [7, 7].forEach(function (seed) {
+      const u = fight(seed);
+      u.turnsPerRound = 3;
+      DD.Combat.endRound();
+      totals.push(entriesOf(u).map(function (e) { return e.k + ':' + e.total; }).sort().join(' '));
+    });
+    t.eq(totals[0], totals[1], 'deterministic per seed (' + totals[0] + ')');
+    // robustness: a unit of an earlier fight is never given a turn (sandbox giveTurnTo)
+    const stale = hero(0);
+    fight(8);
+    t.eq(DD.Combat.giveTurnTo(stale), false, 'giveTurnTo refuses a unit that is not in this fight');
+  });
+
+  T.suite('engine: V3 events — combat:ready (after onStart, before deployment / the roll), skill:used (real uses only), Act.log extra, addRule silent', function (t) {
+    const seen = [];
+    const offR = DD.Events.on('combat:ready', function (e) {
+      seen.push({ phase: e.state.phase, order: e.state.order, onStart: !!e.state.data.onStartRan, round: e.state.round, deploy: e.state.deploy.active });
+    });
+    try {
+      sb({ heroes: [H(1, 1)], enemies: [E(5, 5)], deploy: true, deployTiles: [{ x: 1, y: 1 }, { x: 1, y: 2 }],
+        encounter: { id: 'test_ready', onStart: function (s) { s.data.onStartRan = true; } } });
+    } finally { offR(); }
+    t.eq(seen.length, 1, 'combat:ready fires once');
+    t.ok(seen[0] && seen[0].onStart && seen[0].phase === 'setup' && seen[0].order === null && seen[0].round === 0, 'after encounter.onStart, before deployment and the initiative roll');
+    t.eq(DD.Combat.state.phase, 'deploy', 'deployment opens after it');
+    // skill:used: real uses, never previews or attacks of opportunity
+    sb({ heroes: [H(1, 1, 'test_mage'), H(3, 3, 'test_knight')], enemies: [E(1, 3), E(4, 3)], enemyAi: false, objective: { type: 'custom', text: 'Testing' }, encounter: { id: 'test_used', checkObjective: function () { return null; } } });
+    const used = [];
+    const off = DD.Events.on('skill:used', function (e) { used.push(e); });
+    try {
+      const m = hero(0), k = hero(1);
+      DD.Combat.preview(m, m.basic, 1, 3);
+      t.eq(used.length, 0, 'a preview emits nothing');
+      t.ok(DD.Combat.useSkill(m, m.basic, 1, 3), 'a real use');
+      t.ok(used.length === 1 && used[0].unit === m && used[0].skill.id === 'test_bolt' && used[0].ctx && used[0].ctx.user === m, 'skill:used { unit, skill, ctx }');
+      DD.Combat.endTurn();
+      t.eq(DD.Combat.current(), k, 'the knight\'s turn');
+      t.eq(DD.Combat.provokes(k, 3, 1).length, 1, 'walking off provokes the grunt next to him');
+      const n0 = used.length;
+      let opp = 0;
+      const offO = DD.Events.on('opportunity:attack', function () { opp++; });
+      try { DD.Combat.move(k, 3, 1); } finally { offO(); }
+      t.eq(opp, 1, 'the attack of opportunity happened');
+      t.eq(used.length, n0, 'an attack of opportunity is no skill:used');
+    } finally { off(); }
+    // Act.log extra: merged into the entry (and combat:log), round / text / cls stay the engine's
+    const logs = [];
+    const offL = DD.Events.on('combat:log', function (e) { logs.push(e); });
+    try {
+      DD.Act.log('A test line.', 'cameo', { speaker: 'The Heckler', actor: 'test_heckler', cls: 'hacked', round: 99 });
+    } finally { offL(); }
+    const last = DD.Combat.state.log[DD.Combat.state.log.length - 1];
+    t.ok(last.speaker === 'The Heckler' && last.actor === 'test_heckler' && last.cls === 'cameo' && last.round === DD.Combat.state.round && last.text === 'A test line.', 'the extra fields ride on the entry');
+    t.ok(logs.length === 1 && logs[0].speaker === 'The Heckler', 'combat:log carries them');
+    // addRule: silent logs nothing, and cheat / source / next are kept
+    const n1 = DD.Combat.state.log.length;
+    DD.Act.addRule({ id: 'test_silent', name: 'Hush', desc: 'Nothing.', silent: true, cheat: true, source: 'test_heckler', next: true });
+    t.eq(DD.Combat.state.log.length, n1, 'a silent rule logs no "New rule:" line');
+    const r = DD.Combat.state.rules.filter(function (x) { return x.id === 'test_silent'; })[0];
+    t.ok(r && r.cheat === true && r.source === 'test_heckler' && r.next === true, 'cheat / source / next kept');
+    DD.Act.addRule({ id: 'test_loud', name: 'Loud', desc: 'Everything.' });
+    t.ok(/^New rule: Loud \(Everything\.\)$/.test(DD.Combat.state.log[DD.Combat.state.log.length - 1].text), 'a normal rule still announces itself');
+  });
+
+  T.suite('engine: V3 E10 / E11 / E12 — a squad in objective.bossIds, encounter.banner false, the swap count', function (t) {
+    // E10
+    sb({ w: 9, h: 7, heroes: [H(1, 3, 'test_knight')], enemies: [E(6, 2, 'test_brute'), E(6, 4, 'test_grunt'), E(7, 6, 'test_minion')], enemyAi: false,
+      objective: { type: 'boss', bossIds: ['test_brute', 'test_grunt'] }, encounter: { id: 'test_e10', shortName: 'The Test Squad', name: 'The Test Squad of Many Letters' } });
+    const s = DD.Combat.state;
+    t.eq(s.objective.text, 'Defeat the Test Squad (2 left)', 'objective text from shortName ("the", N left)');
+    t.eq(DD.Combat.bossUnits().map(function (u) { return u.defId; }).join(' '), 'test_brute test_grunt', 'bossUnits: the squad');
+    DD.Act.kill(grab('test_grunt'), null, { cause: 'other' });
+    DD.Combat.refreshObjective();
+    t.ok(s.objective.text === 'Defeat the Test Squad (1 left)' && !s.result, 'one down: 1 left, the fight goes on');
+    const late = DD.Act.spawn('test_grunt', 5, 5, { noFx: true, silent: true });
+    DD.Combat.refreshObjective();
+    t.eq(s.objective.text, 'Defeat the Test Squad (2 left)', 'a squad member arriving mid-fight counts too');
+    DD.Act.kill(grab('test_brute'), null, { cause: 'other' });
+    t.eq(s.result, null, 'the last one still stands');
+    DD.Act.kill(late, null, { cause: 'other' });
+    t.eq(s.result, 'victory', 'every unit of the squad\'s defs down: victory');
+    const mn = s.units.filter(function (u) { return u.defId === 'test_minion'; })[0];
+    t.ok(mn.dead && mn.fled, 'the rest flee');
+    // E11 (FX are recorded, not played)
+    const FX = DD.FX, was = FX.instant;
+    const bannerCount = function (banner) {
+      FX.reset();
+      FX.instant = false;
+      try {
+        sb({ heroes: [H(1, 1)], enemies: [E(6, 5, 'test_boss')], enemyAi: false, encounter: { id: 'test_e11', banner: banner } });
+        return { n: FX.queue.filter(function (e) { return e.type === 'banner' && e.text === 'The Test Overlord'; }).length,
+          intro: DD.Combat.state.log.some(function (l) { return /cracks its knuckles/.test(l.text); }) };
+      } finally { FX.reset(); FX.instant = was; }
+    };
+    const on = bannerCount(undefined), off = bannerCount(false);
+    t.ok(on.n === 1 && on.intro, 'a boss fight shows its boss banner and logs the intro');
+    t.ok(off.n === 0 && off.intro, 'banner: false: no banner (the cameo shows the opponent), the intro is still logged');
+    // E12
+    sb({ w: 9, h: 9, heroes: [H(2, 4), H(3, 4, 'test_knight')], enemies: [E(8, 8)], enemyAi: false, objective: { type: 'custom', text: 'Testing' }, encounter: { id: 'test_e12', checkObjective: function () { return null; } } });
+    const s2 = DD.Combat.state;
+    t.eq(s2.stats.swaps, 0, 'stats.swaps starts at 0');
+    const undone = [];
+    const offU = DD.Events.on('move:undone', function (e) { undone.push(e); });
+    try {
+      t.ok(DD.Combat.swap(hero(0), 3, 4) && s2.stats.swaps === 1, 'a hero swap move counts');
+      t.ok(DD.Combat.undo() && s2.stats.swaps === 0, 'an undone swap does not');
+      t.ok(undone.length === 1 && undone[0].kind === 'swap' && undone[0].unitId === hero(0).id && undone[0].to.x === 2 && undone[0].from.x === 3, 'move:undone { kind: swap, from, to }');
+      t.ok(DD.Combat.swap(hero(0), 3, 4) && s2.stats.swaps === 1, 'swapped again: 1');
+      DD.Combat.endTurn();
+      const k = DD.Combat.current();
+      t.ok(DD.Combat.move(k, 2, 7) && DD.Combat.undo(), 'a walk and its undo');
+      const u2 = undone[undone.length - 1];
+      t.ok(undone.length === 2 && u2.kind === 'move' && u2.unitId === k.id && u2.from.x === 2 && u2.from.y === 7 && Array.isArray(u2.path) && u2.path.length >= 1, 'move:undone { kind: move, from, to, path }');
+    } finally { offU(); }
+    t.ok(s2.stats.cameos === 0 && s2.stats.cheats === 0, 'stats.cameos / cheats start at 0');
+  });
+
+  T.suite('engine: V3 E13 — a rule\'s modifyUse refuses exactly one skill with its reason; useSkill and AutoPlay respect it; asking is pure', function (t) {
+    let q0 = null;
+    const ban = { id: 'test_ban', name: 'Ban', desc: 'No Fire Fixture.', hooks: { modifyUse: function (q) {
+      if (!q0) q0 = Object.assign({}, q);
+      DD.Combat.state.rng.next();   // a careless hook that rolls: the query puts the dice back
+      if (q.skill.id === 'test_fireball') q.why = 'Bleeped by the tests (Fire Fixture).';
+    } } };
+    function fight(rules) {
+      sb({ w: 9, h: 6, heroes: [H(1, 2, 'test_mage')], enemies: [E(5, 2, 'test_grunt'), E(5, 3, 'test_grunt')], enemyAi: false, rules: rules,
+        objective: { type: 'custom', text: 'Testing' }, encounter: { id: 'test_e13', checkObjective: function () { return null; } } });
+      const m = hero(0);
+      return { m: m, fb: m.skills.filter(function (x) { return x.id === 'test_fireball'; })[0] };
+    }
+    const f = fight([ban]), s = DD.Combat.state;
+    const rng0 = JSON.stringify(s.rng.getState()), mut0 = s.mutations;
+    t.eq(DD.Combat.canUse(f.m, f.fb), 'Bleeped by the tests (Fire Fixture).', 'canUse returns the reason');
+    t.ok(q0 && q0.unit === f.m && q0.skill && q0.slot && q0.level === 1 && q0.why === null, 'q = { unit, skill, slot, level, why: null }');
+    t.eq(DD.Combat.canUse(f.m, f.m.basic), true, 'every other skill is fine');
+    t.eq(DD.Combat.vetoOf(f.m, f.fb), 'Bleeped by the tests (Fire Fixture).', 'Combat.vetoOf answers the same');
+    t.ok(JSON.stringify(s.rng.getState()) === rng0 && s.mutations === mut0 && f.m.ap === 3, 'asking is pure: no RNG draw, no state change');
+    t.ok(!DD.Combat.useSkill(f.m, f.fb, 5, 2) && f.m.ap === 3 && f.fb.cd === 0, 'useSkill refuses it (no AP, no cooldown spent)');
+    f.fb.cd = 2;
+    t.eq(DD.Combat.canUse(f.m, f.fb), 'Bleeped by the tests (Fire Fixture).', 'the refusal wins over "On cooldown"');
+    DD.Act.resetCooldowns(f.m);
+    t.eq(DD.Combat.canUse(f.m, f.fb), 'Bleeped by the tests (Fire Fixture).', 'a cooldown reset changes nothing');
+    // AutoPlay: with the ban it never casts it (without it, it would be on the table)
+    function autoUses(rules) {
+      fight(rules);
+      const ids = [];
+      DD.Act.addRule({ id: 'test_e13_spy', name: 'Spy', silent: true, hooks: { onSkillUsed: function (ctx) { if (!DD.Act.simulating && ctx.user && ctx.user.kind === 'hero') ids.push(ctx.skill.id); } } });
+      for (let i = 0; i < 3 && !DD.Combat.state.result; i++) { DD.AutoPlay.takeTurn(); DD.Combat.endTurn(); }
+      return ids;
+    }
+    const free = autoUses([]), banned = autoUses([ban]);
+    const tally = function (ids) { const c = {}; ids.forEach(function (id) { c[id] = (c[id] || 0) + 1; }); return JSON.stringify(c); };
+    t.log('AutoPlay without the ban: ' + tally(free) + ' · with it: ' + tally(banned));
+    t.ok(banned.length > 0 && banned.indexOf('test_fireball') < 0, 'AutoPlay plays on and never picks the banned skill');
+    // the fixtures' Muted Test (the Radio Edit's shape) through a real start cameo: the filled desc and the veto
+    sb({ w: 10, h: 9, encounter: DD.getEncounter('test_a4_lane_d'), heroes: [H(1, 2, 'test_knight'), H(1, 4, 'test_mage')], enemies: [E(8, 4, 'test_boss')], enemyAi: false });
+    const s3 = DD.Combat.state, mu = s3.data.testMute;
+    const rule = s3.rules.filter(function (r) { return r.id === 'cameo:test_cheat_mute'; })[0];
+    const owner = mu && DD.Combat.byId(mu.unitId);
+    t.ok(!!rule && !!owner, 'the mute picked a hero skill (' + (mu && mu.skillId) + ')');
+    t.ok(rule && /^.+ \((Sir Testsalot|Wizzy McTest)\) is muted: it can't be used this fight\.$/.test(rule.desc) && rule.desc.indexOf('<') < 0, 'the filled desc: ' + (rule && rule.desc));
+    const sl = owner && DD.Combat.slotsOf(owner).filter(function (x) { return x.id === mu.skillId; })[0];
+    if (owner && owner !== DD.Combat.current()) DD.Combat.endTurn();
+    t.eq(DD.Combat.canUse(owner, sl), 'Muted by the Heckler (Muted Test).', 'refused all fight with the rule\'s reason');
+  });
+
+  // ---- DD.Cameo ----------------------------------------------------------------------------------------------------
+  function door(id, cfg) {
+    return sb(Object.assign({ w: 10, h: 9, encounter: DD.getEncounter(id), heroes: [H(1, 2, 'test_knight'), H(1, 4, 'test_mage')],
+      enemies: [E(8, 4, 'test_boss')], enemyAi: false }, cfg || {}));
+  }
+  function cameoLines() { return DD.Combat.state.log.filter(function (l) { return l.cls === 'cameo'; }); }
+  function pool(key) { return DD.defs.narration[key] || []; }
+
+  T.suite('engine: V3 cameo — the start cameo: announcer, roast, the cheat in state.rules during deployment (exact desc, a Reason), memory and stats', function (t) {
+    t.ok(DD.Cameo && DD.Cameo.stub === false, 'js/engine/cameo.js replaced the core stand-in');
+    door('test_a4_lane_b', { deploy: true, deployTiles: [{ x: 1, y: 2 }, { x: 1, y: 4 }, { x: 1, y: 6 }] });
+    const s = DD.Combat.state;
+    t.eq(s.phase, 'deploy', 'deployment is open');
+    const rule = s.rules.filter(function (r) { return r.id === 'cameo:test_cheat_rule'; })[0];
+    t.ok(!!rule && rule.cheat === true && rule.source === 'test_heckler' && rule.silent === true && rule.turns === -1, 'the cheat is a rule before anyone deploys (cheat, source, silent, the whole fight)');
+    t.ok(rule && rule.name === '🧪 Rigged Tests' && rule.desc === 'Heroes take 1 more damage from every hit this fight.', 'chip: icon + name, the exact desc');
+    t.ok(!s.log.some(function (l) { return /^New rule:/.test(l.text); }), 'no "New rule:" line (the cameo announces it)');
+    const lines = cameoLines();
+    t.ok(lines.length >= 3 && lines.every(function (l) { return l.speaker === 'The Heckler' && l.actor === 'test_heckler'; }), 'cameo lines carry the speaker (' + lines.length + ')');
+    t.ok(pool('test_heckle_cameo').indexOf(lines[0].text) >= 0, 'first the announcer line: ' + lines[0].text);
+    const roasts = pool('test_heckle_hero_test_knight').map(function (l) { return l.replace(/\{hero\}/g, 'Sir Testsalot'); })
+      .concat(pool('test_heckle_hero_test_mage').map(function (l) { return l.replace(/\{hero\}/g, 'Wizzy McTest'); }));
+    t.ok(roasts.indexOf(lines[1].text) >= 0, 'then a roast of a hero in this fight ({hero} filled): ' + lines[1].text);
+    const cheat = lines.filter(function (l) { return l.cheat === 'test_cheat_rule'; })[0];
+    t.ok(cheat && /^🤡 The Heckler cheats: Rigged Tests\. Heroes take 1 more damage from every hit this fight\. Reason: (the tests said so|flaky|none)\.$/.test(cheat.text), 'the cheat line: ' + (cheat && cheat.text));
+    t.ok(s.log.some(function (l) { return l.cls === 'narrator' && /^DM \(whispering\)/.test(l.text); }), 'the DM\'s counter whisper');
+    t.ok(s.stats.cameos === 1 && s.stats.cheats === 1, 'stats: 1 cameo, 1 cheat');
+    const h = DD.Cameo.history(s);
+    t.ok(h.length === 1 && h[0].style === 'swoop' && h[0].cheat === 'test_cheat_rule' && h[0].actor === 'test_heckler' && h[0].round === 0, 'history: the start cameo with its cheat');
+    t.eq(DD.Cameo.budget(s).used, 0, 'the start cameo never counts toward the budget');
+    t.ok(s.data.cameo.mem && s.data.cameo.mem.cheats.indexOf('test_cheat_rule') >= 0 && s.data.cameo.mem.heroes.length === 1, 'no run: the fight keeps the memory');
+    // the cheat works, and the estimate (the honesty rule) agrees
+    DD.Combat.rollInitiative();
+    const m = DD.Combat.heroes().filter(function (u) { return u.defId === 'test_mage'; })[0], b = foe(0);
+    const est = DD.AI.estimate(b, m, 6), hp0 = m.hp;
+    DD.Act.damage(b, m, 6, {});
+    t.ok(est === 7 && hp0 - m.hp === 7, 'heroes take 1 more: estimate ' + est + ', dealt ' + (hp0 - m.hp));
+    const g0 = b.hp;
+    DD.Act.damage(m, b, 6, {});
+    t.eq(g0 - b.hp, 5, 'the boss is not affected (armor 1)');
+  });
+
+  T.suite('engine: V3 cameo — a start cheat lands before the roll (modifyInitiative), apply may use state.rng and fill the desc, onRemove runs', function (t) {
+    const def = DD.getCameo('test_heckler');
+    def.cheats.zz_init = { id: 'zz_init', name: 'Favouritism', icon: '🤝', rounds: -1, desc: 'Enemies get +50 initiative.',
+      quips: ['Favourites first. Obviously.'],
+      hooks: { modifyInitiative: function (r) { if (r.unit.side === 'enemy') r.total += 50; } } };
+    const enc = Object.assign({}, DD.getEncounter('test_a4_lane_a'), { id: 'test_zz_init', cameo: { actor: 'test_heckler', start: 'test_heckle_cameo', cheat: 'zz_init' } });
+    try {
+      const roll = function (cameo) {
+        sb({ w: 9, h: 7, seed: 3, initiative: 'roll', encounter: enc, cameo: cameo, heroes: [H(1, 2, 'test_knight')], enemies: [E(7, 3, 'test_grunt')], enemyAi: false });
+        return DD.Combat.state.order.filter(function (e) { return e.side === 'enemy'; })[0].total;
+      };
+      const plain = roll(false), cheated = roll(undefined);
+      t.eq(cheated, plain + 50, 'the cheat\'s modifyInitiative changed the roll (' + plain + ' → ' + cheated + ')');
+      t.eq(orderDefs().split(' ')[0], 'test_grunt', 'the favourite goes first');
+      // a direct call (his own fight's way), the actor absent: its own banner and a bubble with the card; no quip pool,
+      // so the cheat's own `quips` line
+      const FX = DD.FX, was = FX.instant;
+      try {
+        roll(false);
+        FX.reset();
+        FX.instant = false;
+        const n0 = DD.Combat.state.stats.cheats;
+        const r = DD.Cameo.cheat('test_heckler', 'zz_init');
+        const bn = FX.queue.filter(function (e) { return e.type === 'banner'; })[0];
+        const ev = FX.queue.filter(function (e) { return e.type === 'cameo'; })[0];
+        t.ok(!!r && r.cheat && DD.Combat.state.stats.cheats === n0 + 1, 'a direct cheat applies even with noCameo (a mechanic)');
+        t.ok(bn && bn.text === 'THE HECKLER\'S RULE: Favouritism' && bn.sub === 'Enemies get +50 initiative.', 'its own banner: ' + (bn && bn.text));
+        t.ok(ev && ev.style === 'bubble' && ev.cheat && ev.cheat.quip === 'Favourites first. Obviously.', 'a bubble with the card and the cheat\'s own quip');
+        t.eq(DD.Cameo.history().filter(function (h) { return h.style === 'cheat'; }).length, 1, 'history: a cheat entry');
+      } finally { FX.reset(); FX.instant = was; }
+    } finally { delete def.cheats.zz_init; }
+    // the crate: apply draws its tile from the combat RNG, fills the desc, and the rule's onRemove runs when it ends
+    door('test_a4_lane_c', { seed: 9, enemies: [E(8, 4, 'test_boss'), E(8, 7, 'test_brute')] });
+    const s = DD.Combat.state, c = s.data.testCrate;
+    const rule = s.rules.filter(function (r) { return r.id === 'cameo:test_cheat_crate'; })[0];
+    t.ok(!!c && DD.Grid.tile(c.x, c.y).obj && DD.Grid.tile(c.x, c.y).obj.id === 'crate', 'apply placed the crate at (' + (c && c.x) + ', ' + (c && c.y) + ')');
+    t.ok(rule && rule.desc === 'A crate lands on (' + c.x + ', ' + c.y + ').', 'the filled desc is the rule\'s, the chip\'s and the log\'s: ' + (rule && rule.desc));
+    t.ok(cameoLines().some(function (l) { return l.text.indexOf('A crate lands on (' + c.x + ', ' + c.y + ').') >= 0; }), 'the log line carries it');
+    door('test_a4_lane_c', { seed: 9, enemies: [E(8, 4, 'test_boss'), E(8, 7, 'test_brute')] });
+    t.eq(JSON.stringify(DD.Combat.state.data.testCrate), JSON.stringify(c), 'same seed, same crate (state.rng)');
+    t.eq(DD.Combat.state.objective.text, 'Defeat the Test Brute Brigade (2 left)', 'the door\'s squad objective (E10, shortName)');
+    for (let i = 0; i < 3 && !DD.Combat.state.result; i++) DD.Combat.endRound();
+    t.ok(DD.Combat.state.data.testCrateRuleEnded && !DD.Combat.state.rules.some(function (r) { return r.id === 'cameo:test_cheat_crate'; }), 'rounds: 2 → the rule ends after round 2 and its onRemove ran');
+  });
+
+  T.suite('engine: V3 cameo — nothing in previews or dry runs (log, cameo memory, stats unchanged)', function (t) {
+    door('test_a4_lane_a', { heroes: [H(1, 2, 'test_mage'), H(4, 2, 'test_knight'), H(1, 6, 'test_cleric')] });
+    const s = DD.Combat.state, m = hero(0), k = hero(1);
+    const snap = function () { return JSON.stringify({ log: s.log.length, cameo: s.data.cameo, stats: [s.stats.cameos, s.stats.cheats] }); };
+    const before = snap();
+    DD.Act.simulating = true;
+    let n = 0, txt = '';
+    try {
+      n += DD.Cameo.fire('round:start', { round: 4 }) + DD.Cameo.fire('start', {}) + DD.Cameo.fire('unit:downed', { unit: k, unitId: k.id });
+      txt += DD.Cameo.say('test_heckler', 'test_heckle_generic', {}, { force: true }) + DD.Cameo.play('test_heckler', 'Hello from a dream.', { force: true });
+    } finally { DD.Act.simulating = false; }
+    t.ok(n === 0 && txt === '', 'fire / say / play do nothing while simulating');
+    t.eq(snap(), before, 'state unchanged');
+    // a real preview that downs a hero (the Heckler has a heroDowned trigger): no trace
+    k.hp = 1;
+    const fb = m.skills.filter(function (x) { return x.id === 'test_fireball'; })[0];
+    const pv = DD.Combat.preview(m, fb, 4, 2);
+    t.ok(pv && pv.perUnit && pv.perUnit[k.id] && pv.perUnit[k.id].lethal, 'the preview downs the knight');
+    t.eq(snap(), before, 'and nothing of the cameo moved');
+    t.eq(DD.Cameo.history(s).length, 1, 'history: still the start cameo only');
+  });
+
+  T.suite('engine: V3 cameo — the budget: ≤ 3 a fight, ≤ 1 a round, ≥ 2 rounds apart, trigger order; start / entrance / forced lines never refused', function (t) {
+    const snap = DD.Balance.snapshot();
+    try {
+      Object.assign(DD.Balance.cameo, { perFight: 3, perRound: 1, minGap: 2 });
+      door('test_a4_lane_a');
+      const s = DD.Combat.state;
+      const say = function () { return DD.Cameo.say('test_heckler', 'test_heckle_generic'); };
+      s.round = 1;
+      t.ok(!!say(), 'round 1: an interjection plays');
+      t.eq(say(), '', 'round 1 again: refused (1 a round)');
+      s.round = 2;
+      t.eq(say(), '', 'round 2: refused (2 rounds apart)');
+      s.round = 3;
+      t.ok(!!say(), 'round 3: plays');
+      s.round = 5;
+      t.ok(!!say(), 'round 5: plays');
+      s.round = 7;
+      t.eq(say(), '', 'round 7: refused (3 a fight)');
+      t.ok(!!DD.Cameo.say('test_heckler', 'test_heckle_generic', {}, { force: true }), 'a forced line is never refused');
+      t.ok(!!DD.Cameo.play('test_heckler', 'test_heckle_generic', { style: 'entrance' }), 'an entrance is never refused');
+      const b = DD.Cameo.budget(s);
+      t.ok(b.used === 3 && b.left === 0 && b.lastRound === 5, 'budget(): ' + JSON.stringify(b));
+      t.eq(s.stats.cameos, 1 + 3 + 2, 'every cameo counts in stats.cameos (start + 3 + forced + entrance)');
+      DD.Balance.cameo.perRound = 2;
+      door('test_a4_lane_a');
+      DD.Combat.state.round = 4;
+      t.ok(!!say() && !!say() && say() === '', 'perRound 2: two in a round, not three');
+    } finally { DD.Balance.restore(snap); }
+    // priority: two triggers on one event → the first one listed plays
+    DD.registerNarration('test_zz_first', ['First!']);
+    DD.registerNarration('test_zz_second', ['Second!']);
+    DD.registerCameo({ id: 'zz_prio', name: 'Priority Tester', triggers: [
+      { on: 'round', act: 4, key: 'test_zz_first', style: 'bubble' }, { on: 'round', act: 4, key: 'test_zz_second', style: 'bubble' }] });
+    try {
+      sb({ heroes: [H(1, 1)], enemies: [E(5, 5)], enemyAi: false, encounter: { id: 'zz_prio_enc', act: 4, cameo: { actor: 'zz_prio' } } });
+      const h1 = DD.Cameo.history();
+      t.ok(h1.length === 1 && h1[0].text === 'First!' && h1[0].round === 1, 'round 1 (the real round:start): the first trigger listed wins');
+      DD.Combat.state.round = 6;
+      const n = DD.Cameo.fire('round:start', { round: 6 });
+      const h = DD.Cameo.history();
+      t.ok(n === 1 && h.length === 2 && h[1].text === 'First!', 'round 6: again only the first (' + n + ')');
+    } finally {
+      delete DD.defs.cameos.zz_prio;
+      delete DD.defs.narration.test_zz_first;
+      delete DD.defs.narration.test_zz_second;
+    }
+  });
+
+  T.suite('engine: V3 cameo — routing: absent → one cameo FX; present → barks on his unit, nothing swoops; Log only → no FX; instant mode → an empty queue', function (t) {
+    const FX = DD.FX, was = FX.instant;
+    const st = DD.Meta && DD.Meta.data && DD.Meta.data.settings;
+    const had = st ? st.cameos : undefined;
+    const cameoFx = function () { return FX.queue.filter(function (e) { return e.type === 'cameo'; }); };
+    try {
+      FX.reset();
+      FX.instant = false;
+      door('test_a4_lane_b');
+      let ev = cameoFx();
+      t.eq(ev.length, 1, 'absent: exactly one cameo FX event');
+      const e = ev[0] || {};
+      t.ok(e.style === 'swoop' && e.actor === 'test_heckler' && e.enemy === 'test_heckler_imp' && e.speaker === 'The Heckler', 'style swoop, the actor, his sprite, the speaker');
+      t.ok(e.banner && e.banner.title === 'The Test Door of Flakiness' && /^The Heckler: ".+"$/.test(e.banner.sub) && e.banner.fit === true, 'banner: the encounter name, sub = his announcer line');
+      t.ok(e.cheat && e.cheat.name === 'Rigged Tests' && e.cheat.icon === '🧪' && e.cheat.desc === 'Heroes take 1 more damage from every hit this fight.' && !!e.cheat.quip, 'the cheat card (name, icon, exact desc, a quip)');
+      t.ok(e.ms === 3300 && !e.parallel && e.text === cameoLines()[1].text, 'Full with a card: 3.3 s, blocking; the bubble is the roast');
+      FX.reset();
+      door('test_a4_lane_a');
+      t.eq(cameoFx()[0] && cameoFx()[0].ms, 2500, 'without a card: 2.5 s');
+      FX.reset();
+      // a bubble interjection: non-blocking
+      DD.Combat.state.round = 3;
+      DD.Cameo.say('test_heckler', 'test_heckle_generic');
+      ev = cameoFx();
+      t.ok(ev.length === 1 && ev[0].style === 'bubble' && ev[0].ms === 0 && ev[0].parallel === true, 'a bubble: ms 0, parallel (AI turns never wait for a heckle)');
+      FX.reset();
+      // present: his own fight
+      sb({ w: 10, h: 9, encounter: DD.getEncounter('test_a4_finale'), heroes: [H(1, 2, 'test_knight'), H(1, 4, 'test_mage')],
+        enemies: [E(8, 4, 'test_boss'), E(8, 6, 'test_heckler_imp')], enemyAi: false });
+      const imp = grab('test_heckler_imp');
+      t.eq(DD.Cameo.present(DD.Combat.state, 'test_heckler'), imp, 'present() finds his unit');
+      t.eq(cameoFx().length, 0, 'present: no cameo FX (nothing swoops)');
+      const said = cameoLines().map(function (l) { return l.text; });
+      const barks = FX.queue.filter(function (x) { return x.type === 'bark' && x.unitId === imp.id; }).map(function (x) { return x.text; });
+      t.ok(said.length >= 1 && said.every(function (l) { return barks.indexOf(l) >= 0; }), 'his lines are barks on his unit (and logged): ' + barks.join(' | '));
+      FX.reset();
+      if (st) {
+        st.cameos = 'log';
+        door('test_a4_lane_b');
+        t.ok(cameoFx().length === 0 && cameoLines().length >= 3 && DD.Combat.state.rules.some(function (r) { return r.cheat; }), 'Log only: no FX, the same log and the same cheat');
+        FX.reset();
+        st.cameos = 'short';
+        door('test_a4_lane_b');
+        t.eq(cameoFx()[0] && cameoFx()[0].ms, 1200, 'Short: 1.2 s');
+        FX.reset();
+      } else t.log('DD.Meta settings missing: the Log only / Short checks skipped');
+    } finally {
+      FX.reset();
+      FX.instant = was;
+      if (st) { if (had === undefined) delete st.cameos; else st.cameos = had; }
+    }
+    // instant mode (tests, sims, headless): applied at once
+    door('test_a4_lane_a');
+    t.ok(!FX.busy() && FX.queue.length === 0, 'instant: the FX queue stays empty');
+    t.ok(cameoLines().length >= 1 && cameoLines()[0].speaker === 'The Heckler' && DD.Combat.state.stats.cameos === 1, 'and the cameo is logged with its speaker');
+    // noCameo: a sandbox's cameo: false and the page-wide DD.Balance.cameo.off
+    door('test_a4_lane_b', { cameo: false });
+    t.ok(DD.Combat.state.noCameo && cameoLines().length === 0 && !DD.Combat.state.rules.length, 'cameo: false: no line, no cheat');
+    const snap = DD.Balance.snapshot();
+    try {
+      DD.Balance.cameo.off = 1;
+      door('test_a4_lane_b');
+      t.ok(DD.Combat.state.noCameo && cameoLines().length === 0 && !DD.Combat.state.rules.length, 'DD.Balance.cameo.off: no cameo in any fight of the page');
+    } finally { DD.Balance.restore(snap); }
+  });
+
+  T.suite('engine: V3 cameo — determinism: a flavour cameo never draws state.rng (only a cheat\'s apply may)', function (t) {
+    const stateAfter = function (id, cameo) {
+      door(id, { seed: 21, cameo: cameo });
+      return JSON.stringify(DD.Combat.state.rng.getState());
+    };
+    t.eq(stateAfter('test_a4_lane_a', undefined), stateAfter('test_a4_lane_a', false), 'the start cameo (lines, roast, comeback) leaves state.rng where no cameo leaves it');
+    t.eq(stateAfter('test_a4_lane_b', undefined), stateAfter('test_a4_lane_b', false), 'a cheat without apply too');
+    t.ok(stateAfter('test_a4_lane_c', undefined) !== stateAfter('test_a4_lane_c', false), 'the crate\'s apply rolled its tile (allowed)');
+    door('test_a4_lane_a');
+    const s = DD.Combat.state, r0 = JSON.stringify(s.rng.getState());
+    s.round = 4;
+    DD.Cameo.fire('round:start', { round: 4 });
+    DD.Cameo.say('test_heckler', 'test_heckle_generic', {}, { force: true });
+    DD.Cameo.fire('combat:end', { result: 'victory', state: s });
+    t.ok(DD.Cameo.history(s).length >= 3, 'three more cameos played');
+    t.eq(JSON.stringify(s.rng.getState()), r0, 'state.rng untouched');
+    // a fight no trigger can match (acts 1-3, sandboxes) keeps no cameo memory at all
+    sb({ heroes: [H(1, 1)], enemies: [E(2, 1, 'test_minion')], encounter: { id: 'test_a1_plain', act: 1, kind: 'boss' } });
+    DD.Act.damage(foe(0), hero(0), 999, {});
+    DD.Act.kill(foe(0), hero(0), { cause: 'other' });
+    t.ok(DD.Combat.state.data.cameo === undefined && DD.Combat.state.stats.cameos === 0, 'an act-1 fight: no state.data.cameo, no cameo');
+  });
+
+  // Review (V3): a fight whose triggers all match on act / kind / encounter but whose `when` says no (the act-3 DM's
+  // twist and shadow under a 3-act knob) used to get an empty state.data.cameo; the memory now starts with a live trigger.
+  T.suite('engine: V3 cameo review — triggers whose `when` refuses leave no cameo memory; a live one starts it', function (t) {
+    const enc = { id: 'rv_a4_not_a_test_fight', act: 4, kind: 'boss', name: 'Not a Test Fight', cameo: { actor: 'test_heckler' } };
+    sb({ heroes: [H(1, 1, 'test_knight'), H(1, 3)], enemies: [E(5, 1, 'test_minion')], encounter: enc });
+    const s = DD.Combat.state;
+    s.round = 3;
+    t.eq(DD.Cameo.fire('round:start', { round: 3 }), 0, 'round: the Heckler\'s act-4 trigger matches, its when refuses');
+    DD.Act.damage(foe(0), hero(0), 999, {});
+    t.eq(DD.Cameo.fire('combat:end', { result: 'victory', state: s }), 0, 'victory: refused too');
+    t.ok(s.data.cameo === undefined && s.stats.cameos === 0 && !s.log.some(function (l) { return l.cls === 'cameo'; }), 'no state.data.cameo, no line, no stat');
+    // the same actor in one of its own fights: the memory starts with the first live trigger
+    door('test_a4_lane_a');
+    t.ok(DD.Combat.state.data.cameo && DD.Combat.state.data.cameo.started === true, 'a live start trigger starts the memory');
+  });
+
+  // Review (V3, NARRATIVE's ask): unit:downed comes after the onDowned / onAllyDowned hooks, so a hook that stands the hero
+  // right back up must not get a "down" heckle; friendly fire keeps {enemy} the opponent (actions.js narrates it so too).
+  T.suite('engine: V3 cameo review — heroDowned skips a hero a hook stood back up; friendly fire never makes a hero the {enemy}', function (t) {
+    DD.registerNarration('test_zz_rv', ['{enemy} got {hero}.']);
+    DD.registerCameo({ id: 'zz_rv', name: 'Down Tester', triggers: [{ on: 'heroDowned', act: 4, key: 'test_zz_rv', style: 'bubble', force: true }] });
+    try {
+      sb({ heroes: [H(1, 1, 'test_knight'), H(1, 3)], enemies: [E(5, 1)], enemyAi: false,
+        encounter: { id: 'zz_rv_enc', act: 4, kind: 'boss', name: 'Revive Test', cameo: { actor: 'zz_rv' } } });
+      const s = DD.Combat.state, k = hero(0), m = hero(1);
+      DD.Act.addRule({ id: 'zz_rv_angel', name: 'Guardian Test Angel', silent: true, turns: -1, hooks: {
+        onDowned: function (u) { if (u && u.kind === 'hero' && !s.data.zzAngel) { s.data.zzAngel = 1; DD.Act.revive(u, 0.5); } } } });
+      DD.Act.damage(foe(0), k, 999, {});
+      t.ok(!k.downed && DD.Cameo.history(s).length === 0, 'stood back up by the hook before the event: no heckle');
+      DD.Act.damage(foe(0), k, 999, {});
+      const h1 = DD.Cameo.history(s);
+      t.ok(k.downed && h1.length === 1 && h1[0].text === foe(0).name + ' got ' + k.name + '.', 'the first real down: one line, {enemy} the foe (' + (h1[0] && h1[0].text) + ')');
+      DD.Act.damage(k, m, 999, {});
+      const h2 = DD.Cameo.history(s);
+      t.ok(m.downed && h2.length === 2 && h2[1].text === 'Revive Test got ' + m.name + '.', 'friendly fire: {enemy} stays the opponent (' + (h2[1] && h2[1].text) + ')');
+    } finally {
+      delete DD.defs.cameos.zz_rv;
+      delete DD.defs.narration.test_zz_rv;
+    }
+  });
+
+  T.suite('engine: V3 cameo — lines: never an absent hero, never an unfilled token, no repeat in a run until the pool is used up', function (t) {
+    DD.registerNarration('test_zz_lines', ['Shady stole the tests.', 'Mocha forgot the stubs.', 'Hello {enemy}.', 'Hi {bogus}.', 'Plain one.', 'Plain two.']);
+    try {
+      const run = { act: 4, flags: {}, consumables: [], gold: 0, difficulty: 'normal' };
+      door('test_a4_lane_a', { run: run });
+      const got = [];
+      for (let i = 0; i < 9; i++) got.push(DD.Cameo.say('test_heckler', 'test_zz_lines', {}, { force: true }));
+      t.ok(got.every(function (x) { return x && !/Shady|Mocha/.test(x); }), 'never a line naming a hero who is not in this fight');
+      t.ok(got.every(function (x) { return x.indexOf('{') < 0; }) && got.indexOf('Hello Test Door A.') >= 0, 'never an unfilled token ({enemy} = the door\'s shortName)');
+      [0, 3, 6].forEach(function (i) {
+        const three = got.slice(i, i + 3);
+        t.eq(three.filter(function (x, j) { return three.indexOf(x) === j; }).length, 3, 'picks ' + (i + 1) + '-' + (i + 3) + ' all differ: ' + three.join(' | '));
+      });
+      t.ok(run.flags.cameo && Array.isArray(run.flags.cameo.lines.test_zz_lines), 'the memory lives in run.flags.cameo.lines');
+      // the next fight of the run remembers (the roast picks a hero not roasted yet)
+      const roasted = run.flags.cameo.heroes.slice();
+      door('test_a4_lane_a', { run: run });
+      t.ok(run.flags.cameo.heroes.length === 2 && run.flags.cameo.heroes.indexOf(roasted[0]) === 0, 'fight 2 roasts the other hero: ' + run.flags.cameo.heroes.join(', '));
+      door('test_a4_lane_a', { run: run });
+      t.ok(run.flags.cameo.heroes.length === 2 && pool('test_heckle_generic').indexOf(cameoLines()[1].text) >= 0, 'fight 3: everybody roasted, a generic line');
+      // a situation goes first, once a run
+      run.flags.testHeckleSituation = true;
+      door('test_a4_lane_a', { run: run });
+      t.eq(cameoLines()[1].text, 'Bob from Accounting owes me a code review.', 'a situation ({name}) beats the roast');
+      door('test_a4_lane_a', { run: run });
+      t.ok(cameoLines()[1].text !== 'Bob from Accounting owes me a code review.' && run.flags.cameo.situations.join() === 'test_heckle_sit_flag', 'once a run');
+    } finally { delete DD.defs.narration.test_zz_lines; }
+  });
+
+  T.suite('engine: V3 cameo — the Bribe skips one start cheat and is spent; a fight without a cheat leaves it alone', function (t) {
+    const run = { act: 4, flags: { cameo: { bribe: 1 } }, consumables: [], gold: 0, difficulty: 'normal' };
+    door('test_a4_lane_a', { run: run });
+    t.eq(run.flags.cameo.bribe, 1, 'no cheat to skip: the bribe waits');
+    door('test_a4_lane_b', { run: run });
+    const s = DD.Combat.state;
+    t.ok(!s.rules.some(function (r) { return r.id === 'cameo:test_cheat_rule'; }) && s.stats.cheats === 0, 'the bribe skips the cheat');
+    t.eq(run.flags.cameo.bribe, 0, 'and is spent');
+    t.ok(cameoLines().some(function (l) { return l.bribe && l.text === 'A bribe? For ME? ...No rule this time.'; }), 'his bribe line instead');
+    door('test_a4_lane_b', { run: run });
+    t.ok(DD.Combat.state.rules.some(function (r) { return r.id === 'cameo:test_cheat_rule'; }) && run.flags.cameo.cheats.indexOf('test_cheat_rule') >= 0, 'the next fight: the cheat again, remembered in run.flags.cameo.cheats');
+  });
+
+  T.suite('engine: V3 cameo — triggers: act / kind / encounter / from / once / squad filters, the event payload, falsy keys, heroDowned once per hero, the victory quip', function (t) {
+    const ctxs = [];
+    DD.registerNarration('test_zz_trig', ['Zing!', 'Zang!', 'Zong!', 'Zung!']);
+    DD.registerCameo({ id: 'zz_trig', name: 'Trigger Tester', triggers: [
+      { on: 'round', act: 4, from: 3, key: 'test_zz_trig', style: 'bubble', force: true, when: function (s, e) { ctxs.push({ s: s, e: e }); return true; } },
+      { on: 'kill', act: 4, squad: true, key: 'test_zz_trig', style: 'bubble', once: true, force: true },
+      { on: 'heroDowned', act: 4, key: 'test_zz_trig', style: 'bubble', force: true },
+      { on: 'signature', act: 4, key: 'test_zz_trig', style: 'bubble', force: true },
+      { on: 'windupCancel', act: 4, key: 'test_zz_trig', style: 'bubble', force: true },
+      { on: 'victory', act: 4, kind: 'boss', style: 'quip', force: true, keyOf: function (s, e) { return e.result === 'victory' && s.encounter.id === 'zz_trig_enc' ? 'test_zz_trig' : null; } },
+      { on: 'round', act: 3, key: 'test_zz_trig', style: 'bubble', force: true },
+      { on: 'round', act: 4, encounter: 'nope', key: 'test_zz_trig', style: 'bubble', force: true },
+      { on: 'round', act: 4, kind: 'normal', key: 'test_zz_trig', style: 'bubble', force: true },
+      { on: 'round', act: 4, style: 'bubble', force: true, keyOf: function () { return null; } },
+    ] });
+    DD.registerCameo({ id: 'zz_throw', name: 'Throw Tester', triggers: [{ on: 'round', key: 'test_zz_trig', style: 'bubble', force: true, when: function () { throw new Error('zz boom'); } }] });
+    const p0 = DD.problems.length;
+    try {
+      sb({ w: 9, h: 7, heroes: [H(1, 1, 'test_knight'), H(1, 3, 'test_mage'), H(1, 5, 'test_cleric')], enemies: [E(6, 2), E(6, 4), E(7, 6, 'test_minion')], enemyAi: false,
+        objective: { type: 'boss', bossIds: ['test_grunt'] }, encounter: { id: 'zz_trig_enc', act: 4, kind: 'boss', name: 'Trigger Test', cameo: { actor: 'zz_trig' } } });
+      const s = DD.Combat.state;
+      const count = function () { return DD.Cameo.history(s).length; };
+      s.round = 2;
+      t.eq(DD.Cameo.fire('round:start', { round: 2 }), 0, 'round 2: before `from` 3');
+      s.round = 3;
+      t.eq(DD.Cameo.fire('round:start', { round: 3 }), 1, 'round 3: exactly one (wrong act, encounter, kind and a falsy key all skip)');
+      t.ok(ctxs.length === 1 && ctxs[0].s === s && ctxs[0].e.round === 3, 'when(state, payload): DD.Combat.state and the event payload');
+      // throwing when = false (reported, then cleared here)
+      t.ok(DD.problems.slice(p0).some(function (w) { return /zz boom/.test(w); }) === false, 'the throw tester is not in this fight (actor)');
+      // heroDowned: once per hero
+      const k = hero(0), m = hero(1);
+      DD.Act.damage(foe(0), k, 999, {});
+      t.ok(k.downed && count() === 2, 'a hero goes down: one line');
+      DD.Act.revive(k, 0.5);
+      DD.Act.damage(foe(0), k, 999, {});
+      t.eq(count(), 2, 'the same hero again: no line');
+      DD.Act.damage(foe(0), m, 999, {});
+      t.eq(count(), 3, 'another hero: a line');
+      const dl = DD.Cameo.history(s)[2];
+      t.ok(dl.style === 'bubble' && dl.key === 'test_zz_trig', 'history entry: style and key');
+      // signature: skill.hype >= 100 only
+      t.eq(DD.Cameo.fire('skill:used', { unit: m, skill: DD.getSkill('test_bolt') }), 0, 'skill:used of a normal skill: nothing');
+      t.eq(DD.Cameo.fire('skill:used', { unit: m, skill: DD.getSkill('test_mage_sig') }), 1, 'a signature: a line');
+      // windupCancel: not on death
+      t.eq(DD.Cameo.fire('windup:cancel', { unit: foe(0), unitId: foe(0).id, reason: 'death' }), 0, 'a wind-up dying with its owner: nothing');
+      t.eq(DD.Cameo.fire('windup:cancel', { unit: foe(0), unitId: foe(0).id, reason: 'stun' }), 1, 'an interrupted wind-up: a line');
+      // kill + squad + once
+      const n0 = count();
+      DD.Act.kill(grab('test_minion'), null, { cause: 'other' });
+      t.eq(count(), n0, 'a minion (not in bossIds): nothing');
+      DD.Act.kill(grab('test_grunt'), null, { cause: 'other' });
+      t.eq(count(), n0 + 1, 'the first squad member down: a line');
+      DD.Act.kill(grab('test_grunt'), null, { cause: 'other' });
+      t.ok(s.result === 'victory', 'the squad is down: victory');
+      const h = DD.Cameo.history(s);
+      t.eq(h.length, n0 + 2, 'the second member: no line (once); the victory quip: one');
+      t.ok(h[h.length - 1].style === 'quip' && s.log.some(function (l) { return l.cls === 'cameo' && l.style === 'quip'; }), 'the victory quip: logged, style quip');
+      // a throwing when counts as false
+      sb({ heroes: [H(1, 1)], enemies: [E(5, 5)], enemyAi: false, encounter: { id: 'zz_throw_enc', act: 4, cameo: { actor: 'zz_throw' } } });
+      const thrown = function () { return DD.problems.slice(p0).filter(function (w) { return /zz boom/.test(w); }).length; };
+      const th0 = thrown();
+      t.eq(DD.Cameo.fire('round:start', { round: 1 }), 0, 'a throwing when: false');
+      t.eq(thrown(), th0 + 1, 'reported through DD.safe');
+      t.eq(DD.Cameo.history().length, 0, 'nothing played');
+    } finally {
+      for (let i = DD.problems.length - 1; i >= p0; i--) if (/zz boom/.test(DD.problems[i])) DD.problems.splice(i, 1);
+      delete DD.defs.cameos.zz_trig;
+      delete DD.defs.cameos.zz_throw;
+      delete DD.defs.narration.test_zz_trig;
+    }
+  });
+
+  T.suite('engine: V3 cameo — campaignGoesOn, interjections: false, a fixture door end to end (AutoPlay), the twist trigger shape', function (t) {
+    const snap = DD.Balance.snapshot();
+    try {
+      DD.Balance.campaign.acts = 3;
+      t.ok(!DD.Cameo.campaignGoesOn({ run: { act: 3 }, encounter: { act: 3 } }) && !DD.Cameo.campaignGoesOn({ run: null, encounter: { act: 3 } }), 'knob 3: the act-3 boss ends it');
+      DD.Balance.campaign.acts = 4;
+      t.ok(DD.Cameo.campaignGoesOn({ run: { act: 3 } }) && DD.Cameo.campaignGoesOn({ run: null, encounter: { act: 3 } }) && !DD.Cameo.campaignGoesOn({ run: { act: 4 } }), 'knob 4: act 3 goes on, act 4 is the end');
+      t.ok(!DD.Cameo.campaignGoesOn({ run: null, encounter: null }), 'a fight with no act: false');
+      // an entrance trigger on a victory (the twist's shape): force, played after the end
+      DD.registerNarration('test_zz_twist', ['You thought this test was over?']);
+      DD.registerCameo({ id: 'zz_twist', name: 'Twister', triggers: [{ on: 'victory', act: 3, kind: 'boss', key: 'test_zz_twist', style: 'entrance', force: true,
+        banner: { title: 'YOU THOUGHT THIS WAS OVER?' }, bubble: 'Over?', when: function (s) { return DD.Cameo.campaignGoesOn(s); },
+        then: function (s, e, played) { s.data.zzThen = played.text; } }] });
+      const FX = DD.FX, was = FX.instant;
+      try {
+        FX.reset();
+        FX.instant = false;
+        sb({ heroes: [H(1, 1)], enemies: [E(2, 1, 'test_minion')], enemyAi: false, encounter: { id: 'zz_twist_enc', act: 3, kind: 'boss', cameo: { actor: 'zz_twist' } } });
+        DD.Act.kill(foe(0), hero(0), { cause: 'other' });
+        const s = DD.Combat.state;
+        const ev = FX.queue.filter(function (e) { return e.type === 'cameo'; });
+        t.ok(s.result === 'victory' && ev.length === 1 && ev[0].style === 'entrance' && ev[0].ms === 4500 && ev[0].text === 'Over?' && ev[0].banner.title === 'YOU THOUGHT THIS WAS OVER?', 'the entrance plays after the victory (banner, bubble, 4.5 s)');
+        t.ok(cameoLines().some(function (l) { return l.text === 'You thought this test was over?'; }) && s.data.zzThen === 'You thought this test was over?', 'the full line is logged; then() ran with what played');
+        DD.Balance.campaign.acts = 3;
+        FX.reset();
+        sb({ heroes: [H(1, 1)], enemies: [E(2, 1, 'test_minion')], enemyAi: false, encounter: { id: 'zz_twist_enc', act: 3, kind: 'boss', cameo: { actor: 'zz_twist' } } });
+        DD.Act.kill(foe(0), hero(0), { cause: 'other' });
+        t.eq(FX.queue.filter(function (e) { return e.type === 'cameo'; }).length, 0, 'knob 3: no twist');
+      } finally {
+        FX.reset();
+        FX.instant = was;
+        delete DD.defs.cameos.zz_twist;
+        delete DD.defs.narration.test_zz_twist;
+      }
+    } finally { DD.Balance.restore(snap); }
+    // interjections: false — the start cameo only
+    door('test_a4_lane_d');
+    const s = DD.Combat.state;
+    s.round = 5;
+    t.eq(DD.Cameo.fire('round:start', { round: 5 }), 0, 'interjections: false: the Heckler\'s round trigger stays quiet');
+    t.ok(DD.Cameo.history(s).length === 1, 'the start cameo played');
+    // a fixture door end to end: AutoPlay plays it, the cameo memory is plain data, nothing warns
+    const p0 = DD.problems.length;
+    door('test_a4_lane_b', { enemyAi: true, noPlan: false });
+    const res = DD.AutoPlay.runBattle(20);
+    const s2 = DD.Combat.state;
+    t.ok(!!res && s2.stats.cameos >= 1 && s2.stats.cheats === 1, 'AutoPlay fought the door (' + res.result + ' in ' + res.rounds + '): ' + s2.stats.cameos + ' cameos, ' + s2.stats.cheats + ' cheat');
+    t.ok(DD.Cameo.budget(s2).used <= 3, 'interjections within the budget (' + DD.Cameo.budget(s2).used + ')');
+    t.ok((function () { try { JSON.stringify(s2.data.cameo); return true; } catch (e) { return false; } })(), 'state.data.cameo is plain data');
+    t.eq(DD.problems.length, p0, 'no warnings');
   });
 })();

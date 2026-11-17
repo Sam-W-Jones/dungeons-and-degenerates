@@ -437,7 +437,8 @@
     const run = UI.run();
     if (!data.next && data.actClear && !data.actClear.victory) {
       const ac = data.actClear;
-      UI.show('victory', { act: ac.act, unlocked: ac.unlocked || [], nextAct: ac.nextAct, healed: ac.healed, text: ac.text });
+      // V3: the act-3 clear that goes on below the table is the Twist panel (actClear.twist)
+      UI.show('victory', { act: ac.act, unlocked: ac.unlocked || [], nextAct: ac.nextAct, healed: ac.healed, text: ac.text, twist: !!ac.twist });
       return;
     }
     if (!data.next && DD.Run && typeof DD.Run.next === 'function') { DD.safe('Run.next', DD.Run.next, DD.Run); return; }

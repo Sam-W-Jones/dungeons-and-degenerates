@@ -1,6 +1,9 @@
-/* Test files loaded after the game manifest (missing ones are skipped). One file per owning area. */
+/* Test files loaded after the game manifest (missing ones are skipped). One file per owning area.
+ * V3: content/hero_benedick.js and content/boss_goats.js ship as empty stubs (their owners replace them); the other new
+ * V3 suites do not exist until their owners land them. */
 window.DD_EXTRA_SCRIPTS = [
   'tests/fixtures.js',        // rules: test-only heroes/enemies/summons (ids prefixed "test_")
+  'tests/core_tests.js',      // lead (V3): DD.finalAct and the act rows, gauntlet scaling, cameo registry, narration variants
   'tests/engine_tests.js',    // rules: grid, LOS, pathing, damage, statuses, push, turn flow, AI
   'tests/content_tests.js',   // rules: generic content validation + skill/enemy smoke + encounter auto-battles
   'tests/mapgen_tests.js',    // mapgen: generation validity, layouts, encounter build
@@ -32,6 +35,7 @@ window.DD_EXTRA_SCRIPTS = [
   'tests/content/hero_valdris.js',
   'tests/content/hero_hjalmar.js',
   'tests/content/hero_pebbles.js',
+  'tests/content/hero_benedick.js',       // V3: the 17th hero
   'tests/content/shared.js',              // items
   'tests/content/kit.js',                 // generic skills + consumables
   'tests/content/passives.js',            // the Table of Questionable Blessings
@@ -41,6 +45,15 @@ window.DD_EXTRA_SCRIPTS = [
   'tests/content/bosses_act1.js',
   'tests/content/bosses_act2.js',
   'tests/content/boss_dm.js',
+  // V3: act 4
+  'tests/content/boss_gardener.js',
+  'tests/content/boss_league.js',
+  'tests/content/boss_galbraith.js',
+  'tests/content/boss_coven.js',
+  'tests/content/boss_svammiel.js',
+  'tests/content/boss_goats.js',
   'tests/content/narrative.js',
+  'tests/content/svammiel_lines.js',      // V3: the svam_* pools (coverage per registered hero, lengths, no repeats)
+  'tests/content/events_act4.js',         // V3: act-4 events (acts: [4], never api.combat)
   'tests/content/integration.js',         // integrator: cross-content checks, core-fix regressions, campaign smoke
 ];

@@ -43,6 +43,25 @@
     return t;
   }
 
+  // V3: Svammiel's cameos: Full / Short / Log only (DD.Meta.CAMEO_SETTINGS; plan §4.1)
+  const CAMEO_LABELS = { full: 'Full', short: 'Short', log: 'Log only' };
+  function cameoControl(s) {
+    const UI = DD.UI, el = UI.el;
+    const choices = DD.Meta && Array.isArray(DD.Meta.CAMEO_SETTINGS) && DD.Meta.CAMEO_SETTINGS.length ? DD.Meta.CAMEO_SETTINGS : ['full', 'short', 'log'];
+    const curV = choices.indexOf(s.cameos) >= 0 ? s.cameos : choices[0];
+    const seg = el('div.segmented.cameo-seg');
+    choices.forEach(function (v) {
+      const b = UI.button(CAMEO_LABELS[v] || DD.util.capitalize(v), function () {
+        s.cameos = v;
+        seg.querySelectorAll('.seg').forEach(function (x) { x.classList.toggle('active', x.dataset.v === v); });
+        changed();
+      }, { cls: 'seg' + (v === curV ? ' active' : '') });
+      b.dataset.v = v;
+      seg.appendChild(b);
+    });
+    return seg;
+  }
+
   function resetProgress() {
     const UI = DD.UI;
     UI.confirm('Burn every character sheet? This deletes <b>all stats, codex entries and run history</b>, and abandons the current campaign. Your settings are kept. This cannot be undone. Like, actually.', { title: 'Reset Progress?', yes: 'Burn it all', no: 'Keep my stuff', danger: true, icon: '🔥' })
@@ -93,6 +112,9 @@
         panel.appendChild(row('Show grid', 'Outline every tile on the battlefield.', toggle(s.showGrid !== false, function (on) { s.showGrid = on; changed(); })));
         // map rotation (settings.rotSnap, read by DD.Render.endRotate; absent = on)
         panel.appendChild(row('Snap rotation to the classic views', 'A middle-drag let go within 4° of a classic view lands on it. Hold Shift while letting go to leave it exactly where it is.', toggle(s.rotSnap !== false, function (on) { s.rotSnap = on; changed(); })));
+        // V3: Svammiel's cameos (settings.cameos, read by DD.Cameo) — shown only once he has been met (spoiler gate);
+        // until then the setting keeps its default
+        if (UI.act4Seen()) panel.appendChild(row('Svammiel\'s cameos', 'How long his drop-ins play. Short trims them; Log only puts his lines and cheats in the combat log with no animation. He cheats either way.', cameoControl(s)));
 
         panel.appendChild(el('div.set-h', null, 'Audio'));
         const vol = el('input.slider', { type: 'range', min: '0', max: '100', step: '5', value: String(Math.round((s.volume !== undefined ? +s.volume : 0.6) * 100)) });

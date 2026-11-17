@@ -290,3 +290,130 @@ Plan: `.tmp/wf7/rotation-design.md` §3.4 (FX + sprites), test T11. World side: 
 
 Nothing in this area changed in the finish run or its review (sprites, FX, audio and these screens were re-shot at
 1280x720 and 1920x1080 and are fine). The review's findings, fixes and requests: docs/notes/hud-v2.md "Review (finish)".
+
+## V3 (act IV "Under the Table": cameos, banner fit / frames, stingers) — RENDER-SPRITES, Nov 14
+
+Plan `.tmp/v3/design.md` §4.1 (presentation), §4.7, §6.1-6.2, §8.2 row D, §8.4; ARCHITECTURE §7.4, §7.6. Files:
+`js/render/fx_render.js`, `js/render/audio.js`, `tests/sprite_tests.js`, this section.
+
+### What landed
+- **The `cameo` FX handler** (DD.Cameo pushes `{ type: 'cameo', actor, name, icon, color, enemy, style, banner: { title, sub,
+  fit, frames } | null, text, speaker, cheat: { id, name, icon, desc, quip } | null, bribe, ms, parallel }`). Every style
+  is screen space inside the board area (`DD.Render.margins()`), anchored on a tile's projected point (`view.toScreen`),
+  so it reads at every yaw; the figure is the cameo def's `enemy` sprite (`DD.Sprites.draw`, a billboard) or, without one,
+  its icon in a medallion.
+  - `entrance` (the twist, plan §2.1's script as fractions of the event's ms): at 11% a 6 px / 700 ms shake, a 260 ms red
+    flash and `svam_sting`; a floor hole opens at the DM's tile (the fight's boss, fallen or not), he rises through it
+    (clipped below the hole's centre line; brimstone sparks and fire), the banner "YOU THOUGHT THIS WAS OVER?" (#ff4a3a),
+    then his big bubble ("I, SVAMMIEL, CONTROL ALL."), then he sinks back.
+  - `swoop` (the start cameo): he dives from above the top edge onto the enemy deployment zone's centre (the free tile
+    nearest it: `tile.zone === 'enemy'`, else `state.enemyZone`, else the enemies' centre, else the board's), his shadow
+    growing on the floor, a landing puff and a 3 px shake; the banner (title = the encounter name, sub = the announcer
+    line, the mini-boss's stinger); the roast bubble; the cheat card ("SVAMMIEL'S RULE", icon + name, the exact desc, his
+    quip) or the Bribe's card (💰 "No rule this time" + the bribe line) slides in under the bubble; he sinks through a hole.
+  - `shadow` (the DM's phase 3): a black winged silhouette crosses the upper board, no line.
+  - `bubble` (interjections; non-blocking, 2.6 s, 3.6 s with a card): his portrait in a crimson-and-gold medallion at the
+    board area's top edge, a bubble beside it, and a mid-fight cheat's card under that; one on screen at a time.
+  - Bubble text wraps at ~44 characters, ≤ 3 lines ("…" past that); the speaker tag "😈 SVAMMIEL" sits on the bubble.
+  - Hosted moment: blocking styles ask `DD.FXRender.moments.cameo` (`start(evt) → ms`, optional `wants(evt)`); the answer
+    becomes `evt.ms` (≤ 15 s; 0 = skip it, nothing drawn); skipping is `evt.elapsed = evt.ms` (the initiative moment's
+    path) and kills the visuals at once. No host: the event keeps the ms DD.Cameo gave it. Bubbles never ask and never
+    block. A throwing host is contained (`DD.safe`). Instant mode: no handler runs, nothing is drawn.
+  - The choreography is fractions of the event's length (`DD.FXRender.CAMEO_TIMES`), so Short (1.2 s), AutoPlay's 35%
+    and any host's ms keep the same order of beats.
+- **Banner `fit` and `frames`** (`addBanner`, and the cameo's banner): `fit` shrinks the title to ≥ 18 px, then squeezes
+  it sideways, until it fits; the sub fits too (≥ 12 px). `frames` plays text frames over the first 60% of the banner's
+  life, then ends on the widest of the title / frames that fits at 18 px (the full League name at 1280 px).
+- **`boss.sting`**: a boss banner (the one `Combat.start` pushes; its text is the boss unit's name) plays its def's
+  `boss.sting` instead of the turn chime; any banner may carry its own `sting` (or `sound`).
+- **Stingers** (`audio.js`): V §12's ten (`svam_sting, cheat, swoop, slide_whistle, clockwork, snip, evil_chord,
+  grand_spell, cackle, bubble`) and the goats' four (GT2: `scratch, bass_drop, crowd_ooh, bleat`); `DD.Audio.fallbacks`
+  (scratch → zap, bass_drop → explosion, crowd_ooh → buff, bleat → bark, and one for each of the ten) and
+  `DD.Audio.resolve(name)`. All silent headless and on debug pages, like every sound.
+- **Goats bleat**: a bark from an enemy tagged `goats` plays `bleat` (not the bear lyricist, tagged `bear`; not Betty).
+
+### Public API added
+`DD.FXRender.cameoLines(text, max = 44, maxLines = 3)`, `CAMEO_TIMES`, `LANE_STINGS`, `cameoAnchor(evt, state)`,
+`fitBanner(ctx, text, W) → { size, sx, w }`; `DD.FXRender.moments.cameo` (installed by the HUD); FX handler `cameo`;
+banner options `fit`, `frames`, `sting`; `DD.Audio.fallbacks`, `DD.Audio.resolve(name)`; the 14 sound names.
+
+### Deviations (with reasons)
+- **Poses `swoop` / `rise`**: `DD.Sprites.draw` only knows idle / attack / cast / hurt / downed (it turns any other pose
+  into idle) and `sprites.js` is not in this role's V3 files. The handler does the swoop (the dive path and a forward
+  `lean`) and the rise / sink (motion, clipped below a floor-hole ellipse) itself; the painter sees `cast` while he talks
+  and `idle` otherwise (Svammiel's painter shows the RULES (DRAFT) clipboard and the spinning d20 in `cast`).
+- **Fit is automatic for a banner that would overflow** (`fit: false` opts out); the contract has it opt-in. An
+  overflowing banner was always cut off at the screen edges, and DD.Cameo's mid-fight rule banner ("SVAMMIEL'S RULE: …",
+  up to 41 characters at 58 px) overflows without it. A banner that fits is drawn exactly as in v2 (same size, centred).
+- **Fitted banners fit the free stretch between the HUD's panels**, not just 92% of the width (they stay ≤ 92%): the HUD
+  reports its panels as `DD.Render.hudMargins` avoid boxes, and at 1280×720 the party cards and the combat log hid both
+  ends of the League's name (scratch screenshot `.tmp/v3/rs/league_swoop_900.png`, fixed). A fitted title and its sub
+  centre on that stretch. The cameo's figure, bubble / card column and bust are nudged clear of the same panels (there
+  are none offscreen, headless or without a HUD, so the "anchored on its tile" test runs without them).
+- **The start cameo's stinger**: `evt.sting` → `encounter.sting` → `encounter.cameo.sting` → a boss def's `boss.sting` →
+  a lane table (`LANE_STINGS`: gardener clockwork, league evil_chord, galbraith grand_spell, coven cackle, goats
+  scratch). Squads have no `boss` field (so no `boss.sting`) and the event carries no sting, while V §12 names one per
+  mini-boss banner. `encounter.sting` is not in ARCHITECTURE §3.8 (see Requests).
+- **Fallbacks for all 14 V3 sounds** (`DD.Audio.fallbacks`), not just the goats' four, so a caller can always resolve a
+  name to a sound this build has.
+- **Gallery `looks` (optional) not built**: `js/render/gallery.js` is not in this role's V3 files; the fallback stands
+  (the hero owner's scratch scene page). The act-4 sprite suite draws any hero def's `looks` map at every yaw and pose.
+
+### Tests (`tests/sprite_tests.js`, six new suites "sprites: V3 …")
+- every style (entrance, swoop, swoop + card + League frames, Short + Bribe, no sprite, shadow, bubble, bubble + card)
+  paints at t = 0, ¼, ½, ¾, 1 at yaw 0 / 90 / 180 / 270 / 37.5 with no swallowed error and with ink mid-way; the swoop
+  hovers over the enemy zone's free centre tile, the twist rises at the fallen boss's tile, the figure stands on its
+  tile's projected point at every yaw and moves with it (yaw 0 vs 180); the live view is untouched;
+- the moment host: no host keeps 2.5 s and blocks; a host's 1234 ms is honoured; skip (elapsed = ms) ends it and its
+  visuals; 0 ms plays nothing; `wants` false leaves DD.Cameo's ms; bubbles never ask, never block, live 2.6 s, one at a
+  time, expire; a quip draws nothing; a throwing host is reported once; instant mode adds nothing;
+- a 70-character line wraps into ≤ 3 lines of ≤ 44 with nothing lost; an over-long one ends in "…"; the League's long
+  word is split; every ≤ 70-character `svam_*` narration line fits a bubble uncut;
+- `fit` + `frames`: the full 72-character League name stays inside 92% at 1280, 1024 and 640 px (title and sub); the
+  frames cycle from "The League of Villainy" and end on the full name at 1280 (on the widest frame that fits below); the
+  cameo's banner fits the same way; "ROUND 2" keeps v2's 58 px with no squeeze; `fit: false` keeps the plain size; an
+  overflowing banner is fitted without asking; `DD.FXRender.fitBanner`;
+- the 14 stingers exist (or their fallbacks), resolve and are silent headless; a boss banner plays `boss.sting` instead of
+  the turn chime; a swoop cues swoop → the League's evil_chord (lane table) → cheat → swoop; the twist opens on
+  `svam_sting`; a goat bleats, the bear barks;
+- every registered act-4 enemy sprite (and any hero `looks` map) paints at every yaw and pose.
+Runs: `bash tools/test.sh "suite=sprites&isolate=svammiel,league,zarathor"` 25 suites PASS;
+`"suite=sprites,render:,hud&isolate=svammiel,league,zarathor"` 141 PASS; the full `bash tools/test.sh`: **PASS — 1146
+suites, 138,844 assertions, 0 failures** (missing scripts 6: the Gardener / Galbraith / Coven files and suites, not
+created yet). Scratch screenshots in `.tmp/v3/rs/`: the League's real start cameo at 900 / 2000 ms
+(`league_swoop_*.png`), the twist entrance (`entrance_*.png`), a bubble with the Radio Edit card (`bubble.png`), a swoop
+at rot 90 (`swoop_r90.png`), a Bribe at rot 200 1600×900 (`bribe_r200.png`), the shadow (`shadow.png`). The scratch page
+`.tmp/v3/rs/scene.html` + `sceneshot.sh` (sources `tools/chrome_slot.sh`; the page forces `debug=1`) pushes one cameo
+event on any combat board.
+
+### Requests
+- **HUD (`combat_hud.js`)**: install `DD.FXRender.moments.cameo = { start(evt) → ms, wants?(evt) }` in `mount` (remove it
+  in `unmount`): return `evt.ms` (× 0.35 under AutoPlay); skip with `evt.elapsed = evt.ms` (the `skipMoment` path). Until
+  it lands the cameo plays DD.Cameo's ms but nothing holds input (the screenshots show "Roll for initiative!" live during
+  the swoop).
+- **Lead (ARCHITECTURE §7.4 / §7.6 / §3.8)**: document the automatic fit of overflowing banners and the HUD-panel fitting;
+  the `DD.FXRender` / `DD.Audio` helpers above; banner `sting`; optionally an encounter `sting` field (the start cameo's
+  mini-boss stinger; the lane table covers the five doors meanwhile).
+- **C5 (`svammiel.js`)**: his own banners can pass `sting: 'svam_sting'` to `DD.FX.banner` (V §12 "his own banner"); his
+  def's `boss.sting` is only heard with the boss banner `Combat.start` pushes, which his `banner: false` skips.
+- **C1, C3 (optional)**: `boss.sting: 'clockwork'` / `'grand_spell'` on the Gardener / Galbraith (the lane table already
+  plays them at the cameo). **C2, C4, C6 (optional)**: an encounter `sting` once the lead adds the field.
+- **C6 (`goats.js`)**: the four stingers exist; `DD.Audio.resolve(name)` gives the fallback if one is ever missing; goat
+  barks already bleat (tag `goats`; the bear's `bear` tag keeps his voice).
+- **META-UI**: the Twist screen can play `DD.Audio.play('svam_sting')` (V §12).
+- **RULES (`cameo.js`, optional)**: pass `fit: true` on the "SVAMMIEL'S RULE: …" banner (the automatic fit covers it now).
+
+### Known issues
+- In the live game the swoop's figure is nudged clear of the HUD's panels, so next to a panel he hovers beside his tile
+  rather than over it (by design; the hole follows him).
+- Headless Chrome draws the 😈 in the bubble tag as a box (no emoji font); browsers show the emoji.
+- Cinzel (the banner font) draws lowercase as small capitals, so the League's stretched name reads in capitals.
+
+## Review (V3) — adversarial review of the cameo FX / banners / stingers (REVIEWER, Nov 15)
+
+No change needed in `fx_render.js`, `audio.js` or `sprite_tests.js`. Looked at (`.tmp/v3/qa/`): the twist entrance at
+2.4 s and 3.4 s (he rises at the fallen DM's tile; the "YOU THOUGHT THIS WAS OVER?" banner fits between the party
+cards and the log), the goats' swoop at 1.2 s (banner, sub, the roast bubble, the Radio Edit card), the League's
+fitted 72-character banner at 0.9 s and its fade at 1.5 s, the swoop at four rotations. The HUD hosts every blocking
+style (see hud-v2.md "Review (V3)"), so the "no host" path only matters headless. The ambient particles' `Math.random`
+is render-only (v2 does the same); no game-logic randomness in the new code.

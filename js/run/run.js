@@ -18,6 +18,11 @@
  * (auto-kept) and once per level gained; events and the shop grant extra rolls. Pending rolls live on the RunHero
  * (`passiveRolls`) and are rolled lazily on their own RNG stream, then stored, so a reload never re-rolls; without
  * the UI they are resolved by the headless policy at once.
+ * V3 (act 4 "Under the Table", ARCHITECTURE §9.2): the last act is DD.finalAct(). Beating the act-3 boss while the
+ * campaign goes on is the twist (his loot shown at last, the act clear marked `twist`, Svammiel's gauntlet map); a
+ * gauntlet door (`miniboss`) is a boss fight whose win seals its lane; the floor boss (`finale`) ends the campaign.
+ * startAtAct fast-forwards a fresh run (tests, debug, sims). Nothing here counts lanes or heroes: both come from the
+ * registry.
  */
 (function () {
   'use strict';
@@ -25,7 +30,7 @@
 
   const SAVE_KEY = 'run';
   const VERSION = 1;
-  const FINAL_ACT = 3;
+  // V3: the campaign's last act is DD.finalAct() (the act knob; DD.Run.FINAL_ACT is a getter on it), never a literal.
   const MAX_SKILLS = 4;
   const MAX_LEVEL = 10;
   const BASE_CONSUMABLES = 3;
@@ -52,7 +57,9 @@
   const SLOTS = ['weapon', 'armor', 'trinket'];
   const FALLBACK_STATS = { hp: 24, ap: 3, mov: 4, armor: 0 };
   const FALLBACK_EVENT = 'run_dm_unprepared';
-  const RUN_STATS = ['combats', 'kills', 'damage', 'goldEarned', 'downs', 'deaths', 'elites', 'bosses', 'actsCleared', 'levelUps'];
+  // V3: miniBosses (gauntlet doors won = lanes sealed), cameos / cheats (Svammiel's, summed from the fights' stats)
+  const RUN_STATS = ['combats', 'kills', 'damage', 'goldEarned', 'downs', 'deaths', 'elites', 'bosses', 'actsCleared', 'levelUps',
+    'miniBosses', 'cameos', 'cheats'];
   // Old RunHero / rewards-data fields from the XP era (dropped on load).
   const XP_LEFTOVERS = ['xp', 'xpByHero', 'levelsGained'];
   // Level-up perks (DESIGN §3): hp / dmg are repeatable, mov once at level 5+.
@@ -99,7 +106,8 @@
    */
   function narr(key, vars) {
     vars = vars || {};
-    const lines = DD.defs.narration && DD.defs.narration[key];
+    // V3: the pool DD.narrate will draw from (the act variant `key@a<act>` when one applies)
+    const lines = DD.defs.narration && DD.defs.narration[DD.narrationKey ? DD.narrationKey(key) : key];
     if (!lines || !lines.length) return '';
     const ok = [];
     for (let i = 0; i < lines.length; i++) if (tokensFilled(lines[i], vars)) ok.push(i);
@@ -137,7 +145,11 @@
     const d = DD.getHero(rh.id);
     return d ? d.name : rh.id;
   }
-  function normalizeKind(k) { return k === 'elite' || k === 'boss' ? k : 'normal'; }
+  /** The fight kind for the engine: a gauntlet door ('miniboss') is a boss fight. */
+  function normalizeKind(k) { return k === 'elite' || k === 'boss' ? k : k === 'miniboss' ? 'boss' : 'normal'; }
+  function finalAct() { return DD.finalAct(); }
+  /** The current act map is Svammiel's gauntlet (V3). */
+  function inGauntlet() { return !!(S && S.map && S.map.shape === 'gauntlet'); }
   function partyLevel() {
     const alive = aliveIdx();
     if (!alive.length) return 1;
@@ -227,16 +239,37 @@
     };
   }
 
+  /** V3: Svammiel's run memory (ARCHITECTURE §4.6, DD.Cameo reads and writes it; saved after each fight), sanitized:
+   *  { lines: { [key]: [used indices] }, heroes: [roasted ids], situations: [ids], cheats: [ids], bribe: 0|1 }. */
+  function cameoMemory(c) {
+    c = c && typeof c === 'object' ? c : {};
+    const strs = function (a) { return (Array.isArray(a) ? a : []).filter(function (x) { return typeof x === 'string'; }); };
+    const lines = {};
+    if (c.lines && typeof c.lines === 'object') {
+      Object.keys(c.lines).forEach(function (k) {
+        if (Array.isArray(c.lines[k])) lines[k] = c.lines[k].filter(function (i) { return typeof i === 'number' && isFinite(i); });
+      });
+    }
+    return Object.assign(c, { lines: lines, heroes: strs(c.heroes), situations: strs(c.situations), cheats: strs(c.cheats), bribe: c.bribe ? 1 : 0 });
+  }
+
   /** Fill fields missing from older saves or hand-built states. */
   function normalize(s) {
     s.difficulty = DIFFICULTIES.indexOf(s.difficulty) >= 0 ? s.difficulty : 'normal';
-    s.act = clamp(Math.floor(num(s.act, 1)), 1, FINAL_ACT);
+    s.act = clamp(Math.floor(num(s.act, 1)), 1, finalAct());
     s.gold = Math.max(0, Math.round(num(s.gold, startGold())));
     ['visited', 'inventory', 'consumables', 'seenEvents', 'learnQueue', 'fallen', 'fought'].forEach(function (k) {
       if (!Array.isArray(s[k])) s[k] = [];
     });
     s.maxConsumables = Math.max(1, Math.round(num(s.maxConsumables, BASE_CONSUMABLES)));
     s.flags = s.flags && typeof s.flags === 'object' ? s.flags : {};
+    // V3 (all optional, no migration): the gauntlet's lanes / beaten order, Svammiel's run memory
+    if (s.map && s.map.shape === 'gauntlet') {
+      if (!Array.isArray(s.map.lanes)) s.map.lanes = [];
+      if (!Array.isArray(s.map.beaten)) s.map.beaten = [];
+    }
+    if (s.flags.gauntlet !== undefined && !Array.isArray(s.flags.gauntlet)) s.flags.gauntlet = [];
+    if (s.flags.cameo !== undefined) s.flags.cameo = cameoMemory(s.flags.cameo);
     const st = s.stats && typeof s.stats === 'object' ? s.stats : {};
     RUN_STATS.forEach(function (k) { st[k] = num(st[k], 0); });
     st.startedAt = num(st.startedAt, Date.now());
@@ -288,6 +321,15 @@
     passRng = null;
     combat = null;
     inCombat = false;
+    // V3: a save from a longer campaign than the knob allows (its act clamped by normalize) gets that act's map, fresh
+    if (S.map && +S.map.act > S.act) {
+      S.map = makeMap(S.act);
+      S.nodeId = null;
+      S.visited = [];
+      S.queuedCombat = null;
+      if (S.pending && S.pending.type !== 'rewards') S.pending = null;
+      save();
+    }
     migratePassives();
     changed();
     return true;
@@ -449,10 +491,11 @@
       difficulty: DIFFICULTIES.indexOf(difficulty) >= 0 ? difficulty : 'normal',
       act: 1, map: null, nodeId: null, visited: [],
       party: [], gold: startGold(), inventory: [], consumables: [], maxConsumables: BASE_CONSUMABLES,
-      stats: { combats: 0, kills: 0, damage: 0, goldEarned: 0, downs: 0, deaths: 0, elites: 0, bosses: 0, actsCleared: 0, levelUps: 0, startedAt: Date.now() },
+      stats: RUN_STATS.reduce(function (st, k) { st[k] = 0; return st; }, {}),
       flags: {}, seenEvents: [], pending: null,
       learnQueue: [], fallen: [], fought: [], queuedCombat: null, over: null, summary: null, seq: 0,
     };
+    S.stats.startedAt = Date.now();
     S.party = ids.map(function (id) { return makeRunHero(id, 1); });
     // "Session Zero character quirks": one roll per hero on the Table of Questionable Blessings, never cursed, kept
     S.party.forEach(function (rh) { autoRoll(rh, 'start', { noCursed: true }); });
@@ -462,7 +505,88 @@
     startKit('items').forEach(function (id) { if (addItem(id)) autoEquip(id); });
     S.map = makeMap(1);
     touch();
-    show('map', { act: 1, intro: true, text: narr('run_start') });
+    show('map', { act: 1, intro: true, text: runStartText() });
+    return S;
+  }
+
+  /**
+   * V3 (plan §2.6, review): the new run's opening line. Once the spoiler gate is open (Svammiel met:
+   * seen.bosses.svammiel) the `run_start_seen` lines join `run_start` (one more cosmetic draw picks the pool, weighted by
+   * size); before it, exactly v2's single draw from `run_start`.
+   */
+  function runStartText() {
+    const seen = !!(DD.Meta && typeof DD.Meta.isSeen === 'function' && DD.Meta.isSeen('bosses', 'svammiel'));
+    const extra = seen && DD.defs.narration ? DD.defs.narration.run_start_seen || [] : [];
+    if (!extra.length) return narr('run_start');
+    const base = (DD.defs.narration && DD.defs.narration[DD.narrationKey ? DD.narrationKey('run_start') : 'run_start']) || [];
+    if (DD.rng.next() * (base.length + extra.length) < extra.length) return narr('run_start_seen') || narr('run_start');
+    return narr('run_start');
+  }
+
+  /**
+   * V3 fast-forward of a fresh run (tests, debug `act=N`, the sims' `start=N`): the party rebuilt at `level` (as
+   * recruits: auto-built skills, Blessings rolled by the headless policy), gear, gold, then act `act` (clamped to
+   * 1..DD.finalAct()) with its map; in a gauntlet act the lanes in opts.beaten are sealed in that order and the party
+   * stands at the last door beaten. Deterministic per run seed. opts: { level (default 1 + round(1.2 × (act − 1)): the
+   * level a party reaches the act at), gear: 'auto' (default: a weapon and an armor per hero, rarities rolled with the
+   * previous act's odds, never cursed, hero items allowed) | 'none', gold (default: unchanged), beaten: [laneIds] |
+   * 'a,b' (unknown ids ignored), noShow }. Returns the run state (null without a run).
+   */
+  function startAtAct(act, opts) {
+    if (!S || S.over) return null;
+    opts = opts || {};
+    act = clamp(Math.floor(num(+act, 1)), 1, finalAct());
+    const level = clamp(Math.floor(num(+opts.level, 1 + Math.round((act - 1) * 1.2))), 1, MAX_LEVEL);
+    hold++;
+    try {
+      // the old party's gear goes back to the bag; every hero is rebuilt like a recruit of that level
+      S.party.forEach(function (rh) { if (rh) SLOTS.forEach(function (slot) { if (rh.items[slot]) S.inventory.push(rh.items[slot]); }); });
+      S.party = S.party.filter(Boolean).map(function (rh) {
+        const fresh = makeRunHero(rh.id, level);
+        autoRollPassivesFor(fresh);
+        return fresh;
+      });
+      S.learnQueue = [];
+      S.maxConsumables = computeMaxConsumables();
+      S.inventory.slice().forEach(function (id) { autoEquip(id); });
+      if (opts.gear !== 'none' && opts.gear !== false) {
+        S.party.forEach(function (rh, i) {
+          ['weapon', 'armor'].forEach(function (slot) {
+            if (rh.items[slot]) return;
+            const id = DD.Rewards.randomItem({ act: Math.max(1, act - 1), slot: slot, hero: rh.id, run: S, noCursed: true }, rng());
+            if (id && canEquip(i, id) && addItem(id)) equip(i, id);
+          });
+        });
+      }
+      if (opts.gold !== undefined && opts.gold !== null && opts.gold !== '' && isFinite(+opts.gold)) S.gold = Math.max(0, Math.round(+opts.gold));
+      S.act = act;
+      S.stats.actsCleared = Math.max(num(S.stats.actsCleared, 0), act - 1);
+      S.map = makeMap(act);
+      S.nodeId = null;
+      S.visited = [];
+      S.pending = null;
+      S.queuedCombat = null;
+      S.flags.lastStop = null;
+      // review (V3): the lanes beaten belong to the map just built (a second fast-forward — DDdbg.act twice — used to
+      // keep the first gauntlet's order and count, so summary.gauntlet repeated lanes)
+      S.flags.gauntlet = [];
+      S.stats.miniBosses = 0;
+      if (inGauntlet()) {
+        S.flags.twistSeen = true;
+        const list = typeof opts.beaten === 'string' ? opts.beaten.split(',') : Array.isArray(opts.beaten) ? opts.beaten : [];
+        list.forEach(function (raw) {
+          const lane = String(raw).trim();
+          const row = S.map.layout[2 * S.map.beaten.length + 1] || [];   // the next door row
+          const id = row.filter(function (x) { return S.map.nodes[x].type === 'miniboss' && S.map.nodes[x].lane === lane; })[0];
+          if (!id || !sealLane(lane, id)) return;
+          S.stats.miniBosses = num(S.stats.miniBosses, 0) + 1;
+          S.nodeId = id;
+          S.visited.push(id);
+        });
+      }
+    } finally { hold--; }
+    touch();
+    if (!opts.noShow) show('map', { act: S.act, intro: true });
     return S;
   }
 
@@ -1158,10 +1282,13 @@
     const node = S.map.nodes[nodeId];
     if (!node || !availableNodes().some(function (n) { return n.id === nodeId; })) return false;
     closeStep();
+    // V3: where the party comes from (the stop before a fight: Svammiel's from_tavern / shop / event roasts)
+    const prev = S.nodeId ? S.map.nodes[S.nodeId] : null;
+    S.flags.lastStop = prev ? prev.type : null;
     S.nodeId = nodeId;
     S.visited.push(nodeId);
     switch (node.type) {
-      case 'combat': case 'elite': case 'boss': enterFight(node); break;
+      case 'combat': case 'elite': case 'boss': case 'miniboss': enterFight(node); break;
       case 'event': enterEvent(node); break;
       case 'shop': enterShop(node); break;
       case 'tavern': enterTavern(node); break;
@@ -1173,8 +1300,13 @@
 
   // ---- combat -------------------------------------------------------------------------------------------------
   function enterFight(node) {
-    const kind = node.type === 'combat' ? 'normal' : node.type;
+    const kind = normalizeKind(node.type);   // V3: a door ('miniboss') is a boss fight for the engine
     let def = node.encounterId ? DD.getEncounter(node.encounterId) : null;
+    if (!def && node.type === 'miniboss') {
+      const lane = (S.map.lanes || []).filter(function (l) { return l.id === node.lane; })[0];
+      def = lane && lane.encounterId ? DD.getEncounter(lane.encounterId) : null;
+      if (def) node.encounterId = def.id;
+    }
     if (!def) {
       def = DD.RunMap.pickEncounter(S.act, kind, rng(), { depth: node.row, exclude: S.fought });
       if (def) node.encounterId = def.id;
@@ -1193,7 +1325,7 @@
     if (enc && typeof enc === 'object' && enc.id && DD.getEncounter(enc.id)) return DD.getEncounter(enc.id);
     const spec = enc && typeof enc === 'object' ? enc : {};
     const node = currentNode();
-    return DD.RunMap.pickEncounter(clamp(Math.floor(num(spec.act, S.act)), 1, FINAL_ACT), normalizeKind(spec.kind || kind), rng(),
+    return DD.RunMap.pickEncounter(clamp(Math.floor(num(spec.act, S.act)), 1, finalAct()), normalizeKind(spec.kind || kind), rng(),
       { depth: node ? node.row : 0, exclude: S.fought });
   }
 
@@ -1212,10 +1344,11 @@
     if (!S || S.over) return null;
     opts = opts || {};
     const def = resolveEncounter(encounter, kind || (encounter && encounter.kind));
+    const nodeId = opts.fromEvent ? null : (opts.nodeId || S.nodeId || null);
     S.pending = {
       type: 'combat',
       data: {
-        nodeId: opts.fromEvent ? null : (opts.nodeId || S.nodeId || null),
+        nodeId: nodeId,
         encounterId: def ? def.id : null,
         kind: normalizeKind(kind || (def && def.kind)),
         act: S.act,
@@ -1223,6 +1356,13 @@
         fromEvent: !!opts.fromEvent,
       },
     };
+    // V3: a gauntlet door carries its lane and its place in the party's order (→ Encounter.build → state.data.gauntlet)
+    const door = nodeId && S.map ? S.map.nodes[nodeId] : null;
+    if (door && door.type === 'miniboss' && door.lane) {
+      const beaten = (S.map.beaten || []).slice();
+      S.pending.data.lane = door.lane;
+      S.pending.data.gauntlet = { lane: door.lane, index: beaten.length, beaten: beaten };
+    }
     S.queuedCombat = null;
     inCombat = false;
     touch();
@@ -1242,13 +1382,16 @@
     const party = S.party.filter(function (h) { return h && !h.dead; });
     party.forEach(function (h) { if (!(h.hp >= 1)) h.hp = 1; });
     const node = p.nodeId ? S.map.nodes[p.nodeId] : currentNode();
-    const setup = DD.safe('DD.Encounter.build(' + def.id + ')', DD.Encounter.build, DD.Encounter,
-      [def, party, { rng: DD.RNG(p.seed), difficulty: S.difficulty, act: p.act, kind: p.kind, depth: node ? node.row : 0 }]);
+    const buildOpts = { rng: DD.RNG(p.seed), difficulty: S.difficulty, act: p.act, kind: p.kind, depth: node ? node.row : 0 };
+    if (p.gauntlet) buildOpts.gauntlet = DD.util.deepClone(p.gauntlet);   // V3: a door's { lane, index, beaten }
+    const setup = DD.safe('DD.Encounter.build(' + def.id + ')', DD.Encounter.build, DD.Encounter, [def, party, buildOpts]);
     if (!setup) {
       DD.warn('DD.Run: encounter "' + def.id + '" failed to build; the fight is skipped');
       finishCombat('victory', null);
       return null;
     }
+    // the setup carries the door's gauntlet object (Combat.start → state.data.gauntlet) even if the builder dropped it
+    if (p.gauntlet && typeof setup === 'object' && !setup.gauntlet) setup.gauntlet = DD.util.deepClone(p.gauntlet);
     const token = ++combatToken;
     inCombat = true;
     const cs = DD.safe('DD.Combat.start(' + def.id + ')', DD.Combat.start, DD.Combat, [setup, {
@@ -1381,6 +1524,11 @@
     const info = applyOutcome(result, cs, { countDowns: failed && !!bal('objectiveFailed', 'countDowns') });
     if (cs && Array.isArray(cs.units)) markSeenUnits(cs.units);
     if (def && S.fought.indexOf(def.id) < 0) S.fought.push(def.id);
+    // V3: Svammiel's cameos and cheats of the fight; the last fight's facts for his roasts
+    const cst = (cs && cs.stats) || {};
+    S.stats.cameos = num(S.stats.cameos, 0) + Math.max(0, num(cst.cameos, 0));
+    S.stats.cheats = num(S.stats.cheats, 0) + Math.max(0, num(cst.cheats, 0));
+    S.flags.lastFight = lastFightOf(cs);
     if (failed && aliveIdx().length) {
       S.stats.failed = (S.stats.failed || 0) + 1;
       const failedNode = p.nodeId ? S.map.nodes[p.nodeId] : null;
@@ -1400,19 +1548,23 @@
       return { result: 'defeat', outcome: 'rewards', data: lost };
     }
     if (result === 'defeat' || !aliveIdx().length) {
-      const sum = endRun('defeat', { killedBy: def ? def.name : null, kind: p.kind });
+      // V3: the killer by its short name (the League's full name is a banner joke); its id for the end screens
+      const sum = endRun('defeat', { killedBy: def ? def.shortName || def.name : null, killedByEncounter: def ? def.id : null, kind: p.kind });
       return { result: 'defeat', outcome: 'gameover', summary: sum };
     }
     // [playtest first-hour-3] 'Fights won' (game over, Hall of Fame, the map chip): victories only
     S.stats.combats++;
     if (p.kind === 'elite') S.stats.elites++;
-    if (p.kind === 'boss') S.stats.bosses++;
+    if (p.kind === 'boss' && !p.lane) S.stats.bosses++;   // V3: a gauntlet door counts in miniBosses instead
     const node = p.nodeId ? S.map.nodes[p.nodeId] : null;
     if (node) { node.done = true; node.result = 'victory'; }
+    // V3: a won door seals its lane (every door row stops offering it); the floor boss beaten is the campaign won
+    if (p.lane && sealLane(p.lane, p.nodeId)) S.stats.miniBosses = num(S.stats.miniBosses, 0) + 1;
+    if (def && def.finale) S.flags.floorBoss = true;
     // v2: the fight's level-up goes to one living hero, drawn among the lowest levels (the dead are skipped)
     const levelUps = grantLevelUps(levelUpsPerWin(p.kind), 'fight');
     const rw = (def && def.reward) || {};
-    const finalBoss = p.kind === 'boss' && p.act >= FINAL_ACT && !!node && p.nodeId === S.map.boss;
+    const finalBoss = p.kind === 'boss' && p.act >= finalAct() && !!node && p.nodeId === S.map.boss;
     const loot = DD.Rewards.combat(p.kind, p.act, rng(), S, { goldMult: rw.goldMult, itemRarity: rw.itemRarity, final: finalBoss });
     const gold = addGold(loot.gold);   // after passive gold bonuses
     const data = rewardData(p.kind === 'boss' ? 'boss' : 'combat', p.kind, gold, loot.choices, {
@@ -1422,13 +1574,48 @@
       downed: info.downed, scars: info.scars, deaths: info.deaths, kills: info.kills,
       text: (info.deaths.length && narr('hero_death')) || narr('victory'),
     });
+    if (p.lane) Object.assign(data, { miniboss: true, lane: p.lane, title: 'Mini-boss Defeated!' });
     S.pending = { type: 'rewards', data: data };
     if (p.kind === 'boss' && node && p.nodeId === S.map.boss) {
       // the rewards screen shows the act-clear interstitial from data.actClear, then DD.Run.next()
       data.actClear = completeAct({ noShow: true, bossIds: bossIdsOf(cs, def) });
       if (S.over) return { result: 'victory', outcome: 'victory', summary: S.summary };
+      // V3: the DM's loot, shown at last, comes pre-sorted by someone else
+      if (data.actClear && data.actClear.twist && !info.deaths.length) data.text = narr('twist_loot') || data.text;
     }
     return { result: 'victory', outcome: 'rewards', data: data };
+  }
+
+  /** V3: the last fight's facts (Svammiel's downed_last / mvp / flawless / swapped roasts): { downed: [heroIds that
+   *  ended it downed], mvp: the hero id with the most kills (its summons' included; null without kills), flawless: no
+   *  hero went down at any point (state.stats.downs), swaps: hero swap moves (state.stats.swaps) }. */
+  function lastFightOf(cs) {
+    const units = cs && Array.isArray(cs.units) ? cs.units : [];
+    const ust = (cs && cs.stats && cs.stats.units) || {};
+    const out = { downed: [], mvp: null, flawless: true, swaps: Math.max(0, Math.floor(num(cs && cs.stats && cs.stats.swaps, 0))) };
+    let best = 0;
+    units.forEach(function (u) {
+      if (!u || u.kind !== 'hero') return;
+      const id = u.runHero && u.runHero.id ? u.runHero.id : u.defId;
+      if (u.downed || u.dead || !(u.hp > 0)) { out.downed.push(id); out.flawless = false; }
+      let kills = num((ust[u.id] || {}).kills, 0);
+      units.forEach(function (s) { if (s && s.kind === 'summon' && s.ownerId === u.id) kills += num((ust[s.id] || {}).kills, 0); });
+      if (kills > best) { best = kills; out.mvp = id; }
+    });
+    if (num(cs && cs.stats && cs.stats.downs, 0) > 0) out.flawless = false;   // a down mid-fight counts too
+    return out;
+  }
+
+  /** V3: seal a beaten gauntlet lane (DD.RunMap.sealLane on the run's map) and record it in run.flags.gauntlet (the
+   *  order beaten). nodeId: the door fought. Returns true when the lane was newly sealed. */
+  function sealLane(lane, nodeId) {
+    if (!S || !inGauntlet()) return false;
+    const fresh = DD.RunMap.sealLane(S.map, lane, nodeId);
+    if (fresh) {
+      if (!Array.isArray(S.flags.gauntlet)) S.flags.gauntlet = [];
+      S.flags.gauntlet.push(lane);
+    }
+    return fresh;
   }
 
   // ---- rewards screen -------------------------------------------------------------------------------------------
@@ -1464,8 +1651,6 @@
   }
 
   // ---- act clear / end of run ----------------------------------------------------------------------------------
-  /** After the act boss is beaten: unlock heroes (DD.Meta), heal 50%, next act map — or final victory after
-   *  act 3. Runs once per beaten boss (later calls return null). opts.noShow: don't show the map. */
   /** Boss enemy def ids of a fight: boss units in the combat state, else the encounter's boss-tier entries. */
   function bossIdsOf(cs, def) {
     const ids = [];
@@ -1475,6 +1660,9 @@
     return ids;
   }
 
+  /** After the act boss is beaten: unlock heroes (DD.Meta), heal 50%, next act map — or the final victory after the
+   *  last act (DD.finalAct()). V3: going on into Svammiel's gauntlet is the twist (info.twist, flags.twistSeen).
+   *  Runs once per beaten boss (later calls return null). opts.noShow: don't show the map. */
   function completeAct(opts) {
     if (!S || S.over || !S.map || S.map.cleared) return null;
     const boss = S.map.nodes[S.map.boss];
@@ -1487,7 +1675,7 @@
       DD.Meta.unlockForBosses(bossIds).forEach(function (id) { if (unlocked.indexOf(id) < 0) unlocked.push(id); });
     }
     S.stats.actsCleared = Math.max(num(S.stats.actsCleared, 0), act);
-    if (act >= FINAL_ACT) {
+    if (act >= finalAct()) {
       endRun('victory', { unlocked: unlocked });
       return { act: act, unlocked: unlocked, victory: true };
     }
@@ -1497,7 +1685,16 @@
     S.map = makeMap(S.act);
     S.nodeId = null;
     S.visited = [];
-    const info = { act: act, nextAct: S.act, unlocked: unlocked, healed: actHeal, text: narr('act_clear') };
+    S.flags.lastStop = null;
+    // V3 twist: the campaign goes on below the table — the next act is Svammiel's gauntlet
+    const twist = inGauntlet();
+    const info = { act: act, nextAct: S.act, unlocked: unlocked, healed: actHeal, twist: twist,
+      text: (twist && narr('act_clear_twist')) || narr('act_clear') };
+    if (twist) {
+      S.flags.twistSeen = true;
+      // the spoiler gate opens with what the player now sees (the entrance cameo sets it too; idempotent)
+      if (DD.Meta && DD.Meta.markSeen) DD.Meta.markSeen('bosses', 'svammiel');
+    }
     S.flags.lastActClear = info;
     touch();
     if (!(opts && opts.noShow)) show('map', { act: S.act, intro: true, actClear: info });
@@ -1524,6 +1721,12 @@
       }),
       fallen: S.fallen.slice(), gold: S.gold, killedBy: extra.killedBy || null, unlocked: extra.unlocked || [],
       stats: Object.assign({}, S.stats, { durationMs: Math.max(0, now - num(S.stats.startedAt, now)) }),
+      // V3: the campaign's length (a won summary with acts === the knob's 4 = Svammiel beaten; v2 summaries have no
+      // acts: "classic, 3 acts"), the lanes in the order beaten, that run's lane count (the M of "N / M"; 0 before the
+      // gauntlet) and whether the floor boss fell
+      acts: finalAct(), gauntlet: (Array.isArray(S.flags.gauntlet) ? S.flags.gauntlet : []).slice(),
+      gauntletLanes: inGauntlet() ? S.map.lanes.length : 0, floorBoss: !!S.flags.floorBoss,
+      killedByEncounter: extra.killedByEncounter || null,
     };
   }
 
@@ -1613,6 +1816,8 @@
   /** Queue a fight to start after the current step (event API `combat`). spec: encounter id | def | { act, kind }. */
   function queueCombat(spec) {
     if (!S || S.over || !spec) return false;
+    // V3: in Svammiel's gauntlet every fight is a door ("ALL encounters are mini-bosses"): events never start one
+    if (inGauntlet()) return false;
     if (typeof spec === 'string') {
       if (!DD.getEncounter(spec)) DD.warn('DD.Run: event asked for unknown encounter "' + spec + '", using a random fight');
       spec = { id: spec };
@@ -1621,7 +1826,7 @@
     const def = spec.id ? DD.getEncounter(spec.id) : null;
     S.queuedCombat = {
       id: def ? def.id : null,
-      act: clamp(Math.floor(num(spec.act, S.act)), 1, FINAL_ACT),
+      act: clamp(Math.floor(num(spec.act, S.act)), 1, finalAct()),
       kind: normalizeKind(spec.kind || (def && def.kind)),
     };
     touch();
@@ -1970,9 +2175,17 @@
     return result(true, (narr('shop_buy', { name: e.label, gold: e.price }) + ' ' + text).trim(), { entry: e });
   }
 
+  /** V3: lanes of the run's gauntlet not sealed yet ([] outside a gauntlet). */
+  function unbeatenLanes() {
+    if (!inGauntlet()) return [];
+    const beaten = S.map.beaten || [];
+    return S.map.lanes.filter(function (l) { return beaten.indexOf(l.id) < 0; }).map(function (l) { return l.id; });
+  }
+
   /** Shop services: 'heal' (every living hero +30% max HP), 'scar' (remove one scar; opts.heroIdx/scarId,
-   *  default: the most scarred hero's latest scar) or 'reroll' (re-roll a Blessing; opts.heroIdx + slot|passiveId,
-   *  default: the party's weakest Blessing). One use of each per visit. */
+   *  default: the most scarred hero's latest scar), 'reroll' (re-roll a Blessing; opts.heroIdx + slot|passiveId,
+   *  default: the party's weakest Blessing) or, V3 act-4 shops, 'bribe' (run.flags.cameo.bribe = 1: Svammiel skips his
+   *  cheat at the next door; refused while a bribe is unspent or when no door is left). One use of each per visit. */
   function shopService(id, opts) {
     opts = opts || {};
     const inv = shop();
@@ -1982,7 +2195,15 @@
     if (S.gold < svc.price) return result(false, narr('shop_broke') || 'You can not afford that.', { reason: 'gold' });
     if (id === 'reroll') return rerollService(svc, opts);
     let text;
-    if (id === 'heal') {
+    if (id === 'bribe') {
+      // V3 (act-4 shops): Svammiel skips the cheat of the next start cameo (DD.Cameo consumes flags.cameo.bribe)
+      const mem = S.flags.cameo = cameoMemory(S.flags.cameo);
+      if (mem.bribe) return result(false, 'Svammiel already has your money. He will honour it. Probably.', { reason: 'bribed' });
+      if (!unbeatenLanes().length) return result(false, 'No floor boss left to bribe for, and Svammiel\'s own fight has no rule to skip.', { reason: 'noDoors' });
+      spendGold(svc.price);
+      mem.bribe = 1;
+      text = 'Svammiel pockets the gold without looking. Your next floor boss gets no help from him. Allegedly.';
+    } else if (id === 'heal') {
       if (!aliveIdx().some(function (i) { return S.party[i].hp < heroStats(S.party[i]).maxHp; })) {
         return result(false, 'Everyone is already at full HP. Show-offs.', { reason: 'healthy' });
       }
@@ -2187,6 +2408,11 @@
     id: FALLBACK_EVENT, acts: [1, 2, 3], weight: 0, unique: false, icon: '📓', fallback: true,
     title: 'The DM Did Not Prep This Room',
     text: function () {
+      // V3: under the table the DM is demoted (only reachable after the twist: no spoiler)
+      if (inGauntlet()) {
+        return 'You open the door onto a perfectly blank room. Svammiel did not prep it. Behind a cereal-box screen, ' +
+          'the demoted DM in a paper hat whispers, "He never preps. It is a room. It has a floor. Roll for vibes?"';
+      }
       return 'You open the door onto a perfectly blank room. Behind his screen, the DM flips through his notes, ' +
         'sweating. "It is... a room. It has a floor. Everybody roll for vibes?"';
     },
@@ -2208,7 +2434,7 @@
   });
 
   Object.assign(Run, {
-    VERSION: VERSION, SAVE_KEY: SAVE_KEY, FINAL_ACT: FINAL_ACT, MAX_SKILLS: MAX_SKILLS, MAX_LEVEL: MAX_LEVEL,
+    VERSION: VERSION, SAVE_KEY: SAVE_KEY, MAX_SKILLS: MAX_SKILLS, MAX_LEVEL: MAX_LEVEL,
     DOWNS_TO_DIE: DOWNS_TO_DIE, DIFFICULTIES: DIFFICULTIES, PERKS: PERKS, FALLBACK_EVENT: FALLBACK_EVENT,
     useUi: null,      // null: UI calls unless DD.headless · true: always · false: never
     rng: rng,
@@ -2256,7 +2482,13 @@
     // act / end
     completeAct: completeAct, endRun: endRun,
     summary: function () { return S ? (S.summary || buildSummary(S.over || 'in progress')) : null; },
+    // V3: Svammiel's floor (the gauntlet), the fast-forward, his run memory
+    startAtAct: startAtAct, sealLane: sealLane, unbeatenLanes: unbeatenLanes, inGauntlet: inGauntlet,
+    /** run.flags.cameo, created (sanitized) when missing; null without a run. */
+    cameoMemory: function () { return S ? (S.flags.cameo = cameoMemory(S.flags.cameo)) : null; },
   });
+  // V3: the campaign's last act follows the act knob (DD.finalAct(): 3 until the flip, then 4)
+  Object.defineProperty(Run, 'FINAL_ACT', { enumerable: true, get: finalAct });
   Object.defineProperty(Run, 'START_GOLD', { enumerable: true, get: startGold });   // DD.Balance.gold.start
   // the one level-up count per won fight (DD.Rewards.LEVEL_UPS_PER_WIN, overridden by DD.Balance.leveling.perWin)
   Object.defineProperty(Run, 'LEVEL_UPS_PER_WIN', { enumerable: true, get: function () { return levelUpsPerWin('normal'); } });

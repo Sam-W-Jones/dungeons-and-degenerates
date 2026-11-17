@@ -4,7 +4,9 @@
 
 An isometric, turn-based tactical roguelike. You draft a party of four "degenerates" — a fake D&D party built from the
 player's real campaign characters — and drag them through **The Campaign**: three acts of branching encounters, each
-ending in a boss, with **The Dungeon Master** himself as the final boss. Combat is tactical (v2: everyone acts in
+ending in a boss, with **The Dungeon Master** himself as the final boss. Or so the players are told: V3 adds a secret
+fourth act, *Under the Table*, that only shows itself once the DM falls (§3; a spoiler for anyone who has not reached
+it, so nothing a player sees before then mentions it). Combat is tactical (v2: everyone acts in
 rolled initiative order and enemies act without telegraphs; positioning, pushes, terrain, control and timing
 matter). It is **not** D&D: no d20 to-hit rolls, no spell slots, no saving throws — the only d20 is initiative —
 just clean, deterministic tactics with a little wild-magic chaos on top.
@@ -23,7 +25,8 @@ Technical contract: `docs/ARCHITECTURE.md`. This doc is the design intent + cont
    — synergy between heroes is the fun.
 3. **Comedy everywhere.** Skill names, barks, enemy names, items, events, narration, death screens — every surface
    gets a joke, but mechanics text stays crystal clear.
-4. **One more run.** Short runs (~45–75 min), branching maps, random rewards, all 16 heroes from the first run.
+4. **One more run.** Short runs (~45–75 min), branching maps, random rewards, all 17 heroes from the first run (V3:
+   Benedick joined the sixteen of v2; every count of heroes is read from the registry, so another hero breaks nothing).
 
 ## 2. Tone & comedy guide
 - Voice: an affectionate roast of tabletop gaming. The narrator is **The DM** — snarky, sleep-deprived, secretly
@@ -31,25 +34,60 @@ Technical contract: `docs/ARCHITECTURE.md`. This doc is the design intent + cont
 - Comedy sources: tabletop in-jokes (rules lawyers, natural 1s, the bard seducing things, session zero, snacks,
   "I check for traps", murderhobos, the party splitting, the DM's pet NPC), character personality, puns,
   bureaucratic monsters (tax goblins, union kobolds, overdue-library liches), mundane problems in a fantasy world.
-- Keep it PG-13. Mild innuendo OK; no slurs, no punching down, no real-world politics. The sixteen heroes are the
-  player's real campaign characters — roast them **affectionately**; never make them pathetic or mean-spirited.
+- Keep it PG-13. Mild innuendo OK; no slurs, no punching down, no real-world politics. The heroes (sixteen in v2,
+  seventeen with V3's Benedick) are the player's real campaign characters — roast them **affectionately**; never make
+  them pathetic or mean-spirited.
 - Pronouns are exact: **she/her** for Ellaria, Sparrow and Kiri; **he/him** for everyone else (Zarathor, Syllamin,
-  Professor Marbles, Marwyn, Josiah, Corelos, Slate, Mayor Buga, Betty, Basanos, Valdris, Hjalmar, Pebbles). Lines that
-  only get a hero's name from the engine (`{hero}`) use no pronoun for them.
+  Professor Marbles, Marwyn, Josiah, Corelos, Slate, Mayor Buga, Betty, Basanos, Valdris, Hjalmar, Pebbles, and V3's
+  **Benedick**). Lines that only get a hero's name from the engine (`{hero}`) use no pronoun for them.
+- **Act 4's cast (V3; the user's answers)**: Svammiel **he**; the Gardener **it** (a machine); the League of Villainy's
+  Kelek, Warduke, Zarak and Zargash **he**, Skylla **she**; Grand Magister Galbraith **he**; the Coven's Granny Gristle,
+  Auntie Brine and Cousin Mildred **she**; the Rapping Goats (Herd Mentality) Billy Bleatz, Lil' Kid, DJ Turnip and
+  the bear lyricist Ursa Verse, the Paw-et Laureate **he**; the act-3 DM **he**. Galbraith and the hags speak in first
+  person or by name; every named villain def sets its `pronoun` so the engine's rule texts get it right.
+- **Svammiel's voice vs the DM's**: the DM narrates (snarky, sleep-deprived, secretly proud of the players; in act 4
+  demoted and whispering counters from the kids' table: `DM (whispering): "…"`). Svammiel is the DM's DM: loud, smug,
+  ALL-CAPS when he is pleased with himself, cheats out loud "for no reason" (every cheat states its exact effect and a
+  "Reason:" that is never a reason), heckles a hero's proudest quirk and never a permanent death. **Zarak** is an orc
+  everyone (Svammiel included) calls a dwarf, and he furiously insists he's an orc. The Rapping Goats' bars are
+  original (no real lyrics or artists) and aim at the party's quirks in battle-rap form (call and response, finishing
+  each other's bars, the hype man, the mic drop), never at fur colour, never in dialect or a coded costume; Betty (a
+  goatfolk warrior) gets the goat-on-goat gag.
 - Mechanics text is plain and exact ("Deal 8 fire damage. Push 2."). Jokes go in names, `flavor`, barks and narration.
 - Lines are short. Barks ≤ 70 characters. Flavor ≤ 120. Event text 2–5 sentences.
 
 ## 3. Run structure & meta progression
-- **Party select**: choose 4 of the 16 heroes + difficulty (Casual / Normal / Brutal). "Roll for Party" randomizes.
+- **Party select**: choose 4 of the 17 heroes + difficulty (Casual / Normal / Brutal). "Roll for Party" randomizes.
 - **Starting kit**: every run starts with a Bucket of Ice Water in the pockets (`DD.Balance.start`: a revive for a
   downed ally). There is no generic starting heal (the user, Nov 12, D9): sustain comes from the heroes themselves (§6).
-- **Acts** (3): each act is a branching map of 7 rows + a boss row. Node types: ⚔ Combat, 💀 Elite, ❓ Event,
-  🛒 Shop, 🍺 Tavern, 💰 Treasure, 👑 Boss. Row 0 is always combat; row 6 is always taverns (rest before the boss);
+- **Acts** (three regular acts, then V3's secret fourth below): each regular act is a branching map of 7 rows + a boss
+  row. Node types: ⚔ Combat, 💀 Elite, ❓ Event, 🛒 Shop, 🍺 Tavern, 💰 Treasure, 👑 Boss (act 4 adds 😈 Mini-boss).
+  Row 0 is always combat; row 6 is always taverns (rest before the boss);
   elites only from row 2; two shops per act map (a few maps only have room for one), at most one per row. Moving is
   always forward along links.
   - Act 1 — *The Leaky Flagon's Basement* (cellar, sewers, goblin warrens).
   - Act 2 — *The Hauntwood & the Necromancy Academy (Accredited)* (forest, graveyard, haunted library).
   - Act 3 — *Behind the DM Screen* (hellscape, dragon hoard, the DM's actual table).
+  - **Act IV — *Under the Table*** (V3, the user's request; a secret until reached). Beating the act-3 DM no longer ends
+    the run (always, as a twist): as he concedes ("Fine. FINE. You win. Same time next—"), **Svammiel**, the winged
+    demon who is the dungeon's "floor boss" and the DM's own DM, bursts up through the table: "You thought this was
+    over? I, SVAMMIEL, CONTROL ALL." The DM's loot is paid, the act-clear heal lands, the Twist panel lists the cast,
+    and act 4 begins. **Every act-4 fight is a mini-boss**: the map is a **gauntlet** of doors, one per mini-boss
+    (five today: the Gardener, the League of Villainy, Grand Magister Galbraith, the Coven, the Rapping Goats; the
+    count is the registry's, §9), which the party beats **in any order it chooses**, with a stop between fights (a
+    tavern, a shop and an event to pick from; the lobby has a shop and an event, the last stop a tavern and a shop),
+    then **Svammiel** himself. A won door is sealed; losing a door ends the run like any boss fight. Svammiel heckles
+    the start of every act-4 fight (a short cameo with one small, announced cheat) and pops in now and then; he cheats
+    blatantly and for no reason, always out loud and always answerable. A full campaign win now needs his defeat; a
+    normal four-act campaign should be won about 25% of the time (the user's answer).
+  - **Ship dark**: act 4 is built while the campaign still has three acts (`DD.Balance.campaign.acts`, read through
+    `DD.finalAct()`); the integrator flips it to four last. Until a player first reaches it (the twist sets the
+    `seen.bosses.svammiel` gate), the title, party select, tips, the Hall's codex and the README keep saying three
+    acts: the lie is the setup. Benedick is not a secret: he is an ordinary hero from the start.
+  - **Act-4 progression** (V3): one hero levels up per won fight as everywhere (a party meets Svammiel around level 6);
+    each door pays mini-boss gold (the boss row × the encounter's `goldMult`) and guarantees a rare item (never a
+    legendary); act-4 shops charge "Svammiel's markup" (×1.25) and sell **Bribe the Floor Boss** (Svammiel skips his
+    cheat in your next fight). Act-4 events never start a fight.
 - **After combat**: gold, **one hero levels up** (below), then **pick 1 of 3 rewards** (item / skill tome for a hero /
   consumable / gold pile / skill upgrade). Elites always offer a rare item; bosses a legendary.
 - **Leveling is slow and shared (v2, user request).** There is no XP. After every won fight exactly **one** living
@@ -71,13 +109,16 @@ Technical contract: `docs/ARCHITECTURE.md`. This doc is the design intent + cont
 - **Death**: a downed hero revives after combat at 1 HP with a **Scar** (comedic permanent debuff, e.g.
   "Trick Knee: −1 move", "Bruised Ego: −5% damage"). The **third** down in a run kills them permanently
   ("written out of the campaign"). All heroes downed in combat = **TPK** → game over.
-- **Unlocks (v2, user request): all 16 heroes are available from the start** — every hero def has `unlock: null`.
+- **Unlocks (v2, user request): all 17 heroes are available from the start** (V3's Benedick included) — every hero
+  def has `unlock: null`.
   The unlock machinery (`unlock: { act }` / `{ boss }`, DD.Meta unlock lists, the act-clear unlock banner, the
   "I'm the DM's Favorite" toggle) stays in the code for possible future use but unlocks nothing today.
   (Previously: Josiah after Act 1, Sparrow after Act 2, Corelos after the DM, Mayor Buga after Grimble, Slate after
   Lich-tenstein.)
 - Hall of Fame: records (runs, wins, best act, kills, deaths), every hero's campaign record, the enemy codex, the
-  Table of Questionable Blessings (entries never rolled show as ???) and past runs.
+  Table of Questionable Blessings (entries never rolled show as ???) and past runs. V3, once act 4 has been seen: an
+  Act IV codex group, "Campaigns won (of which classic: N)" (a v2 win is "Won (classic, 3 acts)"), "The DM defeated",
+  "Floor bosses beaten", and act-4 runs in the history ("Act IV · N / M floor bosses", M = that run's door count).
 
 ## 4. Combat
 ### 4.1 Flow — initiative and individual turns (v2, user request)
@@ -159,7 +200,7 @@ to the wizard.
   attacker. Volatile objects still detonate outright. The preview reads "Break: Crate − 4 damage, 2 HP left" / "… —
   breaks!". A few skills opt out because the grab, the throw, the dash or the gold is the point (`target.objects: false`;
   their tooltips have no 🔨 line): Fetch!, Throw Money At It, Pounce, Arrow from Beyond, Vein Glory, Head Over Heels,
-  and Slate's Hold Still, Rock Bottom and Stress Ball.
+  The Inevitable, and Slate's Hold Still, Rock Bottom and Stress Ball.
 - **No riders on objects** (lead decision D4). On an object a skill deals its damage and nothing else: no statuses,
   pulls or pushes, lifesteal, stolen gold or heals, and no item, status or passive riders either (the Electric Lute's
   water shock, the Echo Chamber Blessing's second hit, on-hit statuses). What counts the use itself does not change:
@@ -289,6 +330,18 @@ bonus loot.
 | Boss HP / hit / big wind-up | 150–200 / 8–12 / 18–25 | 260–320 / 10–14 / 22–30 | 420–520 (phases) / 12–16 / 25–35 |
 | Enemies per normal fight | 3–5 | 4–6 | 4–6 |
 
+**Act 4 (V3, *Under the Table*: every fight a mini-boss; plan §3.0.5).** Mini-bosses may wind up like bosses; regular
+enemies never telegraph.
+| | Act 4 |
+|---|---|
+| Minion HP / hit (vines, imps) | 18–20 / 6–7 |
+| Squad member HP / hit (the League, the Coven, the Rapping Goats: elites) | 60–115 / 7–11, at most one wind-up each (the goats' WHAT?! at 6 is a deliberate under-band poke: it ignores line of sight) |
+| Squad total HP | 320–365 (the Coven 320; the League 365 + two revivals; the goats 255 + the bear 110) |
+| Solo mini-boss HP / hit / big wind-up (the Gardener, Galbraith) | 300–340 (+ a puzzle) / 10–14 / 20–26 |
+| Final boss HP / hit / wind-up (Svammiel) | 480 (3 phases) / 14–18 / 22, plus floor drops |
+| Party level at the fight | about 4.7 at the first door, +0.25 a door; about 6 at Svammiel (one level-up per won fight) |
+| Targets (normal, campaign sims) | the plan's bands: each door 91–95%, Svammiel 80–85%, a four-act campaign about 25% (the user's answer); against the shipped 3-act rate the last one asks for easier doors (`docs/notes/v3-contract.md` P6: open for the lead) |
+
 - v2 note: the enemy numbers in the table above predate initiative order, the removal of Guard and the slower
   leveling; the v2 balance passes kept the content numbers and tuned whole fights with the balance rows below (the
   user's ask: "hard but fair", a well-played party beats the first boss about 60-70% of the time).
@@ -313,7 +366,8 @@ bonus loot.
     damage, plus one extra enemy in every regular fight.
   - Where that lands (the balance audit, normal unless stated): the act 1 bosses are won ~70%, the campaign ~33%
     (casual ~77-80%, brutal ~10%).
-- Heroes L1: HP 20–36, AP 3, move 3–5, initiative modifier −2..+4. Growth +3–5 HP/level. With one level-up per won
+- Heroes L1: HP 20–36, AP 3, move 3–5 (V3's Benedick: move 2 on purpose, the slowest hero, with armor 2; his
+  Dragonsnail flies with +3 move), initiative modifier −2..+4. Growth +3–5 HP/level. With one level-up per won
   fight (v2) a party is about level 2 at the Act 1 boss, 3–4 at the Act 2 boss and 5 at the DM.
 - Hero basic attack 4–6. Skill (L1): single target 7–10 for 2 AP, AoE 4–6 per target for 2 AP, cooldown 1–3.
   Level II ≈ +25%, level III ≈ +50% or one added rider. Signature: 15–25 damage or a game-changing effect.
@@ -342,24 +396,29 @@ SpriteSpec, and 3–6 barks per key. Requirements for every kit:
   - Pool of **9–10 skills** (2 starting): fewer, sharper skills beat many fiddly ones. Comedy stays in names,
     flavor and barks — not in rules text.
   - **Display names are unique per side**: an enemy or boss skill never borrows a hero-side name (hero, hero summon or
-    generic skill), so the log and the codex never confuse the hell hound's leap with Basanos' Pounce.
+    generic skill), so the log and the codex never confuse the hell hound's leap with Basanos' Pounce. V3 reserves
+    Benedick's names from the day he is planned (act-4 enemies never use them): Fourteen Thousand Teeth, Slow Burn,
+    Coming Out of My Shell, Slime Line, I'll Wait, Lettuce Pray, Shellacking, Spit Shine, Snail Mail, Morning Breath,
+    Wing It, Riddle Me This, The Inevitable, A Sticky Situation, Snail Slime, In His Shell, Dragonsnail.
 - **Sustain (D9, the user: "linked to the characters themselves ... without overloading each character with a
   self-heal").** No party gets a generic heal (§3). Healing others belongs to the healers (Ellaria, Josiah; part-time:
   Marbles' Carrot Toss, Pebbles' Emotional Support Dog, Sparrow's Blood Drive). Self-sustain grows out of each hero's
   own verbs and is spread across delivery types: skills (Slate's Stress Ball, Basanos' Transform, Sparrow's Juice Box,
   Betty's Five-Second Rule, Marwyn's Keg Stand, Basanos' Savage Bite, Josiah's Leeches), passives (Betty's Eats
   Anything, Pebbles' Hot Dog, Marwyn's MAGNIFICENT SURGE) and hero items (Sparrow's Bloodsucker's Bib, Pebbles'
-  Fireproof Dog Bed, Hjalmar's Canned Laughter). Kiri, Corelos, Syllamin, Zarathor, Buga and Valdris get no self-heal
-  (Valdris' Temper adds 5 HP only at III): range, stealth, Debt, Block and death-saves instead. Death-saves aside, no
-  hero heals on an HP threshold (Hair Trigger only changes Basanos' form), and the D9 heals (Stress Ball, Transform,
-  Juice Box, the surge, Canned Laughter) only heal the hero who earned them: they never revive or cleanse.
+  Fireproof Dog Bed, Hjalmar's Canned Laughter; V3: Benedick's Snail Mucin Serum, heal 3 whenever a foe gets stuck in
+  his slime: his only heal, and his transform never heals, that is Basanos's verb). Kiri, Corelos, Syllamin, Zarathor,
+  Buga and Valdris get no self-heal (Valdris' Temper adds 5 HP only at III): range, stealth, Debt, Block and
+  death-saves instead. Death-saves aside, no hero heals on an HP threshold (Hair Trigger only changes Basanos' form),
+  and the D9 heals (Stress Ball, Transform, Juice Box, the surge, Canned Laughter, the Serum) only heal the hero who
+  earned them: they never revive or cleanse.
 - Mix of AP costs (1–3), cooldowns and one or two "big" skills with charges/long cooldowns.
 - Three meaningful levels per skill (numbers and/or a new rider at III). `desc` always exact for the level.
 - The passive is the character's comedic core and must change how you play them.
 
 Every brief below matches the registered kit (`js/data/heroes/<id>.js`; level-by-level texts in
 `docs/notes/v2-digest.md` §2 and each hero's notes, which win if this section ever drifts). Numbers are level I unless
-a range is shown. All 16 heroes are available from the start (§3).
+a range is shown. All 17 heroes are available from the start (§3; V3 added Benedick, last below).
 
 ### Zarathor the Bedazzled — Tiefling Warlock (he/him)
 Fire-wielding tiefling obsessed with wild magic and **bling**: gold chains, rings, a gold tooth, sunglasses indoors.
@@ -630,6 +689,34 @@ fire control. 26 HP (+4/level), move 5, init +3; fire can't hurt him (fire resis
 - Sprite: quadruped dog made of flames (orange-yellow body, darker ember core, flickering flame aura, glowing eyes, a
   little collar tag reading "PEBBLES").
 
+### Benedick the Inevitable — Snail (Dragon, Allegedly) Knight of the Margins (he/him)
+V3, the 17th hero (the user, Nov 12; normative spec `.tmp/v3/addendum-benedick.md`). Available from the start and
+playable in every act; not an act-4 spoiler.
+User's brief: *Benedick - a snail, who can transform into a "dragonsnail".* A courteous, unhurried snail knight from the
+margins of old manuscripts, where the snail always beats the knight: a tiny bucket helm with holes for his eyestalks, a
+lance strapped to his shell. He always gets there. He fears salt and anyone who says "garlic butter". Give him a turn
+in his shell and he comes out of it (way out) as a fire-breathing, flying, very pompous DRAGONSNAIL who still wants
+lettuce. Role: slow shell tank; a flying fire-breather in bursts. 28 HP (+4/level), move 2, armor 2, init −2.
+- Passive *A Sticky Situation*: at the end of his turn the tiles he crawled off become Snail Slime (3 rounds); grounded
+  foes, bosses aside, that walk onto it stop there.
+- Basic *Fourteen Thousand Teeth* (5, adjacent; 10 against a plant) as a snail, *Slow Burn* (4-6 fire + Burn 1, range 3,
+  by his shell's level) as the Dragonsnail. Starters: *Coming Out of My Shell* (spend all AP: half damage until his next
+  turn, then the Dragonsnail for 2 turns: flying, +3 move, Slow Burn; III bursts out for 6 fire) and *Slime Line* (hit
+  and pull).
+- Pool, either form: I'll Wait (Taunt one foe and Block), Lettuce Pray (Block for him and nearby allies), Shellacking (a
+  big hit and Dazzled), Spit Shine (a Snail Slime patch at range), Snail Mail (a parcel that bursts at the start of his
+  next turn). Dragonsnail only: Morning Breath (fire cone and Weak), Wing It (push every adjacent foe), Riddle Me This
+  (ranged Stun).
+- Signature *The Inevitable*: he appears next to any foe on the battlefield: 18 damage and Stunned.
+- Sustain (D9): his hero item *Snail Mucin Serum* heals him 3 whenever a foe gets stuck in his slime; the transform never
+  heals.
+- Combos: I'll Wait drags a foe across his slime (it stops short and loses the attack); Slime Line pulls into cleaves and
+  traps; Snail Mail on Rooted, Stunned, Grappled or stuck foes; Slow Burn feeds Valdris and Bark-B-Q; Wing It shoves
+  into pits, lava and traps; Riddle Me This sets up Betty's Kick 'Em.
+- Sprite: a putty-olive snail with a caramel spiral shell, a pennant lance and a bucket helm with eyestalks through the
+  top; a sealed shell with a BRB sign and glowing cracks; an ember-shelled Dragonsnail with green bat wings, horns,
+  smoking nostrils and the helm askew on one horn, still dangling a slimy foot.
+
 ### 6.1 Design notes — open overlaps (documented, not redesigned)
 Skills from the user's briefs that ended up doing nearly the same job. They are fine in play (different heroes,
 different forms); a later design pass may differentiate them. Nothing here changes the game.
@@ -645,6 +732,12 @@ different forms); a later design pass may differentiate them. Nothing here chang
 - **Hjalmar's traps ≈ Corelos' glyphs**: Firecracker Bundle and Bear Trap are floor traps that hurt the first foe to
   step on them, like Glyph of Warding (which also bursts next to it, can be detonated, and Roots at level III like the
   Bear Trap).
+- **Benedick (V3)**: Riddle Me This ≈ Cease & Desist / Butt Out (a single Stun; his is ranged and dragon-only) ·
+  Wing It ≈ Big Wag (adjacent damage + push) · Snail Mail ≈ Arrow from Beyond (delayed; his hits a tile area, hers
+  follows the foe) · Snail Slime ≈ Web / Cheeto Dust (snags: slime stops a walk without Root or Slow) · Spit Shine ≈
+  Buga's Crumb Trail (a ranged floor patch: his stops walks, Buga's Slows) · Lettuce Pray ≈ Divine Forge's Block (small
+  radius, no damage buff) · I'll Wait is the only single-target ranged taunt. His transform shares Basanos's shape on
+  paper only: delayed, timed, cooldown-gated, protective and ranged, and it never heals.
 - Other open calls: Zarathor's starters (Throw Money At It + Wild Card would put his wild magic in his hands from
   turn 1; the ui suite's POOL list moves with them); the Plot Armor Blessing keeps a walk going at 1 HP where the
   Phoenix Feather ends it.
@@ -782,7 +875,76 @@ boss's notes.
    rules-lawyer back. He never moves and makes no attacks of opportunity (his cameo minis hold the line for him).
    Whole-fight rule *Fudged in Your Favour* (a rule chip): a roll of his (Fudged Roll, Roll Behind the Screen) never
    takes a hero with 75%+ of their HP straight to 0; at worst it leaves 1 HP.
-   Defeat line: "Fine. FINE. You win. Same time next week?"
+   Defeat line: "Fine. FINE. You win. Same time next week?" (V3: while the campaign goes on it ends at "Same time
+   next—": the twist cuts him off.)
+
+**Act IV — *Under the Table* (V3; a secret in the game until reached).** Every act-4 fight is a mini-boss (a boss
+fight: wind-ups allowed, boss rewards) on a hand-made arena, placed only by the gauntlet map. Solo mini-bosses are
+`tier: 'boss'` with `boss.mini` (no sheep or charm, falls cost 25% max HP, a stun guard on the DM's pattern); squads are
+elites (charm, sleep, sheep and stuns work on them: charming the barbarian into his own cleric is the anti-party joke),
+they never die to a fall (they take a fixed amount and climb out), and the encounter names the squad
+(`objective.bossIds`). Every fight opens with **Svammiel's cameo**: a banner with his announcer line, a roast of one
+hero (that hero may answer back), then **one small, announced cheat** that previews a finale cheat (a 😈 rule chip
+with the exact text; a Bribe skips it): Green Thumb at the Gardener (two extra Strangler Vines), Nepotism at the League
+(+3 initiative each), That's a 1 Now at Galbraith (the first 10+ hit on him deals 1), The Floor Is Lava at the Coven
+(the approach to the cauldron is lava until the end of round 3) and the **Radio Edit** at the Rapping Goats (the
+party's highest-level damage skill — never a basic, a signature, a transform or a revive — is bleeped: it can't be
+used for the whole fight). Mid-fight he interjects at most 3 times (1 a round, 2 rounds apart). No act-4 mechanic
+relies on enemies blocking each other (both sides walk through their own side); heroes still block enemies, and the
+swap move is part of several answers. Normative specs: `.tmp/v3/design.md` §3 and the goats' addendum.
+6. **The Gardener** (it; *The Overgrown Conservatory*, a 14 × 12 greenhouse; 300 HP, init +1, large). A giant
+   mechanical spider-gardener that heals 4 per plant at its turn start (Photosynthesis, at most 16), spits seeds that
+   sprout Strangler Vines (20 HP, immobile, they act on its turn and Root), plants Pump-kabooms (volatile gourds) and
+   winds up *Mow the Lawn* (22 to each grounded unit in a 3-wide lane, objects destroyed) and *Harvest Festival* (every
+   gourd bursts). Puzzle: weed the garden (fire cooks plants), bait the mow over a **Garden Gnome** (it never looks: 20
+   damage and Stunned, three jams a fight), blow a **Weed-B-Gone Drum** next to it (Corroded: armor 0, +25% damage
+   taken). Phase 2 *Overgrowth Mode* at 150 HP. A Rooted hero can't be swapped out: pull or teleport them.
+7. **The Lllllllllleeeeeeeeeeeaaaaaaaaaaaaguuuuuuuuuuuuueeeeeeeee of Villainy** ("The League of Villainy" where space is
+   tight; *The League's Clubhouse*, 15 × 13). The anti-party, five over-the-top evil elites on their own initiative
+   (365 HP in all): **Kelek** (wizard, he, the rapacious leader forever after his rival Ringlerun's Staff of Power;
+   Evil Missiles, the Unspeakable Fireball wind-up; half damage while Warduke stands next to him), **Warduke**
+   (barbarian, he, a heartless mercenary whose face stays under his dread helm; Skull Splitter, Hero Punt; Unreasonable
+   below half HP), **Skylla** (warlock, she, pact with Baba Yaga, the Mother of all Witches; Eldritch Blah pulls, a Hex;
+   Expendable Friends: once a fight a killing blow kills the nearest other member instead), **Zarak** (rogue, he, an orc
+   assassin everyone calls a dwarf, which he furiously denies; immovable, Tunnel Ambush, Sneak Attack (Audible)) and
+   **Zargash** (cleric of Orcus, he; heals, and prays a fallen member back up from its **body** twice a fight). Villain
+   Hype builds to **The Theme Song** (psychic damage per singer within 3; the podium counts double). Puzzle: break the
+   bodies, kill order (Kelek off Warduke, then Zargash), charm the anti-party, the Trapdoor Lever drops the podium into
+   the Shark Tank (never a kill: 20 and Bleed, then they climb out), Evil Powder Kegs, hold the side door.
+8. **Grand Magister Galbraith** (he; *Galbraith's Grand Observatory*, 13 × 13 over the starry void; 340 HP, flying,
+   init +3). The only creature down here who still uses spell slots, and he shows them (9; spells cost slots; at 2 or
+   fewer he rests a whole turn at +50% damage taken). *Galbraith's Counterspell* eats the first hero spell a round aimed
+   at him (bait it; swords, arrows and corgis go straight through). Wind-ups *Meteoric Displeasure* (three meteors) and
+   *Power Word: Ouch* (26, follows the hero, fizzles out of his sight). Three **Focus Crystals** refill his slots (break
+   them). Phase 2 *Encore* at 100 HP: no slots, +50% damage taken, two rays a turn and the *Grand Finale*. Not
+   Lich-tenstein: no minions, no phylactery, no reform.
+9. **The Coven** (she; *Tea with the Coven*, the bog garden of a gingerbread cottage, 14 × 13; three hags, 320 HP, one
+   turn). **Cousin Mildred** (night hag, holds the Eye and runs the Coven's turn; sleeps and Night Terrors), **Granny
+   Gristle** (green hag, the bruiser; Cheek Pinch roots, Eat Your Greens bogs the ground) and **Auntie Brine** (sea hag,
+   the puller; Undertow, I Was Beautiful Once confuses). A hag next to the **Family Cauldron** stirs; at Brew 6 the
+   Coven winds up *Family Recipe: Hero Pie* (20 to every hero and Slowed). **Hex Threads** join hags who can see each
+   other within 7 (7 psychic and Weakened on a thread). Puzzle: hold the four Stirring Spots (enemies can't end on a
+   hero; swap a hurt spot-holder out and the spot never frees), tip the cauldron, break their line of sight, kill
+   Mildred first to split the turn. Skylla's patron Baba Yaga is family.
+10. **The Rapping Goats** (he, all four; *The Barn Burner*, 15 × 14; the fifth door, the user's Nov 12 request). Three
+    rapping black goats, crew name **Herd Mentality**: **Billy Bleatz** (the MC, holds the Golden Mic), **Lil' Kid**
+    (the hype goat; his WHAT?! needs no line of sight) and **DJ Turnip** (eats his records; *Turnip the Bass* hits one
+    colour of the dance floor while a Speaker Stack stands); 255 HP between them, each on his own initiative. **The
+    Verse**: a diss at the Called-Out hero starts a bar, a different goat finishes it; three bars and the Golden Mic
+    drops **Bar None** (18 psychic + Weakened wherever that hero stands). Clap back at the **Mic Stand** to take the
+    heat, hide the hero from the next goat, shut the finisher up, interrupt the mic. At half the crew's combined HP the
+    snoring hay wakes: **Ursa Verse, the Paw-et Laureate**, a bear lyricist (110 HP) who takes the mic (Bar None 22).
+    When Betty is in the party, the first verse is about him. Every bar is original; the comedy is goat puns and
+    battle-rap form, never the fur colour.
+11. **Svammiel, the Floor Boss** (he; *The Last Floor*, the linoleum under the DM's table, 17 × 14 over the void; 480
+    HP in three phases, flying until caught, init +4). The DM's DM, an original character: a winged demon who owns
+    every floor tile down there and cheats blatantly, for no reason, out loud. One **Round Cheat** a round, announced a
+    round ahead (the floor is lava, the Tilt, a Skill Ban, New Seating Chart, Moving Costs Extra — the swap move
+    included —, Bring a Friend…), **Snap Cheats** while he holds Fudge tokens, phase cheats at phase changes (I Go Twice;
+    You Can't Skip My Cutscenes). The party's answers: **Rulings** from the demoted DM at the kids' table (interact:
+    cancel a cheat, 10 damage), breaking his **Rigged Dice**. Phase 3 *FINE. NO MORE FLOOR.*: outer panels drop for good
+    and he pencils damage away until the party breaks his three **Master Dice**: **CAUGHT CHEATING** (grounded over
+    the void he made, an honest d20, every fall costs him 30). Defeat: the floor gives way under him.
 
 ## 10. Map themes
 | Theme | Act | Look | Features |
@@ -796,6 +958,18 @@ boss's notes.
 | hellscape | 3 | obsidian, lava rivers, brimstone | lava, rocks, fire vents |
 | hoard | 3 | gold piles, treasure, marble | chests, gold piles (difficult), pillars |
 | dm_table | 3 | green felt / graph paper, giant dice, snacks | d20 pillars, soda cans, pencils, cheeto dust |
+| a4_conservatory | 4 | *The Overgrown Conservatory* (the Gardener): lawn, gravel mow lanes, terracotta planters, cracked brass-framed glass, topiary, gnomes | the sprinkler pond (water), compost (mud) |
+| a4_lair | 4 | *The League's Clubhouse*: black marble, a purple carpet runway, the War Room dais and the podium, five thrones, a trophy wall of stolen hero stuff | the Shark Tank, Evil Powder Kegs |
+| a4_observatory | 4 | *Galbraith's Grand Observatory*: white marble with gold star-chart inlays, brass orrery columns | the starry void |
+| a4_cottage | 4 | *Tea with the Coven*: mossy ground, bog, pools, the gingerbread cottage on chicken legs, gnarled trees, a judging black cat | bog, pools |
+| a4_barn | 4 | *The Barn Burner* (the Rapping Goats): worn planks, the hayloft stage and the DJ dais, a gold / pink checkerboard dance floor, barn-red walls, the crowd (three chickens, a cow, a sheep) | hay bales that burn; no pits |
+| a4_underfloor | 4 | *The Last Floor* (Svammiel): black-and-gold linoleum panels under the DM's table, giant table legs, the boulder d20 throne | the void |
+
+Act-4 themes (V3) are hand-made arenas (every act-4 fight has a layout) with procedural fallbacks so the map suites can
+build them; every prop is round, radial or `yawAware` (the map turns), and painted words use `g.text`. Colour pairs:
+the Gardener brass + leaf green · the League violet + acid green · Galbraith midnight blue + gold · the Coven bog green +
+teal + plum · the Rapping Goats hay gold + neon magenta over barn red (colour is never the only signal) · Svammiel
+crimson + gold with graph-paper cream.
 
 ## 11. Events & narration
 35 events (2–3 choices each, at least one with a risk/reward trade; none grants XP — a level-up goes through the
@@ -810,6 +984,17 @@ Session Cancelled (Real Life), Fountain of Questionable Youth, Cursed Ring Clear
 Lawyers), Snack Run, Retcon, I Check for Traps, Mimics Anonymous, the Infernal DMV…
 Narrator lines for every key in ARCHITECTURE §3.10 (8+ lines each), plus 30+ loading-screen tips (79 today), each one
 mechanically true.
+**V3**: Benedick's hero event *Le Bistro Escargot* (acts 1-3, like every hero event). **Act-4 events**
+(`js/data/events_act4.js`, `acts: [4]`, never a fight; enough for every event stop of the gauntlet): The DM's Support
+Group, Svammiel's Suggestion Box, League Recruitment Drive, The Coven's Bake Sale, Galbraith's Book Signing, The
+Gardener's Compost Heap (optionally Herd Mentality's Merch Table). **Narration in act 4**: the DM narrates demoted and
+nervous through `@a4` variants of the usual keys (`boss_start`, `victory`, `defeat`, `shop_greet`, `tavern_greet`,
+`map_enter`, `gameover_title`, `victory_title`…), plus `act_intro_4`, the twist (`act_clear_twist`, `twist_loot`),
+`campaign_won` and `svam_defeat`. **Svammiel's cameo lines** (`js/data/svammiel_lines.js`): an announcer pool per door,
+6 roasts and 3 comebacks for every registered hero (the coverage test reads the registry), one twist reaction per hero,
+situational roasts, interjections, sulks, cheat quips and the DM's whispered counter to every cheat; no line repeats
+within a run. Bubble lines ≤ 70 characters, narration ≤ 160. Act-4 tips (`tips_act4`) join the loading tips only after
+the twist has been seen; every one is true in the final build.
 
 ## 12. Visual & audio direction
 - Isometric, chunky, readable. Procedural canvas art only (no image files): diamond tiles with subtle per-tile
@@ -823,3 +1008,12 @@ mechanically true.
 - UI: dark tavern wood + parchment panels + gold trim; fantasy display font (e.g. Google "Cinzel"/"MedievalSharp"
   with Georgia fallback) and a clean readable body font. Big readable numbers. Every interactive thing has a tooltip.
 - Audio: procedural WebAudio blips/whooshes/thuds; corgi yips; raven caws; mute + volume in settings.
+- **Svammiel's cameos (V3)** must be brief and skippable. The twist **entrance** (≤ 4.5 s Full, 2 s Short): the table
+  shakes, he bursts up through the DM's tile, the banner "YOU THOUGHT THIS WAS OVER?", his bubble "I, SVAMMIEL,
+  CONTROL ALL.", a hero reacts, he sinks back. The start-of-fight **swoop** (≤ 3.3 s with a cheat card): he dives in,
+  hovers over the enemy side with his announcer banner and a roast bubble, the cheat card slides in under it, then he
+  sinks through the floor. Interjections are non-blocking **bubbles** (a bust at the top of the board) or a **quip** (log
+  and caption only). Everything is screen-space, so it reads at every map angle; Space / Enter / Esc / a click skip it;
+  Settings offers Full / Short / Log only; AutoPlay plays it at 35%. In his own fight every line is a bark on his unit.
+  His art: graph-paper bat wings doodled with the party, a cape made from his old DM screen, a crown of gold d4s, a gold
+  d20 that always shows 20, a "DM" lanyard; a grounded look with a red "CAUGHT" paper clip after he is caught.

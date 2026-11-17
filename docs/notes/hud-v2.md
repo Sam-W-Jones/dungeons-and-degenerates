@@ -670,3 +670,218 @@ at some sizes and yaws (1920x1080, the goblin ambush at yaw 45) — by design th
 (WASD / drag) or roll first. The ✖ of a refused swap sits between the two units and is often half under their sprites
 (as the existing "a free hit calls it off" ✖ is); the greyed hint is the primary message. The "1!" of a d4 level-up
 roll renders like "I!" in Cinzel (a font trait, pre-existing). Full-run status: see v2-digest §13.
+
+## V3 (Nov 15) — act IV "Under the Table": Svammiel's cameos, cheat chips, act-4 labels (HUD role)
+
+Role: HUD (plan `.tmp/v3/design.md` §8.2 row F, §4.8, §4.1 the moment host, §8.4 HUD; `addendum-goats.md` §15.1 the
+Radio Edit's sticker). Files: `js/ui/combat_hud.js`, `tests/hud_tests.js`, this section; ARCHITECTURE §8.3's V3
+paragraph gained an "as built" note (the HUD's own section). Run: `bash tools/test.sh "suite=hud: V3&isolate=zzznone"`
+(the real Radio Edit check: `"suite=hud: V3 — a skill&isolate=svammiel,zarathor,syllamin,kiri,betty,skills_generic,items,consumables,passives"`).
+
+### What it does
+- **The cameo moment** (`DD.FXRender.moments.cameo = { wants, start }`, installed in `mount`, removed in `unmount`, like
+  the dice moment): fx_render asks it before a blocking cameo (entrance / swoop / shadow); the answer is DD.Cameo's
+  length (Full / Short as the setting says) × 0.35 under AutoPlay (`CAMEO_AUTO`). While it plays input is locked (the
+  FX are busy), a see-through layer (`.hud-cameoscrim`) takes the skip click, the phase pill reads "😈 Svammiel!" /
+  "Heckling the party…", the hint says "😈 Svammiel has the floor… Click or Space to skip.", and the action bar and the
+  Roll / End Turn buttons show the lock "Svammiel has the floor. Space skips." (before, "Roll for initiative!" looked
+  live during the swoop: RENDER-SPRITES' known issue). **Space / Enter / Esc / a click** skip it (`evt.elapsed =
+  evt.ms`, the dice moment's path; the skipping press never also rolls initiative, ends a turn or opens the menu:
+  `holdAfterSkip`). When fx_render is done with the event (played out, skipped, flushed) the HUD takes over: deployment
+  works right away. The twist's entrance on the DM's won board is hosted the same way; the end of the fight (ribbon,
+  hand-off) waits for it as for any FX. A caption showing when a cameo starts is held and shown again after it (one
+  arriving meanwhile waits too).
+- **Speaker chips**: log lines of cls `cameo` carry the actor's chip ("😈 SVAMMIEL", crimson-gold in his colour; tooltip
+  "Svammiel, The Floor Boss") instead of "DM"; a cheat's line ("Svammiel cheats: … Reason: …") is marked (bold, a
+  crimson rule on the left) and its leading 😈 is printed once (the chip has it). DM lines keep "DM"; on Svammiel's floor
+  (`encounter.gauntlet || encounter.finale`, no act literal) its tooltip reads **"The DM (demoted)"**. Log lines wrap
+  anywhere (the League's 72-letter name).
+- **The caption** (`showDm(text)` → `showCaption(text, speaker)`): a DM line has the "DM" badge; a cameo line has the
+  actor's portrait (the cameo def's `enemy` sprite, his icon as fallback), his name ("SVAMMIEL:") and a crimson panel. A
+  cameo line takes the caption only as a **quip** (the victory sulk: log + caption, plan §4.1) or under Settings **"Log
+  only"** (no cameo FX at all), and not when the actor stands on the board (his lines are barks there): otherwise the
+  swoop's bubble and the interjection busts already show it on the canvas.
+- **Cheat chips (E7)**: a rule with `cheat: true` gets a 😈 badge, a crimson chip and a tooltip line "😈 Svammiel
+  cheats. Out loud, on purpose." over the exact desc; a `next: true` rule is dashed and reads "<icon> Next round:
+  <name>" once (C5's `svam_next` already says "Next round: "); a leading icon equal to `rule.icon` is printed once
+  (DD.Cameo names cheat rules `icon + ' ' + name`: "📻 📻 Radio Edit" before). `renderTop`'s signature hashes every
+  rule's id, turns, icon, **name, desc**, cheat and next, so a chip whose name or desc changes live refreshes (the goats'
+  "📝 Verse 1/3 → Betty", Svammiel's "Rulings: N"); the objective flavour line (the goats' verified fallback) refreshes
+  as before. Long chip names end in an ellipsis inside the objective panel.
+- **Kind labels and short names**: "Mini-boss" (`encounter.gauntlet`), "Floor Boss" (`encounter.finale`), else Boss /
+  Elite / Skirmish (the round box tooltip "Mini-boss fight", the round box sub line). The round box sub uses
+  `encounter.shortName` (the name ellipsizes, the kind label stays). Squad members (`objective.bossIds`: the League, the
+  Coven, the goats) read "Elite · <shortName>" in the tracker tooltip and the inspect panel, and their tracker portraits
+  take the boss colour.
+- **The inspect line naming this and next round's cheats**: the inspect panel of the fight's boss, a squad member, or
+  the cheating actor's own unit (`DD.Cameo.present`) reads "😈 Cheats this round: 📻 Radio Edit (all fight) · next
+  round: none announced." (built from the cheat rules: `next` ones are next round's; the descs in its tooltip). In
+  Svammiel's fight his own passive line (C5) says the same from his deck; both read live state.
+- **The wind-up hint line (E7)**: an intent's `data.hint` ("Bar None → Betty", "Bass → gold squares", "a gnome is in
+  the way!") is a 👉 line in its inspect row and in the tracker tooltip ("Bar None (Bar None → Betty)"), unless the
+  label already contains it.
+- **The tracker overflow case**: no change needed. Checked on the real page at 1280×720 and 1024×640: the real League (5)
+  + 4 heroes + 3 summons (9 entries), a crowd of 12 rolling units (16 chips, the `TRACK_MAX` cycle at the n-crowd size),
+  and the goats' four with the large bear + 4 heroes + 3 summons: every chip inside the tracker, no overflow, no overlap
+  with the round box or the top-right buttons.
+- **BLEEP** (optional, Nov 13, the Radio Edit): a skill button whose refusal starts with "Bleeped" gets a "BLEEP" tape
+  across its icon (the icon blurred), on top of the shipped greyed state and its "⛔ Bleeped by Svammiel (Radio Edit)."
+  tooltip line. The HUD reads the rule veto through `DD.Combat.vetoOf` (E13), so the sticker stays when another reason
+  comes first (a lock, another turn) and the tooltip then lists both ⛔ lines. Other vetoes ("Banned by Svammiel (No
+  Signatures…)", the fixtures' "Muted by …") show their ⛔ line only. Without E13 (the 99-AP fallback) no sticker: the
+  fallback is the ⛔ line, as the addendum says.
+
+### Public API (beyond the contract)
+- `DD.HUD.cameo()` → `{ active, style, actor, name, ms, progress } | null` (the blocking cameo the HUD hosts now).
+- `DD.HUD.skipCameo()` (as Space / Enter / Esc / a click).
+- `DD.HUD.caption()` → `{ text, speaker (null = the DM, else the actor's name), actor, title } | null` (hidden).
+- CSS hooks: `.hud-cameoscrim`, `.hud-phase.p-cameo`, `.log-line.cameo(.cheat)`, `.hl-dm.hl-cameo`, `.hud-dm.cameo`
+  `.dm-port` `.dm-who`, `.hud-chip.rule.cheat` / `.next` `.rl-cheat` `.rl-name` (`data-rule` = the rule id),
+  `.hi-line.cheat`, `.hii-hint`, `.hud-skill.bleeped .hs-bleep`, `.hr-sub .hr-enc` / `.hr-kind`.
+
+### Deviations
+- **The cameo host is not gated headless** (the dice moment's host is, unless `forceMoments`): DD.Cameo's event blocks
+  playback with its own length whether or not it is hosted, so hosting only adds the skip, the lock display and the
+  AutoPlay share. Instant FX (tests, sims) never start the event, so nothing is hosted there.
+- **Cameo lines take the caption only as quips or under "Log only"** (plan: "showDm → showCaption(text, speaker) (his
+  portrait for cameo lines)"). Reason: the swoop's roast bubble and the interjection busts already show every line on
+  the canvas; a caption copy would cover the board twice with the same words. Under Log only (no FX) and for the quip
+  style (plan §4.1: "log + HUD caption only") the caption is where they show.
+- **A caption is held during a blocking cameo** and shown after it (not in the plan): at mount the DM's counter whisper
+  would otherwise sit under the swoop's banner and card.
+- **Extras not in the plan**: the phase pill / hint / lock text during a cameo; the squad sub "Elite · <shortName>" and
+  the boss colour for squad portraits; the inspect line on the fight's boss and squad members (plan: Svammiel's own
+  inspect line, which C5 builds into his passive; the HUD's line is generic, so the doors' start cheats show there too).
+- **The DM is "demoted" on Svammiel's floor** = a gauntlet door or the finale (the plan says "in act 4"): every act-4
+  fight is one of those, and no act literal is needed.
+
+### Requests
+- None blocking. FYI **C5**: the HUD now prints a cheat rule's icon once and a `next` rule's "Next round: " once (your
+  Deviation 8 and HUD (E7) requests a-c are done); the "Rulings: N" chip refreshes live through the name hash.
+- FYI **RENDER-SPRITES**: your request is done (`moments.cameo` installed in `mount`, removed in `unmount`, × 0.35 under
+  AutoPlay, skip = `evt.elapsed = evt.ms`); "Roll for initiative!" is locked and greyed during the swoop now.
+- FYI **QA** (plan §8.5): the `goats_swoop` shot shows the hint "Svammiel has the floor… Click or Space to skip." and the
+  BLEEP sticker on the bleeped skill; my scratch shots are in `.tmp/v3/hud/` (goats swoop / deploy, League deploy, the
+  twist entrance).
+
+### Tests (`tests/hud_tests.js`: 7 new suites "hud: V3 — …" + one assertion in `runFight`)
+The moment (hosted, its length = DD.Cameo's, input locked, pill / hint / scrim / greyed Roll, a deploy click ignored,
+Space / Enter / Esc / a click skip it, the skip never rolls or opens the menu, deployment and the roll right after,
+AutoPlay 35%, Short, Log only = no moment, instant = nothing hosted) · the twist's entrance on a won board (hosted, the
+end waits, Space skips, the press doesn't hurry the hand-off) · speaker chips, the cheat line, "The DM (demoted)" vs "The
+Dungeon Master", the caption for a quip / a DM line / a bubble (Full: none) / Log only, `overflow-wrap` · cheat chips
+(😈, one icon, the exact desc, "Next round" once, a live name and desc refresh, the flavour line) · kind labels
+(Mini-boss, Floor Boss, Boss, Skirmish), the squad sub, the cheats line (a squad member; the present actor with this
+and next round's; none on a plain minion), the wind-up hint (inspect + tracker) · the ⛔ line + BLEEP (a test rule, the
+lock case with both lines, a non-"Bleeped" veto without a sticker, the real Radio Edit when svammiel.js and real heroes
+are loaded) · the tracker crowd on the real page (iframe) at 1280×720 and 1024×640 (the League, the 16-chip crowd, the
+goats with the bear) · the cameo host is released on unmount (`runFight`). Isolated (`isolate=zzznone`): 71 hud suites,
+1002 assertions, 0 failures; the real Radio Edit run (isolate svammiel + four heroes): 12 assertions, 0 failures.
+Full run (Nov 15): 1239 suites, 145,872 assertions, 6 failures in 5 suites, none in my files and all 71 hud suites
+passing: `ui: v2 — party select … fit` (17 / 18 cards at 1600×900: 734 / 725) and `ui: playtest first-hour-6 …` (the
+Init box's "🛡️0Armor" pokes out at 1024×768) are META-UI's; `docs: DESIGN §4 … D1-D4` (The Inevitable missing from
+DESIGN §4.2's opt-out sentence), `kit: registry` (`ben_breath` reuses a generic skill's icon) and `kit: finish D1`
+(`ben_inevitable` is a new opt-out) are HERO-BENEDICK's landing. No swallowed "Error in" lines; missing scripts 0.
+The chip name class is `.rl-name` (`.rc-name` is the rewards screen's global card title: the first shots showed the chips
+in its 1.08 rem display font).
+
+### Known issues
+- Headless Chrome draws the 😈 / 🤡 in the chips and the phase pill as boxes (no emoji font); real browsers show them.
+- During a blocking cameo the see-through layer also takes wheel / drag on the board (≤ 3.3 s; 4.5 s for the twist).
+- The caption shows the last captionable line only: under Log only a start cameo's announcer, roast and cheat lines are
+  all in the log, and the caption shows the last of them (usually the DM's counter whisper).
+
+## Review (V3) — adversarial review of the HUD's act-IV work (REVIEWER, Nov 15)
+
+No change needed in `combat_hud.js` / `hud_tests.js`; what was run (details and the fixes elsewhere: ui-v2.md "Review
+(V3)"):
+- **The cameo moment never traps input** (real page, `.tmp/v3/rv/p_skip.js`): during the League's start swoop the HUD
+  hosts it (3300 ms, lock 'busy', "Roll for initiative!" greyed); a real `keydown` Space on the page and a real click
+  (the topmost element over the board is `.hud-cameoscrim`) each skip it; deployment stays open, initiative is not
+  rolled, the lock clears and the phase pill is back to "⛺ Deployment". The suite also covers Enter, Esc, AutoPlay
+  ×0.35, Short, Log only, instant FX and the twist's entrance on a won board.
+- **The goats' live Verse chip** in the REAL fight (AutoPlay, seed 3, 40 s): the chip text followed the rule's name at
+  every idle sample ("📝 Verse 0/3 → Marwyn" → "1/3 · open: Lil' Kid" → "0/3 → Syllamin · open: DJ Turnip" → "0/3 →
+  Zarathor"), 0 mismatches. With `bosshp=0.52` the bear arrives in round 1: his tracker chip is there, 8 chips all
+  inside the tracker (354-774 px at 1280), the objective reads "Defeat the Rapping Goats (4 left)" with "🐻 Ursa Verse
+  holds the Golden Mic".
+- Every act-4 fight at deployment (montages at 1280×720 and 1600×900, rot 0 / 90 / 200 / 37.5, and 1024×640):
+  cheat chips (😈 + one icon), "Next round: The Tilt", Rulings, the BLEEP sticker on the Radio Edit's skill
+  (Zarathor's Throw Money At It, seed 3), the speaker chips in the log, the demoted DM's whisper caption; nothing
+  overlaps the round box, the tracker or the top-right cluster.
+- Note for C5 (not a HUD bug): the twist's log order is his line, then "The table shakes…" (svammiel.js
+  `twistExtras` logs after the cameo line); the HUD reveals the log in order.
+
+## V3 QA fixes (render-ui cluster, Nov 17) — QA FIXER
+
+The QA findings for `js/render/*`, `js/ui/*`, `css/style.css` (most severe first). This section is the cluster's notes;
+`render-world.md` and `ui-v2.md` point here.
+
+### Fixed
+- **HERO-1 (major) — Snail Mail's preview reached nothing on screen.** `combat_hud.js` `markCustom` (in `previewAt`):
+  a def's own `preview(ctx)` entry (engine `custom: true` when RULES sends it; until then: the armed def has a preview,
+  the aim is no object / revive and the entry has no dry-run `revived` field) keeps its text as `hudCustom`.
+  `overlayPreviews` puts it first in the badge (after a "?" unless it carries one), so each foe in the footprint wears
+  the purple "📦 11 next turn"; `previewSummary` lists "📦 11 next turn → Test Grunt, Test Archer" (grouped by text,
+  three names then "and N more"). The engine's own fill-in ("−5" / "+4") is never repeated. The Mystery Potion's "? (d6)"
+  shows whole too (was a bare "?"). Dry-run previews are unchanged. Looked at: `.tmp/qa_ru/mail_aim.png`.
+- **FIGHTS-04 (minor) — the objective faded whole and ignored the mouse.** `updateObjPeek` now peeks part by part:
+  the panel's background and rivets go (and the panel lets clicks through) when a unit box or the hovered tile is under
+  it; only the title, the flavour line and each chip that is over something take `.ho-under` (lines .32, chips .5,
+  clicks through); the rest stays solid, and a chip clear of the units keeps `pointer-events: auto` (its tooltip opens).
+  The re-check also runs right after `renderTop` rebuilds the panel. Svammiel at the back mid-fight
+  (`.tmp/qa_ru/mid_svam_p2_r0.png`): the title, "This round: Skill Ban · Next cheat: The Floor Is Lava · …" and five
+  of seven chips solid, only the two chips over his head faded.
+- **HERO-3 (polish) — the shell's AP drain was not said at the button.** `DD.UI.drainsAp(def, level, user, desc)`:
+  the def's optional `drainsAp` flag, else its exact desc (`/spends? all (of )?your (remaining )?AP/`; desc == execute):
+  Coming Out of My Shell and Power Nap. Cost pills (tooltips, cards, party select) read "1+ AP" with a title; the HUD
+  button badge reads "1+"; the armed hint adds "— spends all 3 AP" when the hero has more AP than the cost.
+- **HERO-8 (polish) — tile skills said "Targets any unit".** `ui.js` `targetLabel(def)` (`DD.UI.targetLabel`): a tile
+  skill with filter 'any' (or none) targets "a tile"; every other label as before.
+- **HERO-5 (polish, needs data) — the Dragonsnail's countdown only on hover.** An opt-in status flag `showTurns: true`:
+  `DD.UI.statusChip` adds an amber turns badge (bottom left; stacks stay bottom right), the renderer's status row over
+  the unit draws the number in amber. **Shows once `ben_dragon` sets `showTurns: true`** (request below).
+- **FIGHTS-13 (polish, needs data) — the bass's gold squares turned salmon.** The renderer reads `intent.data.tint`
+  (`rawTelegraphs` → `computeTelegraphs` → `telegraphFill`): a tinted wind-up's tiles pulse in its own colour under the
+  same danger tape and red outline; a tile two wind-ups with different tints share stays red. Looked at with a tint
+  injected (`.tmp/qa_ru/bass_tint_crop.png`): the marked squares read gold-and-striped, the unmarked ones pink.
+  **Shows once `goats.js` passes the tint** (request below).
+
+### Not reproduced
+- FIGHTS-04's *deployment* shot: in the iframe probe (`.tmp/qa_ru/p_peek4.js`, shot mode, rot 0) the panel stays solid
+  at deployment (no unit box under it, `peek=false` for 8 s); the `tools/shot.sh` page still peeks a few parts at 6.5 s
+  and 9.5 s (a run whose start cheat is The Tilt). With this fix that is at worst the flavour line and two chips, the
+  rest readable. The mid-fight case (Svammiel flying at the back) reproduced and is fixed.
+
+### Deviations
+- HERO-1: the fix hint flags def-preview entries in `targeting.js` (RULES' file); the HUD honours that flag and, until
+  it lands, recognises them itself (the def has a preview, the aim is no object / revive, no `revived` field: both
+  dry-run shapes set it). HERO-3: no def flag landed; the HUD reads the desc's own words (an optional `drainsAp` wins).
+- Contract additions (ARCHITECTURE §7.2, §8.1, §8.3 "V3 QA" lines): `intent.data.tint`, status `showTurns`,
+  skill `drainsAp` (optional), `DD.UI.targetLabel` / `drainsAp`, the per-part objective peek.
+
+### Requests
+- **HERO-BENEDICK (`js/data/heroes/benedick.js`)**: set `showTurns: true` on the `ben_dragon` status (HERO-5: the chip
+  and the icon over him then count down 2 → 1). Optional: the emergence banner's sub "He came out of his shell — 2
+  turns"; `ben_parcel`'s desc gives its `data.dmg` (HERO-1's "never gives the number" on the parcel's own tooltip; the
+  object desc is a string today); `drainsAp: true` on `ben_shell` (the desc already says it).
+- **Goats (`js/data/bosses/goats.js` `turnipTurn`)**: pass the floor colour with the bass, e.g. `data: { hint: 'Bass → '
+  + colour + ' squares', tint: colour === 'gold' ? C.gold : '#e83aa3' }` (FIGHTS-13; the terrain tops). Alternative
+  without it: name the mark, not the colour ("Bass → the hatched squares").
+- **RULES (`js/engine/targeting.js` preview, the def-preview branch ~l.672-678)**: add `custom: true` to each entry built
+  from a def's `preview(ctx)` (HERO-1; the HUD's shape check is the fallback).
+- **Generic skills (`js/data/skills_generic.js`)**: optional `drainsAp: true` on `gen_power_nap`.
+
+### Tests
+- `tests/hud_tests.js`: "hud: QA HERO-1 …" (Snail Mail armed through the HUD: both foes in the footprint wear the
+  engine's "📦 N next turn", nothing on a foe outside, the hint names the hit and who, no "Hits N foes"; the Mystery
+  Potion's "? (d6)"; a dry-run preview keeps its damage badge), "hud: QA FIGHTS-04 …" (three rule chips; a unit under the
+  last chip fades only it, the first stays hoverable, the title and flavour line stay; a hovered tile under the first
+  chip fades only that one; all solid again after), "hud: QA HERO-3 …" ("1+" badge and title, "1+ AP" pill, the armed
+  hint's "spends all N AP", none with only the cost left; Power Nap a drain, a plain skill not).
+- `tests/ui_tests.js`: "ui: QA HERO-8 …" (every tile skill open to anything says "a tile"; "an enemy" / "an empty tile"
+  unchanged), "ui: QA HERO-5 …" (the turns badge only with `showTurns`, 2 → 1, none when permanent).
+- `tests/render_tests.js`: "render: QA FIGHTS-13 …" (a gold floor: the plain wind-up turns it red, the tinted one stays
+  gold, still marked, a shared tile stays red), "render: QA HERO-5 …" (the status row changes with `showTurns`).
+- Isolated (`suite=QA &isolate=benedick,consumables,skills_generic`): 9 suites, 68 assertions, 0 failures.
+- No balance numbers move: every fix is display only (no engine, AI or AutoPlay path reads these fields); no sim run.

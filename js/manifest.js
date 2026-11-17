@@ -2,6 +2,8 @@
  * Ordered list of every game script. Used by js/loader.js for both index.html and tests/test.html.
  * Missing files are tolerated (reported in DD_MISSING), so planned files can be listed before they exist.
  * Add a new file here ONLY if your area owns it (see docs/ARCHITECTURE.md §1).
+ * V3 (act 4, the 17th hero): the new files are listed in load order. heroes/benedick.js and bosses/goats.js ship as empty
+ * stubs (their owners replace them); the other new V3 files do not exist until their owners land them (skipped meanwhile).
  */
 window.DD_MANIFEST = [
   // core (lead)
@@ -19,6 +21,7 @@ window.DD_MANIFEST = [
   'js/engine/actions.js',
   'js/engine/ai.js',
   'js/engine/combat.js',
+  'js/engine/cameo.js',       // V3: DD.Cameo (Svammiel's cameos: triggers, budget, cheats, routing)
   'js/engine/autoplay.js',
   // engine (mapgen)
   'js/engine/mapgen.js',
@@ -64,6 +67,7 @@ window.DD_MANIFEST = [
   'js/data/heroes/valdris.js',
   'js/data/heroes/hjalmar.js',
   'js/data/heroes/pebbles.js',
+  'js/data/heroes/benedick.js',   // V3: the 17th hero (available from the start, acts 1-3 too)
 
   // enemies + encounters
   'js/data/enemies/act1.js',
@@ -74,10 +78,19 @@ window.DD_MANIFEST = [
   'js/data/bosses/lich.js',
   'js/data/bosses/beholder.js',
   'js/data/bosses/dm.js',
+  // V3: act 4 "Under the Table" (the gauntlet's mini-bosses, the floor boss, then the fifth door)
+  'js/data/bosses/gardener.js',
+  'js/data/bosses/league.js',
+  'js/data/bosses/galbraith.js',
+  'js/data/bosses/coven.js',
+  'js/data/bosses/svammiel.js',
+  'js/data/bosses/goats.js',
 
   // narrative
   'js/data/events.js',
+  'js/data/events_act4.js',   // V3: act-4 events (acts: [4], never a fight)
   'js/data/narrator.js',
+  'js/data/svammiel_lines.js',   // V3: every svam_* line pool (cameo announcers, roasts, comebacks, quips, counters)
 
   // run layer
   'js/run/meta.js',

@@ -1,10 +1,12 @@
 /* Dungeons and Degenerates — js/engine/encounter.js
  * Encounter definition (ARCHITECTURE §3.8) → combat setup for DD.Combat.start (§5.8):
- *   DD.Encounter.build(def, party, { rng, difficulty, act }) → { grid, theme, heroes, enemies, objective, rules,
- *     encounter, deployTiles, reinforcements, ...extras }
+ *   DD.Encounter.build(def, party, { rng, difficulty, act, gauntlet }) → { grid, theme, heroes, enemies, objective,
+ *     rules, encounter, deployTiles, reinforcements, ...extras }
  *   DD.Encounter.pick(act, kind, rng, { depth, exclude }) → encounter def (null only if nothing can be fought)
  *   DD.Encounter.spawnWave(state, wave) → spawned units (reinforcements, called by combat at round start)
  * Enemy entries may also carry placement hints: { id, n, x, y } / { id, at: {x,y} } / { id, mark: 'R' }.
+ * V3: acts run 1..DD.finalAct(); a gauntlet door / the finale is placed by the gauntlet map and never picked at random;
+ * a squad boss fight names its squad in objective.bossIds; opts.gauntlet ({ lane, index, beaten }) → setup.gauntlet.
  */
 (function () {
   'use strict';
@@ -27,6 +29,7 @@
   ];
   const OBJECTIVE_JOKES = {
     boss: 'The minions flee once the boss drops.',
+    squad: 'They came as a set. They leave as a set.',
     survive: 'Backup is "five minutes out".',
     destroy: 'Property damage is a valid strategy.',
     protect: 'No pressure.',
@@ -53,15 +56,20 @@
 
   function key(x, y) { return x + ',' + y; }
   function manhattan(a, b) { return Math.abs(a.x - b.x) + Math.abs(a.y - b.y); }
-  function clampAct(a) { return Math.max(1, Math.min(3, Math.round(+a) || 1)); }
+  /** An act of the campaign: 1..DD.finalAct() (until the knob is flipped, act-4 content plays as act 3). */
+  function clampAct(a) { return Math.max(1, Math.min(DD.finalAct(), Math.round(+a) || 1)); }
+  /** V3: a gauntlet door or the floor boss. The gauntlet map places these; random picks never return one. */
+  function isScripted(e) { return !!(e && (e.gauntlet || e.finale)); }
 
-  /** { id, hp, dmg } of a difficulty; with act + kind the fight's full enemy scaling (DD.Balance.scale). [balance] */
-  function difficultyInfo(d, act, kind, encId) {
+  /** { id, hp, dmg } of a difficulty; with act + kind the fight's full enemy scaling (DD.Balance.scale). [balance]
+   *  V3: gauntlet = an act-4 door's { index } (lanes beaten before it): DD.Balance.gauntlet's order scaling. */
+  function difficultyInfo(d, act, kind, encId, gauntlet) {
     let id = d;
     if (d && typeof d === 'object') id = d.id || d.name || 'normal';
     const base = DIFFICULTY[typeof id === 'string' ? id.toLowerCase() : 'normal'] || DIFFICULTY.normal;
     if (DD.Balance && typeof DD.Balance.scale === 'function') {
-      const sc = DD.Balance.scale(base.id, act, kind, { neutral: act === undefined && kind === undefined, encounter: encId });
+      const sc = DD.Balance.scale(base.id, act, kind, { neutral: act === undefined && kind === undefined, encounter: encId,
+        gauntlet: gauntlet && typeof gauntlet === 'object' ? gauntlet : null });
       return { id: base.id, hp: sc.hp, dmg: sc.dmg };
     }
     return { id: base.id, hp: base.hp, dmg: base.dmg };
@@ -226,10 +234,21 @@
     return n;
   }
 
+  /** V3 E10: the squad of a boss objective (objective.bossIds: enemy def ids), [] when it names none. */
+  function squadOf(o) {
+    return o && Array.isArray(o.bossIds) ? o.bossIds.filter(function (id) { return typeof id === 'string' && !!id; }) : [];
+  }
+  /** "the League of Villainy": the encounter's shortName (else its name), a leading "The" in lower case (as combat.js). */
+  function squadName(def) {
+    const n = String((def && (def.shortName || def.name)) || 'the squad');
+    return /^The /.test(n) ? 'the ' + n.slice(4) : n;
+  }
+
   /** The plain instruction of an objective ("Destroy 3 Totems."). */
   function objectiveGoal(o, def) {
     switch (o.type) {
       case 'boss': {
+        if (squadOf(o).length) return 'Defeat ' + squadName(def) + '.';
         const b = enemyDef(o.bossId);
         return 'Defeat ' + (b ? b.name : 'the boss') + '.';
       }
@@ -250,6 +269,7 @@
   /** One-line joke for an objective (objective.flavor). */
   function objectiveJoke(o, rng) {
     if (o.type === 'custom') return '';
+    if (o.type === 'boss' && squadOf(o).length) return OBJECTIVE_JOKES.squad;
     return OBJECTIVE_JOKES[o.type] || pickLine(KILL_ALL_JOKES, rng);
   }
 
@@ -270,11 +290,16 @@
       DD.warn('Encounter "' + def.id + '": unknown objective type "' + o.type + '" (using killAll)');
       o.type = 'killAll';
     }
+    // V3 E10: a squad (objective.bossIds) is copied, never shared with the def; it makes a boss fight on its own
+    if (o.bossIds !== undefined) o.bossIds = squadOf(o);
+    const squad = (o.bossIds || []).some(function (id) {
+      return !!enemyDef(id) || enemyIds.some(function (e) { return e.id === id; });
+    });
     if (o.type === 'boss' && !o.bossId) {
       const boss = enemyIds.filter(function (e) { return tierOf(e.id) === 'boss'; })[0];
       if (boss) o.bossId = boss.id;
-      else {
-        DD.warn('Encounter "' + def.id + '": boss objective without a boss-tier enemy (using killAll)');
+      else if (!squad) {
+        DD.warn('Encounter "' + def.id + '": boss objective without a boss-tier enemy or a squad in bossIds (using killAll)');
         o.type = 'killAll';
         delete o.text;
       }
@@ -437,7 +462,9 @@
 
   /**
    * Build a combat setup. def: encounter def or id. party: RunHero[] (dead ones skipped) or hero ids.
-   * opts: { rng | seed, difficulty: 'casual'|'normal'|'brutal' (or { id }), act }.
+   * opts: { rng | seed, difficulty: 'casual'|'normal'|'brutal' (or { id }), act, gauntlet }.
+   * V3 opts.gauntlet: an act-4 door's { lane, index, beaten } (DD.Run): kept as setup.gauntlet (the same object; Combat.start
+   * copies it to state.data.gauntlet) and passed to DD.Balance.scale for the order scaling of setup.difficulty.
    * Extras beyond the contract: marks, heroZone, enemyZone, difficulty { id, hp, dmg }, act, kind, name, mapMeta.
    */
   Enc.build = function (def, party, opts) {
@@ -453,7 +480,8 @@
     const enemyRng = rng.fork('enemies'), mapRng = rng.fork('map'), textRng = rng.fork('text');
     const act = clampAct(opts.act || def.act || 1);
     const kind = def.kind || 'normal';
-    const diff = difficultyInfo(opts.difficulty, act, kind, def.id);
+    const gauntlet = opts.gauntlet && typeof opts.gauntlet === 'object' ? opts.gauntlet : null;
+    const diff = difficultyInfo(opts.difficulty, act, kind, def.id, gauntlet);
 
     const list = expandEntries(def.enemies, enemyRng);
     extraEnemies(list, diff.id, kind, enemyRng);
@@ -467,7 +495,7 @@
     const marks = map.marks || {};
     if (marksByGrid) marksByGrid.set(map.grid, marks);
 
-    return {
+    const setup = {
       grid: map.grid,
       theme: map.theme,
       heroes: heroes,
@@ -488,6 +516,8 @@
       name: def.name || def.id,
       mapMeta: map.meta || {},
     };
+    if (gauntlet) setup.gauntlet = gauntlet;
+    return setup;
   };
 
   // =====================================================================================================
@@ -510,15 +540,16 @@
 
   /**
    * Pick from an explicit list. Relaxes, in order: depth → exclude → real content before test_/synthetic content
-   * → kind (boss → elite → normal) → act (nearest first). Weighted by def.weight (weight 0 only when nothing else).
+   * → kind (boss → elite → normal) → act (nearest first, 1..DD.finalAct()). Weighted by def.weight (weight 0 only when
+   * nothing else). V3: never a gauntlet door or the finale (the gauntlet map places those), whatever the act or kind.
    */
   Enc.pickFrom = function (list, act, kind, rng, opts) {
     opts = opts || {};
     rng = rng && typeof rng.next === 'function' ? rng : DD.RNG();
-    const all = (Array.isArray(list) ? list : []).filter(function (e) { return e && typeof e.id === 'string'; });
+    const all = (Array.isArray(list) ? list : []).filter(function (e) { return e && typeof e.id === 'string' && !isScripted(e); });
     if (!all.length) return null;
-    const a0 = clampAct(act);
-    const acts = [a0, a0 - 1, a0 + 1, a0 - 2, a0 + 2].filter(function (a) { return a >= 1 && a <= 3; });
+    const a0 = clampAct(act), last = DD.finalAct();
+    const acts = [a0, a0 - 1, a0 + 1, a0 - 2, a0 + 2].filter(function (a) { return a >= 1 && a <= last; });
     const kinds = { boss: ['boss', 'elite', 'normal'], elite: ['elite', 'normal'], normal: ['normal', 'elite'] }[kind] || [kind, 'normal'];
     const excluded = excludeFn(opts.exclude);
     const depth = typeof opts.depth === 'number' ? opts.depth : null;
@@ -559,9 +590,17 @@
     return Enc.pickFrom(list, act, kind || 'normal', rng, opts) || Enc.synthesize(act, kind || 'normal', rng);
   };
 
+  /** V3: acts whose fights are all hand-made (the gauntlet act): their enemies need their own encounter's scripting. */
+  function scriptedActs() {
+    const out = {}, defs = DD.defs.encounters;
+    for (const id in defs) if (isScripted(defs[id])) out[+defs[id].act || 1] = true;
+    return out;
+  }
+
   /**
    * A procedural stand-in encounter built from registered enemies (used when no encounter fits).
    * Registered as 'mg_fallback_a<act>_<kind>' (so ids stay resolvable) unless opts.register === false.
+   * V3: never with enemies of an act past DD.finalAct() or of a gauntlet act (unless nothing else is registered).
    */
   Enc.synthesize = function (act, kind, rng, opts) {
     opts = opts || {};
@@ -576,8 +615,11 @@
       if (e && !/^wm_/.test(eid)) enemies.push(e);
     }
     if (!enemies.length) return null;
-    const real = enemies.filter(function (e) { return !/^test_/.test(e.id); });
-    const pool = real.length ? real : enemies;
+    const scripted = scriptedActs(), last = DD.finalAct();
+    const usable = enemies.filter(function (e) { const a = +e.act || 1; return a <= last && !scripted[a]; });
+    const ok = usable.length ? usable : enemies;
+    const real = ok.filter(function (e) { return !/^test_/.test(e.id); });
+    const pool = real.length ? real : ok;
     const byAct = function (tiers) {
       for (let d = 0; d < 3; d++) {
         const hit = pool.filter(function (e) { return Math.abs((+e.act || 1) - act) === d && tiers.indexOf(e.tier || 'normal') >= 0; });
@@ -710,6 +752,8 @@
   };
 
   Enc.difficulty = difficultyInfo;
+  Enc.clampAct = clampAct;
+  Enc.isScripted = isScripted;
   Enc.objectiveText = objectiveText;
   Enc.requiredObjects = requiredObjects;
   Enc.resolveEnemies = function (entries, rng) {

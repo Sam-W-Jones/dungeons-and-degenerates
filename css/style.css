@@ -336,6 +336,8 @@ b, strong { font-weight: 700; color: var(--gold-4); }
 .status-chip.buff { border-color: var(--buff); }
 .status-chip.debuff { border-color: var(--debuff); }
 .status-chip .st-stacks { position: absolute; right: -4px; bottom: -4px; min-width: 1rem; height: 1rem; padding: 0 2px; border-radius: 4px; font-size: .62rem; font-weight: 800; color: #fff; background: #000; border: 1px solid var(--sc); display: flex; align-items: center; justify-content: center; }
+/* [QA HERO-5] turns left on a timed form that opts in (status def showTurns): amber, bottom left, apart from stacks */
+.status-chip .st-turns { position: absolute; left: -4px; bottom: -4px; min-width: 1rem; height: 1rem; padding: 0 2px; border-radius: 999px; font-size: .62rem; font-weight: 900; color: #2a180a; background: #ffcf7a; border: 1px solid #ffe7b0; display: flex; align-items: center; justify-content: center; }
 .scar-chip { display: inline-flex; align-items: center; gap: .3em; padding: .15em .55em; border-radius: 6px; font-size: .8rem; background: rgba(140, 40, 30, .28); border: 1px solid rgba(240, 120, 100, .45); color: #ffd9cf; pointer-events: auto; white-space: nowrap; }
 .scar-chip .st-icon { font-size: .9rem; }
 
@@ -368,6 +370,10 @@ b, strong { font-weight: 700; color: var(--gold-4); }
   clip-path: polygon(50% 0, 95% 25%, 95% 75%, 50% 100%, 5% 75%, 5% 25%);
 }
 .parchment .narration { color: var(--ink-2); }
+/* V3: a cameo actor's line (UI.narration { speaker }): his badge (😈) in his colour instead of the DM's d20 */
+.dm-badge.speaker-badge { font-size: 1.05rem; font-family: var(--f-body); color: inherit; clip-path: none; border-radius: 50%; background: radial-gradient(circle at 35% 30%, #ff9a8a, var(--sc, #c0213a) 60%, #4a0610); box-shadow: 0 0 0 1px rgba(255, 210, 120, .6); }
+.narration.by-speaker { color: #ffcfc4; }
+.narration.small { font-size: .88rem; }
 
 /* HUD-ready primitives (DD.UI.meter / DD.UI.apPips, combat log lines) */
 .meter { --mc: var(--hype); position: relative; height: 1rem; border-radius: 6px; overflow: hidden; background: rgba(0, 0, 0, .55); border: 1px solid rgba(0, 0, 0, .8); box-shadow: inset 0 1px 3px rgba(0, 0, 0, .7), 0 1px 0 rgba(255, 220, 160, .08); }
@@ -493,6 +499,8 @@ b, strong { font-weight: 700; color: var(--gold-4); }
 .tt-epithet { font-family: var(--f-body); font-weight: 400; font-style: italic; font-size: .85rem; color: var(--text-2); }
 .tt-costs { display: flex; flex-wrap: wrap; gap: .3rem; }
 .tt-target { font-size: .8rem; color: var(--text-2); }
+/* V3: the League's 56-letter word (and any long name) wraps at the box edge — the wrap is the joke (plan §5.4) */
+.tt, .tt-title, .tt-target, .tt-desc { overflow-wrap: anywhere; }
 .tt-target.tt-aimnote { color: #f3d9a4; }
 .tt-desc { color: var(--text); }
 .tt-next { font-size: .82rem; color: #cfe8ff; padding: .35rem .5rem; border-radius: 6px; background: rgba(90, 169, 255, .1); border: 1px solid rgba(90, 169, 255, .3); }
@@ -778,6 +786,22 @@ b, strong { font-weight: 700; color: var(--gold-4); }
 .pdn-desc { font-size: .82rem; color: var(--text-2); }
 .ps-actions { display: flex; gap: .8rem; align-items: center; }
 .btn.roll.rolling .btn-icon { animation: dice-roll .6s ease-out; }
+/* V3: more than sixteen heroes (party_select.js `.many`; 17 is prime): 6 columns × 3 rows from 1280 px wide, 5 × 4
+   below (the details panel gives up a little width); the card text gets one more line, the art gives way first */
+.ps-roster.many { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: .6rem; }
+.ps-roster.many .hero-card { padding: .35rem .4rem .45rem; }
+.ps-roster.many .hc-art { min-height: 2rem; }
+.ps-roster.many .hc-name { font-size: .95rem; }
+.ps-roster.many .hc-name.long { font-size: .84rem; }
+.ps-roster.many .hc-role { font-size: .72rem; line-height: 1.18; -webkit-line-clamp: 4; }
+@media (min-width: 1280px) { .ps-roster.many { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
+@media (max-width: 1279px) {
+  .ps-body.many { grid-template-columns: minmax(0, 1fr) minmax(19rem, 21rem); gap: 1rem; }
+  /* [V3 review] the narrower details panel: the four stat boxes tighten up so "0 ARMOR" stays inside it (1024 px) */
+  .ps-body.many .psd-stats { gap: .3rem; }
+  .ps-body.many .stat-box { padding: .3rem .36rem; column-gap: .26rem; }
+  .ps-body.many .sb-label { letter-spacing: .04em; }
+}
 
 /* ---------------------------------------------------------------------------------------------------------------
  * Act map
@@ -887,6 +911,82 @@ b, strong { font-weight: 700; color: var(--gold-4); }
 .ab-name { font-family: var(--f-deco); font-weight: 900; font-size: 3.4rem; line-height: 1.1; max-width: 60rem; background: var(--gold-text); -webkit-background-clip: text; background-clip: text; color: transparent; filter: drop-shadow(0 3px 0 #3a1f0c) drop-shadow(0 0 30px rgba(255, 190, 90, .25)); animation: rise-in .8s .25s ease-out both; }
 .ab-intro { max-width: 40rem; font-style: italic; font-size: 1.15rem; color: var(--text-2); animation: rise-in .8s .55s ease-out both; }
 
+/* V3: act IV "Under the Table" — Svammiel's floor plan (map.js renderGauntlet): blue graph paper, red ink, four table
+   legs seen from below, a coffee ring, horns on the party token, a smug doodle over the floor boss and the demoted DM in
+   the margin. Every node sits on a lane track; the node size and the label width follow the board (container units)
+   and the map's own column / track counts (--g-cols, --g-tracks), so any lane count fits without overlap. */
+.screen-map.act-4 { --act-tint: rgba(192, 33, 58, .04); }
+.screen-map.act-4 .mc-act { color: #fff3e6; }
+.act-banner.act-4 { background: radial-gradient(ellipse at 50% 50%, rgba(40, 6, 8, .93), rgba(8, 2, 2, .97)); }
+.act-banner.act-4 .ab-act { color: #ff8a7a; }
+.screen-map.act-4 .mc-act { background: radial-gradient(circle at 35% 30%, #ffb8a8, #c0213a 60%, #5a0a14); }
+.map-board.gauntlet {
+  --g-top: 8px; --g-bottom: 8px; --g-pitch: 56px; --g-lane: 80px; --gn: 42px;
+  background:
+    radial-gradient(circle at 0 0, #6b4423 0 2.4rem, #3d2511 2.5rem 2.65rem, transparent 2.75rem),
+    radial-gradient(circle at 100% 0, #6b4423 0 2.4rem, #3d2511 2.5rem 2.65rem, transparent 2.75rem),
+    radial-gradient(circle at 0 100%, #6b4423 0 2.4rem, #3d2511 2.5rem 2.65rem, transparent 2.75rem),
+    radial-gradient(circle at 100% 100%, #6b4423 0 2.4rem, #3d2511 2.5rem 2.65rem, transparent 2.75rem),
+    radial-gradient(circle at 71% 16%, transparent 0 2.3rem, rgba(130, 80, 35, .26) 2.4rem, rgba(130, 80, 35, .1) 2.7rem, transparent 2.85rem),
+    radial-gradient(circle at 73.5% 18.5%, transparent 0 2.2rem, rgba(130, 80, 35, .12) 2.25rem, transparent 2.45rem),
+    repeating-linear-gradient(0deg, rgba(58, 100, 170, .22) 0 1px, transparent 1px 4.5rem),
+    repeating-linear-gradient(90deg, rgba(58, 100, 170, .22) 0 1px, transparent 1px 4.5rem),
+    repeating-linear-gradient(0deg, rgba(58, 100, 170, .1) 0 1px, transparent 1px .9rem),
+    repeating-linear-gradient(90deg, rgba(58, 100, 170, .1) 0 1px, transparent 1px .9rem),
+    radial-gradient(ellipse at 45% 40%, #f8faff 0%, #e8eef9 60%, #d0dcef 100%);
+  border-color: #4a3a2a;
+  box-shadow: inset 0 0 0 4px rgba(20, 30, 60, .14), inset 0 0 60px rgba(30, 50, 100, .22), var(--shadow-lg);
+}
+@supports (container-type: size) {
+  .map-board.gauntlet {
+    container-type: size;
+    --g-pitch: calc(83cqw / var(--g-cols, 11));
+    --g-lane: calc((100cqh - var(--g-top) - var(--g-bottom)) / var(--g-tracks, 5));
+    --gn: clamp(24px, min(calc(var(--g-pitch) - 12px), calc(var(--g-lane) * .52)), 54px);
+  }
+}
+.map-board.gauntlet > .map-nodes, .map-board.gauntlet > .map-links { top: var(--g-top); bottom: var(--g-bottom); height: calc(100% - var(--g-top) - var(--g-bottom)); }
+.map-board.gauntlet .map-links .link-shadow.done { stroke: rgba(255, 255, 255, .55); stroke-width: 7px; }
+.map-board.gauntlet .map-links .link.done { stroke: #c0213a; stroke-width: 3px; }
+.map-board.gauntlet .map-links .link.open { stroke: #c0213a; stroke-width: 2.5px; }
+.map-board.gauntlet .map-links .link-shadow.open { stroke: rgba(255, 90, 90, .2); stroke-width: 8px; }
+.map-board.gauntlet .map-node { width: var(--gn); height: var(--gn); border: 2px solid #3a4c7a; background: radial-gradient(circle at 50% 38%, #ffffff 0%, #eef2fb 62%, #c4d1ea 100%); box-shadow: 0 2px 0 rgba(30, 40, 80, .35), 0 4px 10px rgba(30, 40, 80, .22); }
+.map-board.gauntlet .mn-icon { font-size: calc(var(--gn) * .5); }
+.map-board.gauntlet .mn-ring { inset: -5px; }
+.map-board.gauntlet .map-node.s-reachable .mn-ring { border-color: #c0213a; }
+.map-board.gauntlet .map-node.door { background: radial-gradient(circle at 50% 35%, #ffe2dc 0%, #ec9a90 58%, #9a2430 100%); border-color: #5a0a14; }
+.map-board.gauntlet .mn-portrait { position: absolute; left: 5%; top: 5%; width: 90% !important; height: 90% !important; border-radius: 50%; overflow: hidden; background: transparent; box-shadow: none; pointer-events: none; }
+.map-board.gauntlet .mn-badge { position: absolute; right: -16%; bottom: -12%; font-size: calc(var(--gn) * .38); line-height: 1; filter: drop-shadow(0 1px 1px rgba(255, 255, 255, .9)) drop-shadow(0 1px 2px rgba(0, 0, 0, .35)); pointer-events: none; }
+.map-board.gauntlet .mn-lane, .map-board.gauntlet .mn-label {
+  position: absolute; top: calc(100% + 3px); left: 50%; transform: translateX(-50%); width: max-content; max-width: calc(var(--g-pitch) * 2 - 12px);
+  font-family: var(--f-body); font-weight: 700; font-size: clamp(9px, calc(var(--g-pitch) * .2), 12.5px); line-height: 1.12; letter-spacing: 0; text-transform: none;
+  color: #7a1020; text-align: center; white-space: normal; overflow-wrap: anywhere; text-shadow: 0 1px 0 #fff, 0 0 3px #fff;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; pointer-events: none;
+}
+.map-board.gauntlet .mn-label { font-family: var(--f-display); font-weight: 900; text-transform: uppercase; letter-spacing: .06em; color: #8f1020; }
+.map-board.gauntlet .map-node.t-boss { width: calc(var(--gn) * 1.35); height: calc(var(--gn) * 1.35); border: 3px solid #5a0a14; background: radial-gradient(circle at 50% 35%, #ffd0c4 0%, #e0503f 58%, #6a0a14 100%); box-shadow: 0 0 0 3px rgba(255, 90, 70, .35), 0 3px 0 rgba(60, 10, 15, .5), 0 8px 18px rgba(90, 10, 15, .4); }
+.map-board.gauntlet .map-node.t-boss .mn-icon { font-size: calc(var(--gn) * .7); }
+.map-board.gauntlet .map-node.s-sealed { filter: grayscale(1) brightness(.98); opacity: .5; }
+.map-board.gauntlet .map-node.s-sealed.fought { opacity: .72; }
+.map-board.gauntlet .map-node.s-sealed .mn-lane { color: #3a4c7a; }
+.map-board.gauntlet .map-node.s-visited { filter: saturate(.6); }
+.map-board.gauntlet .map-node.s-skipped { opacity: .45; }
+/* "leads on": a short dotted stub to the right of every node still ahead */
+.map-board.gauntlet .map-node:not(.t-boss):not(.s-sealed):not(.s-visited):not(.s-current)::after { content: ''; position: absolute; left: calc(100% + 3px); top: 50%; width: calc((var(--g-pitch) - var(--gn)) * .45); border-top: 2px dotted rgba(192, 33, 58, .55); pointer-events: none; }
+.map-board.gauntlet .map-start { font-size: calc(var(--gn) * .62); }
+.map-board.gauntlet .party-token { transform: translate(-128%, -50%); animation: token-bob-g 1.6s ease-in-out infinite; }
+.map-board.gauntlet .party-token .portrait { width: calc(var(--gn) * .62) !important; height: calc(var(--gn) * .62) !important; box-shadow: 0 0 0 2px #fff, 0 0 0 3.5px #c0213a, 0 3px 6px rgba(30, 40, 80, .45); }
+.map-board.gauntlet .party-token::after { left: 100%; top: 50%; transform: translateY(-50%); border: 5px solid transparent; border-left-color: #c0213a; }
+.party-token .tok-horns { display: none; }
+.map-board.gauntlet .party-token .tok-horns { display: block; position: absolute; left: 50%; top: 0; width: 80%; transform: translate(-50%, -62%); pointer-events: none; z-index: 1; }
+.tok-horns svg { display: block; width: 100%; height: auto; }
+.g-doodle-svam { position: absolute; width: calc(var(--gn) * 1.45); transform: translate(-50%, calc(-100% - var(--gn) * .78)); pointer-events: none; opacity: .92; }
+.g-doodle-svam svg, .g-doodle-dm svg { display: block; width: 100%; height: auto; }
+.g-doodle-dm { position: absolute; left: .45rem; bottom: .35rem; width: 3.4rem; pointer-events: none; opacity: .8; transform: rotate(-4deg); }
+.map-board.gauntlet .map-narration { background: rgba(255, 255, 255, .84); border-color: rgba(58, 76, 122, .35); }
+.map-board.gauntlet .map-legend { background: rgba(255, 255, 255, .8); border-color: rgba(58, 76, 122, .35); color: #2a3550; }
+@keyframes token-bob-g { 0%, 100% { transform: translate(-128%, -50%); } 50% { transform: translate(-140%, -50%); } }
+
 /* ---------------------------------------------------------------------------------------------------------------
  * Rewards
  * ------------------------------------------------------------------------------------------------------------- */
@@ -894,7 +994,7 @@ b, strong { font-weight: 700; color: var(--gold-4); }
 .rw-panel { width: min(64rem, 100%); padding: 1.3rem 1.8rem 1.4rem; display: flex; flex-direction: column; gap: .85rem; margin: auto; }
 .rw-banner { text-align: center; margin-top: -.2rem; }
 .rw-banner-text { font-family: var(--f-deco); font-weight: 900; font-size: 2.8rem; letter-spacing: .06em; background: var(--gold-text); -webkit-background-clip: text; background-clip: text; color: transparent; filter: drop-shadow(0 3px 0 #3a1f0c) drop-shadow(0 0 22px rgba(255, 190, 90, .3)); animation: logo-in .7s cubic-bezier(.2, 1.3, .4, 1) both; display: inline-block; }
-.rw-banner-sub { font-family: var(--f-display); font-weight: 700; font-size: .9rem; letter-spacing: .14em; text-transform: uppercase; color: var(--text-3); margin-top: -.2rem; }
+.rw-banner-sub { font-family: var(--f-display); font-weight: 700; font-size: .9rem; letter-spacing: .14em; text-transform: uppercase; color: var(--text-3); margin-top: -.2rem; overflow-wrap: anywhere; }
 .rw-casualties { display: flex; flex-direction: column; gap: .35rem; padding: .55rem .8rem; border-radius: 10px; background: rgba(120, 30, 25, .22); border: 1px solid rgba(240, 120, 100, .4); }
 .cas-h { font-family: var(--f-display); font-weight: 800; font-size: .78rem; text-transform: uppercase; letter-spacing: .14em; color: #f3a194; }
 .cas-row { display: flex; align-items: center; gap: .6rem; font-size: .9rem; color: var(--text); flex-wrap: wrap; }
@@ -1133,6 +1233,29 @@ b, strong { font-weight: 700; color: var(--gold-4); }
   .ks-desc { display: none; }
 }
 
+/* V3: under the table — the shop under new management (the demoted DM in a paper hat), a fourth service (the Bribe) */
+.keeper.svc-4 .keeper-art { min-height: 2.2rem; }
+.keeper.svc-4 .ks-row { padding-top: .25rem; padding-bottom: .3rem; }
+.keeper.svc-4 .keeper-title { display: none; }
+.keeper.svc-4 .speech { min-height: 0; padding: .45rem .7rem; font-size: .84rem; }
+.keeper.svc-4 .keeper-actions { flex-direction: row; padding-top: .4rem; }
+.keeper.svc-4 .keeper-actions .btn { flex: 0 0 auto; min-width: 0; padding-left: .45em; padding-right: .45em; }
+.keeper.svc-4 .keeper-actions .btn.primary { flex: 1 1 auto; }
+.keeper.svc-4 .keeper-actions .btn .kbd { display: none; }
+/* the row holds two buttons in the narrow column (1024 px): Party goes icon-only (its title and P say what it is) */
+.keeper.svc-4 .keeper-actions .btn.ghost .btn-label { display: none; }
+.keeper.svc-4 .keeper-actions .btn.ghost .btn-icon { margin: 0; }
+@media (max-height: 900px) { .keeper.svc-4 .ks-desc { display: none; } }
+@media (max-height: 700px) { .keeper.svc-4 .keeper-art { display: none; } .keeper.svc-4 .speech { margin-top: .2rem; } }
+.keeper.demoted .keeper-sign { font-size: .86rem; background: linear-gradient(180deg, #ffd9cf, #d9604f); }
+.keeper-art.paper-hat { position: relative; }
+.keeper-art.paper-hat::before { content: ''; position: absolute; z-index: 1; left: 50%; top: 2%; width: 34%; height: 22%; transform: translateX(-50%) rotate(-6deg); pointer-events: none;
+  background: linear-gradient(180deg, transparent 62%, #c0213a 62% 74%, transparent 74%), linear-gradient(135deg, #fffef6, #e9e4d2);
+  clip-path: polygon(50% 0, 100% 86%, 100% 100%, 0 100%, 0 86%); filter: drop-shadow(0 2px 2px rgba(0, 0, 0, .5)); }
+/* the tavern's wall-to-wall rug (the one floor Svammiel doesn't own) and its sign */
+.screen.under-table .tav-main { border-radius: 18px; background: repeating-linear-gradient(45deg, rgba(150, 24, 30, .5) 0 1.1rem, rgba(120, 16, 24, .5) 1.1rem 2.2rem), radial-gradient(ellipse at 50% 50%, rgba(170, 30, 36, .55), rgba(90, 10, 16, .6)); box-shadow: inset 0 0 0 .5rem rgba(214, 170, 80, .35), inset 0 0 0 .7rem rgba(90, 10, 16, .6); padding: 1rem 1.2rem; }
+.tav-rug-sign { display: inline-flex; align-items: center; gap: .45rem; margin: .35rem auto .1rem; padding: .25rem .8rem; transform: rotate(-2deg); font-family: var(--f-display); font-weight: 900; font-size: .9rem; letter-spacing: .08em; color: #2a180a; background: linear-gradient(180deg, #fff3d6, #e6c98a); border: 2px solid #5a3a1a; border-radius: 4px; box-shadow: 0 3px 6px rgba(0, 0, 0, .5); }
+.trs-horns { font-size: 1rem; filter: grayscale(.2); }
 .tav-main { min-height: 0; display: flex; flex-direction: column; justify-content: center; gap: 1.2rem; overflow: auto; padding: .2rem; }
 .tav-head { text-align: center; }
 .tav-title { margin: 0; font-family: var(--f-deco); font-weight: 900; font-size: 2.1rem; line-height: 1.15; background: var(--gold-text); -webkit-background-clip: text; background-clip: text; color: transparent; filter: drop-shadow(0 2px 0 #3a1f0c); }
@@ -1159,7 +1282,7 @@ b, strong { font-weight: 700; color: var(--gold-4); }
 .recruit-opt .portrait { box-shadow: 0 0 0 2px #1a0f08, 0 0 0 3.5px var(--hc); }
 .ro-name { font-family: var(--f-display); font-weight: 800; color: var(--gold-4); }
 .ro-role { font-size: .82rem; color: var(--text-2); }
-/* long pick lists (UI.choice with 7+ options — the tavern's twelve recruits of sixteen heroes): four compact columns,
+/* long pick lists (UI.choice with 7+ options — the tavern's recruits: every hero outside the party): four compact columns,
    no scrolling down to 1024×640 */
 .modal-choice:not(.modal-reroll):has(.choice-list.many) { max-width: min(68rem, calc(100vw - 2.5rem)); }
 .modal-backdrop:has(.modal-choice:not(.modal-reroll) .choice-list.many) { padding: 1.25rem; }
@@ -1258,6 +1381,8 @@ b, strong { font-weight: 700; color: var(--gold-4); }
 .tomb-ep { font-size: .76rem; font-style: italic; color: #d6cfc6; line-height: 1.3; }
 .end-stats { display: flex; flex-wrap: wrap; justify-content: center; gap: .5rem; width: 100%; }
 .end-stat { flex: 1 1 6.2rem; max-width: 8.5rem; padding: .45rem .3rem; border-radius: 10px; background: rgba(0, 0, 0, .35); border: 1px solid rgba(198, 156, 75, .25); }
+/* V3: ten stats (the floor bosses joined) still make one row */
+.end-stats:has(> :nth-child(10)) .end-stat { flex-basis: 5.2rem; }
 .end-stat .es-icon { font-size: 1rem; }
 .es-val { font-family: var(--f-display); font-weight: 900; font-size: 1.25rem; color: var(--text); line-height: 1.2; }
 .es-label { font-size: .64rem; text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); }
@@ -1283,6 +1408,69 @@ b, strong { font-weight: 700; color: var(--gold-4); }
 .ub-kicker { font-size: .72rem; font-weight: 800; text-transform: uppercase; letter-spacing: .14em; color: var(--gold-3); }
 .ub-name { font-family: var(--f-display); font-weight: 900; font-size: 1.35rem; color: var(--gold-4); }
 .ub-role { font-size: .85rem; color: var(--text-2); }
+/* V3: act-IV end screens — floor bosses beaten (N / M of that run's lanes), the order, Svammiel's last word */
+.end-killer, .end-floor { overflow-wrap: anywhere; max-width: 100%; }
+.end-floor { font-size: .95rem; color: #ffcfc4; }
+.end-floor b { color: #fff0ea; }
+.end-order { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: .35rem; font-size: 1.35rem; }
+.end-order .lo-h { font-family: var(--f-display); font-weight: 800; font-size: .78rem; letter-spacing: .12em; text-transform: uppercase; color: var(--gold-3); margin-right: .3rem; }
+.end-order .lo-lane { pointer-events: auto; cursor: help; }
+.end-order .lo-arrow { font-size: .9rem; color: var(--text-3); }
+.narration.from-below { opacity: .92; }
+.screen.end-screen.win.four-act { background: radial-gradient(ellipse at 50% 30%, rgba(120, 70, 22, .92), rgba(40, 14, 10, .97) 65%, #0a0303 100%); }
+
+/* V3: THE TWIST PANEL (gameover.js twistPanel; V §4.3): the act-3 clear, crashed. Steps fade in on a timeline (--d);
+   .tw-done shows everything at once (a click / Space, or headless). */
+.screen.end-screen.twist { background: radial-gradient(ellipse at 50% 30%, rgba(90, 40, 18, .92), rgba(24, 8, 6, .97) 65%, #050101 100%); overflow: hidden; }
+.tw-vignette { position: absolute; inset: 0; pointer-events: none; background: radial-gradient(ellipse at 50% 45%, transparent 45%, rgba(190, 20, 20, .45) 100%); animation: fade-in .9s var(--d, 0s) ease-out both; }
+.tw-crack { position: absolute; left: 0; right: 0; top: 47%; height: 2.4rem; pointer-events: none; z-index: 1; filter: drop-shadow(0 0 6px rgba(255, 60, 40, .8)); animation: tw-crack .45s var(--d, 0s) ease-out both; }
+.tw-crack svg { display: block; width: 100%; height: 100%; }
+.tw-wrap { position: relative; z-index: 2; gap: .55rem; width: min(58rem, 100%); }
+.tw-wrap > .end-actions { margin-top: .1rem; }
+.tw-clear { display: flex; align-items: center; justify-content: center; gap: .8rem; }
+.tw-trophy { display: inline-block; font-size: 2.4rem; animation: tw-topple 1.1s var(--d, 0s) cubic-bezier(.5, 0, .9, .6) both; }
+.tw-clear-text { text-align: left; }
+.tw-clear-title { font-family: var(--f-display); font-weight: 900; font-size: 1.3rem; color: var(--gold-4); line-height: 1.1; }
+.tw-wrap .end-kicker { letter-spacing: .3em; font-size: .85rem; }
+.narration.tw-dm-yield { font-size: .95rem; }
+.tw-headline { min-height: 1.15em; font-family: var(--f-deco); font-weight: 900; font-size: 2.6rem; line-height: 1.15; letter-spacing: .03em; color: #ff4a3a; text-shadow: 0 3px 0 #3a0604, 0 0 26px rgba(255, 60, 40, .55); }
+.tw-reveal { display: flex; align-items: center; justify-content: center; gap: 1.4rem; width: 100%; }
+.tw-rise { flex: 0 0 auto; width: 10rem; height: 10rem; filter: drop-shadow(0 0 22px rgba(255, 60, 40, .55)); }
+.tw-rise .portrait { width: 100% !important; height: 100% !important; }
+.tw-right { display: flex; flex-direction: column; align-items: flex-start; gap: .45rem; min-width: 0; text-align: left; }
+.tw-control { font-family: var(--f-deco); font-weight: 900; font-size: 1.9rem; line-height: 1.1; word-spacing: .22em; background: var(--gold-text); -webkit-background-clip: text; background-clip: text; color: transparent; filter: drop-shadow(0 2px 0 #3a1f0c) drop-shadow(0 0 18px rgba(255, 190, 90, .35)); }
+.tw-cast { padding: .55rem .8rem .65rem; border-radius: 10px; background: linear-gradient(180deg, rgba(70, 14, 14, .92), rgba(34, 8, 8, .95)); border: 1px solid rgba(255, 120, 90, .55); box-shadow: 0 0 22px rgba(190, 30, 30, .35); max-width: 34rem; }
+.twc-name { font-family: var(--f-display); font-weight: 900; font-size: 1.15rem; letter-spacing: .2em; color: #ffd9cf; }
+.twc-title { font-family: var(--f-display); font-weight: 700; color: var(--gold-4); font-size: .95rem; }
+.twc-epithet { font-style: italic; color: var(--text-2); font-size: .85rem; }
+.twc-h { margin-top: .35rem; font-size: .7rem; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; color: #ff9a8a; }
+.twc-lanes { display: flex; flex-wrap: wrap; gap: .3rem .45rem; margin-top: .2rem; }
+.twc-lane { pointer-events: auto; display: inline-flex; align-items: center; gap: .25rem; padding: .1rem .5rem; border-radius: 999px; font-size: .8rem; color: var(--text); background: rgba(0, 0, 0, .35); border: 1px solid rgba(255, 140, 110, .4); overflow-wrap: anywhere; }
+.twc-note { font-style: italic; color: #ff9a8a; }
+.tw-heal { font-size: .86rem; }
+.tw-heal i { color: #ffcfc4; }
+.tw-step { animation: tw-in .55s var(--d, 0s) ease-out both; }
+.tw-rise.tw-step { animation: tw-rise .9s var(--d, 0s) cubic-bezier(.2, 1.1, .4, 1) both; }
+.tw-done .tw-step, .tw-done .tw-vignette, .tw-done .tw-crack { animation: none !important; opacity: 1; transform: none; }
+.tw-done .tw-trophy { animation: none !important; visibility: hidden; }
+@keyframes tw-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@keyframes tw-rise { from { opacity: 0; transform: translateY(70%) scale(.9); } to { opacity: 1; transform: none; } }
+@keyframes tw-crack { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
+@keyframes tw-topple { 0% { transform: none; opacity: 1; } 35% { transform: rotate(-24deg); } 100% { transform: translate(-1.5rem, 9rem) rotate(-130deg); opacity: 0; } }
+.static-ui .tw-trophy { visibility: hidden; }
+@media (max-height: 760px) {
+  .tw-headline { font-size: 2.1rem; }
+  .tw-control { font-size: 1.55rem; }
+  .tw-rise { width: 8rem; height: 8rem; }
+  .tw-wrap { gap: .4rem; }
+}
+@media (max-height: 680px) {
+  .tw-headline { font-size: 1.8rem; }
+  .tw-rise { width: 6.6rem; height: 6.6rem; }
+  .tw-clear .tw-trophy { font-size: 1.8rem; }
+  .tw-wrap .narration { font-size: .86rem; line-height: 1.35; }
+  .tw-cast { padding: .4rem .7rem .5rem; }
+}
 .confetti { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
 .cf { position: absolute; top: -20px; width: 9px; height: 14px; border-radius: 2px; background: var(--cf); opacity: .85; animation: confetti-fall linear infinite; transform: rotate(var(--rot)); }
 .tpk .confetti { display: none; }
@@ -1319,7 +1507,7 @@ b, strong { font-weight: 700; color: var(--gold-4); }
 .prog { display: flex; flex-direction: column; gap: .35rem; }
 .prog-h { display: flex; justify-content: space-between; font-size: .88rem; color: var(--text-2); }
 .prog .up-bar { max-width: none; }
-/* v2 roster: all 16 heroes on one page without scrolling, 1024×640 to 1920×1080 (portrait left, text right) */
+/* the roster: every registered hero (V3: 17) on one page without scrolling, 1024×640 to 1920×1080 (portrait left, text right) */
 .hall-roster { display: flex; flex-direction: column; gap: .7rem; }
 .hall-roster > .narration { margin: 0; }
 .hall-heroes { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .55rem; }
@@ -1333,6 +1521,12 @@ b, strong { font-weight: 700; color: var(--gold-4); }
 .hh-rec { font-size: .66rem; font-weight: 700; color: var(--gold-3); line-height: 1.25; }
 .hh-card.fresh .hh-rec { color: var(--text-3); font-weight: 400; font-style: italic; }
 @media (min-width: 1500px) { .hh-card .portrait { width: 4.2rem !important; height: 4.2rem !important; } .hh-name { font-size: 1.05rem; } .hh-sub { font-size: .8rem; } .hh-role, .hh-rec { font-size: .74rem; } }
+/* [V3 review] more heroes than a 4 × 4 grid (hall.js `.many`): a fifth row of 4 columns, so every row gives a little
+   height back (Benedick's two-line race and role made 17 overflow at 1600×900 by 9 px) */
+.hall-heroes.many { gap: .4rem; }
+.hall-heroes.many .hh-card { padding: .36rem .6rem; }
+.hall-heroes.many .hh-text { gap: 0; }
+.hall-heroes.many .hh-sub, .hall-heroes.many .hh-role { line-height: 1.15; }
 .hall-codex { display: flex; flex-direction: column; gap: .8rem; }
 .codex-h { display: flex; justify-content: space-between; align-items: baseline; font-family: var(--f-display); font-weight: 800; color: var(--gold-3); padding-bottom: .3rem; border-bottom: 1px solid rgba(198, 156, 75, .25); margin-top: .4rem; }
 .codex-count { font-family: var(--f-body); font-size: .85rem; color: var(--text-3); }
@@ -1344,7 +1538,19 @@ b, strong { font-weight: 700; color: var(--gold-4); }
 .cx-card.unseen { opacity: .6; }
 .cx-name { font-size: .82rem; font-weight: 700; color: var(--text); line-height: 1.2; }
 .cx-tier { font-size: .66rem; text-transform: uppercase; letter-spacing: .1em; color: var(--text-3); }
+/* V3: the Act IV codex (behind the spoiler gate): a sub-group per lane, objects and statuses as icon cards */
+.codex-h.act-4 { color: #ff9a8a; border-bottom-color: rgba(255, 120, 90, .35); }
+.codex-sub { display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem; margin-top: .2rem; font-family: var(--f-display); font-weight: 700; font-size: .9rem; color: var(--gold-4); overflow-wrap: anywhere; }
+.codex-sub .cs-note { font-family: var(--f-body); font-weight: 400; font-style: italic; font-size: .78rem; color: var(--text-3); }
+.cx-name, .codex-h { overflow-wrap: anywhere; }
+.cx-thing-icon { width: 3.5rem; height: 3.5rem; display: flex; align-items: center; justify-content: center; font-size: 2rem; border-radius: 50%; background: rgba(0, 0, 0, .3); }
+.cx-card.cx-thing.unseen .cx-thing-icon { color: var(--text-3); font-family: var(--f-display); font-weight: 900; }
+.rec-card.v3 { border-color: rgba(255, 120, 90, .4); }
 .hall-history { display: flex; flex-direction: column; gap: .5rem; }
+.hist-title, .hist-floor { overflow-wrap: anywhere; }
+.hist-floor { font-size: .82rem; font-weight: 700; color: #ffb3a6; display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
+.hist-lanes { display: inline-flex; gap: .15rem; font-size: .95rem; }
+.hist-lanes span { pointer-events: auto; cursor: help; }
 .hist-row { display: flex; align-items: center; gap: 1rem; padding: .6rem .9rem; border-radius: 10px; background: rgba(0, 0, 0, .25); border: 1px solid rgba(198, 156, 75, .2); }
 .hist-row.won { border-color: rgba(232, 191, 95, .55); background: linear-gradient(90deg, rgba(232, 191, 95, .14), rgba(0, 0, 0, .2)); }
 .hist-result { font-size: 1.6rem; }

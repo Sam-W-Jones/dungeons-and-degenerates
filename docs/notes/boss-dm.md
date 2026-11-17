@@ -380,3 +380,9 @@ damage far more than to HP (his phases and Plot Armor pace the fight). Nothing i
   them at least 1 HP after Block; both roll descs say "A hero with 75%+ of their HP keeps at least 1 (he fudges it)."
   desc-sweep-3 (scaled doom log, no raw number in Track Switch) holds. DESIGN still lacks the mercy rule (docs request,
   open).
+
+## QA fixes (Nov 17, QA FIXER content cluster; the full list: docs/notes/boss-svammiel.md "QA fixes (Nov 17)")
+- **flow-1**: while the twist cuts him off (`DD.Cameo.campaignGoesOn`), `barks.death` is an empty pool (a getter) and
+  `onDeath` bubbles "Fine. FINE. You win. Same time next—" itself (the engine barks `death` before `onDeath`).
+- **flow-4**: `onDeath` then calls `DD.BossSvammiel.twistShake(state)`: "The table shakes. ..." is logged as he is cut off,
+  ahead of Svammiel's line. With `DD.finalAct()` 3 he is exactly v2. Asserted in boss_svammiel's twist suite.

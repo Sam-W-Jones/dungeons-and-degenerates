@@ -919,3 +919,117 @@ The HUD side and the play-through are in `docs/notes/hud-v2.md` "Rules run"; con
   button can cover the board's bottom row at 1920x1080 yaw 45 (the fit ignores transient panels by design).
 - D6 (skipped by fix:ui) re-judged: holds (optional per the lead; an over-sprite outline pass is not worth the yaw-0
   risk before release).
+
+## V3 (act IV "Under the Table" + the 17th hero) — RENDER-WORLD (Nov 14)
+
+Plan: `.tmp/v3/design.md` §4.7, §6.3, §3.6 E8, §4.12, §8.4 RENDER-WORLD; `addendum-goats.md` §18 / §19 (a4_barn, the
+spotlight zone); `addendum-benedick.md` §17 (the seat); `docs/notes/v3-contract.md` P10 (zones live in the state).
+Only `js/render/renderer.js`, `tests/render_tests.js` and this file changed.
+
+### Summary
+- **Act-4 theme fallbacks** (`THEME_LOOK`, used where `DD.Themes` has no bg / ambient; MAPGEN's entries win), the plan
+  §6.3 table: `a4_conservatory` `#18321f → #050b07` pollen · `a4_lair` `#1c0f28 → #06030a` embers · `a4_observatory`
+  `#0e1240 → #02030a` stars · `a4_cottage` `#1d2a1a → #070a06` fog, **green** (`ambientColor #a6d08e`) · `a4_barn`
+  `#2a1210 → #070302` dust in **hay** colour (`#ffd98a`) · `a4_underfloor` `#2a1a10 → #070403` dust. Tints from V §11
+  (barn: `#ffbf6a`, lantern warm; V has no barn row). Six in all.
+- **The DM's table overhead** (V §11: "the underside of the DM's table looming across the top of the backdrop"):
+  `backdrop: 'table'` (the Last Floor: a plank band across the top of the screen, seams running to the horizon, a
+  cross brace, a wad of gum with a regrettable string, lamp light leaking past the edge) and `'table_far'` (the Barn
+  Burner: a thinner, dimmer band "far overhead", no gum). Screen space, static, the same at every yaw.
+- **Act-4 wall looks** (`WALLS`, the themed canonical `wall` terrain): a mossy greenhouse low wall with brass trim,
+  black marble with League-green trim, white marble with gold trim, gingerbread with icing for mortar (and pink icing
+  trim), barn-red boards with white trim, the DM's walnut. Existing face painters only.
+- **Ambients**: `pollen` (slow yellow motes, swaying up), `stars` (twinkling points with a glint on the brightest at
+  their peak; no sway, a very slow drift, never in the foreground layer), `notes` (hay motes with ~20% drifting music
+  notes in neon magenta / hay gold; the plan's optional barn look: themes.js still asks for `dust`, see Requests). An
+  unknown kind now resolves: the theme's `ambientFallback` (MAPGEN's field), then the kind's own fallback (`pollen` to
+  `fireflies`, `stars` / `notes` to `dust`), then `dust` (it used to draw nothing). `ambientColor` (look or theme def)
+  recolours the kind of that look only.
+- **E8 content zones** (ARCHITECTURE §4.1 / §7.2): `state.data.zones = [{ tiles, color, label, line }]` of the drawn
+  state (never `DD.Render.overlay`, so `resetOverlay()` can't wipe them). Tiles: a soft pulsing tint in the colour and a
+  merged, dark-backed outline, drawn per tile in the painter's order **under** the player overlays (move / target /
+  wind-up stay on top). Line: a thread between two tiles at unit-chest height (the chest of a unit standing on that
+  tile, `mh × 0.55` above its feet; else 22 px above the tile top), dark-backed, an animated dashed highlight, a dot at
+  each end; drawn after silhouettes, under HP widgets and badges. Label: a pill just in front of the zone (below its
+  nearest tile, centred), so it never sits on a unit standing in it; a label with no letters or digits (up to 8 chars,
+  e.g. the goats' speaking head) is a colour glyph in a round badge; over 26 chars is cut with an ellipsis. A line-only
+  zone puts its label 10 px above the line's midpoint. Absent / empty / junk zones draw nothing (yaw 0 pixel-identical);
+  a finished fight (`state.result`) draws none. At most 32 zones; tiles must be integers on the board; a colour that
+  `DD.util.parseColor` can't read (named colours) falls back to gold `#ffd23f`; a line needs two distinct board tiles.
+- **The 17th hero**: `'benedick'` appended last to the fallback `HERO_ORDER` and the 17th `TITLE_SLOTS` seat `[4, 6]` on
+  the cobble path behind the ring ("and Benedick on the path, still arriving"; no object there, height 0, facing the
+  fire). Until he registers the seat stays empty in the game (test heroes fill it in the test harness).
+
+### Public API (V3)
+- `DD.Render.themeLook(id)` returns `{ bg: [top, bottom], ambient (the kind drawn), ambientColor, backdrop, tint }`.
+- `DD.Render.TITLE_SLOTS` / `DD.Render.HERO_ORDER`: getters returning copies (the wave-0 request).
+- `DD.Render.painters.ambients`: the kinds drawn (`dust spores embers fog fireflies pollen stars notes`).
+- `renderTo` results add `zones: [{ tiles, color, line: { ax, ay, bx, by } | null (screen px), label: { x0, y0, x1, y1,
+  text } | null }]`, `ambient: { kind, color, n, front, notes }` and, on the title, `seats: [{ id, x, y }]` in seat order.
+- Theme extras the renderer reads from `DD.Themes[id]` (optional; the renderer's look is the fallback): `ambientFallback`
+  (MAPGEN already sets it), `ambientColor`, `backdrop: 'table' | 'table_far' | null`.
+
+### Deviations
+- E8 reads `state.data.zones`, not the plan's `DD.Render.overlay.zones` (lead patch P10; ARCHITECTURE §4.1 / §7.2).
+- Zones are hidden once the fight has a result (no leftover Hex Threads on the victory screen); the plan says nothing.
+- Label placement (in front of the zone, not on it), the icon badge, the 26-character cut and the chest anchor on a
+  standing unit are choices the plan leaves open.
+- Beyond the plan's list (act-4 only, v2 unchanged): the act-4 wall looks, the `table` / `table_far` backdrop (plan §6.3's
+  bg column asks for the table underside but gives it no owner), the `ambientColor` field (the cottage's "fog (green)",
+  the barn's hay motes), the unknown-kind ambient fallback chain, and the `notes` ambient built rather than left optional.
+
+### Requests
+- **Lead (ARCHITECTURE §7.2, §5.8)**: document the V3 renderer API above (`themeLook`, the `TITLE_SLOTS` / `HERO_ORDER`
+  getters, `painters.ambients`, the `renderTo` fields `zones` / `ambient` / `seats`), the theme extras `ambientColor` and
+  `backdrop` (§5.8's `DD.Themes` line: ambient may also be `pollen` / `stars` / `notes`), and E8's drawing rules (tint
+  under the player overlays, line at chest height, label in front of the zone, hidden on a finished fight, at most 32
+  zones, parseable colours).
+- **MAPGEN (`js/data/themes.js`, optional)**: for music notes in the goats' air, set `a4_barn` `ambient: 'notes',
+  ambientFallback: 'dust'` (the renderer draws `notes` now; today the barn gets hay-coloured dust).
+- **C4 (Coven), C5 (Svammiel), C6 (goats)**: zones as above: integer board tiles, a hex or `rgb()` colour, a short label
+  (an icon-only label draws as a glyph badge), a `line` of two distinct tiles; rewrite `state.data.zones` whenever it
+  changes (the renderer re-reads it every frame; previews copy `state.data`).
+- **META-UI**: nothing new; the campfire follows `UI.HERO_ORDER` when it lists heroes (append `'benedick'` there, plan
+  §4.12) and the renderer's own order otherwise (he is last in both).
+
+### Tests
+- New suites in `tests/render_tests.js`:
+  - `render: V3 act-4 arenas — theme fallbacks, the new ambients …`: every `DD.Themes` act-4 arena has a fallback look
+    and a drawn ambient; the six fallbacks match plan §6.3 (with `DD.Themes`' entry stashed); the ambient fallback
+    chain; pollen / stars / notes spawn and paint, stars never in front, notes mix motes and notes; the `table` /
+    `table_far` bands sit across the top only, the far one thinner; the six arenas at yaw 0 / 90 / 180 / 270 / 37.5.
+  - `render: V3 E8 content zones …` at yaw 0 / 30 / 200: absent, empty and junk zones are pixel-identical to no zones;
+    tints at their rotated tiles, an untouched tile elsewhere; the line's screen ends at chest height (0.75 px) and
+    painted along its length; a standing unit's end at its chest; labels inside the canvas, in front of and centred
+    under the zone; the frame identical again once zones are gone. Also: zones survive `resetOverlay()`; none on a
+    finished fight; junk colour to gold; long labels cut; the live state's zones drawn.
+  - `render: V3 the 17th hero …`: copies; seats distinct, on the island, none in the fire; Benedick last in the
+    fallback order with `[4, 6]`; `min(seats, open heroes)` sit in seat order, real heroes first in the display order
+    (with `UI.HERO_ORDER` and with the renderer's own order); the path seat taken when there are enough heroes;
+    Benedick seated once registered, at `[4, 6]` as the 17th.
+- Yaw-0 identity against the pre-V3 renderer (A/B harness `.tmp/rw3/ident.html`: HEAD's renderer as `R0`, seeded
+  `Math.random`, frozen clock): boss_lichtenstein, boss_dm, boss_rat_king, boss_grimble, a1_rats_in_the_cellar,
+  a1_goblin_ambush, a1_slime_time (busy / plain / grid off / zoomed dpr 2 / tiny) and the title (dpr 1 and 2): **0 px
+  differ** everywhere; the 0 / 90 / 30 / 0 leak checks 0 px.
+- Looked at (`.tmp/rw3/look.html`: procedural maps of the six arenas at yaw 0 / 30 / 200 with four zones each): the
+  table overhead, stars, pollen, green fog, hay motes, the tints / threads / labels at every yaw.
+
+### Known issues
+- Zone lines and labels are overlays: walls and tall props never hide them (like the wind-up tracking lines).
+- Ambients and the table band are screen space (they don't turn with the map), like every v2 ambient.
+- Writing the scratch page `.tmp/rw3/look.html` with the Write tool made a hook open it in the browser pane once; the
+  tab was closed at once (the page idles without `run=1`). Later scratch pages were written through the shell.
+
+## Review (V3) — adversarial review of the renderer's act-IV work (REVIEWER, Nov 15)
+
+No change needed in `renderer.js` / `render_tests.js`. Re-ran the A/B identity harness against HEAD's renderer
+(`.tmp/rw3/run.sh ident.html "enc=a1_goblin_ambush,boss_dm,boss_lich,a2_graveyard"`, base == `git show HEAD:…`): every
+v2 combat frame (grid / no grid, busy / plain, no intents, zoom at DPR 2, tiny) differs by 0 px and the rotation leak
+checks by 0 px. The title frame now differs (2727 px at 1280×720): Benedick has registered, so the live renderer seats
+17 (Benedick on the cobble path at [4, 6], every other hero keeps his v2 seat: the first 16 seats and the order are HEAD's); HEAD's frame in
+this harness showed fewer heroes, which is the harness, not v2 (the game no longer has a 16-hero title to compare). The six arenas were looked at in every fight's montage (rot 0 / 90 / 200 / 37.5 / 180, 1280×720
+and 1600×900): zones (the Coven's threads, the goats' squares), the barn's hay, the underfloor's table band, stars.
+
+## V3 QA fixes (render-ui, Nov 17)
+FIGHTS-13 (`intent.data.tint`: a wind-up's own wash colour) and HERO-5 (status `showTurns`: turns left by the icon over
+the unit) in `renderer.js`; details, requests and tests: `hud-v2.md` "V3 QA fixes".

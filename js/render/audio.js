@@ -4,6 +4,8 @@
  *
  *   DD.Audio.play(name, opts)   opts: { vol 0..2, pitch (rate multiplier), delay (s) } → true if it played
  *   DD.Audio.setVolume(0..1) · DD.Audio.mute(bool) · DD.Audio.isMuted() · DD.Audio.names
+ *   V3: act-IV stingers (svam_sting, cheat, swoop, …, the goats' scratch / bass_drop / crowd_ooh / bleat),
+ *   DD.Audio.fallbacks + DD.Audio.resolve(name) (the shipped fallback of a stinger).
  *
  * The AudioContext is created lazily on the first user gesture (browser autoplay rules); before that, in headless
  * tests or without WebAudio, play() is a silent no-op that never throws. Respects DD.Meta settings sfx/volume.
@@ -205,11 +207,67 @@
       s.noise(0.3, 0.26, 'bandpass', 1300, 450, 1);
       for (let i = 0; i < 3; i++) s.tone('sine', rnd(300, 600), rnd(700, 1000), 0.06, 0.06, { delay: 0.04 + i * 0.05 });
     },
+
+    // ---- V3 stingers (act IV; the game has no music, so act 4 gets stings) ----
+    svam_sting: function (s) { // organ chord + thunder under the table + a bell: Svammiel arrives
+      [55, 82.4, 110].forEach(function (f) { s.tone('sawtooth', f, f, 1.8, 0.1, { attack: 0.08, filter: 900 }); });
+      s.noise(1.4, 0.45, 'lowpass', 200, 60);
+      s.tone('sine', 1320, 1320, 1.2, 0.06, { delay: 0.25 }); s.tone('sine', 1980, 1980, 1.0, 0.035, { delay: 0.25 });
+    },
+    cheat: function (s) { // record scratch, then a sad "wah-wah"
+      s.noise(0.18, 0.3, 'bandpass', 2500, 600, 2);
+      s.tone('square', 247, 233, 0.16, 0.08, { delay: 0.18, filter: 1200 });
+      s.tone('square', 220, 196, 0.26, 0.08, { delay: 0.34, filter: 1200, vibrato: [7, 5] });
+    },
+    swoop: function (s) { // wing whoosh + two leathery thumps
+      s.noise(0.24, 0.24, 'bandpass', 400, 1600, 1.2); s.noise(0.24, 0.2, 'bandpass', 1600, 300, 1.2, 0.22);
+      s.tone('sine', 95, 50, 0.08, 0.22, { delay: 0.3 }); s.tone('sine', 90, 48, 0.08, 0.18, { delay: 0.42 });
+    },
+    slide_whistle: function (s) { s.tone('sine', 1400, 180, 1.3, 0.12, { vibrato: [6, 20] }); },
+    clockwork: function (s) { // three ticks and a clank: the Gardener
+      for (let i = 0; i < 3; i++) s.noise(0.015, 0.22, 'highpass', 4000, 4200, 0.8, i * 0.07);
+      s.tone('triangle', 180, 170, 0.12, 0.16, { delay: 0.2 });
+    },
+    snip: function (s) { s.noise(0.02, 0.26, 'bandpass', 6000, 5600, 3); s.noise(0.02, 0.24, 'bandpass', 6200, 5800, 3, 0.07); },
+    evil_chord: function (s) { // "dun dun DUNNN" + a low tom: the League
+      s.tone('square', 196, 196, 0.18, 0.09, { filter: 1400 });
+      s.tone('square', 185, 185, 0.18, 0.09, { delay: 0.22, filter: 1400 });
+      s.tone('square', 147, 145, 0.55, 0.1, { delay: 0.44, filter: 1400, vibrato: [5, 3] });
+      s.tone('sine', 90, 50, 0.3, 0.4, { delay: 0.44 });
+    },
+    grand_spell: function (s) { // a rising arpeggio with a shimmer: Galbraith
+      [523, 659, 784, 1047].forEach(function (f, i) { s.tone('sine', f, f, 0.3, 0.1, { delay: i * 0.09 }); });
+      s.noise(0.6, 0.04, 'highpass', 6000, 7000, 0.7, 0.1);
+    },
+    cackle: function (s) { // five squeaky staccato notes, rising: the Coven
+      [520, 600, 680, 780, 880].forEach(function (f, i) { s.tone('square', f, f * 1.04, 0.09, 0.06, { delay: i * 0.15, filter: 2200, vibrato: [14, 40] }); });
+    },
+    bubble: function (s) { // the cauldron cooking
+      for (let i = 0; i < 4; i++) { const f = rnd(180, 320); s.tone('sine', f, f * 1.6, 0.06, 0.12, { delay: i * 0.14 + rnd(0, 0.03) }); }
+    },
+    // the Rapping Goats (optional; goats.js falls back to zap, explosion / roar, buff and bark without them)
+    scratch: function (s) { // "wikka-wikka": the crew's sting
+      s.noise(0.14, 0.3, 'bandpass', 3000, 700, 2.5); s.noise(0.12, 0.28, 'bandpass', 700, 2600, 2.5, 0.15);
+      s.noise(0.1, 0.22, 'bandpass', 2800, 900, 2.5, 0.29);
+    },
+    bass_drop: function (s) { s.tone('sine', 120, 38, 0.7, 0.6); s.noise(0.3, 0.22, 'lowpass', 300, 60); s.tone('sine', 60, 40, 0.5, 0.3, { delay: 0.08 }); },
+    crowd_ooh: function (s) { // a barnyard crowd going "ooooh"
+      [196, 247, 294, 330].forEach(function (f, i) { s.tone('triangle', f, f * 0.94, 0.8, 0.05, { attack: 0.12, delay: i * 0.02, filter: 800, vibrato: [5, 6] }); });
+      s.noise(0.7, 0.05, 'bandpass', 700, 500, 1);
+    },
+    bleat: function (s) { s.tone('sawtooth', 520, 470, 0.4, 0.09, { filter: 1800, q: 2, vibrato: [28, 40] }); s.noise(0.1, 0.04, 'bandpass', 1500, 1200, 2); },
   };
+  // V3 stingers and their shipped fallbacks (a caller may use the fallback when a name is missing from DD.Audio.names)
+  const FALLBACKS = { scratch: 'zap', bass_drop: 'explosion', crowd_ooh: 'buff', bleat: 'bark', svam_sting: 'roar', cheat: 'error',
+    swoop: 'push', slide_whistle: 'fall', clockwork: 'step', snip: 'slash', evil_chord: 'debuff', grand_spell: 'magic', cackle: 'bark', bubble: 'splash' };
 
   // ---- public API ---------------------------------------------------------------------------------------------
   DD.Audio = {
     names: Object.keys(SOUNDS),
+    /** V3: the shipped fallback of each act-IV stinger (the goats' four: zap, explosion, buff, bark). */
+    fallbacks: FALLBACKS,
+    /** `name` if it has a recipe, else its fallback, else null. */
+    resolve: function (name) { return SOUNDS[name] ? name : FALLBACKS[name] && SOUNDS[FALLBACKS[name]] ? FALLBACKS[name] : null; },
     /** Play a named effect. Never throws; returns true when a sound was actually scheduled. */
     play: function (name, opts) {
       try {

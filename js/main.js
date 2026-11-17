@@ -37,6 +37,54 @@
     }
   };
 
+  // ---- V3 debug params (ARCHITECTURE §10.1; plan §4.10) -------------------------------------------------------------
+  /** acts=3|4 (the campaign length for this page: the way to reach act IV while it ships dark), cameo=full|short|log|0
+   *  (Svammiel's cameos for this page; 0 = none, run fights included: DD.Balance.cameo.off), bosshp=<0..1> (every
+   *  boss / squad unit of a fight starts at that fraction of its max HP: QA of phase 2s), gate=1 (the act-IV spoiler gate
+   *  open: see openGate). Never saved. Run params (act=4, beaten=, twist=1, final=1) are read by Main.debugRun / the
+   *  debug screens below. */
+  function applyV3Params() {
+    const B = DD.Balance;
+    if (P.acts !== undefined && B && B.campaign) {
+      const n = parseInt(P.acts, 10);
+      if (isFinite(n)) B.campaign.acts = Math.max(3, Math.min(DD.MAX_ACT || 4, n));
+    }
+    if (P.cameo !== undefined) {
+      const v = String(P.cameo);
+      if (v === '0' || v === 'off') { if (B && B.cameo) B.cameo.off = 1; }
+      else if (/^(full|short|log)$/.test(v) && DD.Meta && DD.Meta.data && DD.Meta.data.settings) DD.Meta.data.settings.cameos = v;
+    }
+    const hp = parseFloat(P.bosshp);
+    if (P.bosshp !== undefined && isFinite(hp) && DD.Events) {
+      const f = Math.max(0.01, Math.min(1, hp));
+      DD.Events.on('combat:ready', function () { DD.safe('debug bosshp', bossHp, null, [f]); });
+    }
+    if (P.gate === '1') openGate();
+  }
+  /** The act-IV spoiler gate (DD.Meta seen.bosses.svammiel, set at the twist) opened in memory for this page — gate=1
+   *  (the Hall, title and Settings as a player who has met him sees them) and any debug run that starts below the
+   *  table (a real party there has always met him). Not saved here (a later save of the meta data keeps it). */
+  function openGate() {
+    const seen = DD.Meta && DD.Meta.data && DD.Meta.data.seen;
+    if (seen && seen.bosses && !seen.bosses.svammiel) seen.bosses.svammiel = Date.now();
+  }
+  /** bosshp=: the fight's boss units (objective.bossIds / bossId, else boss-tier units) at f × max HP. */
+  function bossHp(f) {
+    const s = DD.Combat && DD.Combat.state;
+    if (!s || !Array.isArray(s.units)) return;
+    const obj = s.objective || {};
+    const ids = (Array.isArray(obj.bossIds) ? obj.bossIds : []).concat(obj.bossId ? [obj.bossId] : []);
+    s.units.forEach(function (u) {
+      if (!u || u.side !== 'enemy' || u.dead) return;
+      const boss = ids.length ? ids.indexOf(u.defId) >= 0 : (u.isBoss || u.tier === 'boss');
+      if (boss && u.maxHp) u.hp = Math.max(1, Math.round(u.maxHp * f));
+    });
+  }
+  /** The lane ids of the act's gauntlet (debug: final=1 seals every door). */
+  function allLanes(act) {
+    return DD.RunMap && typeof DD.RunMap.gauntletLanes === 'function' ? (DD.RunMap.gauntletLanes(act) || []).map(function (l) { return l.id; }) : [];
+  }
+
   // ---- debug party / run helpers ------------------------------------------------------------------------------------
   function debugLevel() { return Math.max(1, Math.min(10, parseInt(P.level, 10) || 1)); }
 
@@ -129,16 +177,30 @@
     s.unlockAll = hadUnlock;
     const run = DD.UI.run();
     if (!run) { warnToast('Debug: DD.Run.newRun did not create a run.'); return null; }
-    const act = Math.max(1, Math.min(3, parseInt(P.act, 10) || 1));
-    if (act > 1 && DD.RunMap && typeof DD.RunMap.generate === 'function') {
+    // V3: act= (or start=, the sims' name for it) clamps to the campaign's last act (DD.finalAct(): act=4 needs acts=4);
+    // twist=1 on the victory screen shows the Twist panel, so its run is already below the table (the act-3 boss's
+    // clear moves the run to act IV)
+    let act = Math.max(1, Math.min(DD.finalAct(), parseInt(P.act !== undefined ? P.act : P.start, 10) || 1));
+    if (P.twist === '1' && P.screen === 'victory') act = DD.finalAct();
+    if (act >= 4 && typeof DD.Run.startAtAct === 'function') {
+      // act IV: DD.Run.startAtAct fast-forwards the fresh run (party at &level, auto gear, the gauntlet, &beaten lanes)
+      let beaten = P.beaten !== undefined ? String(P.beaten) : '';
+      if (!beaten && P.final === '1' && P.screen === 'victory') beaten = allLanes(act).join(',');
+      const opts = { gear: 'auto', beaten: beaten, noShow: true };
+      if (P.level !== undefined) opts.level = debugLevel();
+      if (P.gold !== undefined && isFinite(+P.gold)) opts.gold = Math.max(0, +P.gold);
+      DD.safe('Run.startAtAct', DD.Run.startAtAct, DD.Run, [act, opts]);
+      if (DD.UI.inGauntlet()) openGate();
+    } else if (act > 1 && DD.RunMap && typeof DD.RunMap.generate === 'function') {
       const map = DD.safe('RunMap.generate', DD.RunMap.generate, DD.RunMap, [act, DD.RNG(String(run.seed) + ':map:' + act), { run: run, exclude: run.fought || [] }]);
       if (map) { run.act = act; run.map = map; run.nodeId = null; run.visited = []; }
     }
-    levelRunParty(debugLevel());
-    debugPassives(run);
-    if (P.gold !== undefined && isFinite(+P.gold)) run.gold = Math.max(0, +P.gold);
+    if (act < 4) levelRunParty(debugLevel());
+    const live = DD.UI.run() || run;
+    debugPassives(live);
+    if (P.gold !== undefined && isFinite(+P.gold)) live.gold = Math.max(0, +P.gold);
     if (DD.Events) DD.Events.emit('run:changed', {});
-    return run;
+    return live;
   };
 
   /** Every pending level-up choice of the run, one entry per level (DD.Run.levelQueueFull, else the heroes that leveled). */
@@ -213,7 +275,7 @@
     }
     const seed = opts.seed !== undefined ? opts.seed : (P.seed !== undefined ? P.seed : DD.newSeed());
     const rng = DD.RNG(seed + ':encounter');
-    const act = opts.act || Math.max(1, Math.min(3, parseInt(P.act, 10) || 1));
+    const act = opts.act || Math.max(1, Math.min(DD.finalAct(), parseInt(P.act, 10) || 1));
     const kind = opts.kind || P.kind || 'normal';
     const level = opts.level || debugLevel();
     const ids = opts.party || Main.debugPartyIds();
@@ -237,6 +299,11 @@
     }]);
     if (!state) { warnToast('Debug: combat failed to start.'); DD.UI.show('title'); return false; }
     DD.UI.show('combat');
+    // V3: twist=1 (with encounter=boss_dm&acts=4) plays the twist entrance at fight start: the cameos' victory triggers
+    // fire as if the act-3 boss had just fallen (screenshots of the entrance)
+    if (P.twist === '1' && !opts.noTwist && DD.Cameo && typeof DD.Cameo.fire === 'function') {
+      DD.safe('Cameo.fire twist', DD.Cameo.fire, DD.Cameo, ['victory', { result: 'victory', debug: true }]);
+    }
     return true;
   };
 
@@ -316,8 +383,22 @@
       case 'rewards': Main.debugRewards(P.kind || 'normal'); break;
       // v2: one level-up (the rotation, or &hero=<party index>), then the real level-up flow
       case 'levelup': if (!Main.debugLevelUp(P.hero)) DD.UI.show('map'); break;
-      case 'gameover': DD.UI.show('gameover', { debug: true }); break;
-      case 'victory': DD.UI.show('victory', { act: run.act, final: P.final === '1' || run.act >= 3, debug: true }); break;
+      case 'gameover': {
+        // V3: on Svammiel's floor the debug party falls to the floor boss (he cheated)
+        const fin = DD.UI.inGauntlet(run) && DD.RunMap && DD.RunMap.finaleOf ? DD.RunMap.finaleOf(run.act) : null;
+        DD.UI.show('gameover', fin ? { debug: true, killedBy: fin.shortName || fin.name, killedByEncounter: fin.id } : { debug: true });
+        break;
+      }
+      case 'victory': {
+        if (P.twist === '1') {
+          // V3: the Twist panel (the act-3 boss beaten, the run already on Svammiel's floor)
+          const heal = DD.Balance && DD.Balance.heal && isFinite(+DD.Balance.heal.actClear) ? +DD.Balance.heal.actClear : 0.5;
+          DD.UI.show('victory', { act: run.act >= 4 ? run.act - 1 : run.act, nextAct: run.act >= 4 ? run.act : run.act + 1, twist: true, healed: heal, unlocked: [], text: DD.UI.narrate('act_clear_twist', {}, []), debug: true });
+          break;
+        }
+        DD.UI.show('victory', { act: run.act, final: P.final === '1' || run.act >= DD.finalAct(), debug: true });
+        break;
+      }
       default: DD.UI.show(screen);
     }
   }
@@ -332,7 +413,8 @@
         debugRunScreen(screen); break;
       default:
         if (!DD.UI.screens[screen]) warnToast('Debug: unknown screen "' + screen + '".');
-        if (!DD.UI.show(screen)) DD.UI.show('title');
+        // V3: screen=hall&tab=codex|records|history|… opens that tab
+        if (!DD.UI.show(screen, screen === 'hall' && P.tab ? { tab: String(P.tab) } : undefined)) DD.UI.show('title');
     }
     if (P.autoplay === '1') Main.startAutoplay();
   }
@@ -360,6 +442,7 @@
           'DDdbg.roll(i)             — hero i rolls on the Table of Questionable Blessings (shows the roll)',
           'DDdbg.table(i?)           — print the d100 table (slices) for hero i',
           'DDdbg.autoplay(on) / speed(x) / instant(on) / unlockAll(on)',
+          'DDdbg.act(n, beaten?)      — fast-forward the run to act n (act IV needs acts=4; beaten: "a,b" lanes)',
         ];
         if (window.console) console.info(lines.join('\n'));
         return lines.length + ' helpers';
@@ -444,6 +527,10 @@
       instant: function (on) { if (DD.FX) { if (on !== false && DD.FX.flush) DD.FX.flush(); DD.FX.instant = on !== false; } return DD.FX && DD.FX.instant; },
       unlockAll: function (on) { DD.UI.settings().unlockAll = on !== false; if (DD.Meta && DD.Meta.save) DD.Meta.save(); return DD.UI.settings().unlockAll; },
       restart: Main.restartCombat,
+      act: function (n, beaten) {
+        if (!run() || !DD.Run || typeof DD.Run.startAtAct !== 'function') return null;
+        return DD.Run.startAtAct(n, { gear: 'auto', beaten: beaten || '' }) ? run().act : null;
+      },
     };
     if (window.console) console.info('[DD] debug mode — type DDdbg.help() for console helpers.');
   }
@@ -472,6 +559,7 @@
     try {
       if (DD.Meta && typeof DD.Meta.load === 'function') DD.safe('Meta.load', DD.Meta.load, DD.Meta);
       if (DD.debug && P.unlockall === '1') DD.UI.settings().unlockAll = true;
+      if (DD.debug) applyV3Params();
       if (DD.debug && P.fast === '1') Main.speedMult = 4;
       Main.applySettings();
       if (DD.debug && P.instant === '1' && DD.FX) DD.FX.instant = true;

@@ -1152,7 +1152,9 @@
     dm.hp = 5;
     act(function () { DD.Act.damage(hero('test_knight'), dm, 50, { cause: 'skill' }); });
     t.eq(S().result, 'victory', 'victory');
-    t.ok(logHas(/Fine\. FINE\. You win\. Same time next week\?/), 'the defeat line');
+    // V3 (the integrator's flip): while the campaign goes on past him (act 4), the twist cuts his line off (dm.js onDeath)
+    const cut = !!(DD.Cameo && DD.Cameo.campaignGoesOn && DD.Cameo.campaignGoesOn(S()));
+    t.ok(logHas(cut ? /Fine\. FINE\. You win\. Same time next—/ : /Fine\. FINE\. You win\. Same time next week\?/), 'the defeat line' + (cut ? ' (cut off: act 4 follows)' : ''));
     t.ok(!S().rules.some(function (r) { return r.id === 'dm_house_rule'; }), 'house rules end with him');
     t.ok(cameos().length === 0, 'his minis flee');
     // a table with room for a single handbook: citing the books that fit is enough

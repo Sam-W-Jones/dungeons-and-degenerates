@@ -1429,3 +1429,457 @@ No gap reaches 2σ against the audit's batches. The act 1 bosses crossed the 70%
 read 71-77% (pooled 73.5% of 1,027, z 1.6 against the audit's 756), while the review's paired batch on the audit's seeds
 reads 70.0% (audit 69%): seed spread plus at most a point or two from the finish run's AutoPlay fixes and Slate's move 4
 (healer-less parties 58 → 62%). Flagged for the lead and the playtest, not tuned (AutoPlay's boss rates are ceilings).
+
+---------------------------------------------------------------------------------------------------------------------
+
+## V3 (Nov 15) — BALANCE: act 4 "Under the Table" and the 17th hero (BAL, plan `.tmp/v3/design.md` §7, §2.3, §8.2 row BAL)
+
+Files: `js/data/balance.js` (`act[4]`, six `encounters` rows, the `campaign` comment), `js/data/bosses/svammiel.js` (`N.masterHp`,
+`N.masterHint`), `tests/balance_tests.js` (two "balance: V3 act 4 — …" suites), the author-sim path of the six act-4 suites
+(`tests/content/boss_{gardener,league,galbraith,coven,goats,svammiel}.js`: `bareRows`, Deviation 6). Nothing else moved: no door's content
+numbers (`DD.<Door>.N`), no hero (Benedick, Ellaria (D11)), no economy row, no act 1-3 row. Sims: stock `tools/sim.sh`, 50-seed
+batches, one headless Chrome at a time; reports and scripts in `.tmp/bal/` (`run.sh` the sequential runner, `sum.sh` the
+act-4 lines of a report, `pool.awk` the pooled headline, `lanes.awk` the pooled doors / positions / Svammiel, `runs.awk` the
+per-hero 3-act and 4-act run shares from `verbose=1` lines).
+
+### The target (plan §7.1, lead patch P6)
+The user: "a normal 4-act campaign won about 25% of the time is right". The plan sized act 4 on v2's old 42.5% three-act
+rate (doors 93%, Svammiel 82%, act 4 cleared 57% → 24%), and §7.1's own rule says that when the three-act rate moves the
+act-4 clears follow it (0.25 / the new rate). The three-act rate is **32.5%** (the integrator's 200-run re-baseline; the
+same 200 runs below), so **about 25% needs ~75% act-4 clears**: doors ~97% and Svammiel ~85% (0.97⁵ × 0.85 = 73%). This
+pass follows the user's number (P6's default) and reports the plan's bands next to it. The plan's own split (doors 93%,
+Svammiel 82%) would give ~19% four-act wins at today's three-act rate; the levers to get there are listed at the end.
+
+### What the campaign looked like at ×1 (the integrator, `.tmp/v3/int/`)
+Campaign parties (items from three acts, Blessings, the 50% heal at the twist, a tavern between doors, and the filter of
+three act bosses: Ellaria and Josiah parties dominate) crush fights tuned on bare author parties: doors 177/178 (99.4%,
+9.3 rounds, HP lost ~15%, 0.45 downs), Svammiel 35/35 (100%, ~9.5 rounds, ~0.9 downs), act 4 cleared 35/36, a **35%**
+four-act campaign. The act-4-only sims (`start=4&level=5`: random parties, two items each, no survivor filter) are far
+weaker than campaign parties (doors 98.7%, Svammiel 95% at ×1, but ×1.3 damage alone drops them to doors 91% / act 4
+cleared 54%, table below): they are a shape probe, never the target measure. Every target below is read from full four-act
+campaign sims.
+
+### Experiments
+start=4 probes (`seeds=50&from=7000&start=4&level=5`; Master Die 8 HP):
+| overrides | doors | Gardener · League · Galbraith · Coven · goats | Svammiel | act 4 cleared | door rounds / downs |
+|---|---|---|---|---|---|
+| none (integrator, 400 runs, Master Die 12) | 98.7% | 99.5 · 99.5 · 97.2 · 98.2 · 99.2 | 94.9% | 89% | 10.3 / 0.82 |
+| `act.4.dmg:1.3` | 91% (192/212) | 100 · 95 · 91 · 77 · 91 | 90% (27/30) | 54% | 11.5 / 1.92 |
+| `act.4.hp:0.9,act.4.dmg:1.5` | 89% (178/200) | 100 · 100 · 82 · 79 · 85 | 75% (21/28) | 42% | 11.2 / 2.48 |
+
+The Gardener stays at 100% whatever its damage (it downs heroes, ~2.5 a fight at ×1.5, but never wipes a party: it is a
+long attrition fight), the Coven and Galbraith respond most, damage lengthens the doors (downed heroes deal nothing).
+
+Campaign batches, the same four seed blocks (`seeds=50&from=1000|2000|5000|6000&verbose=1`: the integrator's
+re-baseline seeds; acts 1-3 replay identically, so the same 65 parties reach act 4 every time and the configurations are
+paired):
+| config (`bal=` on top of act 4's row) | four-act wins | act 4 cleared | doors | Svammiel (rounds, downs) | CAUGHT of his wins | act-4 rounds / deaths / gold left |
+|---|---|---|---|---|---|---|
+| ×1 (integrator, seeds 1000 + 2000) | 35/100 | 35/36 | 177/178 (99.4%) | 35/35 (~9.5, ~0.9) | 23% | 54.9 / 0.06 / 103 |
+| **C1**: act ×1.35 dmg; Gardener ×0.9 HP ×1.3 dmg, League ×1.1 dmg, Coven ×0.9 dmg, goats ×0.9 HP, Svammiel ×1.25 HP ×1.2 dmg; Master Die 8 | 48/200 (24.0%) | 49/65 (75.4%) | 296/305 (97.0%) | 49/56 = 87.5% (13.4, 3.23) | 41% | 57.8 / 0.11 / 118 |
+| **C2**: act ×1.35; Gardener ×0.8 / ×1.45, League ×1.1, Galbraith ×0.92, goats ×0.85 / ×1.08, Svammiel ×1.1 / ×1.35; Master Die 6, hint 45 | 46/200 (23.0%) | 46/65 (70.8%) | 297/306 (97.1%) | 46/56 = 82.1% (11.9, 3.89) | 76% | 55.5 / 0.15 / 119 |
+
+Per door (n ~60 each): C1 Gardener 100% (11.4 rounds, one 30-round stall) · League 95.2 · Galbraith 93.4 · Coven 98.3 ·
+goats 98.4 (10.8 rounds); C2 Gardener 98.4 (10.4) · League 93.8 · Galbraith 98.3 · Coven 95.1 · goats 100 (10.3). The
+League is the swingiest door (one 50-seed block lost 3 of 13 at the same row).
+
+Then fresh seeds (`seeds=50&from=8000|8050|9000|9050&verbose=1`, no `bal=`: the rows written in `balance.js`):
+| config (the file) | four-act wins | act 4 cleared | doors | Svammiel (rounds, downs) | CAUGHT of his wins | act-4 rounds / deaths / gold left |
+|---|---|---|---|---|---|---|
+| **C3**: act ×1.35; Gardener ×0.8 / ×1.45, League —, Galbraith ×0.95, Coven ×0.95, goats ×0.8 / ×1.2, Svammiel ×1.1 / ×1.35 | 44/200 (22.0%) | 44/65 (67.7%) | 287/298 (96.3%) | 44/54 = 81.5% (11.9, 3.06) | 80% | 55.0 / 0.17 / 148 |
+| **C4**: act ×1.35; Gardener ×0.75 / ×1.45, League ×1.05, Galbraith ×0.95, Coven ×0.9, goats ×0.8 / ×1.1, Svammiel ×1.1 / ×1.25 | 44/200 (22.0%) | 44/65 (67.7%) | 289/299 (96.7%) | 44/55 = 80.0% (12.2, 2.98) | 87% | 54.4 / 0.14 / 149 |
+
+Per door: C3 Gardener 95.0 (11.4 rounds) · League 100 · Galbraith 96.6 · Coven 94.9 · goats 95.1 (1.87 downs); C4 Gardener
+98.3 (10.1) · League 98.3 · Galbraith 96.7 · Coven 96.6 · goats 93.7 (10.4).
+
+**What the batches say.** The act-4 outcomes are chaotic: the same 65 parties on the same seeds swing ±8 points of act-4
+clears between near-identical configurations (C4 eased every row of C3 and its first 100 runs cleared act 4 59% against
+C3's 72%; the next 100 evened it out). One door's rate over ~60 fights has a ±2.5-point standard error, Svammiel's over
+~55 fights ±5. So the rows were set from the pooled C2-C4 evidence, not batch by batch: every door at its C2-C4 row sits at
+95-98% (pooled: the Gardener 96.6% of 146 fights at ×0.8/×0.75 HP and ×1.45, the League 94.5% of 127 at ×1.1 and 100% of
+83 at ×1-×1.05, Galbraith 96.6% of 146 at ×0.92-×0.95, the Coven 97.6% of 83 at ×0.9 and 95% of 120 at ×0.95-×1, the goats
+96.7% of 211), the doors 96.5% overall, Svammiel ~81% (132 fights), act 4 cleared ~69%, the campaign ~22%: a little
+under the user's 25% (the three-act rate in these 600 runs is 32.5%: 25% needs ~77% act-4 clears). **C5** eases both ends by a
+notch: act 4 ×1.35 → ×1.3 damage (every door) and Svammiel ×1.1 / ×1.25 → ×1.05 / ×1.2 (×1.56 damage in all).
+
+| config (the file; fresh seeds 10000-10199) | four-act wins | act 4 cleared | doors | Svammiel (rounds, downs) | CAUGHT of his wins | act-4 rounds / deaths / gold left |
+|---|---|---|---|---|---|---|
+| **C5**: act ×1.3; doors as C4; Svammiel ×1.05 / ×1.2 | 56/200 (28.0%; act 3 cleared 35.0%) | 56/70 (80.0%) | 329/336 (97.9%, 9.2 rounds, 0.93 downs) | 56/63 = 88.9% (11.4, 3.05) | 73% | 54.2 / 0.23 / 139 |
+
+Per door: Gardener 98.5 (9.9 rounds) · League 97.1 · Galbraith 98.5 · Coven 95.6 · goats 100 (9.9 rounds, 1.29 downs); by
+position 97.1 / 98.5 / 98.5 / 98.5 / 96.9. The doors are where the plan's §7.1 rule wants them; Svammiel at ×1.56 overshot
+(88.9%, against ~81% at ×1.69-×1.82 in C2-C4: 132 fights). **C6 (landed)**: Svammiel ×1.25 damage (×1.625 in all, the
+midpoint, C1's 87.5% was ×1.62), HP ×1.05; nothing else moved. Measured on fresh seeds 11000-11199:
+
+| config | four-act wins | act 4 cleared | doors | Svammiel (rounds, downs) | CAUGHT of his wins | act-4 rounds / deaths / gold left |
+|---|---|---|---|---|---|---|
+| **C6 (landed)**: act ×1.3; Gardener ×0.75 / ×1.45, League ×1.05, Galbraith ×0.95, Coven ×0.9, goats ×0.8 / ×1.1, Svammiel ×1.05 / ×1.25 | **48/200 (24.0%; act 3 cleared 33.5%)** | 48/67 (71.6%) | 296/306 (96.7%, 9.4 rounds, 1.15 downs) | **48/57 = 84.2%** (11.8, 3.65) | 75% | 53.0 / 0.21 / 136 |
+
+Per door: Gardener 96.7 (10.5 rounds, 1.79 downs) · League 95.1 · Galbraith 96.8 · Coven 100 · goats 95.1 (10.2 rounds,
+1.11 downs); by position 97.0 / 90.8 / 98.3 / 98.3 / 100.
+
+**Svammiel's Master Dice** (the CAUGHT target, ≥ 60% of his wins): at 12 HP AutoPlay broke ~1.15 a fight and caught him
+in ~20% of wins (a two-hit object only scores half its damage for AutoPlay; `masterHint` 30 → 45 alone changed nothing in
+the owner's sims). 8 HP: 33-54% by block (41% pooled); **6 HP with `masterHint` 45: 57-100% (76% pooled)**. Six HP is one
+hit of nearly any damage skill, so the puzzle is reaching the far panels while he hits back, which is what the DM's
+counter line tells a human. A caught Svammiel is easier (+25% damage taken, the honest d20), which his row pays for.
+Author check (`tools/test.sh "suite=boss_svammiel: zz&sim=1&n=60&verbose=1"`, bare L6 parties, content numbers: Deviation 6),
+paired on the same 60 parties: Master Die 6 HP / hint 45 won 31/60 (52%), CAUGHT 19, 14.2 rounds; `knobs=masterHp:12,masterHint:30`
+won 34/60 (57%), CAUGHT 8, 14.8 rounds. Both inside the suite's 45-90% band (the plan's author band 55-62%: within noise);
+the change mostly moves who gets caught, not who wins, in bare fights.
+
+### Benedick, the 17th hero (plan §7.1 row, `addendum-benedick.md` §20): no number moved
+The integrator's 200 three-act runs read him low (19.4% = 0.68× the median, n 62), on the edge of noise (z ≈ −1.6). Three
+more reads, all against a hero at the median:
+| measure | Benedick | against |
+|---|---|---|
+| run share, 400 four-act runs (C2 on the integrator's seeds + C3 on fresh seeds 8000-8099 and 9000-9099; `runs.awk`): act 3 cleared · four-act wins | 26.8% (0.99× the median 27.1%) · 21.4% (1.08× the median 19.8%), n 112 | Basanos 0.92× / 0.96×, Pebbles 0.86× / 0.79× |
+| … the fresh seeds alone (200 runs) | 36.0% (1.16×) · 28.0% (1.31×), n 50 | — |
+| his seat in a fixed party, seeds 1000-1049, act 3 cleared: Betty, Kiri, Josiah | 52% (26/50, integrator) | Pebbles 40% (20/50), Slate 32% (16/50) |
+| … no healer: Marwyn, Corelos, Sparrow | 10% (5/50) | Pebbles 4% (2/50) |
+| per fight (the 400 runs, every act): damage · taken · heals · downs | 47.3 · 13.4 · 0.8 (all Serum) · 0.19 | roster median downs 0.32; Betty 36.3 · 20.1 · 5.5 · 0.26 |
+
+So his run share is inside 0.85-1.15× once the sample grows (the 62-run read was noise), he beats a median hero in the same
+seat with and without a healer, and he goes down less than anyone but the healers. **No knob moved**: the addendum's "weak"
+list (Serum 3 → 4, Slow Burn +1, cd 3/3/3) would push a hero who already sits at the median; move 2 → 3 is out anyway
+(the user: move 2 stands) and the "reserve sustain" heal is out under D9. Below target, left as AutoPlay gaps: damage taken
+13.4 a fight (target 14-19: enemies see the shell and armor 2 and pick other targets; raising `takenMult` 0.5 → 0.6 is a
+nerf his share doesn't ask for), slime stops 0.40 and Snail Mail 1.05 foes a post (the owner's `zz` batch; AutoPlay draws
+no trail lines and never baits a foe onto a parcel: hero-benedick.md). Shell in every fight of 4+ rounds and the
+Dragonsnail 45% of his turns (the owner's batch; the sim's shapeshift rule keeps the shell socketed: 776 / 776).
+**Guard rails** (Basanos and Pebbles within ±5 points of v2's 25.7% / 25.6%, three-act share): 25.0% (−0.7) and 23.3%
+(−2.3) over the 400 runs: PASS. Ellaria stays far ahead (1.8-2.6× the median by block): D11, reported, not trimmed.
+
+### The landed numbers against plan §7.1 (normal; C6 on fresh seeds 11000-11199, doors pooled with C5's 200 runs: same door rows)
+| measure | target | measured | |
+|---|---|---|---|
+| four-act campaign wins | ~25% (the user) | **24.0%** (48/200, CI 19-30); C5 + C6 26.0% of 400 | PASS |
+| three-act equivalent (act 3 cleared) | the re-baseline 32.5% | 33.5% (C6), 32.5-35.0% in every 200-run block | v2 unchanged (below) |
+| act 4 cleared | plan 55-65% (sized on v2's old 42.5%); the user's 25% needs ~75% | 71.6% (48/67); C5 + C6 75.9% (104/137) | follows the user (P6) |
+| each door | plan 91-95%; ~97% for the user's 25% | 96.7% (C6); **97.4% pooled (625/642)**: Gardener 97.6 · League 96.2 · Galbraith 97.7 · Coven 97.7 · goats 97.6 | even; above the plan's band by design |
+| no position worse than −6 points | | pooled by door 1-5: 97.1 / 94.7 / 98.4 / 98.4 / 98.4 | PASS |
+| door rounds 7-10 (goats 8-10) | | 9.3 pooled: Gardener 10.2 · League 9.1 · Galbraith 8.3 · Coven 8.6 · goats 10.1 | the Gardener and the goats at the edge |
+| door downs ≤ 1.3 (≤ 1.1 the Coven, the goats) | | 1.04 pooled: Gardener 1.38 · League 0.86 · Galbraith 0.85 · Coven 0.91 · goats 1.20 | the Gardener and the goats a little over |
+| Svammiel 80-85% at ~6.1 | | **84.2%** (48/57) at party level 5.8-6.0 | PASS |
+| Svammiel 10-12 rounds, ≤ 1.5 downs | | 11.8 rounds · 3.65 downs | downs MISS (below) |
+| CAUGHT in ≥ 60% of his wins | | 75% (50-90% by block; 20-23% before this pass) | PASS |
+| act-4 permanent deaths ≤ 0.6 a run | | 0.21 | PASS |
+| gold left at the end of a won run 100-150 | | 136 (C5 139) | PASS: no economy lever pulled |
+| act-4 rounds ≤ ~55 a run | | 53.0 (C5 54.2) | PASS |
+| a start cameo in every act-4 fight, 0 over budget | | 363 / 363, 0 over, no cameo memory before act 4 | PASS |
+| each cameo cheat ≤ 3 points | | within noise in the campaign (below) | PASS (estimate) |
+| the goats: the bear in 100% of fights that reach half; Bar None landed ≤ 2.0; engagement > 0 | | the bear 60 / 61 (the other a loss before half); Bar None landed 0.45-0.67; bars hung 1.8-2.8, Clap Backs 0.8-1.1, Bar None interrupted 0.07-0.27 and fizzled 0-0.21, speakers broken 0.2-0.5 a fight | PASS |
+| errors / stalls / warnings | 0 / ≤ 1% / 0 | 0 errors and 0 `DD.warn` in all 1,790 sim runs of this pass; 0 stalls in C2-C6; 3 round-cap stalls in all (C1's old Gardener row; two doors of the weak act-4-only parties, 0.2% of their doors) | PASS |
+
+**Svammiel's downs** (≤ 1.5 a fight) don't fit a boss AutoPlay parties win 80-85%: a lost fight alone books 4+ downs, and
+v2's act bosses at 70-85% run 2-4 downs a fight for the same parties (the DM 1.8-1.9 at 81-86%). At ×1 (100% won) he downed
+~0.9 a fight. His downs come from the Natural Twenty, the Pitchfork and the falls; CAUGHT (75% of wins) swaps the Natural
+Twenty for the honest d20. Reported, not chased (chasing it means a softer or longer fight).
+
+**The cameo cheats** (`cameo=0` against the default, act-4-only parties `start=4&level=5`, seeds 7000-7099, 100 runs each;
+these parties win the doors ~91% under the landed rows, so the gaps show where the campaign's ~97% hides them):
+| door | cheat | cameos on | off | gap |
+|---|---|---|---|---|
+| Gardener | Green Thumb | 91.7% (77/84) | 91.9% (79/86) | 0.2 |
+| League | Nepotism | 91.8% (78/85) | 94.0% (78/83) | 2.2 |
+| Galbraith | That's a 1 Now | 89.7% (78/87) | 94.2% (81/86) | 4.5 |
+| Coven | The Floor Is Lava | 92.4% (73/79) | 87.2% (75/86) | −5.2 |
+| the goats | Radio Edit | 88.9% (72/81) | 97.6% (81/83) | 8.7 |
+| act 4 cleared | | 38% (38/100) | 51% (51/100) | |
+
+One gap's standard error is ~4.3 points (the Coven's −5.2 is noise the other way), and about a third of the doors were
+bribed (no cheat). The Radio Edit is the one cheat that reads costly: 8.7 ± 4.3 points here, ~6 in the goats review's
+paired author batch (72% → 66%). In the campaign the goats' door wins 97.6% (124/127) **with** the Radio Edit on every
+unbribed fight, the same as every other door, because the door rows were fitted with the cheats live: the goats' row
+(×0.8 HP, ×1.1 damage) is lighter than the League's and the Gardener's, so the cheat's cost is paid on the goats' own
+numbers. Read as odds, the measured gaps put each cheat at ~0.5-2 points of a ~97% door: ≤ 3. **The Radio Edit stays a
+whole-fight ban** (the user was shown that; no pass shortens it, and this one didn't). Bar None 22 → 18 (the addendum's
+first lever) was not needed: it would lift the goats over the other doors. The `cameo=0` sims still buy the Bribe (about one
+wasted Bribe a run), so the "off" column is, if anything, a little pessimistic.
+
+**Act 4 alone** (`start=4&level=5`: random 4 of 17, level 5, two items each, 450 gold, no survivor filter; the landed rows,
+cameos on): doors 90.8% (378/416), Svammiel 61% (38/62), act 4 cleared 38%, door rounds 10.9 (the Gardener 12.2, the goats
+11.9: weaker parties take longer). A probe, not a target: campaign parties are much stronger (above).
+
+**Casual** (`seeds=50&from=4000&diff=casual`; ×0.8 / ×0.8 on top of every row): four-act campaign 64% (32/50; plan ~55%),
+three-act equivalent 74%, act 4 cleared 86% (32/37; ~80%), doors 99% (180/181; ≥ 97%), Svammiel 89% (32/36; ≥ 92%: one
+fight under at n 36), 0 deaths. Within noise of the plan's casual column; no casual-only row (the act rows multiply).
+**Brutal** (`seeds=40&from=3000&diff=brutal`): 1 of 40 runs reaches act 4 (the integrator's same run: acts 1-3 are
+unchanged), and it clears it (5 doors, Svammiel). The plan's brutal act-4 floors (doors ≥ 70%, Svammiel ≥ 55%, clears ≥ 30%)
+can't be measured until v2's brutal retune lets parties get there (plan §7.1 note); with ×1.15 HP / ×1.05 damage on top
+of the normal rows, brutal's act 4 is the same step harder than normal as its acts 1-3.
+
+**v2's acts 1-3 unchanged**: `tools/sim.sh "seeds=50&from=1000&acts=3"` after the pass is byte-identical to the integrator's
+`.tmp/v3/int/rebase3_1000.txt` (17/50, every act, every fight); every four-act block above replays acts 1-3 exactly as its
+`acts=3` twin would. No act 1-3 row, hero or item moved.
+
+### Deviations (from the plan)
+1. **The act-4 split follows the user's 25%, not the plan's per-fight bands** (lead patch P6's default; plan §7.1's own rule
+   "act-4 clears target 0.25 / the new rate"): doors ~97% (plan 91-95%), act 4 cleared ~72-76% (plan 55-65%), Svammiel 84%
+   (in band). Reason: the three-act rate is 32.5% (the plan assumed 42.5%); the plan's 93% / 82% would give a ~19%
+   four-act campaign. If the lead or the user prefers the plan's bands, the lever is `act[4].dmg` (×1.3 → ~×1.45; the C1-C4
+   rows at ×1.35 already put the doors at 96-97% and the campaign at 22-24%).
+2. **Rows in `balance.js`, not the doors' `N`**: every act-4 HP / damage change is an `act[4]` or `encounters` row (the DM's
+   pattern). The content numbers stay inside plan §3.0.5's bands, and the doors' author-sim suites (sandbox fights read no
+   row) keep measuring what their owners tuned. The only content numbers moved are Svammiel's `N.masterHp` 12 → 6 and
+   `N.masterHint` 30 → 45 (the CAUGHT target; the Master Die desc prints `N.masterHp`).
+3. **Door downs and rounds at the edge**: the Gardener 1.38 downs / 10.2 rounds and the goats 1.20 / 10.1 (plan ≤ 1.3 /
+   ≤ 1.1 and ≤ 10), Svammiel 3.65 downs (≤ 1.5). The HP trims (Gardener ×0.75, goats ×0.8) already took them from 11-13
+   rounds; less HP again would push their win rate up, and the downs come with any campaign-band door AutoPlay heals through.
+4. **Benedick unchanged** (above): his share reads 0.99-1.27× the median over 800 runs; the 0.68× read was noise.
+5. **The Radio Edit's cost is paid on the goats' row, not by a new knob**: their row was fitted with the cheat live (above).
+6. **The act-4 author sims read the content numbers again** (a test-only edit in the six act-4 suites, which hold the bands
+   BAL owns): their real-path fights are run fights, so after the flip they read `act[4]` and the door's row, and the
+   `real=1` / `sim=1` author bands (45-90%) measured bare L5-L6 parties against campaign numbers (Svammiel's `zz`: 7-8%
+   at L6). Each suite's author sim now wraps its start in `bareRows` (boss_dm.js's `bare()` pattern: the act-4 row at ×1
+   and the encounter's row off for that start, `balance=1` keeps them), so the bands keep guarding what the owners tuned.
+   Only the `real=1` / `zz` author path changed; the fixture battles, the review honesty watches and every default suite
+   still run with the campaign rows (the full run passes with them).
+
+### Requests
+- **C5 / Svammiel's notes** (`docs/notes/boss-svammiel.md`): the Master Die is 6 HP and `masterHint` 45 now (BAL); the notes
+  still say 12 / 30. His `zz` author sim reads 52% at L6 (60 bare fights; 57% at 12 HP on the same parties), CAUGHT 19 / 60
+  (8 at 12 HP). The six act-4 suites' author sims now run without the campaign rows (`bareRows`, Deviation 6): owners,
+  keep or reword that helper as you like (it mirrors boss_dm.js's `bare()`).
+- **Lead (docs)**: DESIGN §5 / §9 should quote the act-4 rows (`act[4]` ×1.3 damage; Gardener ×0.75 HP / ×1.45, League
+  ×1.05, Galbraith ×0.95, Coven ×0.9, the goats ×0.8 / ×1.1, Svammiel ×1.05 / ×1.25: ×1.625 damage in all) and the Master
+  Die's 6 HP; settle P6 (the user's ~25% campaign as landed, or the plan's 93% / 82% bands at ~19%).
+- **RULES / AUTOPLAY**: `objectValue` still scores a two-hit object at half its damage (the integrator's request); the
+  Master Die change works around it for Svammiel only. AutoPlay never baits a foe onto Benedick's slime or a Snail Mail
+  parcel (his slime stops 0.40 and mail 1.05 a post, under the addendum's 0.5 / 1.2).
+- **Integrator (`tests/sim/sim.js`)**: with `cameo=0` the sim still buys the Bribe (wasted gold in the comparison); skip it
+  when `DD.Balance.cameo.off`.
+
+### Tests
+`bash tools/test.sh "suite=balance"` (26 suites, 0 failures; the two V3 suites: 42 assertions, including a real Gardener door
+starting at ×0.75 HP / ×1.885 damage) and the final full `bash tools/test.sh`: **PASS, 1275 suites, 149,503 assertions,
+0 failures, 0 "Error in" lines, missing scripts 0**. Opt-in: `boss_svammiel: zz&sim=1&n=60` PASS (52%, the 45-90% band).
+
+---------------------------------------------------------------------------------------------------------------------
+
+## V3 balance audit (INDEPENDENT AUDITOR, Nov 16-17: the act-4 rows re-measured on fresh seeds)
+
+Re-run on seeds BAL never used (BAL: 1000-6000, 7000-7099, 8000-11199), except batch f, which replays BAL's own C6 check
+(11000-11099) with the new rows (paired: acts 1-3 identical); stock `tools/sim.sh` plus a
+scratch probe page (`.tmp/v3audit/h/`: `tests/sim/sim.js` + `probe.js`, which records per act-4 fight the Radio Edit's
+pick and that hero's damage share, the rounds a Clap Back was open, the round Svammiel was CAUGHT, Benedick's shell and
+Dragonsnail turns; `farmclap=1` makes AutoPlay clap back whenever it can, `svam=masterHint:200` makes it prize the
+Master Dice). The probe is neutral: `seeds=50&from=15000` through it is byte-identical to the stock report. 50-seed
+batches, one headless Chrome at a time; reports, `run.sh` / `prun.sh` and the awk tables (`comp.awk` compositions,
+`a4hero.awk`, `lanerounds.awk`, `probe.awk`) in `.tmp/v3audit/`. This role's first attempt (Nov 16, killed with its
+session) measured BAL's rows on 300 fresh runs, moved two rows and began the re-measure; this pass kept its data (no
+file but `balance.js` / `balance_tests.js` changed since), re-measured on 200 more fresh runs and did everything else.
+
+### What landed (two `encounters` rows; nothing else moved)
+| row | BAL (C6) | audit | why |
+|---|---|---|---|
+| `boss_goats` | ×0.8 HP, ×1.1 damage | **×0.8 HP** (damage ×1) | the costliest door at BAL's rows: 95.4% (144/151) and 1.17 downs (target ≤ 1.1) over 500 runs, every other door 97-100%; the Radio Edit (a whole-fight ban, never shortened) costs ~4 points in act-4-only sims, and the plan pays it back on the goats' own numbers |
+| `boss_svammiel` | ×1.05 HP, ×1.25 damage | **×1.1 HP, ×1.3 damage** (×1.69 with `act[4]`) | 91.5% (130/142) at BAL's rows over 500 runs (BAL's own 200: 84.2%; the next 300 fresh: 96.5%), plan 80-85% |
+
+Paired on the same 300 runs (seeds 12000-12299; acts 1-3 replay identically): the goats 95.6% → 97.8% (1.21 → 1.00
+downs), Svammiel 96.5% → 88.4%, four-act campaign 27.3% → 25.3%. Not moved, each measured below: no door's own
+numbers, the Master Die (6 HP, hint 45), `clapHype` (10), Benedick (D9: the Serum stays his one heal), Ellaria (D11),
+the economy, acts 1-3, the Radio Edit (whole fight).
+
+### Batches (normal unless stated; "current" = the rows above)
+| batch | seeds | runs | rows | four-act wins | act 3 cleared | act 4 cleared | doors | Svammiel |
+|---|---|---|---|---|---|---|---|---|
+| n | 12000-12299 | 300 | BAL | 82 (27.3%) | 92 (30.7%) | 82/92 (89.1%) | 433/440 (98.4%) | 82/85 (96.5%) |
+| r | 12000-12299 | 300 | current | 76 (25.3%) | 92 (30.7%) | 76/92 (82.6%) | 439/445 (98.7%) | 76/86 (88.4%) |
+| f | 11000-11099 | 100 | current | 26 (26.0%) | 40 (40.0%) | 26/40 (65.0%) | 173/181 (95.6%) | 26/32 (81.2%) |
+| v (fresh) | 15000-15199 | 200 | current | 42 (21.0%) | 54 (27.0%) | 42/54 (77.8%) | 253/258 (98.1%) | 42/49 (85.7%) |
+| **r + f + v** | | **600** | current | **144 (24.0%)** | 186 (31.0%) | **144/186 (77.4%)** | **865/884 (97.9%)** | **144/167 (86.2%)** |
+| act 4 alone, random | 16000-16099 | 100 | current | `start=4&level=5` | | 40% | 411/440 (93.4%) | 40/71 (56.3%) |
+| … `cameo=0` | 16000-16099 | 100 | current | | | 52% | 424/450 (94.2%) | 52/74 (70.3%) |
+| … fixed A (Coven first, goats last) | 16000-16099 | 100 | current | | | 48% | 392/425 (92.2%) | 48/67 (71.6%) |
+| … fixed B (goats first, Coven last) | 16000-16099 | 100 | current | | | 39% | 407/441 (92.3%) | 39/66 (59.1%) |
+| … `farmclap=1` | 16000-16099 | 100 | current | | | 38% | 380/420 (90.5%) | 38/60 (63.3%) |
+| … `svam=masterHint:200` | 16000-16099 | 100 | current | | | 40% | identical | 40/71 (56.3%) |
+| `acts=3` | 1000-1049 | 50 | — | 17/50 three-act | | | | |
+| Benedick, Betty, Kiri, Josiah | 16000-16049 | 50 | current | 20 (40%) | 26 (52%) | 20/26 | 122/124 | 20/24 |
+| Slate in his seat | 16000-16049 | 50 | current | 9 (18%) | 12 (24%) | 9/12 | — | — |
+| casual | 13000-13099 | 100 | current | 69 (69%) | 73 (73%) | 69/73 (94.5%) | 352/355 | 69/70 |
+| brutal | 14000-14099 | 100 | current | 13 (13%) | 16 (16%) | 13/16 | 80/80 | 13/16 |
+
+`acts=3` on seeds 1000-1049 is byte-identical (timing lines aside) to the integrator's `.tmp/v3/int/rebase3_1000.txt`:
+acts 1-3 are v2's. The three-act equivalent over the 600 current runs is 31.0% (v2 release gate 30.7%).
+
+### Every target (plan §7.1; normal, the 600 current runs unless stated)
+| measure | target | measured | |
+|---|---|---|---|
+| four-act campaign | ~25% (the user) | **24.0%** (144/600, CI 21-28); blocks 21-26% | PASS |
+| act 4 cleared | plan 55-65%; P6's default (§7.1's rule: 0.25 / the three-act rate 31%) ~80% | 77.4% (144/186) | PASS (P6, as BAL) |
+| each door | plan 91-95% (P6: ~97%) | Gardener 97.1 · League 98.3 · Galbraith 98.3 · Coven 97.7 · goats 97.8 (n 174-179) | PASS (P6): even within 1.2 points |
+| no position worse than −6 | | doors 1-5: 97.3 / 97.8 / 97.7 / 96.5 / 100 (act 4 alone: 98.0 / 89.7 / 89.8 / 97.5 / 92.1 against 93.4) | PASS |
+| door downs ≤ 1.3 (≤ 1.1 Coven, goats) | | 0.80: Gardener 0.99 · League 0.70 · Galbraith 0.78 · Coven 0.64 · goats 0.89 | PASS (BAL's 1.38 / 1.20 gone) |
+| door rounds 7-10 (goats 8-10) | | 9.1: Gardener 9.7 · League 9.4 · Galbraith 8.2 · Coven 8.5 · goats 9.8 | PASS |
+| Svammiel 80-85% at ~6.1 | | **86.2%** (144/167, CI 80-91) at party level ~6.0 | EDGE (1.2 points, two fights, over 85%; the campaign at 24% leaves no room to push him harder) |
+| Svammiel 10-12 rounds | | 11.6 | PASS |
+| Svammiel ≤ 1.5 downs | | 2.76 | MISS (structural, as BAL: below) |
+| CAUGHT in ≥ 60% of his wins | | 72% (20-92% by 50-run batch) | PASS |
+| act-4 deaths ≤ 0.6 a run | | 0.13 | PASS |
+| act-4 rounds ≤ ~55 | | 53.7 (max 85) | PASS |
+| gold left at the end of a won run 100-150 | | 145 (blocks 130-154) | PASS (top half) |
+| start cameo in every act-4 fight; 0 over budget; no cameo memory before act 4 | | 1,051 / 1,051; 0; 0 | PASS |
+| each cameo cheat ≤ 3 points (`cameo=0` vs on) | | below | PASS (estimate; two at the line) |
+| the goats: the bear in 100% of fights that reach half; Bar None ≤ 2.0; engagement > 0 | | the bear in every fight that reached half (one loss before half); Bar None 0.50-0.79; hung 1.6-3.0, Clap Backs 0.7-1.8, interrupted 0.08-0.47, speakers 0.09-0.67 a fight | PASS |
+| errors / warnings / timeouts | 0 / 0 / ≤ 1% | 0 / 0 / 0 act-4 stalls in 1,051 campaign act-4 fights; 4 in 1,760 act-4-alone doors (0.2%: one or two heroes left against the Gardener's regrowth or Galbraith's blinks) | PASS |
+| Benedick: share 0.85-1.15× the median | | 3-act 25.4% = **0.97×** (median 26.2%), 4-act 21.6% = **1.00×** (n 134) | PASS |
+| … damage taken 14-19 a fight | | 13.5 | MISS (low, as BAL: AutoPlay's foes pick softer targets; not a nerf his share asks for) |
+| … downs ≤ the roster median (0.30) | | 0.22 | PASS |
+| … shell ≥ 70% of 4+ round fights; dragon 30-45% of his turns | | 100%; ~44% (the probe counts 20.6% at `turn:start`, before the burst, plus 24.0% of turns ended in the shell, each followed by a dragon turn) | PASS |
+| … slime stops ≥ 0.5, Snail Mail ≥ 1.2 a post | | not re-measured (the owner's `zz` 0.40 / 1.05: AutoPlay never baits) | MISS (AutoPlay gap, BAL's request stands) |
+| guard rails: Basanos, Pebbles within ±5 of v2 (25.7%, 25.6%, three-act) | | Basanos 22.2% (−3.5), Pebbles 23.9% (−1.7) | PASS |
+
+**Svammiel's downs** (≤ 1.5): 2.76 a fight at 86% won (at ×1, 100% won, ~0.9). As BAL found, a final boss AutoPlay wins
+80-85% books 2-4 downs (a loss alone books 4+; v2's DM 1.8-1.9 at 81-86%); fewer downs needs a softer or a longer fight,
+and his rounds (11.6) and the campaign (24%) leave no room for either. Reported, not chased.
+
+### What the averages hide
+- **Compositions (campaign, 600 runs).** Doors: with a starting healer (Ellaria / Josiah) 98.5%, without 96.1% (the
+  Gardener without one 91.7%, n 48: its regrowth outlasts thin damage); Slate 96.9%, Betty 98.3%, Syllamin 99.3%,
+  Benedick 99.4%, Basanos 95.1%, Pebbles 96.0% (n 142-474). **Svammiel**: with a healer 90.4% (125), without **73.8%**
+  (42), Betty 77.3%, Pebbles 77.8%, Slate 83.3%: the same shape as v2's DM (the audit's 81% / 65% by healer). No door
+  is a coin flip for anyone. **At the goats**: Betty's parties (he is called out first) 97.8% (46; act 4 alone 98.4%),
+  Syllamin's 100% (60; alone 97.1%), parties with no stun or sleep 100% (7; alone 100%, 10), no healer 95.7% (47).
+- **Act 4 alone** (`start=4&level=5`, 300 runs with cameos: no items from three acts, no survivor filter, so every
+  weakness shows): doors with a healer 96.0%, without 89.3%; the worst door cells are the League for all-melee parties
+  85% (20), Galbraith with Basanos 84.9% (53) or Slate 87.5% (72), the Coven with Pebbles 85.5% (69): never a coin flip.
+  Svammiel is where weak parties break: no healer 42.7% (89), all melee 33% (15), Benedick 47.5% (40), Basanos 44.7%
+  (38), against 77.4% with a healer: his board (panels over the void, far Master Dice) punishes slow melee parties. The
+  final boss, as v2's DM; campaign parties reach him with three acts of gear (73.8% without a healer). Playtest item.
+- **Position** (1-5): campaign 97.3 / 97.8 / 97.7 / 96.5 / 100; act 4 alone 98.0 / 89.7 / 89.8 / 97.5 / 92.1 (all 93.4:
+  doors 2-3 come before the first tavern has topped the party up). Never −6. **Fixed orders** (act 4 alone, 100 runs
+  each): the Coven first and the goats last 48% clears, the reverse 39%, random 40% (± 5 each; BAL's rows: 37% / 36%):
+  no order is a trap; the order stays a free choice.
+- **The cameo cheats** (`cameo=0` against cameos on, act 4 alone, three paired sets of 100 runs: BAL's 7000, this role's
+  12000 at BAL's rows, 16000 at the current rows; ~1/3 of the doors bribed, so no cheat): Green Thumb 3.4 points (91.3%
+  → 94.7%), the Radio Edit 4.0 at BAL's goats row and 2.3 at the current (95.4% → 97.7%), That's a 1 Now 1.9, Nepotism
+  0.7, The Floor Is Lava 0.0; every door 1.9 (92.0% → 93.9%); one cell's standard error ~2.3. In the campaign each door
+  wins 97-98% with its cheat live, because the rows were fitted with the cheats on (the goats' row is where the Radio
+  Edit is paid). PASS as an estimate, Green Thumb and the Radio Edit at the 3-point line.
+- **The Radio Edit's picks** (the probe, 130 unbribed goats fights): spread over 16 heroes. Sparrow is bleeped most (22:
+  Hemo-Glob 12, Vein Glory 7, Juice Box 3; her skills level first), then Slate 14 (Personal Space 10), Basanos 14,
+  Zarathor 12. The bleeped hero's damage share at the goats is 25.6% against 27.5% at his other doors of the same run:
+  nobody is gutted (the most: Marbles 30% → 20%, n 8). The goats win 94.6% with a bleep, 97.9% bribed (richer parties
+  too). **10 of 130 picks were a hero's own sustain verb that also deals damage** — Sparrow's Juice Box 3, Josiah's
+  Prescribe Leeches 3, Basanos's Savage Bite 3, Slate's Stress Ball 1 — legal by the §15.1 rule (damage now, not a revive
+  or a transform) but against D9's grain (request below). Whole fight, never shortened.
+- **A Clap Back Hype farm** (the addendum's risk 11): a clap is open to the party 8.8 rounds of a goats fight (max 17);
+  AutoPlay claps 1.2-1.5 times (12-15 Hype). `farmclap=1` (AutoPlay claps whenever it can, paired seeds): 6.2 claps and
+  +59 Hype a fight (door-fight signatures 0.035 → 0.15), but the goats fall **95.4% → 83.9%** (downs 1.39 → 2.90, rounds
+  11.1 → 12.4): the heat follows the clapper (the verse, Bar None, a square next to Billy) and costs more than the Hype
+  buys; Syllamin's 6-damage clap doesn't change that (76% won when he farms, n 21). Self-limiting: `clapHype` stays 10
+  (its 10 → 5 lever is for claps worth ≥ 40 Hype without that cost). A human who claps only with a fresh tank may do
+  better: playtest item.
+- **Svammiel's dice.** CAUGHT decides his fight: act 4 alone (212 fights) CAUGHT 53% → won 97.3%, not caught → 28.0%; in
+  the campaign 9/9 against 2/3. AutoPlay catches him late (round 11.6; ~30% of the act-4-alone fights end before phase
+  3) and `svam=masterHint:200` changes nothing on the same seeds (40/71 both, the same dice broken): what limits AutoPlay
+  is reaching the far panels alive, not its priority. No cheese the sims can find. A human who rushes the three 6-HP dice
+  the moment phase 3 opens may find the end easier than the sims (the plan's dice had 20 HP, C5 shipped 12, BAL 6 for
+  AutoPlay): playtest item; lever `masterHp` 6 → 12 (BAL's paired author sim: 52% → 57%, AutoPlay's CAUGHT falls).
+- **Benedick.** No permanent shell: shell → burst → two dragon turns → cooldown, and the longest run of shelled turns in
+  1,186 fights (random and fixed parties) is one turn; the shell in 99-100% of 4+ round fights. **No slime stall**:
+  League rounds with / without him 9.4 / 9.4 (campaign, max 13 / 29), 10.6 / 10.5 act 4 alone; 0 campaign act-4
+  stalls. **His seat** (Betty, Kiri, Josiah; fresh seeds 16000-16049, current rows): Benedick 40% four-act (act 3
+  cleared 52%), Slate in his seat 18% (24%); over three blocks of 50 (seeds 1000, 12000, 16000; two at earlier act-4 rows) 42.7% / 25.3% four-act:
+  stronger than the roster's weakest hero, at the median in random parties (1.00×). In his seat: 15.7 damage taken a
+  fight (inside 14-19), 0.18 downs. **Basanos and Pebbles keep their roles**: three-act shares 22.2% / 23.9% (v2 25.7%
+  / 25.6%: −3.5 / −1.7); act 4 cleared 72% / 64% (n 32 / 33, ±8) against 77%; they shared a party with Benedick in 1
+  and 4 of those runs. Benedick's own act-4 clears: 85% (34).
+- **Loops.** Nothing in act 4 pays Hype, gold or healing for a swap or a Help Up: the only repeatable Hype is the Clap
+  Back (above), the Rigged Die's 8 is capped by its spawns, the Serum's 3 per stuck foe is D9's own verb. 0 act-4
+  round-cap stalls in 1,051 campaign fights.
+- **Texts.** The two rows change scaled numbers only; every act-4 text prints them through `DD.AI.fightLevel` (P3) and
+  the Master Die desc prints `N.masterHp`. The full run's honesty suites (previews and AutoPlay dry runs with each cheat
+  live) pass.
+
+### Casual and brutal
+Paired on the first attempt's seeds (acts 1-3 replay identically; the rows only touch act 4), 100 runs each:
+| | four-act | act 3 cleared | act 4 cleared | doors | Svammiel | act-4 deaths | plan §7.1 |
+|---|---|---|---|---|---|---|---|
+| casual, BAL's rows (13000-13099) | 70% | 73% | 70/73 (95.9%) | 99.4% | 98.6% | 0.04 | ~55% · ~80% · ≥ 97% · ≥ 92% |
+| **casual, current** | **69%** | 73% | **69/73 (94.5%)** | 99.2% (352/355) | 98.6% (69/70) | 0.04 | doors, Svammiel PASS; clears and campaign MISS (high) |
+| brutal, BAL's rows (14000-14099) | 12% | 16% | 12/16 | 97.4% | 12/14 | 0.31 | ≥ 30% clears · ≥ 70% · ≥ 55% |
+| **brutal, current** | **13%** | 16% | **13/16 (81%)** | 100% (80/80) | 13/16 (81%) | 0.44 | PASS (floors; n 16) |
+
+**Casual's act 4 is easier than the plan's casual column** (94.5% cleared against ~80%; four-act 69% against ~55%):
+casual parties arrive with three easy acts of items and levels and every act-4 row is multiplied by casual's ×0.8 /
+×0.8. Its floors (doors ≥ 97%, Svammiel ≥ 92%) hold, and nobody asked for a harder casual; reaching ~80% would need a
+casual-only act-4 row, which `B.scale` has no slot for (difficulty × act × act-kind × kind × encounter: an act row's
+sub-rows are fight kinds, not difficulties), so it is a contract change, not a number: **left to the lead** (lever if
+wanted: a `difficulty`-keyed sub-row of `act[4]`, e.g. casual ×1.25 damage, ARCHITECTURE §5 and `B.scale` together).
+**Brutal** reaches act 4 in 16 of 100 runs (v2's brutal three-act rate) and clears it 81%: the floors hold; n 16 is a
+shape, not a measure.
+
+### Left to the lead or a human playtest
+1. **P6 is still open** (the user's ~25% campaign, as landed: doors ~98%, act 4 cleared ~77%; or the plan's 91-95% doors
+   and 55-65% clears at a ~17-19% campaign: `act[4].dmg` ×1.3 → ~×1.45).
+2. **Svammiel's phase 3 for a dice-rushing human** (6-HP Master Dice; the sims can't rush them): if the end feels like a
+   formality, `masterHp` 6 → 12.
+3. **Svammiel for slow melee parties without a healer** (act 4 alone 33-43%; campaign parties without a healer 74%).
+4. **The Clap Back with a fresh tank** (the heat outweighs the Hype for AutoPlay's farm: 95.4% → 83.9%; a careful human
+   may come out ahead).
+5. **Sparrow is the hero the Radio Edit bleeps most** (22 of 130, her best-levelled skill), and 10 of 130 picks were a
+   sustain verb (request below).
+
+### Deviations (from the plan)
+1. P6 as BAL: the doors sit at ~98% and act 4 is cleared ~77% (the plan's 91-95% and 55-65%) because the user's ~25%
+   campaign needs it at today's 31% three-act rate.
+2. Svammiel at 86.2% is a point over the plan's 80-85% (CI 80-91): pushing him to 82-83% would take the campaign to
+   ~23%; the user's number wins.
+3. Svammiel's downs (2.76 against ≤ 1.5) and Benedick's damage taken (13.5 against 14-19 in random parties; 15.7 in his
+   fixed seat) stay as BAL left them (reasons above).
+
+### Requests
+- **C5 / lead (`svammiel.js` `radioPick`, addendum-goats §15.1)**: leave out skills that heal (tagged `'heal'` or `'drain'`, or an `L.heal`:
+  Stress Ball) — Sparrow's Juice Box, Josiah's Prescribe Leeches, Basanos's Savage Bite, Slate's Stress Ball were 10 of
+  130 picks; D9 makes those a hero's own sustain, and a whole-fight bleep of one is a heavier cut than a hero-turn of
+  damage. The next-best damage skill is always there (every hero has 2+). A pick-rule change, not a number: not mine.
+- **Lead (docs)**: DESIGN §5 / §9 should quote the rows as landed (the goats ×0.8 HP, no damage row; Svammiel ×1.1 HP /
+  ×1.3 damage, ×1.69 with `act[4]`), not BAL's C6.
+- **Lead (casual)**: see "Casual and brutal".
+- BAL's open requests stand (AutoPlay's `objectValue` for two-hit objects and slime / parcel baiting; the sim's Bribe with
+  `cameo=0`; C5's notes still saying Master Die 12 / hint 30).
+
+### Tests
+`tests/balance_tests.js`: the V3 rows suite pins the rows as landed (`A4_ROWS`: the goats `{ hp: 0.8 }`, Svammiel `{ hp: 1.1,
+dmg: 1.3 }`); every other V3 check (each door harder than its content numbers and leaning on damage, casual < normal <
+brutal, the finale the hardest row, no order scaling, a real Gardener door at the scaled numbers, the Master Die, the
+Radio Edit whole-fight, Benedick's one heal) is unchanged. Final full `bash tools/test.sh` (Nov 17, 6 min,
+`.tmp/v3audit/test_full.txt`): **PASS — 1275 suites, 149,503 assertions, 0 failures, 0 "Error in" lines, missing
+scripts 0.** About 2,700 sim runs for this audit (both attempts) (every report in `.tmp/v3audit/`): 0 errors, 0 `DD.warn` lines, 0
+probe errors.
+
+## QA fixes (Nov 17) — QA FIXER, content cluster: what the act-4 fixes do to the numbers (no row moved)
+The content cluster's QA fixes (docs/notes/boss-svammiel.md "QA fixes (Nov 17)") change three of Svammiel's mechanics
+and two door details; no `balance.js` row moved. Re-measured on the audit's own act-4-alone seeds (paired: the same
+parties and door orders; the pre-fix code reproduced the audit's `s4r_16000.txt` byte for byte, so its two reports are
+the baseline): `tools/sim.sh "seeds=50&from=16000|16050&start=4&level=5&verbose=1"`, reports in `.tmp/qafix-content/`.
+
+| act 4 alone, seeds 16000-16099 | audit (pre-fix) | after the fixes |
+|---|---|---|
+| Svammiel won | 40/71 (56.3%) | **49/69 (71.0%)** (+15) |
+| … falls a fight | 1.82 | 0.88 (FIGHTS-02: one fall per drop) |
+| … downs a fight | 4.49 | 4.40 |
+| … rounds | 12.5 | 13.7 |
+| … CAUGHT (fights / wins) | 50% / 82% | 29% / 41% (FIGHTS-08: 12-HP Master Dice; AutoPlay rarely chips a two-hit object) |
+| … snap cheats a fight | 0.16 | 0.28 (FIGHTS-07: a Fudge token every phase) |
+| … pencil HP / panels dropped | 15.3 / 2.4 | 33.7 / 4.7 (longer phase 3: the dice stand longer) |
+| all doors | 411/440 (93.4%) | 400/431 (92.8%) |
+| … the Coven | 81/85 (95.3%) | 77/84 (91.7%) (FIGHTS-06: his lava no longer burns the hags, so the cheat now taxes the party) |
+| … the goats | 83/87 (95.4%) | 82/86 (95.3%) (FIGHTS-09: the bear's Mic Check) |
+| errors / warnings | 0 / 0 | 0 / 0 |
+
+Reading: FIGHTS-01 (a phase-2 wind-up waits until every hero had a turn) and FIGHTS-02 make him much easier for AutoPlay
+(+15 points act 4 alone); FIGHTS-08 (dice 6 → 12 HP) pulls the other way but AutoPlay's two-hit `objectValue` keeps it
+from chasing them (CAUGHT in 41% of his wins, plan ≥ 60%). In the campaign (audit: Svammiel 86.2%, four-act 24.0%) this
+reads as Svammiel ~92-94% and the four-act campaign ~25-26% (an estimate from act 4 alone, not a campaign measure).
+**For BAL / the lead**: the campaign band (Svammiel 80-85%) needs his row raised again — the lever is
+`encounters.boss_svammiel` (×1.1 HP / ×1.3 damage), damage first (his wind-ups now land on fewer heroes); re-measure on
+600 campaign runs as the audit did. Not done here: a balance pass, not a QA fix, and the QA fixes are what the user's
+"hard but fair" asks for. CAUGHT ≥ 60% of wins needs the RULES / AUTOPLAY `objectValue` request, not fragile dice.
+Tests: `tests/balance_tests.js` pins `masterHp >= 12` now (was `<= 8`).
+- One lever probe on the same seeds (URL override, no file change): `bal=encounters.boss_svammiel.dmg:1.55` gave 45/68
+  (66%; 27/33 and 18/35, one stall) against 71% at x1.3: noisy at this size and less than half the gap, so no row is
+  proposed here; BAL should fit it on campaign runs. Reports: `.tmp/qafix-content/lever_s4_*.txt`.

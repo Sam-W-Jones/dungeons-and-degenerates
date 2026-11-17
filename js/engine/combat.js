@@ -10,6 +10,9 @@
  * undone).
  * Public actions emit 'combat:changed'; the end of combat (hooks, 'combat:end', onEnd) is finalized when the
  * outermost public action completes, so effects never run on a half-resolved state.
+ * V3 (act 4): 'combat:ready' (the start cameo's moment), 'skill:used', actsWithOwner units sharing their owner's turn
+ * (E1), a unit's own turnsPerRound (E2), squads in objective.bossIds (E10), encounter.banner: false (E11), the swap count
+ * (E12) and the modifyUse veto in canUse (E13).
  */
 (function () {
   'use strict';
@@ -131,6 +134,19 @@
     for (let i = from || 0; i < s.order.length; i++) if (s.order[i].unitId === u.id) return i;
     return -1;
   }
+  /**
+   * V3 E1: the unit acts on its owner's turn instead of rolling its own entry: a summon, or an enemy whose def (or the
+   * unit itself) says `actsWithOwner` (the Gardener's vines, Cousin Mildred's Eye; DD.Act.spawn(id, x, y, { owner })).
+   */
+  function ridesWithOwner(u) {
+    if (!u || !u.ownerId) return false;
+    if (u.kind === 'summon') return true;
+    if (u.kind === 'hero') return false;
+    if (u.actsWithOwner) return true;
+    const def = DD.Hooks.defOf(u);
+    return !!(def && def.actsWithOwner);
+  }
+  Combat.actsWithOwner = ridesWithOwner;
   /** The unit whose turn u acts on: itself when it has an initiative entry, else its owner's (summons); null if none. */
   function turnOwnerOf(u) {
     const s = S();
@@ -138,7 +154,7 @@
     let cur = u;
     for (let guard = 0; cur && guard < 8; guard++) {
       if (entryIndex(s, cur) >= 0) return cur;
-      if (!cur.ownerId) return null;
+      if (!ridesWithOwner(cur)) return null;
       const o = Combat.byId(cur.ownerId);
       if (!o || o.dead) return null;
       cur = o;
@@ -146,6 +162,20 @@
     return null;
   }
   Combat.turnOwner = turnOwnerOf;
+  /**
+   * E1 for the first roll (the order is still being built, so turnOwnerOf can't answer): an actsWithOwner unit whose
+   * owner chain ends in a living unit that rolls for itself gets no entry of its own.
+   */
+  function hasLivingOwner(u) {
+    let cur = u;
+    for (let guard = 0; guard < 8; guard++) {
+      if (!ridesWithOwner(cur)) return cur !== u;
+      const o = Combat.byId(cur.ownerId);
+      if (!o || o.dead || o === u) return false;
+      cur = o;
+    }
+    return false;
+  }
   /** The units of a turn: its owner plus every (non-dead) summon acting on that turn. */
   function groupOf(owner) {
     const s = S();
@@ -204,13 +234,20 @@
     return 0;
   }
   Combat.initOf = initOf;
-  /** How many initiative entries a unit gets per round (enemy / summon def turnsPerRound, e.g. a boss with two). */
+  /**
+   * How many initiative entries a unit gets per round: V3 E2 the unit's own `turnsPerRound` (a phase that gains or loses
+   * a turn; read at every round start), else its enemy / summon def's (e.g. a boss with two). Heroes: 1. Clamped 1-4.
+   */
   function entriesPerRound(u) {
-    if (u.kind === 'hero') return 1;
-    const def = DD.Hooks.defOf(u);
-    const n = def ? Math.round(+def.turnsPerRound || 1) : 1;
+    if (!u || u.kind === 'hero') return 1;
+    let n = Math.round(+u.turnsPerRound);
+    if (!(isFinite(n) && n >= 1)) {
+      const def = DD.Hooks.defOf(u);
+      n = def ? Math.round(+def.turnsPerRound || 1) : 1;
+    }
     return U.clamp(isFinite(n) ? n : 1, 1, 4);
   }
+  Combat.entriesPerRound = entriesPerRound;
   /** One initiative entry. Roll mode: d20 + init via state.rng, then the unit's modifyInitiative(r) hooks. */
   function rollEntry(s, u, k) {
     const init = initOf(u);
@@ -311,7 +348,10 @@
     return list[0];
   };
 
-  /** Round start: drop the dead, give orphans (summons whose owner died) an entry, merge the joiners. */
+  /**
+   * Round start: drop the dead, give orphans (summons and actsWithOwner units whose owner died) an entry, bring every
+   * unit's entries to entriesPerRound (E2: a missing one is rolled like a joiner, an extra one dropped), merge the joiners.
+   */
   function mergeJoiners(s) {
     if (!s.order) return;
     s.order = s.order.filter(function (e) { const u = Combat.byId(e.unitId); return !!u && !u.dead; });
@@ -320,10 +360,32 @@
       if (!active(u) || turnOwnerOf(u) || s.joining.some(function (j) { return j.unitId === u.id; })) return;
       entriesFor(s, u).forEach(function (e) { s.joining.push(e); });
     });
+    syncEntries(s);
     const add = s.joining;
     s.joining = [];
     add.forEach(function (e) { insertEntry(s, e); });
     renumber(s);
+  }
+  /** E2: every non-hero unit with entries gets exactly entriesPerRound(u) of them (entry numbers k = 0..n−1). */
+  function syncEntries(s) {
+    const ks = {};
+    s.order.concat(s.joining).forEach(function (e) { (ks[e.unitId] = ks[e.unitId] || []).push(e.k || 0); });
+    s.units.forEach(function (u) {
+      if (u.dead || u.kind === 'hero' || !ks[u.id]) return;
+      const want = entriesPerRound(u), have = ks[u.id];
+      const keep = function (e) { return e.unitId !== u.id || (e.k || 0) < want; };
+      if (have.some(function (k) { return k >= want; })) {
+        s.order = s.order.filter(keep);
+        s.joining = s.joining.filter(keep);
+        DD.Act.log(u.name + ' now takes ' + want + (want === 1 ? ' turn' : ' turns') + ' a round.', 'system');
+      }
+      const added = [];
+      for (let k = 0; k < want; k++) if (have.indexOf(k) < 0) added.push(rollEntry(s, u, k));
+      if (!added.length) return;
+      added.forEach(function (e) { s.joining.push(e); });
+      DD.Act.log(u.name + ' now takes ' + want + ' turns a round' + (s.initMode === 'roll' ? ' (rolls ' + added.map(function (e) { return e.total; }).join(', ') + ')' : '') + '.', 'system');
+      emit('initiative:joined', { unit: u, unitId: u.id, entries: added.map(function (e) { return Object.assign({}, e); }) });
+    });
   }
 
   // ---- state cloning (previews) ------------------------------------------------------------------------
@@ -484,7 +546,8 @@
     const act = (setup && setup.act) || (enc && enc.act) || (run && run.act) || 1;
     const kind = opts.kind || (setup && setup.kind) || (enc && enc.kind) || 'normal';
     if (DD.Balance && typeof DD.Balance.scale === 'function') {
-      const sc = DD.Balance.scale(name, act, kind, { neutral: !!opts.sandbox, encounter: enc && enc.id });
+      // V3 (P11): an act-4 door's order scaling rides on setup.gauntlet ({ lane, index, beaten })
+      const sc = DD.Balance.scale(name, act, kind, { neutral: !!opts.sandbox, encounter: enc && enc.id, gauntlet: setup && setup.gauntlet || null });
       return { name: name, hp: sc.hp, dmg: sc.dmg };
     }
     const d = DIFFICULTY[name];
@@ -500,11 +563,22 @@
     for (let i = 0; i < s.grid.tiles.length; i++) { const o = s.grid.tiles[i].obj; if (o && (!id || o.id === id)) n++; }
     return n;
   }
-  /** The named boss (objective.bossId: def or unit id) plus every boss-tier enemy, e.g. a phase spawned as a new unit. */
+  /**
+   * The named boss (objective.bossId: def or unit id) plus every boss-tier enemy, e.g. a phase spawned as a new unit.
+   * V3 E10: objective.bossIds (def ids) names a squad: every unit of those defs, incl. one that arrives mid-fight.
+   */
   function bossUnits(s) {
-    const id = s.objective && s.objective.bossId;
-    const named = id ? s.units.filter(function (u) { return u.side === 'enemy' && (u.defId === id || u.id === id); }) : [];
+    const ob = s.objective || {};
+    const ids = (Array.isArray(ob.bossIds) ? ob.bossIds : []).concat(ob.bossId ? [ob.bossId] : []);
+    const named = ids.length ? s.units.filter(function (u) { return u.side === 'enemy' && (ids.indexOf(u.defId) >= 0 || ids.indexOf(u.id) >= 0); }) : [];
     return named.concat(s.units.filter(function (u) { return u.side === 'enemy' && DD.Act.isBoss(u) && named.indexOf(u) < 0; }));
+  }
+  Combat.bossUnits = function (s) { s = s || S(); return s ? bossUnits(s) : []; };
+  /** "Defeat the League of Villainy": the encounter's shortName (else its name), a leading "The" in lower case. */
+  function squadName(s) {
+    const enc = s.encounter || {};
+    const n = String(enc.shortName || enc.name || 'the squad');
+    return /^The /.test(n) ? 'the ' + n.slice(4) : n;
   }
   /** Units a protect { unitId } objective is about: that unit id, else every unit of that def id (encounter defs). */
   function vipUnits(s, id) {
@@ -519,8 +593,15 @@
     ob = ob || s.objective;
     switch (ob.type) {
       case 'boss': {
-        const b = bossUnits(s)[0];
-        return 'Defeat ' + (b ? b.name : 'the boss') + ' (the minions will flee)';
+        if (Array.isArray(ob.bossIds) && ob.bossIds.length) {
+          const left = bossUnits(s).filter(function (u) { return !u.dead; }).length;
+          return 'Defeat ' + squadName(s) + ' (' + left + ' left)';
+        }
+        const bosses = bossUnits(s), b = bosses[0];
+        // [qa FIGHTS-12] the suffix only while someone is there to flee (any other enemy, summons too — finalize sends
+        // them all) or a wave is still coming: a solo boss (Galbraith, the finale before its imps) is just "Defeat X"
+        const minions = wavesPending(s) || s.units.some(function (u) { return u.side === 'enemy' && active(u) && bosses.indexOf(u) < 0; });
+        return 'Defeat ' + (b ? b.name : 'the boss') + (minions ? ' (the minions will flee)' : '');
       }
       case 'survive': return 'Survive ' + ob.rounds + ' rounds (' + Math.min(s.round, ob.rounds) + '/' + ob.rounds + ')';
       case 'destroy': {
@@ -689,7 +770,8 @@
       units: [], hype: 0, encounter: enc,
       objective: normalizeObjective(setup.objective || (enc && enc.objective) || { type: 'killAll' }),
       rules: [], deploy: { active: false, tiles: [] }, log: [],
-      stats: { units: {}, envKills: 0, hypeGained: 0, xp: 0, gold: 0, downs: 0, goldGained: 0, objects: {} },
+      // V3: cameos (lines played), cheats (applied), swaps (E12: hero swap moves)
+      stats: { units: {}, envKills: 0, hypeGained: 0, xp: 0, gold: 0, downs: 0, goldGained: 0, objects: {}, cameos: 0, cheats: 0, swaps: 0 },
       result: null, difficulty: { hp: diff.hp, dmg: diff.dmg, tiers: !opts.sandbox, mov: !opts.sandbox && DD.Balance && DD.Balance.enemyMov ? Object.assign({}, DD.Balance.enemyMov) : null }, difficultyName: diff.name,
       run: run, kind: opts.kind || (enc && enc.kind) || 'normal',
       reinforcements: (setup.reinforcements || (enc && enc.reinforcements) || []).map(function (w) { return Object.assign({}, w, { done: false }); }),
@@ -704,7 +786,13 @@
       noActFirst: !!opts.noPlan, aiOff: opts.enemyAi === false,
       // free-form scripting state for encounters / rules / bosses: previews copy it
       data: {}, startHooksFired: false,
+      // V3: no cameo at all (a sandbox's cameo: false, or the page-wide DD.Balance.cameo.off of the sims' cameo=0)
+      noCameo: opts.cameo === false || !!(DD.Balance && DD.Balance.cameo && +DD.Balance.cameo.off),
     };
+    // V3: an act-4 door's place in the gauntlet ({ lane, index, beaten: [laneIds] }, from DD.Encounter.build)
+    if (setup.gauntlet && typeof setup.gauntlet === 'object') {
+      s.data.gauntlet = Object.assign({}, setup.gauntlet, { beaten: Array.isArray(setup.gauntlet.beaten) ? setup.gauntlet.beaten.slice() : [] });
+    }
     Combat.state = s;
     endCb = typeof opts.onEnd === 'function' ? opts.onEnd : null;
     endState = s;
@@ -746,11 +834,13 @@
       Combat.refreshObjective();
       if (enc && enc.intro) Act.log(enc.intro, 'narrator');
       Act.narrate(s.kind === 'boss' ? 'boss_start' : s.kind === 'elite' ? 'elite_start' : 'combat_start', {});
+      // V3 E11: encounter.banner === false keeps the intros but skips the banners (the start cameo shows the opponent)
+      const banners = !(enc && enc.banner === false);
       bossUnits(s).forEach(function (b) {
         const def = DD.getEnemy(b.defId);
         if (def && def.boss) {
           if (def.boss.intro) Act.log(def.boss.intro, 'enemy');
-          if (!DD.FX.instant) DD.FX.banner(b.name, { sub: def.boss.title || '' });
+          if (banners && !DD.FX.instant) DD.FX.banner(b.name, { sub: def.boss.title || '' });
         }
       });
       const hs = Combat.heroes();
@@ -759,6 +849,9 @@
       s.startHooksFired = true;
       DD.Hooks.fireAll('onCombatStart');
       if (enc && typeof enc.onStart === 'function') DD.safe('encounter onStart', enc.onStart, enc, [s]);
+      // V3: the fight is built, nobody has deployed or rolled yet: the start cameo (and its cheat) lands here, so a
+      // modifyInitiative cheat changes the roll and a placed object is on the board during deployment
+      emit('combat:ready', { state: s });
       if (s.deploy.active) s.phase = 'deploy';
       else doRoll(s);
     } finally {
@@ -775,7 +868,7 @@
    * surfaces: [{ x, y, id, turns }], terrain(tile) (mutate or return overrides), objective, rules, encounter,
    * reinforcements, deployTiles + deploy: true, noPlan (enemies pass their round-1 turns), enemyAi: false (enemies
    * always pass), initiative ('heroesFirst' default | 'enemiesFirst' | 'roll'), order: [unit or def ids], difficulty,
-   * gold, consumables, run, onEnd }.
+   * gold, consumables, run, onEnd, cameo: false (V3: no cameo), gauntlet: { lane, index, beaten } (V3: state.data.gauntlet) }.
    */
   Combat.sandbox = function (cfg) {
     cfg = cfg || {};
@@ -793,12 +886,13 @@
       enemies: (cfg.enemies || []).map(function (e) { return { id: e.id, x: e.x, y: e.y, hpMult: e.hpMult, level: e.level }; }),
       objective: cfg.objective, rules: cfg.rules || [], encounter: cfg.encounter || null,
       deployTiles: cfg.deployTiles || [], reinforcements: cfg.reinforcements || [],
+      gauntlet: cfg.gauntlet || null,
     };
     return Combat.start(setup, {
       seed: cfg.seed !== undefined ? cfg.seed : 1, sandbox: true, noPlan: !!cfg.noPlan, difficulty: cfg.difficulty,
       summons: cfg.summons, deploy: !!cfg.deploy, gold: cfg.gold, consumables: cfg.consumables, objects: cfg.objects,
       surfaces: cfg.surfaces, run: cfg.run || null, onEnd: cfg.onEnd, kind: cfg.kind,
-      initiative: cfg.initiative, order: cfg.order, enemyAi: cfg.enemyAi,
+      initiative: cfg.initiative, order: cfg.order, enemyAi: cfg.enemyAi, cameo: cfg.cameo,
     });
   };
 
@@ -813,8 +907,9 @@
     s.units.forEach(function (u) { if (!u.dead) u.block = 0; });
     const list = [];
     s.order = list;
-    // every hero and enemy rolls; summons act on their owner's turn (one without a living owner rolls for itself)
-    s.units.forEach(function (u) { if (!u.dead && u.kind !== 'summon') entriesFor(s, u).forEach(function (e) { list.push(e); }); });
+    // every hero and enemy rolls; summons act on their owner's turn (one without a living owner rolls for itself), and
+    // so do actsWithOwner enemies (E1: their owner is checked directly — the order is still being built)
+    s.units.forEach(function (u) { if (!u.dead && u.kind !== 'summon' && !hasLivingOwner(u)) entriesFor(s, u).forEach(function (e) { list.push(e); }); });
     s.units.forEach(function (u) { if (!u.dead && u.kind === 'summon' && !turnOwnerOf(u)) entriesFor(s, u).forEach(function (e) { list.push(e); }); });
     arrange(s, list);
     s.turnIndex = -1;
@@ -1155,7 +1250,8 @@
    */
   Combat.giveTurnTo = function (unit) {
     const s = S();
-    if (!s || !s.sandbox || s.result || !unit || unit.dead) return false;
+    // a unit of another (earlier) fight is refused, never given a turn here
+    if (!s || !s.sandbox || s.result || !unit || unit.dead || Combat.byId(unit.id) !== unit) return false;
     return action(function () {
       if (!s.order) doRoll(s);
       if (s.result) return false;
@@ -1522,6 +1618,7 @@
       const r = DD.Act.swapMove(unit, ally, { provoke: true });
       const clean = r.swapped && !r.provoked && s.mutations === m0 && active(unit) && active(ally) &&
         unit.x === x && unit.y === y && ally.x === from.x && ally.y === from.y;
+      if (r.swapped) s.stats.swaps = (s.stats.swaps || 0) + 1;   // V3 E12 (Svammiel's 'swapped' heckle)
       s.undo = clean ? { kind: 'swap', unitId: unit.id, allyId: ally.id, from: from, to: { x: x, y: y }, ap: ap0, facing: facing0, lastDir: dir0,
         allyFacing: afacing0, allyLastDir: adir0, path: [{ x: x, y: y }], mutations: s.mutations, turn: s.turn } : null;
       // [finish D7] a hero with 'swap' barks says one now and then ({ally} = who it swapped with), else a move bark
@@ -1558,7 +1655,9 @@
         DD.FX.move(u, [rec.from], { from: rec.to, ms: 60 });
         DD.FX.move(a, [rec.to], { from: rec.from, ms: 60, parallel: true });
         s.undo = null;
+        s.stats.swaps = Math.max(0, (s.stats.swaps || 0) - 1);   // nobody saw anything, not even the stats
         DD.Act.log(u.name + ' and ' + a.name + ' swap back. Nobody saw anything.', 'system');
+        emit('move:undone', { unit: u, unitId: u.id, kind: 'swap', allyId: a.id, from: Object.assign({}, rec.to), to: Object.assign({}, rec.from) });
         return true;
       }
       const back = rec.path.slice(0, -1).reverse();
@@ -1568,6 +1667,8 @@
       DD.FX.move(u, back, { ms: 60 * back.length });
       s.undo = null;
       DD.Act.log(u.name + ' takes that back.', 'system');
+      // V3 (optional ask, Benedick's slime trail): the walk was taken back — from where it ended to where it began
+      emit('move:undone', { unit: u, unitId: u.id, kind: 'move', from: Object.assign({}, rec.to), to: Object.assign({}, rec.from), path: rec.path.map(function (p) { return { x: p.x, y: p.y }; }) });
       return true;
     });
   };
@@ -1597,6 +1698,19 @@
     return null;
   }
 
+  /**
+   * V3 E13: the unit's sources (incl. state.rules) may refuse a use: modifyUse(q), q = { unit, skill, slot, level, why:
+   * null }; a source sets q.why to the reason ("Bleeped by Svammiel (Radio Edit)."). A pure query (DD.Targeting.pure, like
+   * a def's canUse): no RNG draw, no state change. Returns the reason or null.
+   */
+  function vetoOf(unit, r) {
+    if (!DD.Hooks.has('modifyUse', unit)) return null;
+    const q = { unit: unit, skill: r.def, slot: r.slot || null, level: r.level || 1, why: null };
+    DD.Targeting.pure(function () { DD.Hooks.fire('modifyUse', unit, q); });
+    return typeof q.why === 'string' && q.why ? q.why : null;
+  }
+  Combat.vetoOf = function (unit, slotOrDef) { const r = unit && DD.Targeting.resolve(slotOrDef); return r ? vetoOf(unit, r) : null; };
+
   /** true, or a short reason why the unit can't use this skill slot right now. */
   Combat.canUse = function (unit, slot) {
     const s = S();
@@ -1605,6 +1719,8 @@
     const r = DD.Targeting.resolve(slot);
     if (!r) return 'Unknown skill.';
     if (r.slot && !ownsSlot(unit, r.slot)) return 'Not their skill.';
+    const veto = vetoOf(unit, r);
+    if (veto) return veto;
     if (hasSt(unit, 'sleep') && !hasSt(unit, 'stun') && !hasSt(unit, 'frozen')) return 'Asleep. Zzz.';
     if (stunned(unit)) return 'Stunned!';
     if (hasSt(unit, 'sheep')) return 'Baa. (Sheep can only move.)';
@@ -1705,6 +1821,8 @@
     const aimed = ctx.target;
     if (objHit) { ctx.objectHit = objHit; ctx.target = null; }
     try { DD.Hooks.fire('onSkillUsed', unit, ctx); } finally { if (objHit) ctx.target = aimed; }
+    // V3: a real use (never a preview / dry run — emit is muted there — nor an attack of opportunity)
+    if (!(ctx.opportunity || (opts.extra && opts.extra.opportunity))) emit('skill:used', { unit: unit, skill: def, ctx: ctx });
     Combat.refreshObjective();
     Combat.checkEnd();
     return ctx;

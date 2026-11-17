@@ -1,5 +1,6 @@
 /* Dungeons and Degenerates — js/core/namespace.js
- * Global namespace, content registries, narration and after-load hooks.
+ * Global namespace, content registries (V3: cameos), narration (V3: act variants), the campaign length
+ * (DD.finalAct) and after-load hooks.
  * Loaded FIRST (see js/manifest.js). At load time every other file may only:
  *   - attach things to window.DD
  *   - call DD.register*(), DD.registerNarration(), DD.afterLoad()
@@ -19,6 +20,18 @@
   } catch (e) { /* ignore */ }
   DD.debug = DD.params.debug === '1';
   DD.headless = false; // tests set true: no renderer, DD.FX.instant = true
+
+  // ---- the campaign's length (V3: act 4 ships dark, the integrator flips the knob last; ARCHITECTURE §2) ------------
+  // DD.finalAct() is the last act of a campaign: DD.Balance.campaign.acts clamped to CLASSIC_ACTS..DD.MAX_ACT. Every
+  // module asks it instead of writing a literal 3 (or 4). Content may target any act up to DD.MAX_ACT whatever the knob
+  // says: while the knob is 3, act 4 is reached only by suites that set it, DD.Run.startAtAct and debug URLs (acts=4).
+  const CLASSIC_ACTS = 3;   // v2's three-act campaign: the knob's default and its floor
+  DD.MAX_ACT = 4;
+  DD.finalAct = function () {
+    const c = DD.Balance && DD.Balance.campaign;
+    const n = Math.floor(Number(c && c.acts));
+    return isFinite(n) ? Math.max(CLASSIC_ACTS, Math.min(DD.MAX_ACT, n)) : CLASSIC_ACTS;
+  };
 
   // ---- diagnostics ----------------------------------------------------------
   DD.problems = []; // registration / content warnings (strings)
@@ -50,6 +63,7 @@
   DD.defs = {
     heroes: {}, skills: {}, statuses: {}, items: {}, consumables: {}, enemies: {}, summons: {},
     terrain: {}, objects: {}, surfaces: {}, encounters: {}, events: {}, scars: {}, passives: {}, narration: {},
+    cameos: {},
   };
 
   function register(kind, def, required, defaults) {
@@ -151,6 +165,7 @@
 
   DD.registerEvent = function (def) {
     return register('events', def, ['title', 'text', 'choices'], function () {
+      // the default is the classic acts' map stops on purpose: an act-4 (gauntlet) event opts in with acts: [4]
       return { acts: [1, 2, 3], weight: 1, unique: true, icon: '❓' };
     });
   };
@@ -171,7 +186,40 @@
     });
   };
 
+  /**
+   * V3: a cameo actor (Svammiel) — the lines, triggers and cheats DD.Cameo plays (ARCHITECTURE §3.13). Registers at load
+   * time like any def, before (or without) js/engine/cameo.js.
+   */
+  DD.registerCameo = function (def) {
+    return register('cameos', def, ['name'], function () {
+      return { title: '', icon: '🎭', color: '#c0213a', enemy: null, triggers: [], cheats: {}, situation: null,
+        roastPrefix: null, comebackPrefix: null };
+    });
+  };
+
+  /**
+   * V3: a stand-in for DD.Cameo until js/engine/cameo.js (RULES) assigns the real one (ARCHITECTURE §5.11). Content may
+   * call it at runtime before the engine lands: nothing plays, nothing is applied (stub === true).
+   */
+  DD.Cameo = {
+    stub: true,
+    STYLES: {}, TOKENS: {},
+    fire: function () { return 0; },
+    play: function () { return ''; },
+    say: function () { return ''; },
+    cheat: function () { return null; },
+    present: function () { return null; },
+    history: function () { return []; },
+    budget: function () { return { used: 0, left: 0, lastRound: 0 }; },
+    /** The fight is not the campaign's last act: a run's act (else the fight's encounter act) < DD.finalAct(). */
+    campaignGoesOn: function (state) {
+      const act = state && (state.run ? state.run.act : state.encounter && state.encounter.act);
+      return Number(act) > 0 && Number(act) < DD.finalAct();
+    },
+  };
+
   // ---- lookups ------------------------------------------------------------------
+  DD.getCameo = function (id) { return DD.defs.cameos[id] || null; };
   DD.getHero = function (id) { return DD.defs.heroes[id] || null; };
   DD.getSkill = function (id) { return DD.defs.skills[id] || null; };
   DD.getStatus = function (id) { return DD.defs.statuses[id] || null; };
@@ -248,9 +296,31 @@
     (bag[key] = bag[key] || []).push.apply(bag[key], lines.filter(function (l) { return typeof l === 'string' && l; }));
   };
 
-  /** Pick a narration line for key and fill tokens. Returns '' if none. */
+  // V3 act variants (ARCHITECTURE §2, §3.10): a pool registered as `key@a<act>` (e.g. 'victory@a4') replaces `key`'s
+  // pool while that act is being played. It uses the base key's tokens (DD.Narrator.TOKENS[key]).
+  function actOf(v) { const n = Math.floor(Number(v)); return isFinite(n) && n > 0 ? n : 0; }
+  /**
+   * The act whose narration variants apply now: the run's act while a run is going on or just ended (its fights share
+   * the run state), a sandbox / debug fight's encounter act while it runs (or after it, when no run exists), else 0.
+   */
+  DD.narrationAct = function () {
+    const C = DD.Combat && DD.Combat.state, R = DD.Run && DD.Run.state;
+    if (C && C.run && C.run === R) return actOf(R.act);
+    if (C && !C.run && C.encounter && (!R || C.phase !== 'over')) return actOf(C.encounter.act);
+    return R ? actOf(R.act) : 0;
+  };
+  /** The key DD.narrate draws from: `key@a<act>` when that variant has lines (act: default DD.narrationAct()), else key. */
+  DD.narrationKey = function (key, act) {
+    const a = act === undefined ? DD.narrationAct() : actOf(act);
+    const v = a ? key + '@a' + a : null;
+    return v && DD.defs.narration[v] && DD.defs.narration[v].length ? v : key;
+  };
+  /** A variant key's base key ('victory@a4' → 'victory'); other keys unchanged. */
+  DD.narrationBaseKey = function (key) { return String(key).replace(/@a\d+$/, ''); };
+
+  /** Pick a narration line for key (its act variant when one applies) and fill tokens. Returns '' if none. */
   DD.narrate = function (key, vars, rng) {
-    const lines = DD.defs.narration[key];
+    const lines = DD.defs.narration[DD.narrationKey(key)];
     if (!lines || !lines.length) return '';
     const r = rng && rng.next ? rng.next() : Math.random();
     let line = lines[Math.floor(r * lines.length) % lines.length];

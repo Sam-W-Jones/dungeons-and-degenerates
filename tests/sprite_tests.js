@@ -864,4 +864,387 @@
     t.eq(inPortrait, 0, 'portraits never draw add-on overlays');
     dropProblems(p0);
   });
+
+  // ---------------------------------------------------------------------------------------------------------------
+  // V3 (act IV, plan §4.7 / §8.4 RENDER-SPRITES): the `cameo` FX, banner fit / frames, the stingers, act-4 sprites.
+  const LINE70 = 'Nice formation. Did a toddler place your minis? I want to meet the kid';
+  const YAWS = [0, 90, 180, 270, 37.5];
+  /** The League's name at a stretch level (each letter run capped at n; 13 = the user's full 72-character name). */
+  function leagueName(n) {
+    if (DD.League && typeof DD.League.name === 'function') return DD.League.name(n);
+    const run = function (ch, k) { return ch.repeat(Math.min(n, k)); };
+    return 'The L' + run('l', 10).slice(1) + run('e', 11) + run('a', 12) + 'g' + run('u', 13) + run('e', 9) + ' of Villainy';
+  }
+  function leagueFrames() { const f = []; for (let i = 1; i <= 13; i++) f.push(leagueName(i)); return f; }
+  const RULE_CARD = { id: 'svam_green_thumb', name: 'Green Thumb', icon: '🌱', desc: 'Svammiel planted two Strangler Vines for the Gardener.',
+    quip: 'I did a little gardening. For it. Against you.' };
+  function svamEnemy() { return DD.getEnemy && DD.getEnemy('svam_svammiel') ? 'svam_svammiel' : null; }
+  function cameoEvt(o) {
+    return Object.assign({ type: 'cameo', actor: 'svammiel', name: 'Svammiel', title: 'The Floor Boss', icon: '😈', color: '#c0213a', enemy: svamEnemy(),
+      style: 'bubble', banner: null, text: '', speaker: 'Svammiel', cheat: null, bribe: null, ms: 0, parallel: false }, o);
+  }
+  /** A 10 × 10 board: the enemy zone on rows 0-2, a fallen boss (the DM) at (7, 6), a foe at (4, 1), a hero below. */
+  function cameoState() {
+    const tiles = [];
+    for (let y = 0; y < 10; y++) for (let x = 0; x < 10; x++) tiles.push({ x: x, y: y, h: 0, t: 'stone', surface: null, obj: null, zone: y <= 2 ? 'enemy' : y >= 8 ? 'hero' : null, tag: null });
+    const boss = fakeUnit('cm_boss', '__none', 'enemy', { x: 7, y: 6, tier: 'boss', dead: true });
+    const foe = fakeUnit('cm_foe', '__none', 'enemy', { x: 4, y: 1 });
+    const hero = fakeUnit('cm_hero', '__none', 'hero', { x: 4, y: 8 });
+    return { id: 'cameo_fx', grid: { w: 10, h: 10, tiles: tiles }, units: [boss, foe, hero], round: 1, rules: [], log: [], data: {}, encounter: null };
+  }
+  /** A view that projects through DD.Iso at the current yaw (call inside DD.Iso.withYaw). */
+  function yawView(c, st, tt) {
+    const W = c.width, H = c.height;
+    return { ctx: c.getContext('2d'), zoom: 1, t: tt, dt: 16, width: W, height: H, state: st, yaw: DD.Iso.view().yaw,
+      toScreen: function (x, y, h) { const w = DD.Iso.toWorld(x, y, h || 0); return { x: W / 2 + w.x, y: H * 0.25 + w.y }; },
+      local: function (u, v) { return DD.Iso.local(u, v); } };
+  }
+  /** Set a cameo's clock to fraction k of its length (blocking: the event's elapsed; a bubble: its effect's age). */
+  function setCameoTime(evt, k) {
+    if (evt.style === 'bubble') { if (evt._fx) evt._fx.age = k * evt._fx.life; } else { evt.elapsed = k * evt.ms; evt.done = false; }
+  }
+
+  T.suite('sprites: V3 cameo FX — every style paints at every yaw and time, anchored on its tile (rotation-safe)', function (t) {
+    const H = DD.FX.handlers, Iso = DD.Iso, p0 = DD.problems.length, live = Iso.view();
+    t.ok(!!H.cameo && typeof H.cameo.start === 'function', 'handler registered: cameo');
+    t.ok(DD.FXRender.CAMEO_TIMES && ['entrance', 'swoop', 'shadow', 'bubble'].every(function (s) { return !!DD.FXRender.CAMEO_TIMES[s]; }), 'every DD.Cameo style has a choreography');
+    t.eq(LINE70.length, 70, 'the test line is 70 characters');
+    const M = DD.FXRender.moments, prevHost = M.cameo;
+    delete M.cameo;
+    // the whole canvas is the board area here (a HUD suite may have left its margins behind)
+    const R = DD.Render, realMargins = R ? R.margins : null;
+    if (R) R.margins = function () { return { left: 0, right: 0, top: 0, bottom: 0 }; };
+    const st = cameoState();
+    const c = canvas(960, 540), ctx = c.getContext('2d');
+    const full = leagueName(13);
+    const cases = [
+      { label: 'entrance (the twist)', style: 'entrance', ms: 4500, banner: { title: 'YOU THOUGHT THIS WAS OVER?' }, text: 'I, SVAMMIEL, CONTROL ALL.' },
+      { label: 'swoop', style: 'swoop', ms: 2500, banner: { title: 'The Overgrown Conservatory', sub: 'Svammiel: "Weeding day! Guess who the weeds are."', fit: true }, text: LINE70 },
+      { label: 'swoop + cheat card + League frames', style: 'swoop', ms: 3300, banner: { title: full, sub: 'Svammiel: "My favourites!"', fit: true, frames: leagueFrames() }, text: LINE70, cheat: RULE_CARD },
+      { label: 'swoop (Short) + a Bribe', style: 'swoop', ms: 1200, banner: { title: 'Tea with the Coven' }, text: 'Short and sweet.', bribe: 'Bribery! My love language. Fine. No rule this time.' },
+      { label: 'swoop, no sprite (icon medallion)', style: 'swoop', ms: 2500, enemy: null, banner: { title: 'Galbraith' }, text: LINE70 },
+      { label: 'shadow', style: 'shadow', ms: 900 },
+      { label: 'bubble', style: 'bubble', text: LINE70 },
+      { label: 'bubble + cheat card', style: 'bubble', text: 'Radio edit! That skill had language in it.', cheat: RULE_CARD },
+      { label: 'bubble, no sprite', style: 'bubble', enemy: null, text: 'Hi.' },
+    ];
+    let tt = 100;
+    const empty = [];
+    const anchorX = {};
+    try {
+      cases.forEach(function (cs) {
+        YAWS.forEach(function (yaw) {
+          withFx([], function () {
+            const evt = cameoEvt(Object.assign({}, cs, { label: undefined }));
+            Iso.withYaw(yaw, function () {
+              t.tryRun(cs.label + ' @' + yaw + ' start', function () { H.cameo.start(evt); });
+              [0, 0.25, 0.5, 0.75, 1].forEach(function (k) {
+                setCameoTime(evt, k);
+                ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, c.width, c.height);
+                tt += 0.016;
+                t.tryRun(cs.label + ' @' + yaw + ' t=' + k, function () { DD.FXRender.drawScreen(yawView(c, st, tt)); });
+                if (k === 0.5 && ink(c) < 150) empty.push(cs.label + ' @' + yaw);
+                if (k === 0.5 && cs.label === 'swoop' && evt._fx && evt._fx._fig) {
+                  const want = yawView(c, st, tt).toScreen(evt._fx.anchor.x, evt._fx.anchor.y);
+                  anchorX[yaw] = { got: evt._fx._fig.anchorX, want: want.x };
+                }
+              });
+            });
+            t.tryRun(cs.label + ' @' + yaw + ' end', function () { evt.done = true; H.cameo.end(evt); });
+          });
+        });
+      });
+    } finally {
+      if (prevHost) M.cameo = prevHost; else delete M.cameo;
+      if (R) R.margins = realMargins;
+    }
+    t.eq(empty.length, 0, 'every style paints mid-way at every yaw' + (empty.length ? ' (empty: ' + empty.slice(0, 4).join(', ') + ')' : ''));
+    const a = DD.FXRender.cameoAnchor({ style: 'swoop' }, st), b = DD.FXRender.cameoAnchor({ style: 'entrance' }, st);
+    t.ok(a && a.y <= 2 && !(a.x === 4 && a.y === 1), 'a swoop hovers over the enemy zone (the free tile nearest its centre): ' + JSON.stringify(a));
+    t.ok(b && b.x === 7 && b.y === 6, 'the twist rises at the fallen boss\'s tile (the DM\'s)');
+    t.ok(YAWS.every(function (y) { return anchorX[y] && Math.abs(anchorX[y].got - anchorX[y].want) < 1; }), 'the figure stands on its tile\'s projected point at every yaw');
+    t.ok(anchorX[0] && anchorX[180] && Math.abs(anchorX[0].got - anchorX[180].got) > 50, 'turning the map moves the figure with its tile (yaw 0 vs 180)');
+    t.ok(Iso.view() === live, 'the live view is untouched');
+    t.eq(errorsSince(p0).length, 0, 'no swallowed errors');
+  });
+
+  T.suite('sprites: V3 cameo moment host — its ms is honoured, skip ends it, bubbles never block, instant adds nothing', function (t) {
+    const p0 = DD.problems.length, M = DD.FXRender.moments, prev = M.cameo;
+    const c = canvas(640, 360);
+    let tt = 500;
+    const frame = function () { tt += 0.016; DD.FXRender.drawScreen(fakeView(c, tt, 16)); };
+    try {
+      withFx([], function (FX) {
+        // no host: the event keeps the ms DD.Cameo gave it, and blocks
+        delete M.cameo;
+        const e1 = FX.push(cameoEvt({ style: 'swoop', ms: 2500, text: 'Hello, snacks.', banner: { title: 'The Barn Burner' } }));
+        FX.update(16);
+        t.eq(e1.ms, 2500, 'no host: a swoop lasts DD.Cameo\'s 2.5 s');
+        FX.update(1500);
+        t.ok(FX.busy(), 'and playback waits on it');
+        FX.flush();
+        // a host: its ms wins; skipping (elapsed = ms) ends it and its visuals
+        const calls = [];
+        M.cameo = { start: function (evt) { calls.push(evt.style); return 1234; } };
+        const e2 = FX.push(cameoEvt({ style: 'entrance', ms: 4500, text: 'I, SVAMMIEL, CONTROL ALL.', banner: { title: 'YOU THOUGHT THIS WAS OVER?' } }));
+        FX.update(16);
+        t.eq(e2.ms, 1234, 'the host\'s ms is honoured');
+        t.eq(calls.join(','), 'entrance', 'the host started the moment once');
+        frame();
+        t.ok(DD.FXRender.count() >= 2, 'the figure and its banner are on screen');
+        FX.update(1000);
+        t.ok(FX.busy(), 'still playing after 1 s of 1.234');
+        e2.elapsed = e2.ms;
+        FX.update(16);
+        t.ok(!FX.busy(), 'skipping finishes it and playback moves on');
+        frame();
+        t.eq(DD.FXRender.count(), 0, '...and its visuals are gone');
+        // a shadow and a swoop ask the host too; a host may also end one at once (0 ms: nothing drawn)
+        M.cameo = { start: function (evt) { calls.push(evt.style); return 0; } };
+        const e3 = FX.push(cameoEvt({ style: 'shadow', ms: 900 }));
+        FX.update(16);
+        t.ok(e3.ms === 0 && !FX.busy() && !e3._fx, 'a 0 ms answer plays nothing');
+        M.cameo = { wants: function () { return false; }, start: function () { calls.push('nope'); return 9000; } };
+        const e4 = FX.push(cameoEvt({ style: 'shadow', ms: 900 }));
+        FX.update(16);
+        t.ok(e4.ms === 900 && calls.indexOf('nope') < 0, 'a host that does not want it leaves DD.Cameo\'s ms');
+        FX.flush();
+        // bubbles: never asked, never waited for, one on screen at a time, gone after their life
+        M.cameo = { start: function () { calls.push('bubble?'); return 5000; } };
+        const n0 = calls.length;
+        const b1 = FX.push(cameoEvt({ style: 'bubble', text: 'Hm. Bold choice.', parallel: true }));
+        FX.update(16);
+        t.ok(!FX.busy() && calls.length === n0, 'a bubble is non-blocking and never asks the host');
+        t.ok(b1._fx && !b1._fx.dead && b1._fx.life === 2600, 'it lives 2.6 s');
+        const b2 = FX.push(cameoEvt({ style: 'bubble', text: 'Second thoughts.', parallel: true }));
+        FX.update(16); frame();
+        t.ok(b1._fx.dead && b2._fx && !b2._fx.dead, 'one bubble at a time: a new one replaces the old');
+        for (let i = 0; i < 260; i++) frame();
+        t.eq(DD.FXRender.count(), 0, 'bubbles expire (no leaks)');
+        // a quip has no FX; a throwing host is contained
+        FX.push(cameoEvt({ style: 'quip', text: 'Log only.' }));
+        FX.update(16);
+        t.eq(DD.FXRender.count(), 0, 'a quip draws nothing');
+        M.cameo = { start: function () { throw new Error('boom cameo host'); } };
+        FX.push(cameoEvt({ style: 'swoop', ms: 400, text: 'x' }));
+        t.tryRun('throwing host', function () { FX.update(16); FX.flush(); });
+        const errs = errorsSince(p0);
+        t.ok(errs.length === 1 && /boom cameo host/.test(errs[0]), 'the broken host is reported once and playback goes on');
+        dropProblems(p0);
+        // instant mode (tests, sims, headless): zero virtual time, nothing drawn
+        FX.instant = true;
+        const n1 = DD.FXRender.count();
+        FX.push(cameoEvt({ style: 'swoop', ms: 2500, text: 'Instant.' }));
+        t.ok(!FX.busy() && DD.FXRender.count() === n1, 'instant mode: the cameo applies at once and adds no visuals');
+        FX.instant = false;
+      });
+    } finally {
+      if (prev) M.cameo = prev; else delete M.cameo;
+    }
+    t.eq(errorsSince(p0).length, 0, 'no swallowed errors');
+  });
+
+  T.suite('sprites: V3 cameo bubbles wrap at ~44 characters, at most 3 lines', function (t) {
+    const W = DD.FXRender.cameoLines;
+    t.ok(typeof W === 'function', 'DD.FXRender.cameoLines');
+    const l = W(LINE70);
+    t.ok(l.length >= 2 && l.length <= 3 && l.every(function (s) { return s.length <= 44; }), 'a 70-character line wraps into ≤ 3 lines of ≤ 44 (' + l.length + ')');
+    t.eq(l.join(' '), LINE70, '...losing nothing');
+    const long = W('blah '.repeat(60));
+    t.ok(long.length === 3 && /…$/.test(long[2]), 'an over-long line is cut at 3 lines with "…"');
+    const lg = W('Behold ' + leagueName(13) + '!');
+    t.ok(lg.length <= 3 && lg.every(function (s) { return s.length <= 44; }), 'a word longer than a line (the League\'s name) is split');
+    t.eq(W('').length, 0, 'no text, no lines');
+    // every bubble line in the cameo pools fits (DESIGN: bubble lines ≤ 70)
+    const N = DD.defs.narration || {}, bad = [];
+    Object.keys(N).filter(function (k) { return /^svam_/.test(k); }).forEach(function (k) {
+      (N[k] || []).forEach(function (line) { if (typeof line === 'string' && line.length <= 70 && /…$/.test(W(line).join(' '))) bad.push(k + ': ' + line); });
+    });
+    t.eq(bad.length, 0, 'every ≤ 70-character svam_* line fits a bubble uncut' + (bad.length ? ' (' + bad[0] + ')' : ''));
+  });
+
+  T.suite('sprites: V3 banner fit keeps the full League name inside 92% of the width; frames cycle', function (t) {
+    const H = DD.FX.handlers, p0 = DD.problems.length;
+    const full = leagueName(13), frames = leagueFrames();
+    t.eq(full.length, 72, 'the full name is the user\'s 72 characters');
+    const record = function (c) {
+      const ctx = c.getContext('2d'), real = ctx.fillText, rec = [];
+      ctx.fillText = function (s, x, y) {
+        const m = ctx.getTransform();
+        rec.push({ s: String(s), w: ctx.measureText(String(s)).width * Math.abs(m.a), a: m.a, font: ctx.font });
+        return real.apply(ctx, arguments);
+      };
+      return rec;
+    };
+    let tt = 900;
+    const drawAt = function (c, rec, evt, k) {
+      evt.elapsed = k * evt.ms; evt.done = false; rec.length = 0;
+      c.getContext('2d').clearRect(0, 0, c.width, c.height);
+      tt += 0.016;
+      DD.FXRender.drawScreen(fakeView(c, tt, 16));
+      return rec;
+    };
+    [1280, 1024, 640].forEach(function (Wd) {
+      const c = canvas(Wd, Math.round(Wd * 0.5625)), rec = record(c);
+      withFx([], function () {
+        const evt = { type: 'banner', text: full, sub: 'Svammiel: "My favourites! Nepotism is a family value."', fit: true, frames: frames, ms: 1300 };
+        H.banner.start(evt);
+        let worst = 0, worstSub = 0;
+        const seen = [];
+        [0, 0.02, 0.1, 0.2, 0.3, 0.4, 0.5, 0.59, 0.6, 0.7, 0.85, 0.97].forEach(function (k) {
+          drawAt(c, rec, evt, k).forEach(function (r) {
+            if (r.s === full || frames.indexOf(r.s) >= 0) { worst = Math.max(worst, r.w); if (seen[seen.length - 1] !== r.s) seen.push(r.s); }
+            else if (/^Svammiel:/.test(r.s)) worstSub = Math.max(worstSub, r.w);
+          });
+        });
+        t.ok(worst > 0 && worst <= Wd * 0.92 + 0.5, Wd + ' px: the title stays inside 92% (' + Math.round(worst) + ' ≤ ' + Math.round(Wd * 0.92) + ')');
+        t.ok(worstSub > 0 && worstSub <= Wd * 0.94 + 0.5, Wd + ' px: the sub fits too (' + Math.round(worstSub) + ')');
+        t.ok(seen.length >= 6, Wd + ' px: the frames cycle (' + seen.length + ' texts)');
+        t.eq(seen[0], frames[0], Wd + ' px: it starts on "' + frames[0] + '"');
+        if (Wd === 1280) t.eq(seen[seen.length - 1], full, '1280 px: it ends on the full name');
+        else t.ok(frames.indexOf(seen[seen.length - 1]) >= 0 || seen[seen.length - 1] === full, Wd + ' px: it ends on the widest frame that fits');
+      });
+    });
+    // the cameo's own banner (the League's start cameo) fits the same way
+    const c = canvas(1280, 720), rec = record(c);
+    withFx([], function () {
+      const prev = DD.FXRender.moments.cameo;
+      delete DD.FXRender.moments.cameo;
+      try {
+        const evt = cameoEvt({ style: 'swoop', ms: 3300, text: LINE70, cheat: RULE_CARD, banner: { title: full, sub: 'Svammiel: "Favourites first."', fit: true, frames: frames } });
+        H.cameo.start(evt);
+        let worst = 0, n = 0;
+        [0.08, 0.15, 0.25, 0.35, 0.42].forEach(function (k) {
+          drawAt(c, rec, evt, k).forEach(function (r) { if (r.s === full || frames.indexOf(r.s) >= 0) { worst = Math.max(worst, r.w); n++; } });
+        });
+        t.ok(n > 0 && worst <= 1280 * 0.92 + 0.5, 'the cameo banner fits the full name too (' + Math.round(worst) + ')');
+      } finally { if (prev) DD.FXRender.moments.cameo = prev; }
+    });
+    // v2 banners are unchanged; fit: false opts out
+    const c2 = canvas(1280, 720), rec2 = record(c2);
+    withFx([], function () {
+      const plain = { type: 'banner', text: 'ROUND 2', sub: 'Fight!', ms: 950 };
+      H.banner.start(plain);
+      const r = drawAt(c2, rec2, plain, 0.5).filter(function (x) { return x.s === 'ROUND 2'; })[0];
+      t.ok(r && r.a === 1 && /\b58px\b/.test(r.font), 'a short title keeps the v2 size (58 px at 1280, no squeeze)');
+      DD.FXRender.clear();
+      const raw = { type: 'banner', text: full, ms: 950, fit: false };
+      H.banner.start(raw);
+      const r2 = drawAt(c2, rec2, raw, 0.5).filter(function (x) { return x.s === full; })[0];
+      t.ok(r2 && r2.w > 1280, 'fit: false keeps the plain size (and overflows: ' + Math.round(r2 ? r2.w : 0) + ')');
+      DD.FXRender.clear();
+      const auto = { type: 'banner', text: 'SVAMMIEL\'S RULE: Initiative? Natural 20.', sub: 'Svammiel rolls a 20 for initiative.', ms: 950 };
+      H.banner.start(auto);
+      const r3 = drawAt(c2, rec2, auto, 0.5).filter(function (x) { return x.s === auto.text; })[0];
+      t.ok(r3 && r3.w <= 1280 * 0.92 + 0.5, 'a banner that would overflow is fitted without asking (' + Math.round(r3 ? r3.w : 0) + ')');
+    });
+    const f = DD.FXRender.fitBanner(c.getContext('2d'), full, 1280);
+    t.ok(f.size >= 18 && f.w * f.sx <= 1280 * 0.92 + 0.5, 'DD.FXRender.fitBanner: ' + f.size + ' px, squeeze ' + f.sx.toFixed(2));
+    t.eq(errorsSince(p0).length, 0, 'no swallowed errors');
+  });
+
+  T.suite('sprites: V3 stingers exist and stay silent headless; boss banners play boss.sting; cameo cues; goats bleat', function (t) {
+    const A = DD.Audio, H = DD.FX.handlers, p0 = DD.problems.length;
+    const v3 = ['svam_sting', 'cheat', 'swoop', 'slide_whistle', 'clockwork', 'snip', 'evil_chord', 'grand_spell', 'cackle', 'bubble'];
+    const goats = { scratch: 'zap', bass_drop: 'explosion', crowd_ooh: 'buff', bleat: 'bark' };
+    v3.forEach(function (n) { t.ok(A.names.indexOf(n) >= 0, 'stinger recipe: ' + n); });
+    Object.keys(goats).forEach(function (n) {
+      t.ok(A.names.indexOf(n) >= 0 || A.names.indexOf(goats[n]) >= 0, 'goat stinger ' + n + ' or its fallback ' + goats[n]);
+      t.eq(A.fallbacks[n], goats[n], n + ' falls back to ' + goats[n]);
+      t.ok(A.resolve(n) === n || A.resolve(n) === goats[n], 'DD.Audio.resolve(' + n + ')');
+    });
+    t.eq(A.resolve('no_such_sound'), null, 'resolve: an unknown name with no fallback is null');
+    const all = v3.concat(Object.keys(goats));
+    t.ok(all.every(function (n) { return A.play(n, { vol: 2 }) === false; }), 'every stinger is a silent no-op headless');
+    // a spy instead of WebAudio: what plays when
+    const played = [], real = A.play;
+    A.play = function (n) { played.push(n); return false; };
+    const C = DD.Combat, prevState = C.state, M = DD.FXRender.moments, prevHost = M.cameo;
+    delete M.cameo;
+    try {
+      withDefs([
+        { bag: 'enemies', def: { id: '__spr_sting_boss', name: 'Sting Boss', __kind: 'enemies', act: 4, tier: 'boss', boss: { title: 'Loud', sting: 'evil_chord' }, sprite: { base: 'blob' } } },
+        { bag: 'enemies', def: { id: '__spr_goat', name: 'Spr Goat', __kind: 'enemies', act: 4, tier: 'elite', tags: ['goats'], sprite: { base: 'blob' } } },
+        { bag: 'enemies', def: { id: '__spr_bear', name: 'Spr Bear', __kind: 'enemies', act: 4, tier: 'elite', tags: ['goats', 'bear'], sprite: { base: 'blob' } } },
+      ], function () {
+        const sb = fakeUnit('sb', '__spr_sting_boss', 'enemy', { name: 'Sting Boss' });
+        const gt = fakeUnit('gt', '__spr_goat', 'enemy'), br = fakeUnit('br', '__spr_bear', 'enemy');
+        C.state = { units: [sb, gt, br], encounter: { id: 'x', gauntlet: { lane: 'league', order: 2 } } };
+        withFx([sb, gt, br], function () {
+          H.banner.start({ type: 'banner', text: 'Sting Boss', sub: 'Loud', ms: 950 });
+          t.ok(played.indexOf('evil_chord') >= 0 && played.indexOf('turn') < 0, 'a boss banner plays its def\'s boss.sting instead of the turn chime');
+          played.length = 0;
+          H.banner.start({ type: 'banner', text: 'ROUND 2', ms: 950 });
+          t.eq(played.join(','), 'turn', 'other banners keep the v2 chime');
+          played.length = 0;
+          H.bark.start({ type: 'bark', unit: gt, unitId: gt.id, text: 'Baa-ars!', dur: 300 });
+          H.bark.start({ type: 'bark', unit: br, unitId: br.id, text: 'Haiku time.', dur: 300 });
+          t.eq(played.join(','), 'bleat,bark', 'a goat bleats; the bear lyricist barks');
+          // the start cameo's cues: swoop in, the mini-boss's stinger (by lane), the cheat card, swoop out
+          played.length = 0;
+          C.state.units = [];
+          const c = canvas(640, 360);
+          const evt = cameoEvt({ style: 'swoop', ms: 3300, text: 'Hello.', cheat: RULE_CARD, banner: { title: 'The League of Villainy' } });
+          H.cameo.start(evt);
+          let tt = 1500;
+          for (let k = 0; k <= 1.0001; k += 0.05) { setCameoTime(evt, k); tt += 0.016; DD.FXRender.drawScreen(fakeView(c, tt, 16)); }
+          t.eq(played.join(','), 'swoop,evil_chord,cheat,swoop', 'swoop cues: whoosh, the League\'s evil chord, the cheat card, whoosh');
+          played.length = 0;
+          const tw = cameoEvt({ style: 'entrance', ms: 4500, text: 'I, SVAMMIEL, CONTROL ALL.', banner: { title: 'YOU THOUGHT THIS WAS OVER?' } });
+          H.cameo.start(tw);
+          for (let k = 0; k <= 1.0001; k += 0.05) { setCameoTime(tw, k); tt += 0.016; DD.FXRender.drawScreen(fakeView(c, tt, 16)); }
+          t.ok(played[0] === 'svam_sting', 'the twist opens on svam_sting (' + played.join(',') + ')');
+        });
+      });
+    } finally {
+      A.play = real;
+      C.state = prevState;
+      if (prevHost) M.cameo = prevHost;
+    }
+    t.eq(errorsSince(p0).length, 0, 'no swallowed errors');
+  });
+
+  T.suite('sprites: V3 act-4 sprites (and hero looks) draw at every yaw and pose', function (t) {
+    const S = DD.Sprites, Iso = DD.Iso, p0 = DD.problems.length;
+    const enemies = Object.keys(DD.defs.enemies || {}).map(function (id) { return DD.defs.enemies[id]; })
+      .filter(function (d) { return d && d.act >= 4 && d.sprite && !/^__/.test(d.id); });
+    const looks = [];
+    Object.keys(DD.defs.heroes || {}).forEach(function (id) {
+      const d = DD.defs.heroes[id];
+      if (d && d.looks && typeof d.looks === 'object') Object.keys(d.looks).forEach(function (k) { if (d.looks[k]) looks.push({ id: id + ':' + k, spec: d.looks[k] }); });
+    });
+    if (!enemies.length && !looks.length) { t.log('no act-4 sprites or hero looks registered yet'); t.ok(true, 'nothing to draw yet'); return; }
+    const c = canvas(220, 220), ctx = c.getContext('2d'), poses = S.OPTIONS.poses, blank = [];
+    const clear = function () { ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, 220, 220); };
+    enemies.forEach(function (d) {
+      const u = fakeUnit('a4_' + d.id, d.id, 'enemy', { name: d.name, tier: d.tier, flags: Object.assign({}, d.flags || {}), tags: (d.tags || []).slice() });
+      YAWS.forEach(function (yaw) {
+        Iso.withYaw(yaw, function () {
+          poses.forEach(function (pose) {
+            clear();
+            u.vis.pose = pose === 'idle' ? null : pose; u.vis.poseT = 0.5; u.vis._fxAt = performance.now();
+            u.vis.downed = pose === 'downed';
+            t.tryRun(d.id + ' @' + yaw + ' ' + pose, function () { S.drawUnit(ctx, u, 110, 190, 0.8, 1.3); });
+            if (pose === 'idle' && ink(c) < 40) blank.push(d.id + ' @' + yaw);
+          });
+        });
+      });
+      u.vis.pose = null; u.vis._fxAt = undefined; u.vis.downed = false;
+    });
+    looks.forEach(function (L) {
+      YAWS.forEach(function (yaw) {
+        Iso.withYaw(yaw, function () {
+          poses.forEach(function (pose) {
+            [1, -1].forEach(function (facing) {
+              clear();
+              t.tryRun(L.id + ' @' + yaw + ' ' + pose, function () { S.draw(ctx, L.spec, 110, 190, 1, { t: 0.9, pose: pose, poseT: 0.5, facing: facing }); });
+              if (pose === 'idle' && facing === 1 && ink(c) < 40) blank.push(L.id + ' @' + yaw);
+            });
+          });
+        });
+      });
+    });
+    t.eq(blank.length, 0, enemies.length + ' act-4 sprites and ' + looks.length + ' hero looks paint at every yaw' + (blank.length ? ' (blank: ' + blank.slice(0, 4).join(', ') + ')' : ''));
+    t.eq(errorsSince(p0).length, 0, 'no swallowed painter errors');
+  });
 })();

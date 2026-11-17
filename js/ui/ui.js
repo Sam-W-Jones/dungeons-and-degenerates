@@ -45,6 +45,8 @@
     1: { roman: 'I', name: "The Leaky Flagon's Basement", sub: 'Cellars, sewers and goblin warrens.' },
     2: { roman: 'II', name: 'The Hauntwood & the Necromancy Academy (Accredited)', sub: 'Cursed woods, graveyards and an overdue library.' },
     3: { roman: 'III', name: 'Behind the DM Screen', sub: 'Hellscapes, a dragon hoard and the actual table.' },
+    // V3 (plan §4.10): count-free on purpose, the doors come from the registry. Only shown once act IV is reached.
+    4: { roman: 'IV', name: 'Under the Table', sub: 'Svammiel\'s floor: a gauntlet of mini-bosses in any order, then the floor boss.' },
   };
   UI.NODE_TYPES = {
     combat: { icon: '⚔️', name: 'Combat', desc: 'A fight. Probably goblins. It is always goblins. Win it and one hero levels up.' },
@@ -54,6 +56,8 @@
     tavern: { icon: '🍺', name: 'Tavern', desc: 'Rest, train or recruit. Mostly drink.' },
     treasure: { icon: '💰', name: 'Treasure', desc: 'Free loot! Definitely not a mimic. Probably.' },
     boss: { icon: '👑', name: 'Boss', desc: 'The big bad of this act. Bring snacks.' },
+    // V3: a gauntlet door (DD.RunMap TYPES.miniboss); the map legend lists it only on a gauntlet map (spoiler gate)
+    miniboss: { icon: '😈', name: 'Mini-boss', desc: 'One of Svammiel\'s floor bosses. One hero levels up. Always offers a rare item. Beat it and its door is sealed.' },
   };
   UI.DIFFICULTIES = [
     { id: 'casual', name: 'Casual', icon: '🍕', desc: 'Enemies have 20% less HP and deal 20% less damage.', quip: 'The DM pulls his punches.' },
@@ -127,8 +131,9 @@
     cursed: { name: 'Cursed', color: '#c06cff' },
   };
   UI.SLOTS = { weapon: { name: 'Weapon', icon: '🗡️' }, armor: { name: 'Armor', icon: '🛡️' }, trinket: { name: 'Trinket', icon: '💍' } };
+  // V3: Benedick, the 17th hero, arrives last (obviously). An id here that is not registered is ignored (UI.heroIds).
   UI.HERO_ORDER = ['zarathor', 'syllamin', 'marbles', 'marwyn', 'ellaria', 'josiah', 'buga', 'sparrow', 'slate', 'corelos',
-    'kiri', 'betty', 'basanos', 'valdris', 'hjalmar', 'pebbles'];
+    'kiri', 'betty', 'basanos', 'valdris', 'hjalmar', 'pebbles', 'benedick'];
   const MAX_LEVEL = 10;
 
   // ---- tiny utils -------------------------------------------------------------------------------------------------
@@ -951,7 +956,8 @@
       if (h) return String(h);
     }
     if (u.boss) return 'Defeat ' + ((DD.getEnemy(u.boss) || {}).name || u.boss) + ' to unlock.';
-    if (u.act >= 3) return 'Defeat the Dungeon Master to unlock.';
+    // dormant (no hero has an unlock): the Dungeon Master's act (DD.Meta.DM_ACT), not "the last act"
+    if (+u.act === ((DD.Meta && DD.Meta.DM_ACT) || 3)) return 'Defeat the Dungeon Master to unlock.';
     if (u.act) return 'Clear Act ' + U.roman(u.act) + ' to unlock.';
     if (u.text) return String(u.text);
     return 'Keep playing to unlock.';
@@ -989,7 +995,9 @@
   UI.narrate = function (key, vars, fallback) {
     vars = vars || {};
     let s = '';
-    const lines = (DD.defs && DD.defs.narration && DD.defs.narration[key]) || [];
+    // V3: filter the pool DD.narrate will draw from (an act variant `key@a4` replaces the base pool in act IV)
+    const pk = typeof DD.narrationKey === 'function' ? DD.narrationKey(key) : key;
+    const lines = (DD.defs && DD.defs.narration && DD.defs.narration[pk]) || [];
     const usable = [];
     lines.forEach(function (l, i) { if (tokensFilled(l, vars)) usable.push(i); });
     if (usable.length && typeof DD.narrate === 'function') {
@@ -1009,6 +1017,27 @@
   const FILTER_LABEL = {
     enemy: 'an enemy', ally: 'an ally', allyOrSelf: 'an ally or self', any: 'any unit', notSelf: 'another unit',
     empty: 'an empty tile', emptyOrUnit: 'a tile', downedAlly: 'a downed ally', object: 'an object',
+  };
+
+  /** [QA HERO-8] Who or what a skill aims at: a tile skill open to anything aims at "a tile", not "any unit". */
+  function targetLabel(def) {
+    const tg = (def && def.target) || {};
+    if (tg.type === 'tile' && (!tg.filter || tg.filter === 'any')) return 'a tile';
+    return FILTER_LABEL[tg.filter] || '';
+  }
+  UI.targetLabel = targetLabel;
+
+  /**
+   * [QA HERO-3] Does using this skill spend every AP the user has left (Power Nap, Coming Out of My Shell)? The def's
+   * `drainsAp` flag when it sets one, else its own exact text ("spend all your AP"; desc == execute). `desc`: the
+   * resolved text when the caller has it.
+   */
+  const DRAIN_RE = /\bspends? all (?:of )?your (?:remaining )?AP\b/i;
+  UI.drainsAp = function (def, level, user, desc) {
+    if (!def) return false;
+    if (def.drainsAp !== undefined) return !!def.drainsAp;
+    if (desc === undefined) desc = DD.skillDesc(def, level || 1, user || null);
+    return DRAIN_RE.test(String(desc || ''));
   };
 
   function isCombatUnit(u) { return !!u && typeof u === 'object' && u.x !== undefined && u.side !== undefined; }
@@ -1172,7 +1201,7 @@
       hype: num(def.hype),
       range: rangeLabel(def, L, user, lv),
       area: areaLabel(def, L, user),
-      target: (def.target && FILTER_LABEL[def.target.filter]) || '',
+      target: targetLabel(def),
       los: !!(def.target && def.target.los),
       straight: !!(def.target && def.target.straight),
       desc: desc(lv),
@@ -1182,6 +1211,7 @@
       tags: (def.tags || []).filter(function (t) { return typeof t === 'string'; }),
       random: (def.tags || []).indexOf('random') >= 0,
     };
+    info.drainsAp = UI.drainsAp(def, lv, user, info.desc);
     info.baseAp = info.ap;
     info.baseHp = info.hpCost;
     if (user && def.owner !== 'enemy' && DD.Combat && typeof DD.Combat.costOf === 'function') {
@@ -1204,7 +1234,10 @@
     const out = [];
     if (info.hype) out.push('<span class="pill hype">' + info.hype + ' Hype</span>');
     const apMod = info.baseAp !== undefined && info.ap !== info.baseAp ? (info.ap < info.baseAp ? ' mod-down' : ' mod-up') : '';
-    out.push('<span class="pill ap' + apMod + '"' + (apMod ? ' title="Listed at ' + info.baseAp + ' AP"' : '') + '>' + info.ap + ' AP' +
+    // [QA HERO-3] a skill that spends every AP left: "1+ AP" (the cost, then the rest)
+    const drain = info.drainsAp ? 'Costs ' + info.ap + ' AP, then spends every AP you have left' : '';
+    const apTitle = [apMod ? 'Listed at ' + info.baseAp + ' AP' : '', drain].filter(Boolean).join(' · ');
+    out.push('<span class="pill ap' + apMod + (drain ? ' drain' : '') + '"' + (apTitle ? ' title="' + esc(apTitle) + '"' : '') + '>' + info.ap + (drain ? '+' : '') + ' AP' +
       (apMod ? ' <s>' + info.baseAp + '</s>' : '') + '</span>');
     if (opts.paidBy && info.baseHp > 0) out.push('<span class="pill hpcost paid" title="Paid by ' + esc(opts.paidBy) + '">🩸 <s>−' + info.baseHp + ' HP</s> paid by ' + esc(opts.paidBy) + '</span>');
     else if (info.hpCost) out.push('<span class="pill hpcost">−' + info.hpCost + ' HP</span>');
@@ -1520,6 +1553,8 @@
     const chip = el('span.status-chip', { class: d ? (d.type === 'buff' ? 'buff' : 'debuff') : '', style: d && d.color ? { '--sc': d.color } : null });
     chip.appendChild(el('span.st-icon', null, d ? d.icon || '?' : '?'));
     if (num(st.stacks, 1) > 1) chip.appendChild(el('span.st-stacks', null, String(st.stacks)));
+    // [QA HERO-5] a timed form that opts in (status def showTurns: the Dragonsnail) shows its turns left at a glance
+    if (d && d.showTurns && num(st.turns, -1) > 0) chip.appendChild(el('span.st-turns', { title: U.plural(num(st.turns), 'turn') + ' left' }, String(st.turns)));
     UI.tooltip(chip, function () { return UI.statusTooltipHtml(st); });
     return chip;
   };
@@ -1878,12 +1913,141 @@
     return h;
   };
 
-  /** DM narration line (italic, with a little d20 badge). */
+  /** DM narration line (italic, with a little d20 badge). V3: opts.speaker 'svammiel' (a cameo actor id) gets that
+   *  actor's badge (😈) instead of the DM's. */
   UI.narration = function (text, opts) {
     opts = opts || {};
     if (!text) return null;
-    return el('div.narration' + (opts.cls ? '.' + opts.cls : ''), null, el('span.dm-badge', { title: 'The Dungeon Master' }, 'DM'), el('span.narr-text', null, text));
+    const cam = opts.speaker && typeof DD.getCameo === 'function' ? DD.getCameo(opts.speaker) : null;
+    const badge = opts.speaker ? el('span.dm-badge.speaker-badge', { title: cam ? cam.name + (cam.title ? ', ' + cam.title : '') : String(opts.speaker), style: cam && cam.color ? { '--sc': cam.color } : null }, (cam && cam.icon) || '😈')
+      : el('span.dm-badge', { title: 'The Dungeon Master' }, 'DM');
+    const cls = opts.cls ? '.' + String(opts.cls).trim().split(/\s+/).join('.') : '';
+    return el('div.narration' + cls + (opts.speaker ? '.by-speaker' : ''), null, badge, el('span.narr-text', null, text));
   };
+
+  // ---- V3: act IV "Under the Table" (plan §2, §4.10) ------------------------------------------------------------------
+  /** The spoiler gate: true once the player has met Svammiel (DD.Meta seen.bosses.svammiel, set at the twist). Until
+   *  then nothing a player can reach names act IV or Svammiel. */
+  UI.act4Seen = function () {
+    const m = UI.meta();
+    const b = m && m.seen && m.seen.bosses;
+    if (!b) return false;
+    return Array.isArray(b) ? b.indexOf('svammiel') >= 0 : !!b.svammiel;
+  };
+  /** True while the run plays a gauntlet (Svammiel's floor): the act-4 dressing of map, shop and tavern. */
+  UI.inGauntlet = function (run) {
+    run = run || UI.run();
+    return !!(run && run.map && run.map.shape === 'gauntlet');
+  };
+  // the door teasers of the map tooltip and the Twist panel's cast card (V §5.1; the goats': addendum-goats §4).
+  // Keyed by lane id; a lane without one shows its hint only. {league} is the League's name at stretch level 4.
+  const LANE_TEASERS = {
+    gardener: '🕷️ The Gardener — Head Groundskeeper. Eight legs, eight blades, one sun hat.',
+    league: '🦹 {league} — five evil adventurers and a very long banner.',
+    galbraith: '🔭 Grand Magister Galbraith — the lich every spell is named after.',
+    coven: '🫖 The Coven — three hags, one Eye, one cauldron. They babysat Svammiel.',
+    goats: '🐐 The Rapping Goats — three goats, one mic, a verse about each of you. (feat. ???)',
+  };
+  const FINALE_TEASER = '😈 Svammiel — The Floor Boss. He cheats. He tells you so.';
+  // the cast card's aside per lane (the bear stays a surprise)
+  const LANE_CAST_NOTE = { goats: '(feat. ???)' };
+  // the Hall codex's group header per lane (plan §5.4, §5.8; addendum-goats §17.7)
+  const LANE_CODEX = {
+    league: { title: 'The League of Villainy', note: '(full name: 56 letters in \'League\' alone; the members disagree on the count)' },
+    goats: { title: 'The Rapping Goats (Herd Mentality, feat. Ursa Verse)' },
+  };
+  /** The enemy def ids an encounter names (its line-up, then objective.bossIds / bossId), de-duplicated. */
+  function encounterUnitIds(enc) {
+    const ids = [];
+    const add = function (id) { if (typeof id === 'string' && id && ids.indexOf(id) < 0) ids.push(id); };
+    const obj = (enc && enc.objective) || {};
+    (Array.isArray(obj.bossIds) ? obj.bossIds : []).forEach(add);
+    if (obj.bossId) add(obj.bossId);
+    ((enc && enc.enemies) || []).forEach(function (e) { add(typeof e === 'string' ? e : e && e.id); });
+    return ids.filter(function (id) { return !!DD.getEnemy(id); });
+  }
+  UI.encounterUnitIds = encounterUnitIds;
+  /** The boss-tier unit of an encounter (the finale's floor boss), else its first squad / line-up def. → def | null */
+  function leadDef(enc) {
+    const ids = encounterUnitIds(enc);
+    const boss = ids.filter(function (id) { const d = DD.getEnemy(id); return d && d.tier === 'boss'; })[0];
+    return DD.getEnemy(boss || ids[0]) || null;
+  }
+  /**
+   * Display info of a gauntlet lane (a lane object { id, encounterId }, a lane id or an encounter id): { id, encounterId,
+   * icon, name (the full encounter name), shortName, hint, teaser, castNote, portrait (the first objective.bossIds def,
+   * else the line-up's first: the goats' door shows Billy Bleatz, the bear stays a surprise), codex { title, note } }.
+   */
+  UI.laneInfo = function (lane) {
+    let enc = null, id = null;
+    if (lane && typeof lane === 'object') { id = lane.id || null; enc = lane.encounterId ? DD.getEncounter(lane.encounterId) : null; }
+    else if (typeof lane === 'string') {
+      enc = DD.getEncounter(lane);
+      if (!enc) {
+        id = lane;
+        const lanes = DD.RunMap && typeof DD.RunMap.gauntletLanes === 'function' ? DD.safe('RunMap.gauntletLanes', DD.RunMap.gauntletLanes, DD.RunMap, [DD.MAX_ACT || 4]) || [] : [];
+        const hit = lanes.filter(function (l) { return l.id === lane; })[0];
+        enc = hit ? DD.getEncounter(hit.encounterId) : null;
+      }
+    }
+    if (enc && !id) id = enc.gauntlet && enc.gauntlet.lane ? enc.gauntlet.lane : enc.id;
+    const name = enc ? enc.name || enc.id : U.capitalize(String(id || 'Mystery door'));
+    const shortName = enc ? enc.shortName || enc.name || enc.id : name;
+    const icon = (enc && enc.icon) || UI.NODE_TYPES.miniboss.icon;
+    let teaser = LANE_TEASERS[id] || '';
+    if (teaser.indexOf('{league}') >= 0) teaser = teaser.replace('{league}', DD.League && typeof DD.League.name === 'function' ? DD.League.name(4) : 'The Lllleeeeaaaaguuuueeee of Villainy');
+    if (enc && enc.finale) teaser = FINALE_TEASER;
+    const ids = encounterUnitIds(enc);
+    const lead = enc && enc.finale ? leadDef(enc) : DD.getEnemy(ids[0]);
+    return {
+      id: id, encounterId: enc ? enc.id : null, icon: icon, name: name, shortName: shortName,
+      hint: enc && enc.gauntlet && enc.gauntlet.hint ? String(enc.gauntlet.hint) : '', teaser: teaser,
+      castNote: LANE_CAST_NOTE[id] || '', portrait: lead ? lead.id : null, finale: !!(enc && enc.finale),
+      codex: LANE_CODEX[id] || { title: shortName },
+    };
+  };
+  /** The gauntlet's lanes: the run's map (its own count, never a literal), else the registry's for the last act. */
+  UI.gauntletLanes = function (run) {
+    run = run === undefined ? UI.run() : run;
+    if (run && run.map && run.map.shape === 'gauntlet' && Array.isArray(run.map.lanes)) return run.map.lanes.slice();
+    if (!DD.RunMap || typeof DD.RunMap.gauntletLanes !== 'function') return [];
+    const act = typeof DD.finalAct === 'function' ? Math.max(DD.finalAct(), DD.MAX_ACT || 4) : 4;
+    return DD.safe('RunMap.gauntletLanes', DD.RunMap.gauntletLanes, DD.RunMap, [act]) || [];
+  };
+  /** A short lane name for lists ("Gardener, League of Villainy"): the shortName without a leading "The ". */
+  UI.laneShort = function (lane) {
+    const s = UI.laneInfo(lane).shortName;
+    return String(s).replace(/^The\s+/, '');
+  };
+  /**
+   * Who ended a run (summary or { killedBy, killedByEncounter }): { name, cheated, pronoun }. The floor boss's fight is
+   * named after its boss unit (Svammiel), and he cheated — the act-4 game over and the Hall history say so.
+   */
+  UI.killerOf = function (sm) {
+    if (!sm) return null;
+    const enc = sm.killedByEncounter ? DD.getEncounter(sm.killedByEncounter) : null;
+    if (enc && enc.finale) {
+      const d = leadDef(enc);
+      const pr = d && d.pronoun ? d.pronoun : 'he';
+      return { name: d ? d.name : enc.shortName || enc.name, cheated: true, pronoun: pr };
+    }
+    return sm.killedBy ? { name: String(sm.killedBy), cheated: false, pronoun: null } : null;
+  };
+  /** " (he cheated)" for a killer from UI.killerOf, else ''. */
+  UI.cheatedText = function (k) { return k && k.cheated ? ' (' + (k.pronoun === 'they' ? 'they' : k.pronoun || 'he') + ' cheated)' : ''; };
+  /** "N / M floor bosses" counts of a run or summary: { n, m, order: [lane ids] } (M from that run's own lane count). */
+  UI.floorCounts = function (src) {
+    if (!src) return { n: 0, m: 0, order: [] };
+    if (src.map && src.map.shape === 'gauntlet') {
+      const beaten = Array.isArray(src.map.beaten) ? src.map.beaten.slice() : [];
+      return { n: beaten.length, m: (src.map.lanes || []).length, order: beaten };
+    }
+    const order = Array.isArray(src.gauntlet) ? src.gauntlet.slice() : [];
+    return { n: order.length, m: num(src.gauntletLanes), order: order };
+  };
+  const NUMBER_WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
+  /** 5 → "five" (0..12; digits beyond). */
+  UI.numberWord = function (n) { n = Math.round(num(n)); return NUMBER_WORDS[n] !== undefined ? NUMBER_WORDS[n] : String(n); };
 
   /**
    * Pick which socketed skill to forget for a new one. cb(replaceIdx): -1 = free slot (nothing forgotten),

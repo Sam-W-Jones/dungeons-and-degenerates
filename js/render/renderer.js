@@ -19,6 +19,9 @@
  * half-resolution silhouettes); exact bakes follow under a per-frame budget once it settles, and a Q / R / Home turn
  * bakes the view it lands on while it animates. Built-in blocks (and content objects with def.yawAware) turn with the
  * board through the yawAware painter; other object painters are billboards.
+ * V3: act-4 theme looks (bg, tint, walls, the DM's table overhead), ambients pollen / stars / notes (unknown kinds fall
+ * back), content zones from state.data.zones (E8: tinted tiles, a chest-height line, a label; nothing when absent) and
+ * the 17th campfire seat.
  */
 (function () {
   'use strict';
@@ -46,8 +49,18 @@
     hoard: { bg: ['#36280f', '#0d0903'], ambient: 'dust', tint: '#ffd36a' },
     dm_table: { bg: ['#2c2019', '#0a0705'], ambient: 'dust', tint: '#ffcf8a' },
     title: { bg: ['#1b2440', '#06070f'], ambient: 'fireflies', tint: '#ffb35a' },
+    // V3 act IV "Under the Table" (plan §6.3). Extras: ambientColor (recolours the ambient kind of this look only),
+    // backdrop ('table': the underside of the DM's table across the top of the screen; 'table_far': far overhead)
+    a4_conservatory: { bg: ['#18321f', '#050b07'], ambient: 'pollen', tint: '#b6e07a' },
+    a4_lair: { bg: ['#1c0f28', '#06030a'], ambient: 'embers', tint: '#b98cff' },
+    a4_observatory: { bg: ['#0e1240', '#02030a'], ambient: 'stars', tint: '#a8c8ff' },
+    a4_cottage: { bg: ['#1d2a1a', '#070a06'], ambient: 'fog', ambientColor: '#a6d08e', tint: '#c6e28a' },
+    a4_barn: { bg: ['#2a1210', '#070302'], ambient: 'dust', ambientColor: '#ffd98a', tint: '#ffbf6a', backdrop: 'table_far' },
+    a4_underfloor: { bg: ['#2a1a10', '#070403'], ambient: 'dust', tint: '#ffcf6a', backdrop: 'table' },
   };
   const DEFAULT_LOOK = { bg: ['#221a22', '#08060a'], ambient: 'dust', tint: '#ffd9a0' };
+  // an ambient kind this renderer doesn't draw falls back to the theme's ambientFallback, else this, else dust
+  const AMBIENT_FALLBACK = { pollen: 'fireflies', stars: 'dust', notes: 'dust' };
 
   // Wall looks per theme (the canonical 'wall' terrain is themed; content walls use their own colors).
   const WALLS = {
@@ -62,6 +75,14 @@
     hoard: { top: '#e2dcd2', left: '#c4bcb0', right: '#a89f93', mortar: '#8a8276', face: 'marble', trim: '#e3b341' },
     dm_table: { top: '#7c3030', left: '#5f2525', right: '#4c1e1e', mortar: '#ece2c6', face: 'books' },
     title: { top: '#7f7a70', left: '#625e56', right: '#504c46', mortar: '#34312c', face: 'brick', moss: '#4f7a3a' },
+    // V3 act IV: a greenhouse's brass-trimmed low wall gone mossy · black marble with League-green trim · white
+    // marble with gold star-chart trim · gingerbread with icing for mortar · barn-red boards · the DM's walnut
+    a4_conservatory: { top: '#8c9a8a', left: '#6d7b6b', right: '#5a6658', mortar: '#3a4538', face: 'brick', trim: '#c9a24a', moss: '#4f7a3a' },
+    a4_lair: { top: '#33293d', left: '#261e2e', right: '#1d1724', mortar: '#0f0b14', face: 'marble', trim: '#9be22d' },
+    a4_observatory: { top: '#e4e2ee', left: '#c3c1d0', right: '#a8a6b8', mortar: '#8a889a', face: 'marble', trim: '#e3b341' },
+    a4_cottage: { top: '#b57a42', left: '#956232', right: '#7b5029', mortar: '#f6efe2', face: 'brick', trim: '#f2a9c0' },
+    a4_barn: { top: '#93402f', left: '#7c3224', right: '#65281c', mortar: '#2a120c', face: 'wood', trim: '#ece2cc' },
+    a4_underfloor: { top: '#5a3a24', left: '#462d1b', right: '#382415', mortar: '#1a0f08', face: 'wood' },
   };
 
   // ---- canonical terrain looks (ARCHITECTURE §3.7). side: face style; tex: cached top painter ----------
@@ -220,8 +241,20 @@
     const base = THEME_LOOK[theme] || DEFAULT_LOOK;
     const def = DD.Themes && DD.Themes[theme];
     const bg = def && def.bg && def.bg.top ? [def.bg.top, def.bg.bottom || base.bg[1]] : base.bg;
-    const ambient = def && def.ambient !== undefined ? def.ambient : base.ambient;
-    return { id: theme, bg: bg, ambient: ambient, tint: base.tint, wall: WALLS[theme] || WALLS.default };
+    const asked = def && def.ambient !== undefined ? def.ambient : base.ambient;
+    const ambient = ambientKind(asked, def && def.ambientFallback);
+    // a look's ambientColor belongs to its own ambient kind (a theme def may bring its own)
+    const ambientColor = (def && def.ambientColor) || (ambient === base.ambient ? base.ambientColor : null) || null;
+    const backdrop = def && def.backdrop !== undefined ? def.backdrop : base.backdrop || null;
+    return { id: theme, bg: bg, ambient: ambient, ambientColor: ambientColor, backdrop: backdrop, tint: base.tint, wall: WALLS[theme] || WALLS.default };
+  }
+  /** The ambient kind actually drawn: a known kind, else the theme's fallback, else the kind's own fallback, else dust. */
+  function ambientKind(kind, fallback) {
+    if (!kind) return null;
+    if (AMBIENT_N[kind]) return kind;
+    if (fallback && AMBIENT_N[fallback]) return fallback;
+    const f = AMBIENT_FALLBACK[kind];
+    return f && AMBIENT_N[f] ? f : 'dust';
   }
 
   // ---- glyph cache (emoji / short labels rendered once per size) -----------------------------------------
@@ -1907,14 +1940,22 @@
     c.restore();
   }
 
-  /** A wind-up tile: red pulsing fill + moving hatch (calmer for one landing in 2+ of its owner's turns). */
+  /**
+   * A wind-up tile: red pulsing fill + moving hatch (calmer for one landing in 2+ of its owner's turns). A tinted one
+   * (intent.data.tint) pulses in its own colour under the same red-and-cream danger tape.
+   */
   function telegraphFill(F, c, cx, cy, info) {
     const a = info.a;
     const later = info.delayed && !info.now;
     c.beginPath(); diamond(c, cx, cy, HW, HH);
     const p = later ? 0.75 + 0.25 * pulse(3) : 0.62 + 0.38 * pulse(5.5);
-    c.fillStyle = 'rgba(255,38,28,' + Math.min(0.6, ((later ? 0.2 : 0.3) + 0.09 * Math.min(2, info.n - 1)) * p) * a + ')';
-    c.fill();
+    const wash = Math.min(0.6, ((later ? 0.2 : 0.3) + 0.09 * Math.min(2, info.n - 1)) * p) * a;
+    if (info.tint) {
+      c.save(); c.globalAlpha = Math.min(1, wash * 1.4); c.fillStyle = info.tint; c.fill(); c.restore();
+    } else {
+      c.fillStyle = 'rgba(255,38,28,' + wash + ')';
+      c.fill();
+    }
     const pat = hatchPattern(c, false, 'tape');
     if (pat) {
       c.save(); c.globalAlpha = a * (later ? 0.32 : 0.42 + 0.2 * pulse(5.5)); c.fillStyle = pat; c.fill(); c.restore();
@@ -1949,6 +1990,7 @@
     const ov = F.ov;
     if (!ov) return;
     const i = t.y * F.gw + t.x;
+    if (F.zones) for (let k = 0; k < F.zones.length; k++) if (F.zones[k].set && F.zones[k].set[i]) zoneFill(F, c, t, cx, cy, top, F.zones[k]);
     if (ov.deploy[i]) regionTile(F, c, t, cx, cy, top, ov.deploy, 'rgba(80,220,120,' + (0.18 + 0.07 * pulse(2.5)) + ')', 'rgba(150,255,170,0.9)');
     if (ov.move[i] || (ov.swapSet && ov.swapSet[i])) regionTile(F, c, t, cx, cy, top, ov.moveAll, 'rgba(60,140,255,0.27)', 'rgba(150,205,255,0.95)');
     else if (ov.pass && ov.pass[i]) passTile(F, c, t, cx, cy, top);
@@ -3496,6 +3538,8 @@
       c.lineWidth = 1.2; c.strokeStyle = col; c.stroke();
       drawGlyph(c, (def && def.icon) || '❔', x, cyy, size * 0.8);
       if (st.stacks > 1) label(c, String(st.stacks), x + size * 0.42, cyy + size * 0.38, Math.max(7, Math.round(8 * z)), '#ffffff', { strokeWidth: 2.2 });
+      // [QA HERO-5] a timed form that opts in (status def showTurns): its turns left, amber, bottom left
+      if (def && def.showTurns && st.turns > 0) label(c, String(st.turns), x - size * 0.42, cyy + size * 0.38, Math.max(7, Math.round(8 * z)), '#ffcf7a', { strokeWidth: 2.2 });
       x += size + gap;
     }
     if (sts.length > 6) label(c, '+' + (sts.length - 6), x, cyy, Math.round(9 * z), '#ffffff');
@@ -3944,6 +3988,138 @@
       objTargets: Array.isArray(o.objTargets) && o.objTargets.length ? tileSet(F, o.objTargets) : null,
       reviveIds: Array.isArray(o.reviveTargets) && o.reviveTargets.length ? o.reviveTargets : null,
     };
+    F.zones = contentZones(F);
+  }
+
+  // ---- V3 E8: content zones (state.data.zones; ARCHITECTURE §4.1, §7.2) -----------------------------------------
+  const ZONE_MAX = 32, ZONE_COLOR = '#ffd23f', ZONE_CHEST = 22;
+  /** A content zone's tile: in range, integer coordinates (else null). */
+  function zoneTile(F, p) {
+    if (!p || typeof p !== 'object') return null;
+    const x = +p.x, y = +p.y;
+    if (!isFinite(x) || !isFinite(y) || x !== Math.floor(x) || y !== Math.floor(y)) return null;
+    return x >= 0 && y >= 0 && x < F.gw && y < F.gh && F.tiles[y * F.gw + x] ? { x: x, y: y } : null;
+  }
+  /**
+   * The content zones of the frame's state, cleaned: [{ set, tiles, color, label, line: [a, b] | null, ph }] or null
+   * (no zones, an empty list, a finished fight). Bad entries are skipped; a bad colour falls back to gold.
+   */
+  function contentZones(F) {
+    const st = F.st, data = st && st.data;
+    const raw = data && typeof data === 'object' ? data.zones : null;
+    if (!Array.isArray(raw) || !raw.length || st.result || !F.gw) return null;
+    const out = [];
+    for (let i = 0; i < raw.length && out.length < ZONE_MAX; i++) {
+      const z = raw[i];
+      if (!z || typeof z !== 'object') continue;
+      const tiles = [];
+      if (Array.isArray(z.tiles)) z.tiles.forEach(function (p) { const q = zoneTile(F, p); if (q) tiles.push(q); });
+      let line = null;
+      if (Array.isArray(z.line) && z.line.length >= 2) {
+        const a = zoneTile(F, z.line[0]), b = zoneTile(F, z.line[1]);
+        if (a && b && (a.x !== b.x || a.y !== b.y)) line = [a, b];
+      }
+      if (!tiles.length && !line) continue;
+      let text = typeof z.label === 'string' || typeof z.label === 'number' ? String(z.label).trim() : '';
+      if (text.length > 26) text = text.slice(0, 25).trim() + '…';
+      out.push({
+        set: tiles.length ? tileSet(F, tiles) : null, tiles: tiles, line: line, label: text,
+        color: U.parseColor(z.color) ? z.color : ZONE_COLOR, ph: i * 1.7,
+      });
+    }
+    return out.length ? out : null;
+  }
+  /** A zone tile: a soft pulsing tint in the zone's colour and its merged outline (dark-backed, reads on any floor). */
+  function zoneFill(F, c, t, cx, cy, top, z) {
+    c.beginPath(); diamond(c, cx, cy, HW, HH);
+    c.fillStyle = rgba(z.color, 0.16 + 0.08 * pulse(2.2, z.ph)); c.fill();
+    c.beginPath();
+    quadEdges(c, cx, cy, (HW - 2.5) / HW, function (e) { return !inSet(F, z.set, t.x + e.dx, t.y + e.dy, top); });
+    c.lineCap = 'round';
+    stroke(c, 'rgba(12,6,8,0.55)', 3.4);
+    stroke(c, rgba(z.color, 0.95), 1.6);
+  }
+  /** World point of a zone line's end: the chest of the unit standing there, else a standing unit's chest height. */
+  function zoneAnchor(F, p) {
+    for (let i = 0; i < F.unitDraws.length; i++) {
+      const d = F.unitDraws[i];
+      if (d.u.dead || d.downed || Math.round(d.x) !== p.x || Math.round(d.y) !== p.y) continue;
+      return { x: d.wx, y: d.wy - Math.max(12, d.mh * 0.55) };
+    }
+    const w = Iso.toWorld(p.x, p.y, topLevel(F, gridTile(F, p.x, p.y)));
+    return { x: w.x, y: w.y - ZONE_CHEST };
+  }
+  /** Zone lines (a thread between two tiles at unit-chest height) and labels; F.zoneStats for renderTo. */
+  function drawZones(F) {
+    F.zoneStats = [];
+    if (!F.zones) return;
+    const c = F.ctx, V = Iso.view();
+    const labels = [];
+    setWorldTransform(F);
+    for (let i = 0; i < F.zones.length; i++) {
+      const z = F.zones[i];
+      const stat = { tiles: z.tiles.length, color: z.color, line: null, label: null };
+      F.zoneStats.push(stat);
+      if (z.line) {
+        const a = zoneAnchor(F, z.line[0]), b = zoneAnchor(F, z.line[1]);
+        c.save();
+        c.lineCap = 'round';
+        c.beginPath(); c.moveTo(a.x, a.y); c.lineTo(b.x, b.y);
+        c.strokeStyle = 'rgba(12,6,8,0.6)'; c.lineWidth = 4.4; c.stroke();
+        c.strokeStyle = rgba(z.color, 0.95); c.lineWidth = 2.2; c.stroke();
+        c.setLineDash([5, 7]); c.lineDashOffset = -time * 18;
+        c.strokeStyle = 'rgba(255,255,255,0.55)'; c.lineWidth = 1; c.stroke();
+        c.setLineDash([]);
+        [a, b].forEach(function (p) {
+          c.beginPath(); c.arc(p.x, p.y, 3.2, 0, TAU); c.fillStyle = z.color; c.fill();
+          c.lineWidth = 1.2; c.strokeStyle = 'rgba(12,6,8,0.8)'; c.stroke();
+        });
+        c.restore();
+        const sa = w2s(F, a.x, a.y), sb = w2s(F, b.x, b.y);
+        stat.line = { ax: sa.x, ay: sa.y, bx: sb.x, by: sb.y };
+      }
+      if (z.label) {
+        // just in front of the zone (below its nearest tile), so it never sits on a unit standing in it
+        let wx = 0, wy = -Infinity;
+        if (z.tiles.length) {
+          z.tiles.forEach(function (p) {
+            const w = Iso.toWorld(p.x, p.y, topLevel(F, gridTile(F, p.x, p.y)));
+            wx += w.x / z.tiles.length;
+            wy = Math.max(wy, w.y + V.hy);
+          });
+        } else {
+          const a = zoneAnchor(F, z.line[0]), b = zoneAnchor(F, z.line[1]);
+          wx = (a.x + b.x) / 2; wy = (a.y + b.y) / 2 - 10;
+        }
+        labels.push({ z: z, stat: stat, p: w2s(F, wx, wy), below: !!z.tiles.length });
+      }
+    }
+    if (!labels.length) return;
+    setScreenTransform(F);
+    const zz = clamp(F.zoom, 0.75, 1.3);
+    const fs = Math.round(11 * zz), bh = Math.round(17 * zz);
+    const placed = [];
+    labels.forEach(function (L) {
+      c.font = 'bold ' + fs + 'px ' + FONT;
+      // an icon-only label (🗣️, 🪑) is drawn as a bigger colour glyph in a round badge
+      const icon = !/[A-Za-z0-9]/.test(L.z.label) && L.z.label.length <= 8;
+      const bw = icon ? bh + Math.round(4 * zz) : Math.round(c.measureText(L.z.label).width + 14 * zz);
+      let x = Math.round(clamp(L.p.x - bw / 2, 4, W - bw - 4));
+      let y = Math.round(L.below ? L.p.y + 2 : L.p.y - bh / 2);
+      for (let guard = 0; guard < 8; guard++) {
+        const hit = placed.filter(function (o) { return x < o.x + o.w + 2 && x + bw + 2 > o.x && y < o.y + o.h + 2 && y + bh + 2 > o.y; })[0];
+        if (!hit) break;
+        y = hit.y + hit.h + 3;
+      }
+      placed.push({ x: x, y: y, w: bw, h: bh });
+      c.beginPath(); roundRect(c, x, y, bw, bh, bh / 2);
+      c.fillStyle = 'rgba(22,12,16,0.9)'; c.fill();
+      c.lineWidth = 1.5; c.strokeStyle = rgba(L.z.color, 0.95); c.stroke();
+      if (icon) drawGlyph(c, L.z.label, x + bw / 2, y + bh / 2, bh * 0.8);
+      else label(c, L.z.label, x + bw / 2, y + bh / 2 + 0.5, fs, '#fff4dc', { strokeWidth: 2.2 });
+      L.stat.label = { x0: x, y0: y, x1: x + bw, y1: y + bh, text: L.z.label };
+    });
+    setWorldTransform(F);
   }
 
   /** Call engine code that may run content (area fns); a failing key falls back silently after one warning. */
@@ -4019,6 +4195,8 @@
           // show it (DD.AI.describe says when it is still unknown): no '?' for a landing the board already marks
           unknown: (desc ? !!desc.uncertain : hasStatus(u, 'dazzled') || hasStatus(u, 'confused')) ||
             !!(skill && Array.isArray(skill.tags) && skill.tags.indexOf('random') >= 0),
+          // [QA FIGHTS-13] its own wash colour (intent.data.tint), if it names one
+          tint: it.data && typeof it.data.tint === 'string' && it.data.tint ? it.data.tint : null,
         });
       }
       if (entry.list.length) out.push(entry);
@@ -4083,8 +4261,12 @@
           const p = it.tiles[j];
           if (!p || p.x < 0 || p.y < 0 || p.x >= F.gw || p.y >= F.gh) continue;
           const idx = (p.y | 0) * F.gw + (p.x | 0);
-          const cell = tele[idx] || (tele[idx] = { a: 0, n: 0, now: false, delayed: false });
+          const cell = tele[idx] || (tele[idx] = { a: 0, n: 0, now: false, delayed: false, tint: null });
           cell.n++;
+          // [QA FIGHTS-13] a wind-up may wash its tiles in its own colour (intent.data.tint: the goats' bass on the gold
+          // squares stays gold, not salmon); tiles two wind-ups share keep the red
+          const tint = it.tint || null;
+          cell.tint = cell.n === 1 ? tint : cell.tint === tint ? tint : null;
           cell.a = Math.max(cell.a, fa);
           // lands at its owner's next turn = "now"; 2+ of its turns away = "later" (calmer)
           if (it.delay > 1) cell.delayed = true; else cell.now = true;
@@ -4352,6 +4534,7 @@
 
   function drawLateWorld(F) {
     const c = F.ctx;
+    drawZones(F);
     setWorldTransform(F);
     drawTelegraphLines(F, c);
     drawPath(F, c);
@@ -4361,37 +4544,57 @@
   // ======================================================================================================
   // Backdrop, ambient particles, lights, foreground (cosmetic randomness: Math.random is fine here)
   // ======================================================================================================
-  const AMBIENT_N = { dust: 46, spores: 38, embers: 56, fog: 9, fireflies: 30 };
-  const ambient = { kind: null, list: [] };
+  // V3: pollen (slow yellow motes, the conservatory), stars (twinkling points that never drift into the foreground,
+  // the observatory) and notes (hay motes with a few drifting ♪ ♫, an optional barn look)
+  const AMBIENT_N = { dust: 46, spores: 38, embers: 56, fog: 9, fireflies: 30, pollen: 42, stars: 90, notes: 40 };
+  const ambient = { kind: null, color: null, list: [] };
+  const NOTE_GLYPHS = ['♪', '♫', '♪', '♬'];
 
-  function spawnParticle(kind, anywhere) {
+  function spawnParticle(kind, anywhere, color) {
     const p = { x: Math.random(), y: anywhere ? Math.random() : 1.04, ph: Math.random() * TAU, front: Math.random() < 0.28, life: 0 };
     if (kind === 'dust') { p.vx = (Math.random() - 0.5) * 0.01; p.vy = -0.004 - Math.random() * 0.008; p.r = 0.6 + Math.random() * 1.5; p.a = 0.15 + Math.random() * 0.35; p.color = '#ffe9c4'; }
     else if (kind === 'spores') { p.vx = (Math.random() - 0.5) * 0.01; p.vy = -0.008 - Math.random() * 0.012; p.r = 0.9 + Math.random() * 1.6; p.a = 0.3 + Math.random() * 0.4; p.color = Math.random() < 0.5 ? '#c3f07a' : '#9ae8c8'; }
     else if (kind === 'embers') { p.vx = (Math.random() - 0.5) * 0.02; p.vy = -0.03 - Math.random() * 0.05; p.r = 0.7 + Math.random() * 1.6; p.a = 0.5 + Math.random() * 0.5; p.color = Math.random() < 0.6 ? '#ff9a3a' : '#ffd36a'; }
     else if (kind === 'fog') { p.x = anywhere ? Math.random() : -0.3; p.y = 0.25 + Math.random() * 0.75; p.vx = 0.004 + Math.random() * 0.008; p.vy = 0; p.r = 0.16 + Math.random() * 0.2; p.a = 0.05 + Math.random() * 0.05; p.color = '#c8d4e6'; p.front = Math.random() < 0.4; }
     else if (kind === 'fireflies') { p.vx = (Math.random() - 0.5) * 0.02; p.vy = (Math.random() - 0.5) * 0.02; p.r = 1 + Math.random() * 1.2; p.a = 0.7; p.color = '#d8ff7a'; p.y = 0.25 + Math.random() * 0.7; }
+    else if (kind === 'pollen') { p.vx = (Math.random() - 0.5) * 0.008; p.vy = -0.005 - Math.random() * 0.009; p.r = 0.8 + Math.random() * 1.4; p.a = 0.3 + Math.random() * 0.4; p.color = Math.random() < 0.7 ? '#f4e27a' : '#fff6c2'; }
+    else if (kind === 'stars') {
+      p.x = anywhere ? Math.random() : -0.03; p.y = Math.random() * 0.9; p.vx = 0.0012 + Math.random() * 0.0012; p.vy = 0;
+      p.r = 0.45 + Math.random() * Math.random() * 1.5; p.a = 0.45 + Math.random() * 0.55; p.sp = 0.8 + Math.random() * 2.6;
+      p.color = Math.random() < 0.12 ? '#ffe2a0' : Math.random() < 0.5 ? '#dfe8ff' : '#ffffff'; p.front = false;
+    }
+    else if (kind === 'notes') {
+      if (Math.random() < 0.2) {
+        p.note = NOTE_GLYPHS[Math.floor(Math.random() * NOTE_GLYPHS.length)];
+        p.vx = (Math.random() - 0.5) * 0.006; p.vy = -0.012 - Math.random() * 0.01; p.r = 9 + Math.random() * 6; p.a = 0.35 + Math.random() * 0.3;
+        p.color = Math.random() < 0.5 ? '#ff3fb4' : '#d9b44a';
+      } else { p.vx = (Math.random() - 0.5) * 0.01; p.vy = -0.004 - Math.random() * 0.008; p.r = 0.6 + Math.random() * 1.5; p.a = 0.15 + Math.random() * 0.35; p.color = '#ffd98a'; }
+    }
+    if (color && !p.note) p.color = color;
     return p;
   }
-  function ensureAmbient(kind) {
-    if (ambient.kind === kind) return;
+  function ensureAmbient(kind, color) {
+    color = color || null;
+    if (ambient.kind === kind && ambient.color === color) return;
     ambient.kind = kind;
+    ambient.color = color;
     ambient.list = [];
     const n = AMBIENT_N[kind] || 0;
-    for (let i = 0; i < n; i++) ambient.list.push(spawnParticle(kind, true));
+    for (let i = 0; i < n; i++) ambient.list.push(spawnParticle(kind, true, color));
   }
   function updateAmbient(dt) {
     const k = ambient.kind;
     if (!k) return;
     const sec = Math.min(0.1, dt / 1000);
+    const sway = k === 'fog' || k === 'stars' ? 0 : 0.004;
     for (let i = 0; i < ambient.list.length; i++) {
       const p = ambient.list[i];
       p.life += sec;
-      p.x += (p.vx + Math.sin(time * 0.7 + p.ph) * (k === 'fog' ? 0 : 0.004)) * sec;
+      p.x += (p.vx + Math.sin(time * 0.7 + p.ph) * sway) * sec;
       p.y += p.vy * sec;
       if (k === 'fireflies') { p.vx += (Math.random() - 0.5) * 0.02 * sec; p.vy += (Math.random() - 0.5) * 0.02 * sec; p.vx = clamp(p.vx, -0.02, 0.02); p.vy = clamp(p.vy, -0.015, 0.015); }
-      const out = p.y < -0.05 || p.x < -0.4 || p.x > 1.4 || (k === 'fireflies' && (p.y > 1.05 || p.y < 0.15));
-      if (out) ambient.list[i] = spawnParticle(k, k === 'fireflies');
+      const out = p.y < -0.05 || p.x < -0.4 || p.x > 1.4 || (k === 'fireflies' && (p.y > 1.05 || p.y < 0.15)) || (k === 'stars' && p.x > 1.03);
+      if (out) ambient.list[i] = spawnParticle(k, k === 'fireflies', ambient.color);
     }
   }
   function drawAmbient(F, front) {
@@ -4412,13 +4615,89 @@
         c.fillStyle = g; c.fillRect(x - r, y - r, r * 2, r * 2);
         continue;
       }
+      if (k === 'stars') { drawStar(c, p, x, y); continue; }
       let a = p.a * (0.6 + 0.4 * Math.sin(time * 2 + p.ph));
       if (k === 'fireflies') a = Math.max(0, Math.sin(time * 1.3 + p.ph)) * 0.9;
       if (a <= 0.02) continue;
+      if (p.note) {
+        // a drifting music note: wobbles as it rises, a soft halo under the glyph
+        const s = p.r * (front ? 1.3 : 1);
+        c.save();
+        c.translate(x, y); c.rotate(Math.sin(time * 1.6 + p.ph) * 0.3);
+        c.beginPath(); c.arc(0, 0, s * 0.8, 0, TAU); c.fillStyle = rgba(p.color, a * 0.12); c.fill();
+        c.font = 'bold ' + Math.round(s * 1.4) + 'px ' + FONT;
+        c.textAlign = 'center'; c.textBaseline = 'middle';
+        c.fillStyle = rgba(p.color, a); c.fillText(p.note, 0, 0);
+        c.restore();
+        continue;
+      }
       const r = p.r * (front ? 1.4 : 1);
       c.beginPath(); c.arc(x, y, r * 2.6, 0, TAU); c.fillStyle = rgba(p.color, a * 0.18); c.fill();
       c.beginPath(); c.arc(x, y, r, 0, TAU); c.fillStyle = rgba(p.color, a); c.fill();
     }
+    c.restore();
+  }
+  /** One twinkling star: a point, a faint halo, and a four-point glint on the brightest at their peak. */
+  function drawStar(c, p, x, y) {
+    const tw = 0.5 + 0.5 * Math.sin(time * p.sp + p.ph);
+    const a = p.a * (0.3 + 0.7 * tw);
+    if (a <= 0.03) return;
+    const r = p.r;
+    c.beginPath(); c.arc(x, y, r * 3, 0, TAU); c.fillStyle = rgba(p.color, a * 0.12); c.fill();
+    c.fillStyle = rgba(p.color, a);
+    c.fillRect(x - r * 0.7, y - r * 0.7, r * 1.4, r * 1.4);
+    if (r > 1.1 && tw > 0.75) {
+      const L = r * 4 * (tw - 0.6);
+      c.fillStyle = rgba(p.color, a * 0.7);
+      c.fillRect(x - L, y - 0.35, L * 2, 0.7);
+      c.fillRect(x - 0.35, y - L, 0.7, L * 2);
+    }
+  }
+
+  /**
+   * V3 backdrop (look.backdrop 'table' / 'table_far'): the underside of the DM's table across the top of the screen,
+   * plank seams running off toward the horizon, a cross brace, a wad of gum and a sliver of lamp light along its edge.
+   * Screen-space and static (the same at every yaw); 'table_far' is a thinner, dimmer band far overhead.
+   */
+  function drawTableUnderside(c, far) {
+    const bandH = Math.round(H * (far ? 0.085 : 0.17));
+    if (bandH < 4) return;
+    c.save();
+    c.globalAlpha = far ? 0.6 : 1;
+    const g = c.createLinearGradient(0, 0, 0, bandH);
+    g.addColorStop(0, '#140b06'); g.addColorStop(1, '#33200f');
+    c.fillStyle = g; c.fillRect(0, 0, W, bandH);
+    // plank seams: from the top edge toward a vanishing point at the horizon
+    const vx = W * 0.5, vy = H * 0.55, k = bandH / vy;
+    c.beginPath();
+    for (let i = -9; i <= 9; i++) {
+      const x0 = vx + i * W * 0.085;
+      c.moveTo(x0, 0); c.lineTo(x0 + (vx - x0) * k, bandH);
+    }
+    c.strokeStyle = 'rgba(0,0,0,0.45)'; c.lineWidth = 1.2; c.stroke();
+    c.beginPath();
+    for (let i = -9; i <= 9; i++) {
+      const x0 = vx + i * W * 0.085 + 2;
+      c.moveTo(x0, 0); c.lineTo(x0 + (vx - x0) * k, bandH);
+    }
+    c.strokeStyle = 'rgba(255,200,140,0.06)'; c.lineWidth = 1; c.stroke();
+    // a cross brace and the apron along the near edge
+    c.fillStyle = 'rgba(10,5,2,0.55)'; c.fillRect(0, Math.round(bandH * 0.38), W, Math.max(2, Math.round(bandH * 0.12)));
+    c.fillStyle = '#1a0e07'; c.fillRect(0, bandH - Math.max(3, Math.round(bandH * 0.16)), W, Math.max(3, Math.round(bandH * 0.16)));
+    // gum: a pink wad with a long, regrettable string
+    if (!far) {
+      const gx = W * 0.71, gy = bandH * 0.62, gr = Math.max(4, bandH * 0.13);
+      c.beginPath(); c.ellipse(gx, gy, gr * 1.5, gr, 0, 0, TAU); c.fillStyle = '#d9799f'; c.fill();
+      c.beginPath(); c.ellipse(gx - gr * 0.4, gy - gr * 0.35, gr * 0.6, gr * 0.3, 0, 0, TAU); c.fillStyle = 'rgba(255,220,235,0.45)'; c.fill();
+      c.beginPath(); c.moveTo(gx + gr * 0.4, gy + gr * 0.8);
+      c.quadraticCurveTo(gx + gr * 0.9, gy + gr * 3, gx + gr * 0.5, gy + gr * 4.4);
+      c.strokeStyle = 'rgba(217,121,159,0.8)'; c.lineWidth = Math.max(1, gr * 0.22); c.stroke();
+    }
+    // lamp light leaking past the table's edge
+    const lg = c.createLinearGradient(0, bandH, 0, bandH + Math.max(6, bandH * 0.35));
+    lg.addColorStop(0, 'rgba(255,207,106,' + (far ? 0.16 : 0.28) + ')'); lg.addColorStop(1, 'rgba(255,207,106,0)');
+    c.fillStyle = lg; c.fillRect(0, bandH, W, Math.max(6, bandH * 0.35));
+    c.fillStyle = 'rgba(255,214,140,' + (far ? 0.35 : 0.55) + ')'; c.fillRect(0, bandH - 1, W, 1);
     c.restore();
   }
 
@@ -4430,6 +4709,7 @@
     g.addColorStop(0, look.bg[0]); g.addColorStop(1, look.bg[1]);
     c.fillStyle = g;
     c.fillRect(0, 0, W, H);
+    if (look.backdrop === 'table' || look.backdrop === 'table_far') drawTableUnderside(c, look.backdrop === 'table_far');
     if (F.boardCenter) {
       const bc = w2s(F, F.boardCenter.x, F.boardCenter.y);
       const r = Math.max(W, H) * 0.65;
@@ -4438,7 +4718,7 @@
       c.fillStyle = rg;
       c.fillRect(0, 0, W, H);
     }
-    ensureAmbient(look.ambient || null);
+    ensureAmbient(look.ambient || null, look.ambientColor);
     drawAmbient(F, false);
   }
 
@@ -4497,10 +4777,12 @@
   // the whole table sits at the fire: the ring of tiles two steps out (the classic eight seats first, then the rest,
   // alternating sides), so every hero gets a spot and nobody sits in the flames
   const TITLE_SLOTS = [[2, 5], [4, 5], [1, 4], [5, 4], [1, 2], [5, 2], [2, 1], [4, 1],
-    [1, 3], [5, 3], [3, 5], [3, 1], [1, 5], [5, 1], [1, 1], [5, 5]];
-  // fallback when DD.UI is not loaded (same order as DD.UI.HERO_ORDER: the original ten, then the newer six)
+    [1, 3], [5, 3], [3, 5], [3, 1], [1, 5], [5, 1], [1, 1], [5, 5],
+    [4, 6]];   // and Benedick on the path, still arriving
+  // fallback when DD.UI is not loaded (same order as DD.UI.HERO_ORDER: the original ten, the newer six, then V3's
+  // Benedick, who arrives last, obviously)
   const HERO_ORDER = ['zarathor', 'syllamin', 'marbles', 'marwyn', 'ellaria', 'josiah', 'buga', 'sparrow', 'slate', 'corelos',
-    'kiri', 'betty', 'basanos', 'valdris', 'hjalmar', 'pebbles'];
+    'kiri', 'betty', 'basanos', 'valdris', 'hjalmar', 'pebbles', 'benedick'];
   let titleState = null, titleHeroKey = '';
   const titleBark = { at: 4, unitId: null, text: '', until: 0 };
   let stars = null;
@@ -5758,6 +6040,12 @@
           booms: (F.booms || []).map(function (b) { return Object.assign({}, b); }),
           // rules run: ⇄ rings drawn under swappable allies, allies faded by overlay.ghosts
           swapRings: F.swapRings || 0, ghosted: F.ghosted || 0,
+          // V3: content zones drawn (E8: tiles tinted, the line's screen ends, the label's box), the ambient drawn, and
+          // on the title the campfire seats ({ id: hero id, x, y } in seat order)
+          zones: (F.zoneStats || []).map(function (z) { return JSON.parse(JSON.stringify(z)); }),
+          ambient: { kind: ambient.kind, color: ambient.color, n: ambient.list.length,
+            front: ambient.list.filter(function (p) { return p.front; }).length, notes: ambient.list.filter(function (p) { return !!p.note; }).length },
+          seats: sc === 'title' && F.st && F.st.units ? F.st.units.map(function (u) { return { id: u.defId, x: u.x, y: u.y }; }) : null,
         } : null;
       } finally {
         W = saved.W; H = saved.H; DPR = saved.DPR; texBudget = saved.budget; frameBakeMs = saved.baked; lodOff = saved.lod;
@@ -5955,6 +6243,19 @@
       objects: Object.keys(OBJ).filter(function (k) { return k.indexOf('title_') !== 0; }),
       surfaces: Object.keys(SURF),
       themes: Object.keys(THEME_LOOK).filter(function (k) { return k !== 'title'; }),
+      ambients: Object.keys(AMBIENT_N),
     },
+    /**
+     * V3: the look a theme id gets ({ bg: [top, bottom], ambient (the kind drawn, after fallbacks), ambientColor, backdrop,
+     * tint }): DD.Themes' bg / ambient / ambientFallback / ambientColor / backdrop win over the renderer's fallbacks.
+     */
+    themeLook: function (id) {
+      const l = themeLook(id);
+      return { bg: l.bg.slice(), ambient: l.ambient, ambientColor: l.ambientColor, backdrop: l.backdrop, tint: l.tint };
+    },
+    /** The title campfire's seats [[x, y], …] in fill order (a copy); heroes sit in DD.UI.HERO_ORDER, else HERO_ORDER. */
+    get TITLE_SLOTS() { return TITLE_SLOTS.map(function (s) { return s.slice(); }); },
+    /** The renderer's own hero order (a copy), used when DD.UI is not loaded. */
+    get HERO_ORDER() { return HERO_ORDER.slice(); },
   });
 })();

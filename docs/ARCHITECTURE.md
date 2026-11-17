@@ -40,9 +40,35 @@ Every module is written against this document. If you must deviate, stay backwar
 | Integration | lead / integrator | `tests/content/integration.js`, `tests/sim/*`, `tools/sim.sh`, `docs/notes/v2-digest.md` |
 | Docs + tools | DOCS (finish run) | `docs/DESIGN.md`, this file's §1-4 and §9-10, `docs/notes/v2-digest.md`, `tests/docs_tests.js` (the docs quote the game; the sim's stall accounting; the digest §2 kit generator), `tests/sim/*`, `tools/*.sh` (harness bugs only) |
 
+**V3 (act 4 "Under the Table" and the 17th hero; plan `.tmp/v3/design.md` §8.2).** The v2 rows above keep their files;
+V3 adds these owners and files (each new file's suite and notes belong to its owner):
+
+| V3 owner | Files |
+|---|---|
+| Lead: contract + core (wave 0) | this file and `docs/DESIGN.md` (the V3 sections), `js/core/namespace.js` (`DD.finalAct`, `registerCameo`, the `DD.Cameo` stand-in, narration act variants), `js/data/balance.js` (the V3 rows), `js/manifest.js`, `tests/manifest.js`, `tests/core_tests.js` (new: suites "core: …" for the V3 core and rows), the phase-0 test widenings, `docs/notes/v3-contract.md` |
+| RULES | `js/engine/cameo.js` (new: `DD.Cameo`, §5.11), `js/engine/{combat,actions}.js` (E1, E2, E10-E13, `combat:ready`, `skill:used`, `Act.log` extra, `rule.silent`), `tests/{engine_tests,fixtures}.js`, `docs/notes/rules.md` |
+| META-RUN | `js/run/{run,runmap,rewards,meta}.js` (`FINAL_ACT` getter, the twist, the gauntlet map, `startAtAct`, the Bribe, act-4 odds), `tests/run_tests.js`, `docs/notes/meta-run.md` |
+| MAPGEN | `js/engine/encounter.js`, `js/data/themes.js` (the six act-4 themes incl. `a4_barn`), `tests/mapgen_tests.js`, `docs/notes/mapgen.md` |
+| RENDER-SPRITES | `js/render/{fx_render,audio}.js` (the `cameo` FX, banner `fit` / `frames`, stingers), `tests/sprite_tests.js`, `docs/notes/render-sprites.md` |
+| RENDER-WORLD | `js/render/renderer.js` (ambients, act-4 theme fallbacks, the zone overlay E8, the hero fallback order and `TITLE_SLOTS`), `tests/render_tests.js`, `docs/notes/render-world.md` |
+| HUD | `js/ui/combat_hud.js` (the cameo moment host, speaker chips, E7), `tests/hud_tests.js`, `docs/notes/hud-v2.md` |
+| META-UI | `js/ui/ui.js`, `js/ui/screens/*.js` (map, gameover, rewards, hall, settings, title, tavern, shop, party_select), `js/main.js`, `css/style.css`, `tests/ui_tests.js`, `docs/notes/ui-v2.md` |
+| NARRATIVE | `js/data/narrator.js`, `js/data/svammiel_lines.js` (new: every `svam_*` pool), `js/data/events_act4.js` (new), `js/data/events.js` (V3: `ev_ben_bistro` only), `tests/content/{narrative,svammiel_lines,events_act4}.js`, `docs/notes/narrative.md` |
+| C1 the Gardener | `js/data/bosses/gardener.js`, `tests/content/boss_gardener.js`, `docs/notes/boss-gardener.md` |
+| C2 the League | `js/data/bosses/league.js` (+ `DD.League.name`), `tests/content/boss_league.js`, `docs/notes/boss-league.md` |
+| C3 Galbraith | `js/data/bosses/galbraith.js`, `tests/content/boss_galbraith.js`, `docs/notes/boss-galbraith.md` |
+| C4 the Coven | `js/data/bosses/coven.js`, `tests/content/boss_coven.js`, `docs/notes/boss-coven.md` |
+| C5 Svammiel | `js/data/bosses/svammiel.js` (the floor boss, his cheats, the `svammiel` cameo def and its five cameo cheats incl. the Radio Edit), `js/data/bosses/dm.js` (the twist cut-off line only), `tests/content/boss_svammiel.js`, `docs/notes/boss-svammiel.md` |
+| C6 the Rapping Goats | `js/data/bosses/goats.js` (replaces the phase-0 stub), `tests/content/boss_goats.js` (replaces the stub), `docs/notes/boss-goats.md` |
+| HERO-BENEDICK | `js/data/heroes/benedick.js` (replaces the phase-0 stub), `tests/content/hero_benedick.js` (replaces the stub), `docs/notes/hero-benedick.md` |
+| Integrator | `tests/sim/sim.js`, `tests/content/integration.js`, `tests/content/shared.js` (the `REAL` list only), the flip (`DD.Balance.campaign.acts: 4`), `docs/notes/v3-digest.md`, `README.md` (no act-4 spoilers); optional: `tests/content/kit.js` (the heroes-v1 list) |
+| BAL | `js/data/balance.js` (after the flip) + each fight's knobs through its owner |
+| QA | `.tmp/v3/qa/` only (screenshots, playtest notes; findings go to the owners as requests) |
+
 Notes/hand-offs: `docs/notes/<area>.md` (owned by that area). Never edit another area's files; if you need a change
 there, write it under **Requests** in your notes file (the lead integrates). `docs/notes/v2-digest.md` is the map of
-the whole v2 game (counts, kits, sims, open requests by owner).
+the whole v2 game (counts, kits, sims, open requests by owner); `docs/notes/v3-contract.md` lists the V3 contract and
+the lead's patches to the V3 plan.
 
 ## 2. Core (already implemented — read the source)
 
@@ -57,6 +83,22 @@ the whole v2 game (counts, kits, sims, open requests by owner).
   getSummon/getTerrain/getObject/getSurface/getEncounter/getEvent/getScar`.
 - `DD.skillLevel(def, level)` → `levels[level-1]`; `DD.skillDesc(def, level, user)`; `DD.resolve(v, L, user, fb)`.
 - `DD.registerNarration(key, lines)`, `DD.narrate(key, vars, rng)`; `DD.afterLoad(fn, order)`.
+- **V3 — the campaign's length**: `DD.finalAct()` → the last act of a campaign = `DD.Balance.campaign.acts` clamped to
+  3..`DD.MAX_ACT` (4); default and floor 3. **Every module asks `DD.finalAct()`; nobody writes a literal 3 or 4 for "the
+  last act"** (`DD.Run.FINAL_ACT` becomes a getter on it). Act 4 ships dark: the knob stays 3 until the integrator's
+  flip, so act 4 is reached only by suites that set the knob (inside `try / finally` with `DD.Balance.snapshot()` /
+  `restore`), by `DD.Run.startAtAct` and by debug URLs (`acts=4`, §10.1). Content may be written for any act
+  1..`DD.MAX_ACT` whatever the knob says (the content suites accept it).
+- **V3 — cameos**: `DD.registerCameo(def)` / `DD.getCameo(id)` / `DD.defs.cameos` (§3.13). `DD.Cameo` starts as a core
+  stand-in (`DD.Cameo.stub === true`: every call does nothing, `campaignGoesOn` already answers) so content can call it
+  before `js/engine/cameo.js` lands; cameo.js **assigns** `DD.Cameo = { … }` (never `DD.Cameo || …`), §5.11.
+- **V3 — narration act variants**: a pool registered as `key@a<act>` (e.g. `victory@a4`) replaces `key`'s pool while
+  that act is played; it uses the base key's tokens (`DD.Narrator.TOKENS[key]`). `DD.narrationAct()` → the run's act
+  while a run is going on or just ended (its fights share the run state: `DD.Combat.state.run === DD.Run.state`), a
+  sandbox / debug fight's `encounter.act` while it runs (or after it when no run exists), else 0.
+  `DD.narrationKey(key, act?)` → the key `DD.narrate` draws from (`key@a<act>` when that pool has lines, else `key`; act
+  defaults to `DD.narrationAct()`). `DD.narrationBaseKey('victory@a4')` → `'victory'`. A caller that filters a pool
+  itself before calling `DD.narrate` (run.js `narr`, `UI.narrate`) reads `DD.defs.narration[DD.narrationKey(key)]`.
 
 ---------------------------------------------------------------------------------------------------------------------
 
@@ -71,7 +113,9 @@ the whole v2 game (counts, kits, sims, open requests by owner).
   color: '#e25822',                                    // UI accent
   unlock: null,                                        // null = starter; { act: N } = unlocked by first clear of act N;
                                                        // { boss: enemyId } = unlocked the first time that boss is beaten.
-                                                       // v2: every hero is null (all 16 available, DESIGN §3)
+                                                       // v2: every hero is null (V3: all 17 available, Benedick
+                                                       //   included; DESIGN §3). Counts of heroes are read from the
+                                                       //   registry (DD.defs.heroes), never a literal
   stats: { hp: 24, ap: 3, mov: 4, armor: 0, init: 1 }, // level-1 base; init = v2 initiative modifier (−2..+4)
   growth: { hp: 4 },                                   // per level-up
   flags: {},                                           // flying | hop (climb 2 levels) | large | immovable
@@ -239,6 +283,23 @@ Party-wide inventory (max 3 by default). Using one costs `ap` (default 1) and re
 ```
 Hero summons use `DD.registerSummon(def)`: same shape (no act/tier) plus `ap` (default 2); they are player-controlled,
 side `'hero'`, `kind: 'summon'`, die at combat end and never count for victory/defeat.
+**V3 enemy fields** (all optional):
+```js
+{ act: 4,                            // 1..DD.MAX_ACT (§2)
+  pronoun: 'he',                     // 'he' | 'she' | 'it' | 'they' for rule texts (DD.Act.pronouns). EVERY named act-4 villain
+                                     //   sets it (Svammiel he; the Gardener it; Kelek, Warduke, Zarak, Zargash he; Skylla she;
+                                     //   Galbraith he; the hags she; Billy Bleatz, Lil' Kid, DJ Turnip, Ursa Verse he); else 'it'
+  shortName: 'The League of Villainy',   // where width is tight (HUD top bar, tracker, map labels, game-over killer line)
+  boss: { title, intro, mini: true,  // mini: a mini-boss (boss rules: no sheep / charm, falls cost 25% max HP, a stun guard;
+          sting: 'evil_chord' },     //   the codex and HUD say "Mini-boss"); sting: optional audio stinger with its banner
+  actsWithOwner: true,               // E1 (RULES): no initiative entry of its own while its ownerId unit lives (spawned with
+                                     //   DD.Act.spawn(id, x, y, { owner })): it acts on its owner's turn, owner first; an
+                                     //   orphan gets its own entry at the next round start (mergeJoiners)
+}
+```
+A squad member (the League, the Coven, the Rapping Goats) is `tier: 'elite'` with **no `boss` field** (`DD.Act` marks a
+unit with one a boss: no charm, no sheep); the encounter names the squad in `objective.bossIds` (§3.8). An instance may
+carry `unit.turnsPerRound` (E2: `entriesPerRound` reads it; `mergeJoiners` adds or drops an entry at the next round start).
 
 ### 3.7 Terrain / Object / Surface
 ```js
@@ -310,6 +371,30 @@ provide `colors`/`color` (and optionally `draw`).
   onStart(state) {}, onRoundStart(state) {}, onRoundEnd(state) {},   // optional scripting
   reward: { goldMult: 1, itemRarity: null } }
 ```
+**V3 encounter fields** (act 4: every fight is a hand-made boss fight placed by the gauntlet map, §9.3):
+```js
+{ id: 'boss_league', act: 4,                           // act: 1..DD.MAX_ACT
+  kind: 'boss', weight: 0,                             // every act-4 fight: a boss fight never picked at random
+  gauntlet: { lane: 'league', order: 2, hint: 'Five of them: control and area damage.' },   // a door of the gauntlet
+                                                       //   (lane id, map order; hint: the map tooltip's one-line profile)
+  finale: true,                                        // instead of gauntlet: the floor boss behind the last door
+  shortName: 'The League of Villainy',                 // ≤ 24 characters: map labels, HUD top bar, game-over line, history
+  icon: '🦹',                                          // map door icon (🕷️ 🦹 🔭 🫖 🐐; the finale 😈)
+  banner: false,                                       // E11: Combat.start skips its per-boss banners (the cameo shows it)
+  cameo: { start: 'svam_cameo_league', cheat: 'svam_nepotism', interjections: true },
+                                                       // undefined: the act's cameo triggers apply · false: no cameo ·
+                                                       //   { start: announcer key | false, cheat: cheat id | null,
+                                                       //   interjections: false = start cameo only } (§3.13, §5.11)
+  objective: { type: 'boss', bossIds: ['lg_kelek', …], flavor: '…' },   // E10: victory when every unit of these defs
+                                                       //   is dead (the rest flee); objectiveText reads shortName ("Defeat
+                                                       //   the League of Villainy (3 left)"); a unit spawned later may be
+                                                       //   named too (the goats' bear); flavor: a live subtitle line
+  reward: { goldMult: 0.9, itemRarity: 'rare' } }      // a door: a guaranteed rare, boss gold × 0.9 (lead patch P5);
+                                                       //   the finale: { goldMult: 0, itemRarity: null } (the run ends)
+```
+Gauntlet lanes are read from the registry, never counted in code: `DD.RunMap.gauntletLanes(act)` = the encounters with
+that `act` and `gauntlet`, sorted by `gauntlet.order` then id, real lanes before `test_` lanes, at most 6. Random picks
+(`DD.Encounter.pickFrom`, act-map nodes, `api.combat`) never return a `gauntlet` or `finale` encounter.
 
 ### 3.9 Event — `DD.registerEvent(def)`
 ```js
@@ -323,6 +408,8 @@ provide `colors`/`color` (and optionally `draw`).
     { label: 'Walk away.', resolve: (api) => 'It looks so sad.' } ] }
 ```
 `resolve` returns outcome text (string) or `{ text, combat: encounterIdOrSpec }` to start a fight afterwards. API §9.5.
+`acts` defaults to the classic acts `[1, 2, 3]`: V3 act-4 events opt in with `acts: [4]` (`js/data/events_act4.js`) and
+never start a fight (`DD.Run.queueCombat` refuses in a gauntlet act; the act-4 event suite asserts no `api.combat`).
 
 ### 3.10 Narration keys
 `DD.registerNarration(key, lines)`; tokens `{hero} {enemy} {ally} {n} {gold} {name}`. Keys used by engine/UI:
@@ -339,6 +426,12 @@ swapped with) and the downed variants `DD.Act` picks instead of `hero_downed` (`
 key's callers fill is `DD.Narrator.TOKENS` (`js/data/narrator.js`): a line may use
 only those, because `DD.narrate` leaves an unfilled token in the text. Content may register its own keys (boss
 banners: `grim_start`, `dm_phase2`…; Syllamin's `syl_heckle`…), narrated by its own code.
+**V3**: act variants `key@a<act>` (§2: `boss_start@a4`, `victory@a4`, `gameover_title@a4`…) replace the base pool in that
+act and use the base key's tokens. New engine / UI keys (NARRATIVE adds them to `DD.Narrator.TOKENS`): `act_intro_4`,
+`act_clear_twist`, `twist_loot`, `victory_final`, `campaign_won`, `tips_act4` (loading tips, only after the
+`DD.Meta.data.seen.bosses.svammiel` gate), `run_start_seen`, `svam_defeat`, `svam_phase2`, `svam_phase3`. The cameo
+pools (`svam_*`, `js/data/svammiel_lines.js`) are content keys played by `DD.Cameo` with `DD.Cameo.TOKENS`; the act-4
+fights' own keys use their file prefix (`gard_`, `league_`, `gal_`, `cov_`, `goats_` / `rap_`).
 
 ### 3.11 SpriteSpec (procedural sprites; renderer §7.3)
 ```js
@@ -391,6 +484,58 @@ RunHero `passives: [{ id, level }]` (max 4). In combat, hero units carry `unit.p
 `DD.getPassive(id)`, `DD.passiveInstance(entry)`, `DD.passiveStats(entry)`, `DD.passiveDesc(entry)`. The sandbox
 accepts `heroes: [{ id, passives: ['rp_x', { id: 'rp_y', level: 2 }] }]`.
 
+### 3.13 Cameo — `DD.registerCameo(def)` (V3; played by `DD.Cameo`, §5.11)
+A cameo actor appears in fights it is not (necessarily) in: Svammiel heckles every act-4 fight, bursts in at the act-3
+twist and cheats. One def (C5, `js/data/bosses/svammiel.js`); its line pools live in `js/data/svammiel_lines.js`
+(NARRATIVE).
+```js
+DD.registerCameo({
+  id: 'svammiel', name: 'Svammiel', title: 'The Floor Boss', icon: '😈', color: '#c0213a',
+  enemy: 'svam_svammiel',          // enemy def: sprite + portrait; a unit of this def on the board = the actor is "present"
+  triggers: [                      // checked in order; each { on, act?, kind?, encounter?, squad?, from?, when?(state, ctx),
+                                   //   key | keyOf(state, ctx), style, once?, force? }; state = DD.Combat.state, ctx =
+                                   //   the event's payload (§5.11); a falsy key from keyOf skips the trigger
+    { on: 'start', act: 4, style: 'swoop' },        // every act-4 fight (encounter.cameo may override, §3.8)
+    { on: 'victory', act: 3, kind: 'boss', when: function (s) { return DD.Cameo.campaignGoesOn(s); }, key: 'svam_twist',
+      style: 'entrance', force: true },             // the twist on the DM's table
+    { on: 'heroDowned', act: 4, key: 'svam_down', style: 'bubble' },
+    { on: 'kill', act: 4, key: 'svam_env_kill', style: 'bubble', once: true,
+      when: function (s, e) { const k = DD.Combat.byId(e.killerId); return !!k && k.side === 'hero' &&
+        /^(surface|terrain|bump|fall|explosion)$/.test(e.cause); } },   // a hero's environmental kill (actions.js's
+                                                    //   ENV_KILL_CAUSE, the env_kill narration's rule)
+    { on: 'victory', act: 4, keyOf: function (s) { const g = s.encounter.gauntlet; return g ? 'svam_sulk_' + g.lane : null; },
+      style: 'quip' },                              // read the lane from the encounter: a sandbox door has no data.gauntlet
+    /* … round (from), signature, kill (squad), windupCancel, the DM-phase-3 shadow (plan §4.1) */ ],
+  situation: function (state, run) { return { key, vars } || null; },   // the start roast's situation (plan §4.1)
+  roastPrefix: 'svam_hero_', comebackPrefix: 'svam_back_',             // per-hero pools: svam_hero_<heroId> …
+  cheats: { svam_green_thumb: Cheat, svam_nepotism: Cheat, svam_cameo_one: Cheat, svam_cameo_lava: Cheat,
+            svam_cameo_radio: Cheat /* , the finale's round / snap / phase cheats */ },
+});
+Cheat = { id: 'svam_green_thumb', name: 'Green Thumb', icon: '🌱',
+  desc: 'Svammiel planted two Strangler Vines for the Gardener.',   // exact mechanics, one sentence (≤ 90 characters); may
+                                   //   be a template `apply` fills (the Radio Edit's "<Skill> (<Hero>) is bleeped: …"): the
+                                   //   rule, chip, card, banner sub and log all carry the filled string
+  rounds: -1,                      // the rule's duration in rounds (state.rules turns, ticked at round end); -1 = the whole fight
+  hooks: { … },                    // optional: becomes the rule { id: 'cameo:' + id, cheat: true, source: actorId, silent: true }
+  onAdd: function (state, rule) {}, onRemove: function (state, rule) {},   // optional, copied onto the rule (§5.5):
+                                   //   The Floor Is Lava restores the terrain in onRemove when its 3 rounds end
+  telegraphFlat: function (unit, intent, rule) {},   // optional, copied onto the rule: the flat a cheat adds to enemy
+                                   //   strikes, so wind-ups, reach and threat shading show it (DD.AI.ruleFlat)
+  apply: function (state, ctx) {}, // optional one-off effects through DD.Act (placeObject, spawn, setTerrain…); the ONLY
+                                   //   place a cameo may draw from state.rng
+  when: function (state) { return true; },   // optional: skipped when it could do nothing it promises
+  next: false }                    // optional: shown as a "Next round" chip (the finale's announced cheats)
+```
+Defaults: `title ''`, `icon '🎭'`, `color '#c0213a'`, `enemy null`, `triggers []`, `cheats {}`, `situation null`,
+`roastPrefix` / `comebackPrefix` null (no roasts). **Honesty rule**: a cheat that changes damage declares the matching
+pure query, so the AI, AutoPlay, threat shading and every preview stay exact: in its rule `hooks` the queries
+`estimateDealt` / `estimateTaken` / `threatAt` (§5.3; previews are dry runs and see the damage hooks themselves), the
+cheat's own `telegraphFlat` (a rule field, above); if it works through a status, that status def's `takenFlat` /
+`telegraphFlat` / `takenMult` fields. These are fields, not hook names: inside `hooks` they would be ignored, and
+`content_tests` reports unknown hook names. A cheat that refuses a skill does it in `Combat.canUse` (`modifyUse`, E13;
+RULES adds `modifyUse` to `content_tests`' hook list with it), never by surprise at resolution. Lines are picked with
+the cosmetic RNG (`DD.rng`), never `state.rng`.
+
 ---------------------------------------------------------------------------------------------------------------------
 
 ## 4. Runtime state shapes
@@ -428,6 +573,17 @@ accepts `heroes: [{ id, passives: ['rp_x', { id: 'rp_y', level: 2 }] }]`.
   noActFirst, aiOff,             // sandbox: AI units pass in round 1 (noPlan) / always (enemyAi: false)
   data: {} }                     // free-form scripting state for encounters / rules / bosses (previews copy it)
 ```
+**V3 fields**: `noCameo` (sandbox `cameo: false`, or `DD.Balance.cameo.off`: no cameo at all) · `data.cameo = { log:
+[{ round, actor, key, text, style, cheat }], used, lastRound, fired: { [triggerId]: true } }` (DD.Cameo's memory of this
+fight; previews copy it) ·
+`data.gauntlet = { lane, index, beaten: [laneIds] }` (an act-4 door: `Combat.start` copies `setup.gauntlet`) ·
+`stats.cameos`, `stats.cheats` (cameos played, cheats applied) · `stats.swaps` (E12: hero swap moves) · log entries may
+carry the extra fields of `Act.log(text, cls, extra)` (`{ speaker: 'Svammiel', actor: 'svammiel' }` on `cls: 'cameo'`
+lines) · rules may carry `cheat: true` (a 😈 chip), `source` (the actor id), `next: true` (a "Next round" chip) and
+`silent: true` (`Act.addRule` logs nothing: the cameo logs the cheat itself). `objective.flavor`: an optional live
+subtitle line content may rewrite (the HUD shows it under the objective). `data.zones = [{ tiles: [{x,y}], color,
+label, line: [{x,y}, {x,y}] }]` (E8, optional): content zones the renderer draws (Hex Threads, "next" panels, chairs,
+the goats' spotlight); content writes them here, never into `DD.Render.overlay` (§7.2).
 
 ### 4.2 Tile
 `{ x, y, h /*0..4*/, t /*terrain id*/, surface: null|{ id, turns, data }, obj: null|ObjInstance, zone: null|'hero'|'enemy', tag: null|string }`
@@ -498,6 +654,15 @@ RunHero = { id /*hero id*/, level: 1, hp, skills: [ { id, level } ] /*≤4*/,
             perks: [], pendingLevels: 0, levelChoices: null,   // levels gained whose boon is not chosen yet
             passives: [ { id, level } ] /*≤4, §3.12*/, passiveRolls: [] }
 ```
+**V3 run fields** (all optional, filled by `normalize`; no save migration, `VERSION` stays 1): `act` 1..`DD.finalAct()`
+(an act past the knob clamps down) · `map` may be a gauntlet `ActMap` (§9.3) · `stats.miniBosses`, `stats.cameos`,
+`stats.cheats` · `flags.gauntlet` (lane ids in the order beaten) · `flags.cameo = { lines: { [key]: [used indices] },
+heroes: [roasted ids], situations: [], cheats: [ids], bribe: 0|1 }` (saved after each fight) · `flags.twistSeen` ·
+`flags.lastFight = { downed: [heroIds], mvp, flawless, swaps }` and `flags.lastStop` (the cameo's situations). The run
+summary (`buildSummary`, `DD.Meta.recordRun`) adds `acts` (that campaign's `DD.finalAct()`: `result: 'victory'` with
+`acts: 4` = Svammiel beaten; a v2 summary without `acts` is a "classic, 3 acts" win), `gauntlet` (lane ids in the order
+beaten), `gauntletLanes` (that run's lane count:
+`map.lanes.length`, the M of every "N / M" floor-boss count; never a literal) and `floorBoss` (beaten or not).
 v2 (DESIGN §3): **there is no XP.** A RunHero has no `xp`; `level` rises only through level-ups (§9.2 "Leveling"),
 each applying its HP growth at once and leaving a pending boon (`pendingLevels`) plus a Blessing roll. Saves from the
 XP era load as they are: `xp` fields (heroes, pending rewards data `xp` / `xpByHero` / `levelsGained`) are dropped,
@@ -510,6 +675,16 @@ history: [] }`. Render-owned settings (written by `DD.Render` through `DD.Meta.s
 battlefield view angle in degrees (0.1 steps, absent = 0; written 500 ms after a player's turn of the map settles, never
 from `rot=`), `rotSnap` = a released rotate drag snaps to a classic view within 4° (absent = true; the Settings toggle
 "Snap rotation to the classic views").
+**V3**: `settings.cameos: 'full' | 'short' | 'log'` (Svammiel's cameos: Full / Short / Log only; default 'full') ·
+`stats.dmDefeated` (runs that beat the act-3 DM), `stats.miniBosses` (sum), `stats.classicWins` (won campaigns that
+ended at the DM, the Hall's "of which classic"; a meta stored without `dmDefeated` / `classicWins` — a v2 veteran's —
+seeds both from its lifetime `wins`, `Meta.load`) · `stats.bestAct` may reach 4 · the spoiler
+gate `seen.bosses.svammiel` (set by the twist entrance, `DD.Meta.markSeen('bosses', 'svammiel')`): until it is set
+nothing a player can reach mentions act 4 or Svammiel (title, tips, Hall codex incl. "Miscellaneous Horrors" and the
+seen counts, the Hall's V3 records — "Floor bosses beaten", the classic label —, README). That includes two places the
+plan leaves implicit (the review): the Settings row "Svammiel's cameos" shows only after the gate (the setting keeps
+its default meanwhile), and the map legend's 😈 Mini-boss entry (`TYPES.miniboss` names Svammiel) only on a gauntlet
+map — the act 1-3 legend stays the v2 list. Benedick is no secret: he shows everywhere from the start.
 
 ---------------------------------------------------------------------------------------------------------------------
 
@@ -663,6 +838,14 @@ onDeathPrevented(unit, d)     // the unit's sources, right after preventDeath re
 onStatusRemoved(unit, st, reason)  // the unit's sources after a status left it ('removed' | 'expired' (decay) |
                               //   'cleansed'); the status itself is gone (its def's own onRemove ran first). Not on
                               //   downs / deaths (every status goes)
+// V3 (E13, RULES implements it in Combat.canUse)
+modifyUse(q)                  // QUERY (pure, wrapped in DD.Targeting.pure like a def's canUse), the user's sources incl.
+                              //   state.rules: q = { unit, skill (def), slot, level, why: null } — set q.why to a short
+                              //   reason string to refuse the use ("Bleeped by Svammiel (Radio Edit)."). Fired after the
+                              //   turn checks; Combat.canUse returns q.why, so the HUD's ⛔ line, Combat.useSkill,
+                              //   AutoPlay and its dry runs all respect it. Refusals only: never change state, never
+                              //   draw RNG. (Svammiel's R11 No Signatures and the goats' Radio Edit; fallback without
+                              //   it: a rule's modifyCost prices the refused skill at 99 AP)
 ```
 v2: `modifyGuard` is gone with Guard (unused AP is simply lost); a content hook of that name is reported as unknown.
 `DamageCtx = { source, target, base, amount, mult: 1, flat: 0, element, skill, tags, cause, ignoreBlock, ignoreArmor,
@@ -775,6 +958,12 @@ swapMove(mover, ally, { provoke }) → { swapped, provoked, interrupted }   // t
                                  //   cancels the swap), then they trade tiles (no bump), log + FX, enterTile for both (mover
                                  //   'move', ally 'teleport'), onMove + Bleed for the mover only, never two on one tile
 ```
+**V3 (RULES)**: `log(text, cls, extra)` — `extra` (e.g. `{ speaker: 'Svammiel', actor: 'svammiel' }`) is merged into the
+log entry and carried by `combat:log`; cls `'cameo'` for cameo lines · `addRule(rule)` honours `rule.silent` (no "New
+rule: …" line) and keeps `cheat`, `source`, `next` · `spawn(enemyId, x, y, { owner })` sets `ownerId` before
+`Combat.noteArrival` (E1: an `actsWithOwner` unit acts on its owner's turn; `{ owner, actsWithOwner: true }` flags one
+unit whose def doesn't; an enemy with an owner but no flag rolls its own entry) · `unit:downed` also carries `killerId`
+and `cause`.
 `moveAlong(unit, path, opts)`: `opts.provoke` = a MOVE action (DD.Combat.move, AI walks): leaving a tile next to opposing
 units triggers their attacks of opportunity (§6.2); without it (skill dashes, scripted walks) nothing provokes;
 `opts.passDowned` (engine requests): it may step over the bodies of downed foes (never ending on one). Returns the
@@ -864,15 +1053,30 @@ addRule(rule) / removeRule(id)  // Rule = { id, name, icon, desc, hooks, turns /
 ```
 `finish(result)` narrates `victory`, `defeat` (nobody standing) or, engine requests, `objective_failed` (a lost objective
 while a hero still stands: the run goes on).
+**V3 (RULES; plan §3.6 E1-E13)**: `start(setup, opts)` copies `setup.gauntlet` to `state.data.gauntlet`, sets
+`state.noCameo` for `opts.cameo === false` (sandbox `cfg.cameo: false`) or a truthy `DD.Balance.cameo.off` (the
+page-wide switch of the sims' and debug pages' `cameo=0`: run fights included), passes `gauntlet: setup.gauntlet` to
+`DD.Balance.scale` (§6.10), skips the per-boss banners when
+`encounter.banner === false` (E11) and emits **`combat:ready`** after `encounter.onStart`, before deployment / the
+initiative roll (the start cameo and its cheat land there, so a `modifyInitiative` cheat changes the roll). E1:
+`doRoll` gives no entry to an `actsWithOwner` unit whose owner lives (checked directly, not through the order being
+built). E2: `entriesPerRound(u)` honours `u.turnsPerRound`; `mergeJoiners` tops a unit up or drops extras at round start.
+E10: `bossUnits` / `objectiveText` read `objective.bossIds` and `encounter.shortName`. E12: `stats.swaps`. E13: `canUse`
+fires `modifyUse` (§5.3) after the turn checks. Helpers (RULES, V3): `Combat.actsWithOwner(u)`, `Combat.entriesPerRound(u)`,
+`Combat.bossUnits(state?)`, `Combat.vetoOf(unit, slotOrDef) → reason | null` (the `modifyUse` veto alone, for the HUD's
+"BLEEP" sticker); `sandbox(cfg)` forwards `cfg.cameo` and `cfg.gauntlet`. `resolveSkill` emits **`skill:used`** ({ unit, skill, ctx }) after
+`onSkillUsed`, real uses only (never in a preview, a dry run or an attack of opportunity).
 Events emitted on `DD.Events`: `combat:start`, `combat:changed` (after every public mutation), `combat:log`,
 `combat:end` ({result}), `initiative:rolled` ({ order: [{ unitId, name, side, roll, init, total, k }], rolled: bool } —
 the dice moment), `initiative:joined` ({ unit, entries }), `round:start` ({round}), `round:end` ({round}),
 `turn:start` / `turn:end` ({ unit, unitId, round, turn, index, entry }), `turn:player` ({ round, unit }: a hero turn
 waits for input), `turn:enemy` ({ round, unit }: once per run of AI turns), `windup:start` / `windup:cancel`
 ({ unit, intent | reason }), `opportunity:attack` ({ attacker, attackerId, mover, moverId, skillId, from, to }: right
-before an attack of opportunity resolves), `unit:died`, `unit:downed`, `hype:changed`. FX markers for playback (no
-duration of their own): `turn` (FX.turn: `DD.FX.shownTurn = { unitId, round }` follows it), `initiative` ({ order }),
-`windup`.
+before an attack of opportunity resolves), `unit:died`, `unit:downed`, `hype:changed`; V3: `combat:ready` ({ state }:
+once, after `encounter.onStart`, before deployment / `doRoll`), `skill:used` ({ unit, skill, ctx }: a real use, after
+`onSkillUsed`) and `move:undone` ({ unit, unitId, kind: 'move' | 'swap', from, to, path | allyId }: `Combat.undo` took a
+walk or a swap back; Benedick's slime trail). FX markers for playback (no duration of their own): `turn` (FX.turn: `DD.FX.shownTurn = { unitId, round }`
+follows it), `initiative` ({ order }), `windup`. Events are not emitted while `DD.Act.simulating` (previews, dry runs).
 
 ### 5.6 `DD.AI` (RULES) — AI turns (no telegraphs) and boss wind-ups
 ```
@@ -1063,6 +1267,14 @@ DD.Encounter.build(encounterDef, party /* RunHero[] | hero ids */, opts { rng, d
 DD.Encounter.pick(act, kind, rng, { depth, exclude }) → encounterDef
 DD.Encounter.spawnWave(state, wave)    // reinforcements (called by combat at round start)
 ```
+**V3 (MAPGEN, plan §4.6)**: `clampAct` → 1..`DD.finalAct()`; `pick` / `pickFrom` bound their act list by
+`DD.finalAct()` and never return a `gauntlet` or `finale` encounter (all acts and kinds); `DD.Themes[id].act` may be
+1..`DD.MAX_ACT` (six act-4 themes incl. `a4_barn`, each with a `gen` fallback; ambients may add `pollen` / `stars` /
+`notes`, each with a fallback) and `forAct` clamps to 1..`DD.finalAct()`; `buildObjective` copies `objective.bossIds`
+(and `flavor`); `build(def, party, { …, gauntlet: { lane, index, beaten } })` puts `setup.gauntlet` (same object) in
+the setup and passes it to `DD.Balance.scale(…, { gauntlet })` for `setup.difficulty`. The order scaling itself
+lives in `DD.Balance.scale` (§6.10): in a run `Combat.start` computes the fight's multipliers from the run, not from
+`setup.difficulty`, so RULES' `difficultyOf` passes `{ gauntlet: setup.gauntlet }` too.
 Layout legend defaults: `.` floor · `#` wall · `~` water · `^` lava · `_` pit · `,` mud · `*` ice · `"` grass/bush ·
 `H` hero deploy · `E` enemy spawn · `B` boss spawn · `C` crate · `X` explosive barrel · `P` pillar · `T` tree ·
 `L` lever · `S` spikes · `O` pressure plate · `$` chest · `F` fountain. `heights` rows give per-tile elevation digits.
@@ -1074,7 +1286,75 @@ Layout legend defaults: `.` floor · `#` wall · `~` water · `^` lava · `_` pi
 Combat: §5.5. Render/input: `input:tileHover {x,y}|null`, `input:tileClick {x,y,button,shift}`, `input:unitClick
 {unitId}`, `input:rightClick`, `input:key {key, code}`, `render:view {yaw, moving}` (the battlefield view angle changed:
 `moving: true` at most every 66 ms while it turns, then exactly one `moving: false` once it has rested 150 ms; the new
-view is already applied when it fires). UI: `ui:screen {id}`. Run: `run:changed`, `run:gold`.
+view is already applied when it fires). UI: `ui:screen {id}`. Run: `run:changed`, `run:gold`. V3 combat events:
+`combat:ready`, `skill:used` (§5.5).
+
+### 5.11 `DD.Cameo` (RULES, `js/engine/cameo.js`; V3, plan §4.1) — Svammiel's cameos
+One tested place serves the twist on the DM's table, the start of every act-4 fight, the mid-fight interjections, the
+budget and the "never in a preview" guarantee. Defs: §3.13. Until the file lands, the core stand-in answers (§2).
+```
+fire(event, payload) → n                  // dispatch the triggers of every registered cameo (engine-internal; tests call it)
+play(actorId, keyOrText, opts) → text     // one cameo now: opts { style, vars, cheat, force, speaker }
+say(actorId, key, vars, opts) → text      // a scripted interjection from content (phase changes, the goats' bear):
+                                          //   budgeted unless opts.force
+cheat(actorId, cheatId, opts) → rule|null // apply + announce a cheat (below)
+campaignGoesOn(state) → bool              // the run's act (a sandbox: the encounter's act) < DD.finalAct()
+present(state, actorId) → Unit|null       // the actor's unit on the board (its own fight), if any
+history(state) → [{ round, actor, key, text, style, cheat }]   // state.data.cameo.log
+budget(state) → { used, left, lastRound }
+keyOf(actorId, name) → key                // an actor's own pools: def.linePrefix (default: roastPrefix up to its first
+                                          //   '_', 'svam_') + 'generic' | 'bribe' | 'reason' | 'quip_<cheatId>' | 'counter_<cheatId>'
+setting() → 'full' | 'short' | 'log'      // DD.Meta.data.settings.cameos as the engine reads it
+STYLES                                    // entrance (the twist: Full 4.5 s / Short 2 s), swoop (start: 2.5 s, 3.3 s with a
+                                          //   cheat card / 1.2 s), bubble (non-blocking, 2.6 s life), quip (log + caption,
+                                          //   0 ms), shadow (0.9 s / 0.5 s); Log only = no FX at all
+TOKENS                                    // the tokens each trigger fills: hero, name, enemy, n
+EVENTS                                    // engine event → trigger name (combat:ready → start, …)
+stub: false                               // the core stand-in has stub: true
+```
+**As built (RULES, `docs/notes/rules.md` "V3")**: `encounter.cameo.actor` (optional) names the one actor that serves the
+fight (the fixtures' doors use it; real doors need not). Optional trigger fields beyond the filters: `banner: { title,
+sub }` and `bubble` (the FX event's banner / bubble while the log keeps the full line: the twist), `cheat` (a start
+trigger's default cheat), `then(state, payload, played)` (after a cameo really played, never in previews: the twist's
+extras), `id` (the `once` key). `act`, `kind` and `encounter` may be lists. A situation is
+`situation(state, run, usedSituationKeys) → { key, vars, heroId | unitId | unit } | null` (a key used this run is
+skipped). A cheat's `apply(state, ctx)` may return the filled desc (or set `ctx.desc`); `false` = no cheat; its optional
+`quips` list is the card's quip when the actor has no `<prefix>quip_<cheatId>` pool. A direct `cheat()` call from
+content is a mechanic: `noCameo` doesn't stop it (the start cameo's cheat does respect it); in a preview it applies its
+effect and rule only. `unit:downed` also carries `killerId` / `cause`.
+- **Triggers** (all suppressed while `DD.Act.simulating`): `start` ← `combat:ready` · `round` ← `round:start` ·
+  `heroDowned` ← `unit:downed` (once per hero per fight) · `kill` ← `unit:died` (`squad`: a unit of `objective.bossIds`)
+  · `signature` ← `skill:used` (`skill.hype >= 100`) · `windupCancel` ← `windup:cancel` (reason ≠ `'death'`) ·
+  `victory` ← `combat:end` (`result === 'victory'`). A trigger's `when(state, ctx)` / `keyOf(state, ctx)` get
+  `state` = `DD.Combat.state` and `ctx` = that event's payload as emitted (`unit:died` { unit, unitId, killerId, cause },
+  `unit:downed` { unit, unitId, killerId, cause }, `round:start` { round }, `windup:cancel` { unit, unitId, reason }, `skill:used` { unit,
+  skill, ctx }, `combat:end` { result, state }, `combat:ready` { state }); a throwing `when` / `keyOf` counts as false
+  (`DD.safe`), a falsy key skips the trigger. Filters: `act` (the fight's act: the run's, else the encounter's), `kind`
+  (`encounter.kind`), `encounter` (its id), `from` (round ≥), `once` (once a fight). The plan's interjection pools map
+  to triggers: `svam_down` heroDowned, `svam_signature` signature, `svam_member_down` kill + squad, `svam_countered`
+  windupCancel, `svam_long` round from 8, `svam_env_kill` kill + a `when` on the engine's environmental causes (§3.13),
+  `svam_phase` (the goats: `svam_phase_goats`, the bear's entrance) content's own `DD.Cameo.say` at its phase change,
+  `svam_sulk_<lane>` victory.
+- **Start cameo, in order**: guards (simulating, `state.noCameo` — also set by `DD.Balance.cameo.off` —,
+  `encounter.cameo === false`) → banner (title = the
+  encounter name, sub = the announcer line `svam_cameo_<lane>`) → the roast (a situation, else a hero not roasted this
+  run `svam_hero_<id>`, else `svam_generic`) → maybe that hero's comeback bark (`svam_back_<id>`, `Balance.cameo.comeback`)
+  → the cheat (unless `run.flags.cameo.bribe`: then `svam_bribe`, and the bribe is consumed) → routing (the actor
+  **present** on the board: every line becomes `DD.Act.bark(his unit, text)`, nothing swoops) → log lines
+  `DD.Act.log(text, 'cameo', { speaker, actor })` → one FX event (§7.4) → memory (`state.data.cameo`, `stats.cameos`,
+  `run.flags.cameo`).
+- **Budget** (`DD.Balance.cameo`): interjections (`bubble`, `quip`) at most `perFight` (3) a fight, `perRound` (1) a
+  round, `minGap` (2) rounds apart, in trigger order. The start, the twist, the shadow and forced lines never count and
+  are never refused.
+- **Lines**: `DD.defs.narration[key]` filtered by `DD.Act.partyLines`, minus the indices used this run
+  (`run.flags.cameo.lines[key]`; a key's memory resets once its pool is exhausted), picked with the cosmetic RNG; tokens
+  from `vars`. **The combat RNG is never drawn for flavour**: a flavour cameo leaves `state.rng.getState()` unchanged.
+- **`cheat(actorId, cheatId)`**: `when` → `apply` → `DD.Act.addRule({ id: 'cameo:' + id, name: icon + ' ' + name, icon,
+  desc, turns: rounds, hooks, onAdd, onRemove, telegraphFlat, cheat: true, source: actorId, silent: true })` (the
+  cheat's optional rule fields are copied, §3.13) → the banner "SVAMMIEL'S RULE: <name>" (sub
+  = desc) folded into the cameo FX (or its own banner in his fight) → the log line "😈 Svammiel cheats: <name>. <desc>
+  Reason: <reason>." → the DM's counter whisper (`svam_counter_<id>`) → `stats.cheats++`, `run.flags.cameo.cheats`.
+- **Instant mode** (`DD.FX.instant`: tests, sims, headless): the FX applies at once, zero virtual time.
 
 ---------------------------------------------------------------------------------------------------------------------
 
@@ -1265,7 +1545,8 @@ is active. After combat, downed heroes revive at
 tavern). Summons die at 0 HP.
 
 ### 6.9 Objectives
-`killAll` (default: all enemy-side non-summon units dead) · `boss` (the unit with `tier: 'boss'` dies; minions flee) ·
+`killAll` (default: all enemy-side non-summon units dead) · `boss` (the unit with `tier: 'boss'` dies; minions flee;
+V3 E10: with `bossIds`, every unit of those defs — a squad of elites, incl. one spawned mid-fight — must die) ·
 `survive` `{ rounds }` (victory at the end of that round) · `destroy` `{ objId, count }` (objects destroyed) ·
 `protect` `{ objId | unitId }` (defeat if it is destroyed; victory by killAll) · `custom` (`encounter.checkObjective(state)
 → 'victory'|'defeat'|null`). The HUD shows `state.objective.text` (object defs may give a `pluralName` for it).
@@ -1274,7 +1555,13 @@ tavern). Summons die at 0 HP.
 casual: enemy HP ×0.8, damage ×0.8 · normal: ×1 · brutal: HP ×1.15, damage ×1.05, +1 enemy per normal encounter
 (`DD.Balance.difficulty` / `extraEnemies`; the act, fight-kind and encounter rows of `DD.Balance.scale` multiply on top in
 real fights, sandbox fights use the difficulty factor alone). The engine's fallback copies (combat.js, encounter.js) are
-used only without `DD.Balance`.
+used only without `DD.Balance`. V3: an act's row is read for acts 1..`DD.finalAct()` (`act[4]` once the knob is 4;
+before that an act-4 fight reads act 3's row); act-4 doors may scale by order (`DD.Balance.gauntlet`, off by default):
+`DD.Balance.scale(difficulty, act, kind, { encounter, gauntlet: { index } })` multiplies HP by `1 + hpPerBeaten × index`
+and damage by `1 + dmgPerBeaten × index` (index = lanes beaten before this door; not in sandbox / `neutral` fights).
+Its two callers pass the door's gauntlet object: `Combat.start`'s `difficultyOf` (RULES: `setup.gauntlet`, the numbers a
+run's fight really uses) and `Encounter.build`'s `difficultyInfo` (MAPGEN: `opts.gauntlet`). Every act-4 fight is a
+boss-kind fight, so brutal's extra enemy never joins it.
 
 ---------------------------------------------------------------------------------------------------------------------
 
@@ -1403,6 +1690,17 @@ DD.Render.overlay = {
 // previews[id] may also be { revive: true, heal: 0, text: 'UP! 7 HP' } (a heal aimed at a downed ally): a green badge
 // renderTo() stats add swapRings (⇄ rings drawn), ghosted (faded allies) and booms[].kind ('boom' | 'break')
 ```
+**V3 E8 — content zones (RENDER-WORLD; plan §3.6)**: the renderer also draws `state.data.zones` (§4.1: `[{ tiles:
+[{x,y}], color, label, line: [{x,y}, {x,y}] }]`; tiles tinted, an optional label, an optional line between two tiles at
+unit-chest height) for the Coven's Hex Threads, Svammiel's "next" panels and chairs and the goats' spotlight; absent /
+empty = nothing drawn (yaw 0 pixel-identical). Content writes the zones into its combat state, **not** into
+`DD.Render.overlay` (the HUD calls `resetOverlay()` at mount and unmount, which would wipe them, and headless runs have
+no renderer); previews copy `state.data`, so a zone never leaks out of a dry run. Fallback without E8: `DD.FX.tile`
+pulses.
+**V3 QA (render-ui, Nov 17)**: a wind-up may name its own wash colour, `intent.data.tint` (any CSS colour; the goats'
+bass on the gold squares stays gold): its tiles pulse in that colour under the same red-and-cream danger tape and red
+outline; a tile two wind-ups with different tints share keeps the red. A status def may set `showTurns: true` (a timed
+form: the Dragonsnail): its icon over the unit draws its turns left (amber, bottom left), as `DD.UI.statusChip` does.
 
 ### 7.3 Sprites — `DD.Sprites`
 ```
@@ -1448,6 +1746,16 @@ dice, not a fixed order) the marker lasts the ms `start` returns — playback (a
 host may finish it early by setting `evt.elapsed = evt.ms`; the engine's "Roll for initiative!" banner right before it
 (only dice texts in between) is folded into the moment (0 ms, not drawn). Without a host, or in instant mode, nothing
 waits. A throwing host is contained (`DD.safe`).
+**V3 — the `cameo` FX type** (RENDER-SPRITES handler, hosted by the HUD as `DD.FXRender.moments.cameo`, installed in
+`mount` and removed in `unmount`, like the initiative moment): `{ type: 'cameo', actor, style, banner: { title, sub },
+text, speaker, cheat: { name, icon, desc } | null, ms }`. Blocking styles (`entrance`, `swoop`, `shadow`) last the ms the
+host's `start(evt)` returns (× 0.35 under the HUD's AutoPlay; Space / Enter / Esc / a click skip it through the same
+`skipMoment` path); `bubble` / `quip` are non-blocking (`ms: 0`, parallel: AI turns never wait for a heckle). Everything
+is drawn in screen space inside the board area (`DD.Render.margins()`), so it reads at every yaw: the figure is the
+cameo def's `enemy` sprite (`DD.Sprites.draw`, poses `swoop` / `rise` / `cast`, clipped below a floor-hole ellipse for
+the sink); bubble text wraps at ~44 characters, ≤ 3 lines. Settings "Log only" (`settings.cameos === 'log'`) pushes no
+FX. `addBanner` options: `fit: true` (shrink the font until the text fits 92% of the width, ≥ 18 px) and `frames:
+[texts]` (text frames over the first 60% of its life: the League's stretching name).
 
 ### 7.5 Input — `DD.Input`
 `init(canvas)`; emits `input:*` events (§5.10). Camera: drag with the right (or left, past 6 px) mouse button,
@@ -1471,7 +1779,10 @@ progress where it is. Hover is frozen while the view moves and re-picked once it
 ### 7.6 Audio — `DD.Audio`
 Procedural WebAudio SFX (no files): `play(name, opts)`, `setVolume(v)`, `mute(bool)`. Names: click, hover, hit, crit,
 fire, frost, zap, poison, heal, buff, debuff, push, bump, fall, explosion, death, downed, levelup, coin, buy, error,
-turn, victory, defeat, bark, corgi, caw, roar, magic, summon, step, slash, arrow, splash.
+turn, victory, defeat, bark, corgi, caw, roar, magic, summon, step, slash, arrow, splash. V3 stingers: `svam_sting,
+cheat, swoop, slide_whistle, clockwork, snip, evil_chord, grand_spell, cackle, bubble` (+ the goats' optional `scratch,
+bass_drop, crowd_ooh, bleat`, each with a shipped fallback) and a def's optional `boss.sting`. Debug pages and tests are
+silent (no agent ever adds `sound=1`).
 
 ---------------------------------------------------------------------------------------------------------------------
 
@@ -1504,6 +1815,10 @@ bossWithTitle(name, title) → text  // "Grimble, the Goblin Tax Collector" · "
 consumableDesc(def, user?) → text  // a consumable's text: a string, or desc(L, user) like a skill's (the holder's reach)
 chooseSkillSlot(heroIdx, newSkillId, opts, cb) → modal  // the "learn a 5th skill" picker (cb(−1 free slot | 0..3 | null)): a
                                // skill with `def.forgetWarning` (§3.2; Basanos's Transform) gets a ⚠ line on its Forget card
+targetLabel(def) → text        // V3 QA: "an enemy", "a tile" (a tile skill with filter 'any' or none: not "any unit")…
+drainsAp(def, level?, user?, desc?) → bool  // V3 QA: spends every AP left (Power Nap, Coming Out of My Shell): the def's
+                               // optional `drainsAp` flag, else its exact desc ("spend all your AP"); cost pills read "1+ AP"
+statusChip(st)                 // V3 QA: a status def with `showTurns: true` also shows its turns left (amber, bottom left)
 ```
 
 ### 8.2 Screens & flow
@@ -1511,6 +1826,13 @@ chooseSkillSlot(heroIdx, newSkillId, opts, cb) → modal  // the "learn a 5th sk
 `combat` (HUD) → `rewards` → `levelup` (modal flow per hero) → `map` · `event` → `map` · `shop` · `tavern` (rest /
 train / recruit) · `party` (manage skills, items, consumables; reachable from map) · boss victory → act transition →
 next act or `victory` · defeat → `gameover` → `title`. Also `settings`, `hall` (unlocks, stats, codex).
+**V3 flow** (only when `DD.finalAct()` is 4): the act-3 DM falls → on his board the `svammiel` cameo's twist entrance
+("You thought this was over? I, SVAMMIEL, CONTROL ALL.") → the Victory ribbon → `rewards` (the DM's loot, shown at last)
+→ `completeAct` continues (50% heal, `S.act = 4`, the gauntlet map, `info.twist`) → `victory` screen's **Twist panel**
+(not the final branch; button "Descend to Act IV") → `map` (the gauntlet: lobby, then a door per lane in any order with
+stops between) → each door a `miniboss` node (a boss fight: start cameo + cheat) → the last stop → **Svammiel**
+(`finale`) → final `victory` ("The Campaign Is Over (For Real This Time)"). Game over in act 4 lists the floor bosses
+beaten (N / M from `map.lanes.length`). With `DD.finalAct()` 3 the v2 flow is unchanged.
 
 ### 8.3 Combat HUD (`js/ui/combat_hud.js`, screen id `combat`) — v2: initiative, no telegraphs, no Guard
 Top bar: round + phase pill + who acts ("Goblin Grunt #2/8"), the **initiative tracker** (portraits in turn order from
@@ -1612,6 +1934,33 @@ keeping `data.dice`) shows every die it rolled on its dice-moment card and in th
   single-target damage skill: "<skill> can't break the Crate: any single-target damage skill can", a skill with
   `target.objects: false`: "<skill> is for foes only, not the Crate: another single-target damage skill can break it",
   no object damage). Who aims is always the engine's `DD.Targeting.aimsAtObjects` (markers, aim hint, tooltips).
+**V3 (HUD, plan §4.8)**: the cameo moment host (§7.4); log lines of cls `cameo` show a "😈 SVAMMIEL" chip
+(`entry.speaker`) instead of "DM"; `showDm(text)` → `showCaption(text, speaker)` (his portrait for cameo lines; in act 4
+the narrator chip reads "The DM (demoted)"); E7: rule chips refresh when a rule's name or desc changes live (`renderTop`
+hashes them), a 😈 badge on `cheat: true`, a "Next round" style on `next: true`, the wind-up hint line
+(`intent.data.hint`); the kind label reads "Mini-boss" (`encounter.gauntlet`) / "Floor Boss" (`encounter.finale`); the
+top bar, tracker and objective use `encounter.shortName`; a skill refused by `modifyUse` shows its reason in the ⛔ line
+(optional "BLEEP" sticker when it starts with "Bleeped"); `objective.flavor` shows under the objective.
+*As built (HUD, `docs/notes/hud-v2.md` "V3")*: the host answers every blocking cameo while the combat screen is up (the
+dice moment's headless gate does not apply: DD.Cameo's event blocks anyway); during it a see-through layer takes the skip
+click, the phase pill reads "😈 Svammiel!", the bar shows the lock "Svammiel has the floor. Space skips.", and a caption
+showing when it starts is held and shown again after it. A cameo line takes the caption only as a `quip` or under
+Settings "Log only" (no FX), unless the actor stands on the board (his lines are barks there): the swoop and the bubbles
+already show it on the canvas. Chips: a leading icon equal to `rule.icon` is printed once, a `next` rule reads "Next
+round: <name>" once. The DM is demoted on Svammiel's floor (`encounter.gauntlet || encounter.finale`). Squad members
+(`objective.bossIds`) are "Elite · <shortName>" in the tracker and inspect, in the boss colour. The inspect panel of the
+fight's boss, a squad member or the cheating actor himself has "😈 Cheats this round: … · next round: …" (from the cheat
+rules). The BLEEP sticker reads `Combat.vetoOf` (E13), so it stays while another reason (a lock) comes first; the ⛔
+tooltip then lists both. A wind-up's `intent.data.hint` is a 👉 line in its inspect row and the tracker tooltip.
+`DD.HUD` adds `cameo()` → `{ active, style, actor, name, ms, progress } | null`, `skipCameo()`, `caption()` → `{ text,
+speaker, actor, title } | null`.
+*V3 QA (render-ui, Nov 17)*: a def's own `preview(ctx)` text (Snail Mail's "📦 11 next turn", the Mystery Potion's "? (d6)")
+leads that unit's board badge and is listed in the aim hint ("📦 11 next turn → Test Grunt"); the HUD reads the entry's
+`custom: true` (RULES request) or, until then, knows it by the armed def having a preview and the entry having no dry-run
+`revived` field. The objective panel peeks part by part: its background goes when a unit or the hovered tile is under
+it, and only the lines and chips over something fade (`.ho-under`; a faded chip lets clicks through), so the rest (a cheat
+chip's tooltip) stays readable. A drain skill (`DD.UI.drainsAp`) shows "1+" on its button and "spends all N AP" in the
+armed hint when the hero has more AP than its cost.
 
 ---------------------------------------------------------------------------------------------------------------------
 
@@ -1667,15 +2016,43 @@ tavern() · tavernRest() · tavernTrain(h, s) · tavernRecruit(id, i) · levelQu
   `levelUps: [LevelUp]` (the step's own level-ups; the screen's "The DM rolls a d4… 3! Marwyn levels up!") and
   `leveled` (every pending boon, one entry per level); `stats.levelUps` counts all levels gained.
 
+**V3 (META-RUN, plan §4.3)**: `FINAL_ACT` is a getter on `DD.finalAct()` (every site that wrote 3 asks it: `normalize`,
+`resolveEncounter`, `queueCombat`, `resolveCombat`, `completeAct`, `travel`, `normalizeKind`, `enterFight`). The act-3 boss
+with `DD.finalAct()` 4 is no longer the end: `resolveCombat` pays his rewards (the `twist_loot` text) and `completeAct`
+heals 50%, sets `S.act = 4`, `S.map = makeMap(4)`, `info.twist = true`, `S.flags.twistSeen = true`. `travel` /
+`enterFight` / `normalizeKind` know `'miniboss'` (a boss fight for the engine); `startCombat` puts `lane` and
+`gauntlet: { index, beaten }` in `pending.data` (→ `Encounter.build(…, { gauntlet })` → `state.data.gauntlet`); a won
+door seals its lane (`DD.RunMap.sealLane`) and counts `stats.miniBosses`; `queueCombat` refuses in a gauntlet act
+(returns false); `shopService('bribe')` (act-4 shops: sets `run.flags.cameo.bribe = 1`, one per visit); and
+**`startAtAct(act, { level, gear: 'auto', gold, beaten })`** — a test / debug / sim fast-forward of a fresh run: the party
+rebuilt at `level` (makeRunHero + autoRollPassivesFor), auto gear with act-3 odds (`DD.Rewards.randomItem`), `gold`,
+pre-sealed lanes, then `S.act = act; S.map = makeMap(act)`; deterministic per seed. Nothing in the run layer names a
+number of lanes or heroes.
+
 ### 9.3 `DD.RunMap.generate(act, rng) → ActMap`
 `{ act, rows, nodes: { [id]: { id, row, col, type, links: [ids], encounterId?, eventId?, done } }, start: [ids], boss: id }`
-Types: `combat, elite, event, shop, tavern, treasure, boss`.
+Types: `combat, elite, event, shop, tavern, treasure, boss`; V3: `miniboss` (`TYPES.miniboss`: icon 😈, "Mini-boss":
+"One of Svammiel's floor bosses. One hero levels up. Always offers a rare item. Beat it and its door is sealed.";
+`isFight` includes it).
+**V3 gauntlet** (`isGauntlet(act)`: the registry has encounters with that act and `gauntlet`): with L lanes
+(`gauntletLanes(act)`, §3.8) the map has rows = 2L + 2: row 0 the lobby (`DD.Balance.map.gauntlet.lobby`), door rows 1,
+3, …, 2L − 1 (one `miniboss` node per lane, in lane order), intermissions 2, 4, …, 2L − 2 (`between`), the last stop 2L
+(`last`), the boss 2L + 1 (the `finale` encounter, real first, else `pickEncounter(act, 'boss')`); complete links
+between consecutive rows. `ActMap` (gauntlet) = `{ act, shape: 'gauntlet', rows, nodes, start, boss, layout, lanes: [{
+id, encounterId, order }], beaten: [laneIds], cleared }`; door nodes `{ type: 'miniboss', lane, encounterId, sealed?,
+result? }`. `sealLane(lane)`: every door node of the lane `done = true, sealed = true` (the fought one also `result:
+'victory'`), the lane pushed to `map.beaten` and `S.flags.gauntlet`; `availableNodes` filters `done`, so door row k
+offers the L − k unbeaten lanes. Any L (0..6) builds a valid map; `validate` has a gauntlet branch. Exports
+`isGauntlet`, `gauntletLanes`, `sealLane`.
 
 ### 9.4 `DD.Rewards`
 `LEVEL_UPS_PER_WIN` · `levelUpsFor(kind)` (v2: no XP table) · `combat(kind, act, rng, run) → { gold, levelUpCount,
 choices: [Reward] }` · `apply(reward, opts)` ·
 `randomItem({ rarity, act, slot, hero }, rng)` · `randomConsumable(rng)` · `skillTome(heroIdx, rng)` ·
 `Reward = { type: 'item'|'skill'|'upgrade'|'consumable'|'gold'|'heal', id?, heroIdx?, amount?, label, desc }`.
+V3: `actIdx` clamps to 1..`DD.finalAct()`; `RARITY_ODDS[4] = { common: 22, rare: 46, legendary: 24, cursed: 8 }`; prices
+× `DD.Balance.priceAct[4]` (1.25, "Svammiel's markup"); the Bribe (`DD.Balance.prices.bribe`) among act-4 shop services;
+a mini-boss's rewards screen is titled "Mini-boss Defeated!" (reward data `miniboss: true`).
 
 ### 9.5 Event API (`api` passed to `choice.resolve`)
 ```
@@ -1726,6 +2103,14 @@ enemies and encounters with `test_` ids — lets the whole game run before real 
 `window.DDdbg` exposes helpers in the console (`DDdbg.help()` lists them: show, run, combat, newRun, gold, item,
 consumable, skill, heal, scar, `levelUp` (v2: one level-up, the rotation or a named hero), `xp` (its XP-era alias), win,
 lose, fight, event, shop, tavern, rewards, passive). `js/main.js` must do nothing when `window.DD_TEST` is set.
+**V3 params** (META-UI, `js/main.js`): `acts=3|4` (sets `DD.Balance.campaign.acts` for that page: the way to reach act 4
+while it ships dark; `act=4` without `acts=4` clamps to act 3) · `act=4` (map / combat / rewards in act 4, through
+`DD.Run.startAtAct`) · `beaten=gardener,league` (pre-sealed lanes, any lane ids) · `twist=1` (with `encounter=boss_dm`:
+the twist entrance at fight start; with `screen=victory&act=3`: the Twist panel) · `cameo=full|short|log|0` (full /
+short / log set `settings.cameos` for the page; `0` = no cameo and no cameo cheat in any fight, run fights included:
+`DD.Balance.cameo.off = 1` → `state.noCameo`) · optional `bosshp=<0..1>` (every `objective.bossIds` unit starts at that fraction of max HP:
+QA of phase 2s) · `screen=victory` is the final victory when `act >= DD.finalAct()`. Every QA URL keeps `debug=1`
+(silent).
 `tests/fixtures.js` only registers content (it must not reference `DD_TEST`); it includes at least 4 test heroes,
 6 test enemies (incl. an elite and a boss), 2 test summons and test encounters for every act × kind.
 
@@ -1738,6 +2123,12 @@ encounter auto-battled, every event choice resolved. `isolate=<substr,…>` load
 tests whose path matches (core always loads): iterate isolated, finish with a full run. A suite that needs
 real FX playback (an on-screen pin, a queued `DD.FX.call`) sets `DD.FX.instant = false`, plays with `DD.FX.flush()` and
 restores it in a `finally`. Missing files listed in `tests/manifest.js` are skipped (the loader reports them).
+**V3 test rules**: a suite that needs act 4 sets the knob inside `try / finally` (`const snap = DD.Balance.snapshot();
+try { DD.Balance.campaign.acts = 4; … } finally { DD.Balance.restore(snap); }`); counts of heroes, lanes and doors are
+read from the registry (`DD.defs.heroes`, `UI.heroIds()`, `DD.RunMap.gauntletLanes(act)`, `map.lanes.length`), never a
+literal 4, 5, 16 or 17. RULES' fixtures add test lanes `test_a4_lane_a..d`, a `test_a4_finale`, a test act-4 event and a
+test cameo actor `test_heckler`; with the real lanes loaded only one test lane fits under the cap of 6, so a suite that
+needs a known lane set runs isolated (`isolate=`) or builds from test content only.
 `tests/docs_tests.js` (docs + tools) checks that the docs quote the game: it reads DESIGN / ARCHITECTURE / the v2 digest
 (and a few game files, for their exact rule words) with a synchronous file:// request, which `tools/test.sh` allows
 (`--allow-file-access-from-files`; a page that can't read files skips those suites). It only tests what the docs claim,

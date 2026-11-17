@@ -256,9 +256,13 @@
           el('div.keeper-actions', null, UI.button('Party', function () { UI.show('party', { back: 'tavern' }); }, { icon: '🎒', cls: 'small ghost', hotkey: 'p' })));
         st.refs.options = el('div.tav-options');
         st.refs.result = el('div.tav-result-wrap');
+        // V3: under the table the tavern is the one floor Svammiel doesn't own: a wall-to-wall rug and a sign (V §5.4)
+        const under = UI.inGauntlet(run);
+        const sign = under ? el('div.tav-rug-sign', { title: 'He can\'t cheat on carpet. Fine print.' }, el('span.trs-horns', null, '😈'), 'NO DEMONS PAST THE RUG') : null;
         const main = el('main.tav-main', null,
-          el('div.tav-head', null, el('h1.tav-title', null, name), el('div.tav-sub', null, 'Choose one: rest, train or recruit. The ale is not optional.')),
+          el('div.tav-head', null, el('h1.tav-title', null, name), sign, el('div.tav-sub', null, 'Choose one: rest, train or recruit. The ale is not optional.')),
           st.refs.options, st.refs.result, el('div.tav-foot', null, st.refs.leave));
+        if (under) root.classList.add('under-table');
         root.appendChild(el('div.tavern-layout', null, keeper, main));
         say(t.used ? 'Anything else? No? Then shoo.' : (t.greeting || UI.narrate('tavern_greet', {}, FALLBACK.tavern_greet)));
         render();

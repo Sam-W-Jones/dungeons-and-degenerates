@@ -4,6 +4,9 @@
  * Unlock rules (DESIGN §3): heroes whose def has `unlock: null` are starters; `unlock: { act: N }` heroes unlock on
  * the first clear of act N; `unlock: { boss: enemyId }` heroes unlock the first time that boss is beaten;
  * settings.unlockAll ("I'm the DM's Favorite") unlocks everyone while it is on.
+ * V3: settings.cameos ('full' | 'short' | 'log'), lifetime dmDefeated / miniBosses / classicWins (a v2 meta seeds the
+ * first and the last from its wins), bestAct up to 4; the spoiler gate
+ * seen.bosses.svammiel is set by the twist (DD.Cameo's entrance and DD.Run.completeAct).
  */
 (function () {
   'use strict';
@@ -21,9 +24,15 @@
     enemy: 'enemies', enemies: 'enemies', boss: 'bosses', bosses: 'bosses', event: 'events', events: 'events',
     passive: 'passives', passives: 'passives',   // Blessings discovered on the Table of Questionable Blessings
   };
-  const STAT_KEYS = ['runs', 'wins', 'bestAct', 'deaths', 'kills', 'downs', 'combats', 'elites', 'bosses', 'goldEarned', 'actsCleared'];
+  // V3: dmDefeated (runs that beat the Dungeon Master), miniBosses (gauntlet doors won, summed), classicWins (won
+  // campaigns that ended at the DM: every v2 win, a 3-act one; the Hall's "of which classic" — the history keeps only 20)
+  const STAT_KEYS = ['runs', 'wins', 'bestAct', 'deaths', 'kills', 'downs', 'combats', 'elites', 'bosses', 'goldEarned', 'actsCleared',
+    'dmDefeated', 'miniBosses', 'classicWins'];
   // Per-run summary stats that add up into the lifetime totals (runs/wins/bestAct are handled separately).
-  const SUMMED = ['deaths', 'kills', 'downs', 'combats', 'elites', 'bosses', 'goldEarned'];
+  const SUMMED = ['deaths', 'kills', 'downs', 'combats', 'elites', 'bosses', 'goldEarned', 'miniBosses'];
+  // The Dungeon Master's act (dm.js): the classic campaign's finale. Not "the last act" — that is DD.finalAct().
+  const DM_ACT = 3;
+  const CAMEO_SETTINGS = ['full', 'short', 'log'];   // V3: Svammiel's cameos: Full / Short / Log only
 
   function defaults() {
     const stats = {};
@@ -32,11 +41,15 @@
       version: 1,
       unlocked: STARTERS.slice(),
       stats: stats,
-      settings: { animSpeed: 1, sfx: true, volume: 0.6, shake: true, unlockAll: false, showGrid: true },
+      settings: { animSpeed: 1, sfx: true, volume: 0.6, shake: true, unlockAll: false, showGrid: true, cameos: 'full' },
       seen: { enemies: {}, bosses: {}, events: {}, passives: {} },
       history: [],
     };
   }
+
+  function isNum(v) { return typeof v === 'number' && isFinite(v); }
+  /** A won summary whose campaign ended at the DM (a v2 one has no `acts`). */
+  function classicWin(h) { return !!h && h.result === 'victory' && !(+h.acts > DM_ACT); }
 
   /** Merge stored data over defaults, keeping only well-typed values (old or hand-edited saves never crash). */
   function merge(base, stored) {
@@ -46,10 +59,11 @@
         if (typeof id === 'string' && id && base.unlocked.indexOf(id) < 0) base.unlocked.push(id);
       });
     }
-    if (stored.stats && typeof stored.stats === 'object') {
-      for (const k in stored.stats) {
-        const v = stored.stats[k];
-        if (typeof v === 'number' && isFinite(v)) base.stats[k] = v;
+    const sst = stored.stats && typeof stored.stats === 'object' ? stored.stats : null;
+    if (sst) {
+      for (const k in sst) {
+        const v = sst[k];
+        if (isNum(v)) base.stats[k] = v;
       }
     }
     if (stored.settings && typeof stored.settings === 'object') {
@@ -57,6 +71,7 @@
         const v = stored.settings[k];
         if (!(k in base.settings) || typeof v === typeof base.settings[k]) base.settings[k] = v;
       }
+      if (CAMEO_SETTINGS.indexOf(base.settings.cameos) < 0) base.settings.cameos = 'full';
     }
     if (stored.seen && typeof stored.seen === 'object') {
       for (const kind in base.seen) {
@@ -66,6 +81,17 @@
     }
     if (Array.isArray(stored.history)) {
       base.history = stored.history.filter(function (h) { return h && typeof h === 'object'; }).slice(0, HISTORY_MAX);
+    }
+    // [qa flow-2] a meta from before these stats (a v2 veteran's): every v2 win beat the DM and was a classic win, so
+    // seed them from the lifetime wins (not the 20-entry history). A V3 meta without classicWins (saved before it
+    // existed) takes off the four-act wins its history still shows.
+    if (sst) {
+      const wins = base.stats.wins || 0;
+      if (!isNum(sst.dmDefeated)) base.stats.dmDefeated = wins;
+      if (!isNum(sst.classicWins)) {
+        const longWins = base.history.filter(function (h) { return h.result === 'victory' && !classicWin(h); }).length;
+        base.stats.classicWins = Math.max(0, wins - longWins);
+      }
     }
     return base;
   }
@@ -89,6 +115,8 @@
     STARTERS: STARTERS,
     ACT_UNLOCKS: ACT_UNLOCKS,
     BOSS_UNLOCKS: BOSS_UNLOCKS,
+    DM_ACT: DM_ACT,
+    CAMEO_SETTINGS: CAMEO_SETTINGS,
     data: defaults(),
 
     defaults: defaults,
@@ -200,7 +228,7 @@
         for (const a in ACT_UNLOCKS) if (ACT_UNLOCKS[a].indexOf(heroId) >= 0) act = +a;
       }
       if (!act) return '';
-      return act >= 3 ? 'Beat the Dungeon Master to unlock.' : 'Clear Act ' + act + ' to unlock.';
+      return +act === DM_ACT ? 'Beat the Dungeon Master to unlock.' : 'Clear Act ' + act + ' to unlock.';
     },
 
     /** Record a finished run (victory / defeat / abandoned): lifetime stats + history (newest first, max 20). */
@@ -215,6 +243,8 @@
       const rs = entry.stats || {};
       SUMMED.forEach(function (k) { if (typeof rs[k] === 'number' && isFinite(rs[k])) st[k] = (st[k] || 0) + rs[k]; });
       if (typeof rs.actsCleared === 'number') st.actsCleared = (st.actsCleared || 0) + rs.actsCleared;
+      if (+rs.actsCleared >= DM_ACT) st.dmDefeated = (st.dmDefeated || 0) + 1;   // V3: the DM fell in this run
+      if (classicWin(entry)) st.classicWins = (st.classicWins || 0) + 1;
       Meta.data.history.unshift(entry);
       if (Meta.data.history.length > HISTORY_MAX) Meta.data.history.length = HISTORY_MAX;
       Meta.save();
