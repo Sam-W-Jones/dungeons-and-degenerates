@@ -2289,6 +2289,11 @@ the campaign back to ~25%, and her parties reach him most). Her share of run win
 because the others came up. Whether "I don't want Ellaria brought down" also covers her parties' win rate is still the
 user's call (plan §9; the balance pass's options: (a) keep, (b) Svammiel ×1.1 HP: her parties ~60%, campaign ~30%).
 
+**Decided (Nov 18, the user): "Keep as is".** Option (a): Svammiel stays ×1.15 HP / ×1.5 damage and Ellaria's parties
+sit at ~53%. "Don't bring Ellaria down" protects her kit (files, numbers, items, texts), not her parties' win rate; later
+passes hold the campaign targets by tuning enemies even when that moves her parties a few points. The 52% guard stays
+as a stop-and-report line, not a ceiling on enemy tuning above it.
+
 ### Verdict
 **Ready to push.** Tests pass twice with identical results; Ellaria's files, kit text, items, statuses and DESIGN
 subsection are unchanged; all 16 lifts are in with their tests, notes and DESIGN briefs; descs match execute; no

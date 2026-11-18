@@ -86,7 +86,8 @@
       // runs; plan 80-85%). His row first (plan §8 step 1, damage first, one ×0.05 step an iteration on 600 fresh runs):
       // ×1.35 / ×1.4 / ×1.45 / ×1.5 damage read 94.6 / 87.0 / 88.9 / 89.6% (damage barely moves him), then ×1.15 HP: 80.0%,
       // campaign 25.3%. Ellaria's parties fell to 48.9% (pooled over the last two iterations, guard 52%): the pass stopped
-      // there and handed the question to the lead (docs/notes/balance.md "Conditional healing pass (Nov 18)")
+      // there and handed the question to the lead (docs/notes/balance.md "Conditional healing pass (Nov 18)"). The final
+      // gate read her parties at 53.4% at these rows, and the user kept them ("Keep as is", Nov 18)
       boss_svammiel: { hp: 1.15, dmg: 1.5 },
     },
     tierHp: { minion: 1, normal: 1, elite: 1, boss: 1 },
