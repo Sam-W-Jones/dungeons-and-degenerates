@@ -1883,3 +1883,422 @@ Tests: `tests/balance_tests.js` pins `masterHp >= 12` now (was `<= 8`).
 - One lever probe on the same seeds (URL override, no file change): `bal=encounters.boss_svammiel.dmg:1.55` gave 45/68
   (66%; 27/33 and 18/35, one stall) against 71% at x1.3: noisy at this size and less than half the gap, so no row is
   proposed here; BAL should fit it on campaign runs. Reports: `.tmp/qafix-content/lever_s4_*.txt`.
+
+---------------------------------------------------------------------------------------------------------------------
+
+## Conditional healing pass (Nov 18) — heal:balance (plan `.tmp/heal/plan.md` §7-§8)
+
+The user (Nov 18): "I don't wan't Ellaria brought down. I want everyoe else brought up but by conditional healing". The
+16 lifts (plan §4, built in phases 1-2) are measured here against the "before" (`.tmp/heal/baseline.md`); the enemy rows
+take back what the lifts added to the campaign, under the plan's protocol (§7 targets, §8 enemy policy). Ellaria's file,
+items, statuses, texts and numbers are untouched (`git diff js/data/heroes/ellaria.js` empty).
+
+**Measurement** (as the baseline): stock `tools/sim.sh`, one 100-seed page at a time, `debug=1&healers=ellaria,josiah,
+valdris&raw=1&verbose=1`, pooled with the baseline's `merge.awk` / `split.awk` and `.tmp/heal/lifts.awk`. Iteration k:
+600 fresh normal runs, seeds 30000 + 1000·k … +599; casual / brutal pages (100 runs) at +600 / +700 in iterations 0, 3
+and 6. The row under test went in through the page's `bal=` override (the same `DD.Balance.set` the shipped row makes;
+each page's "overrides:" line records it) and into `js/data/balance.js` once decided. The final-gate seeds (40000-40599,
+41000-41099, 42000-42099) were never used. Scripts and raw pages: `.tmp/heal/after/` (`run_iter.sh`, `compose.sh`,
+`gates.sh`, `row.awk`, `rounds.awk`, `t8.awk`, `t8md.awk`; one folder per iteration). Rates carry Wilson 95% intervals,
+per-fight means batch-means 95% half-widths over the six pages.
+
+### What landed
+| what | before | after | why |
+|---|---|---|---|
+| `encounters.boss_svammiel` | ×1.1 HP / ×1.3 damage | **×1.15 HP / ×1.5 damage** (×1.95 with `act[4]`; 414 HP in a campaign) | T3: the lifts left him at 90.8% (plan 80-85%); §8 step 1, damage first to its limit (+0.2), then HP |
+| Valdris `DENTS` (Forge Armor I-III on a Dented target) | 4 / 5 / 6 | **7 / 8 / 9** (the top of `dents` I [4, 7]) | T6 first: he healed others 1.9 HP a fight against Sparrow's 3.2; T8: 0.72 fires (min 0.8) |
+| Kiri `GHOSTING` (Ethereal Step I-III) | 3 / 4 / 5 | **5 / 6 / 7** (the top of `ghost` I [3, 5]) | T8: 0.16 fires (min 0.4), 0.51 HP a fight (band 1-4) |
+| Benedick `MUCIN_HEAL` (A Sticky Situation) | 3 (Serum +3 = 6) | **5** (Serum +3 = 8; the top of [3, 5]) | T8: 0.27 fires (min 0.4), 0.54 HP a fight (band 0.9-3.6) |
+| Slate `HUG` (Hold Still I-III) | 3 / 4 / 4 | **4 / 5 / 5** (`hug` I [2*, 5], one step) | T8: 0.98 fires a fight over 1,800 runs (min 1.0); `holdValue` prices the hug |
+| `encounters.boss_goats` | ×0.8 HP | unchanged (×1.05 damage measured in iteration 6, then undone: the Ellaria guard, below) | T3: the goats' door read 99.4% over 3,600 runs (≤ 98.5%) |
+
+Every other row, heal number, kit, item, Blessing, consumable and the economy are as they were. Each heal change moved
+only its constant (the descs, levels, statuses and AutoPlay prices read it); the hero's suite pins, notes ("Balance pass
+(Nov 18)" in `docs/notes/hero-{valdris,kiri,benedick,slate}.md`, their DESIGN §6 briefs), DESIGN §6 and v2-digest §2 say
+the new numbers. The Svammiel row: `js/data/balance.js` comment, `tests/balance_tests.js` `A4_ROWS` (pin and comment),
+DESIGN §5 and §9 (the docs suite reads both).
+
+### Iterations (normal, 600 runs each)
+Columns: four-act campaign (T1) · act 3 cleared (T2) · act clears of entrants 1 / 2 / 3 / 4 · the lowest and highest act-4
+door · Svammiel · Ellaria's parties (the guard) · no-healer parties · healer-less runs lost in act 1 (T7).
+
+| iteration | change (on top of the one before) | campaign | act 3 | clears of entrants | doors | Svammiel | with Ellaria | no healer | healer-less act-1 losses |
+|---|---|---|---|---|---|---|---|---|---|
+| baseline (20000+) | — (no lift) | 26.5% (159/600, 23.1–30.2) | 32.8% | 68.7 / 70.1 / 68.2 / 80.7 | league 95.7 – gardener 98.4 | 92.4% (159/172) | 58.1% (93/160) | 9.5% (21/222) | 47.7% |
+| 0 | the 16 lifts at the plan's numbers | 32.8% (197/600, 29.2–36.7) | 39.5% | 73.7 / 75.6 / 71.0 / 83.1 | coven 95.6 – goats 100.0 | 90.8% (197/217) | 57.6% (83/144) | 18.9% (45/238) | 35.7% |
+| 1 | Svammiel ×1.35 dmg; dents 5/6/7, ghost 4/5/6, mucin 4 | 32.2% (193/600, 28.6–36.0) | 37.0% | 70.7 / 77.4 / 67.7 / 86.9 | galbraith 97.2 – gardener 99.5 | 94.6% (193/204) | 61.1% (96/157) | 13.8% (30/218) | 42.7% |
+| 2 | Svammiel ×1.4 dmg; dents 6/7/8, ghost 5/6/7, mucin 5 | 28.0% (168/600, 24.6–31.7) | 35.0% | 72.3 / 71.0 / 68.2 / 80.0 | coven 95.6 – galbraith 99.5 | 87.0% (168/193) | 54.5% (72/132) | 14.7% (40/272) | 36.0% |
+| 3 | Svammiel ×1.45 dmg; dents 7/8/9, hug 4/5/5 | 30.7% (184/600, 27.1–34.5) | 37.7% | 73.0 / 72.8 / 70.8 / 81.4 | gardener 96.3 – goats 99.5 | 88.9% (184/207) | 58.3% (81/139) | 14.2% (35/246) | 35.8% |
+| 4 | Svammiel ×1.5 dmg (its limit) | 30.2% (181/600, 26.6–34.0) | 38.0% | 72.5 / 78.4 / 66.9 / 79.4 | gardener 95.9 – goats 99.5 | 89.6% (181/202) | 61.9% (96/155) | 11.8% (30/255) | 41.2% |
+| **5 (kept)** | **Svammiel ×1.15 HP** | **25.3% (152/600, 22.0–29.0)** | **34.5%** | 69.0 / 76.1 / 65.7 / 73.4 | coven 96.0 – goats 100.0 | **80.0% (152/190)** | 50.7% (69/136) | 11.6% (29/250) | 36.0% |
+| 6 (undone) | the goats ×1.05 dmg | 26.2% (157/600, 22.8–29.8) | 35.7% | 74.2 / 69.4 / 69.3 / 73.4 | gardener 98.0 – galbraith 98.5 | 79.3% (157/198) | 47.3% (69/146) | 13.7% (33/241) | 33.2% |
+
+Casual / brutal (100 runs each): iteration 0 77% / 5%, iteration 3 80% / 12%, iteration 6 74% / 9% (baseline 67% / 9%).
+0 errors and 0 `DD.warn` lines on all 48 pages; one round-cap stall (iteration 2, seed 32141, below).
+
+**Svammiel barely answers his damage row** (×1.3 → ×1.5 read 90.8 / 94.6 / 87.0 / 88.9 / 89.6%: about −1 point a step,
+inside one iteration's noise of ±4), and clearly answers his HP (×1.15: 80.0%, then 79.3% with the goats' step): his
+fight is decided by how long the party stands in his floor drops and cheats, not by his hits. His rounds 11.8 → 12.7-12.9
+(limit +1.5). The stop: after iteration 6 Ellaria's parties read **48.9% pooled over the last two iterations** (138/282,
+43.2-54.7%; guard 52%), so the rule undid iteration 6's step (the goats' row) and stopped raising rows. The kept row set
+is iteration 5's.
+
+### Every target, at the kept rows (iteration 5; iterations 3-6 pooled where the reading depends only on heal numbers)
+| target | baseline | iteration 0 (lifts, today's rows) | kept rows | |
+|---|---|---|---|---|
+| T1 campaign [23, 28], CI overlaps 22-28 | 26.5% | 32.8% | **25.3%** (22.0–29.0) | PASS |
+| T2 act 3 cleared [28, 35] | 32.8% | 39.5% | **34.5%** (30.8–38.4) | PASS (iteration 6: 35.7%) |
+| T3 Svammiel [80, 85] | 92.4% | 90.8% | **80.0%** (152/190) | PASS at the edge (iteration 6: 79.3%) |
+| T3 every door [91, 98.5] | 95.7–98.4% | 95.6–100% | coven 96.0 · galbraith 98.5 · gardener 98.0 · **goats 100.0** · **league 99.0** | MISS: the goats (99.4% over iterations 0-5, 1,250 fights); the league is noise (98.3% pooled) |
+| T3 0 act-4 stalls | 0 | 0 | 0 | PASS |
+| T4 casual [60, 75] / brutal [5, 13] | 67% / 9% | 77% / 5% | 74% / 9% (iteration 6's rows: the goats' step aside, the same) | PASS |
+| Ellaria guard ≥ 52% (pooled, last two) | 58.1% | 57.6% | **48.9%** (iterations 5+6) | **BOUND**: the stop |
+| T5 (report) | below | below | below | as expected |
+| T6 Valdris ≥ 1.25× every non-healer | 0.4 vs Marbles 2.3 | 1.9 vs Sparrow 3.2 | **3.45 vs Sparrow 2.85 = 1.21×** (iterations 3-6) | MISS by a hair, `dents` at its limit |
+| T6 Josiah, Ellaria ≥ 2× every non-healer | 15.5, 11.8 | 15.5, 10.1 | 15.2, 10.7 | PASS |
+| T7 no-healer ÷ all ≥ 0.45; healer-less act-1 losses < 42% | 0.36; 47.7% | 0.58; 35.7% | 0.46; 36.0% | PASS (report) |
+| T8 each lift | — | 12 of 16 met | 11 of 16 met in full (below) | MISS: Kiri, Benedick, Sparrow, Valdris (others' share), Slate (0.99) |
+| T9 hygiene | 0 / 0 / 0 | 0 / 0 / 0 | 0 errors, 0 warnings; 1 stall in 7,470 fights (iteration 2, not a lift) | see below |
+
+### T8: each lift (per fight the hero started; fires · HP, ± batch 95%)
+Iteration 0 = the plan's numbers at today's rows (600 runs). Final = iterations 3-6 pooled (2,400 runs: every heal number
+as landed; the rows moved only Svammiel's and, in iteration 6, the goats'). Regular = HP a regular fight (guard rail).
+
+| label | min fires | HP band | iteration 0 | final (iterations 3-6) | regular (rail) | |
+|---|---|---|---|---|---|---|
+| lift:slate | 1.0 | 2.5-10 | 1.01 ± 0.08 · 2.67 ± 0.25 | 0.99 ± 0.05 · 3.22 ± 0.15 | 2.31 (≤ 10) | fires 1% under (noise: 1.08 / 0.95 / 0.98 / 0.96 by iteration) |
+| lift:hjalmar | 0.6 | 2-8 | 1.33 ± 0.12 · 4.10 ± 0.48 | 1.27 ± 0.04 · 3.72 ± 0.18 | 3.81 (≤ 10) | met |
+| lift:pebbles | 1.5 | 2.3-9 | 1.90 ± 0.11 · 5.21 ± 0.56 | 1.80 ± 0.06 · 4.67 ± 0.20 | 3.44 (≤ 8; boss 5.61 ≤ 12) | met |
+| lift:basanos | 2.0 | 4.5-14 | 2.90 ± 0.29 · 7.31 ± 0.98 | 2.95 ± 0.07 · 7.62 ± 0.28 | 5.98 (≤ 12 with the Collar fights in) | met |
+| lift:marbles | 0.4 | 1.9-7.6 | 0.96 ± 0.06 · 4.16 ± 0.32 | 1.01 ± 0.04 · 4.31 ± 0.17 | 4.04 (≤ 10) | met |
+| lift:buga | 2.0 | 2-8 | 4.48 ± 0.08 · 4.38 ± 0.26 | 4.58 ± 0.06 · 4.53 ± 0.12 | 5.04 (≤ 10) | met |
+| lift:valdris | 0.8 | 2.5-10, others ≥ 60% | 0.72 ± 0.15 · 3.01 ± 0.68 (others 53%) | 0.81 ± 0.03 · 5.55 ± 0.23 (others 55%) | — | others' share under |
+| lift:sparrow (to others) | 0.25 | 0.8-3.2 | 0.23 ± 0.08 · 1.35 | 0.24 ± 0.02 · 1.40 | — | fires 4% under |
+| lift:betty | 0.5 | 1.2-5 | 0.77 ± 0.04 · 1.76 ± 0.12 | 0.80 ± 0.03 · 1.75 ± 0.06 | — | met |
+| lift:benedick | 0.4 | 0.9-3.6 | 0.27 ± 0.12 · 0.54 ± 0.31 | 0.30 ± 0.03 · 0.92 ± 0.12 | — | fires under (HP met at 5) |
+| lift:kiri | 0.4 | 1-4 | 0.16 ± 0.04 · 0.51 ± 0.11 | 0.19 ± 0.01 · 0.91 ± 0.06 | — | fires and HP under |
+| lift:marwyn | 0.3 | 2.5-10 | 0.71 ± 0.10 · 4.84 ± 0.78 | 0.72 ± 0.06 · 4.98 ± 0.32 | — | met |
+| lift:corelos | 0.4 | 0.9-3.6 | 0.62 ± 0.06 · 1.49 ± 0.19 | 0.63 ± 0.03 · 1.49 ± 0.08 | — | met |
+| lift:syllamin (worn) | 0.8 | 1.2-5 | 1.38 · 3.22 a worn fight (worn 5%) | 1.55 · 2.94 (worn 401 fights, 5%) | — | met |
+| lift:zarathor (worn) | 0.8 | 1.2-5 | 2.05 · 4.00 a worn fight (worn 7%) | 2.48 · 4.79 (worn 419 fights, 5%) | — | met |
+| lift:josiah | 0.5 | 0.6-2.6 | 0.85 ± 0.09 · 0.93 ± 0.14 | 0.89 ± 0.03 · 1.01 ± 0.06 | — | met |
+
+No guard rail came near a breach (no loop: every heal is bounded per event or per turn, as the plan says). The misses are
+the ones the builders and reviewers predicted, and no number inside the plan's ranges reaches them:
+- **Kiri** (0.19 fires): AutoPlay rarely starts her turn in melee; `ghost` at its top step lifted the HP 0.51 → 0.91 a
+  fight (band floor 1.0). **Benedick** (0.30 fires): enemy paths take equal-cost detours around slime; `MUCIN_HEAL` 5
+  put the HP in its band (0.92). Both need an AutoPlay / engine change (their notes' requests), or the lead revisiting
+  their T8 rows.
+- **Valdris**: fires met (0.81), the HP almost doubled (3.0 → 5.6), but 55% goes to others against 60%: AutoPlay forges
+  himself about as often as an ally; no number moves that split.
+- **Sparrow** (0.24 fires against 0.25, HP to others in band): not raised. `SHARE` ½ → ⅔ cannot add drains of a
+  Bleeding foe with a hurt ally in reach, and it would widen T6's gap (she is the non-healer Valdris must beat by 1.25×).
+- **Slate** (0.99 against 1.0, ± 0.05): one step taken (3/4/4 → 4/5/5), which lifted his HP 2.6 → 3.2 a fight; the fires
+  reading flips around the minimum by iteration (1.08 / 0.95 / 0.98 / 0.96). A second step was not taken: the pass had
+  stopped and the final gate pools with the last iteration only if its numbers are unchanged.
+- The worn shares of the two common trinkets (honestly unknown in the plan): the Loyalty Card and the Jar of Tears are
+  worn in ~5% of their heroes' fights, so they add ~0.2 HP a fight overall (2.9-4.8 a worn fight).
+- Basanos' rail is "≤ 12 without the Flea Collar": the sim's worn columns do not track the Collar, so the figure above
+  includes the Collar fights (still 5.98 ≤ 12).
+
+### T5 (report): hero shares at the kept rows (iterations 5 + 6 pooled: the rows differ by the goats' step only; 1,200 runs)
+Four-act run wins of the starting four, × the median (21.9%), Wilson 95%:
+
+| hero | share (CI, n) | × median | baseline × median (pooled 1,300) |
+|---|---|---|---|
+| **ellaria** | 48.9% (43.2–54.7, 282) | **2.24×** | 2.63× (2.85×) |
+| josiah | 41.0% (35.4–46.9, 278) | 1.88× | 1.97× (1.95×) |
+| zarathor | 36.1% (30.7–41.8, 280) | 1.65× | 1.93× (1.75×) |
+| syllamin | 33.6% (28.3–39.2, 286) | 1.54× | 1.36× (1.52×) |
+| kiri | 26.8% (21.8–32.4, 269) | 1.22× | 1.13× (1.17×) |
+| marbles | 24.2% (19.7–29.5, 293) | 1.11× | 0.87× (0.92×) |
+| corelos | 22.9% (18.4–28.1, 284) | 1.05× | 1.26× (1.27×) |
+| slate | 22.8% (18.4–27.8, 303) | 1.04× | 0.73× (0.78×) |
+| betty | 21.9% (17.6–26.8, 311) | 1.00× | 0.86× (1.00×) |
+| valdris | 21.8% (17.4–26.9, 289) | 1.00× | 0.84× (0.95×) |
+| buga | 21.4% (17.0–26.6, 276) | 0.98× | 1.13× (0.94×) |
+| benedick | 21.4% (16.8–26.7, 262) | 0.98× | 0.97× (1.02×) |
+| sparrow | 20.7% (16.4–25.8, 285) | 0.95× | 0.90× (0.95×) |
+| pebbles | 19.3% (15.0–24.3, 275) | 0.88× | 0.81× (0.86×) |
+| basanos | 19.0% (14.7–24.2, 263) | 0.87× | 1.00× (0.91×) |
+| marwyn | 18.1% (14.0–23.1, 276) | 0.83× | 1.10× (1.18×) |
+| hjalmar | 18.1% (14.0–22.9, 288) | 0.83× | 0.72× (0.85×) |
+
+(a) the 13 lifted heroes other than Josiah, Zarathor, Syllamin: 0.83-1.22×, all inside [0.75, 1.5]. (b) the bottom six
+of the baseline (Slate, Hjalmar, Pebbles, Basanos, Marbles, Buga): mean **0.95×** (≥ 0.93; baseline 0.88). (c) Josiah
+1.88 ≤ 2.05, Zarathor 1.65 ≤ 1.85, Syllamin 1.54 ≤ 1.62. (d) nobody above Ellaria. (e) **Ellaria 2.24×** (below her
+2.63×: the others came up), her parties 48.9% (baseline 58.1%). The T5 lever (a bottom-six hero significantly low) never
+fired: no hero read below 0.80× with its interval under the median. Her kit is untouched; her ratio fell because the
+median rose (iteration 0: 1.95×), her parties' rate fell with Svammiel's HP step and with noise in acts 1-3 (her act-3
+clears read 63-67% in iterations 0-4 and 59-60% in 5-6 on unchanged act 1-3 rows).
+
+### The healer split at the kept rows (iteration 5; baseline in brackets)
+With Ellaria 50.7% (58.1) · with Josiah 40.4% (43.6) · with Valdris 19.9% (18.6) · **no healer 11.6% (9.5)** · any healer
+35.1% (36.5) · all 25.3% (26.5). Healer-less runs ending in act 1: 36.0% (47.7). The lifts did what they were for at
+today's rows (iteration 0: no healer 9.5 → 18.9%, the healer-less act-1 losses 47.7 → 35.7%); the enemy retune then took
+the campaign back to ~25%, at the finale, which healer parties reach most often.
+
+### T9: the one stall
+Iteration 2, seed 32141, `a3_hoarders_lair` (an act-3 elite): a lone Zarathor (10/39 HP) against the Young Red Dragon
+(42/145) for 30 rounds; replayed with `dump=1` (`.tmp/heal/after/it2/stall_32141.txt`): the dragon basks in its hoard for
++6 Block every turn and winds up its breath, Zarathor chips 4-5 through the Block every third round, nobody heals. No
+lift heal is involved; it is the AutoPlay-against-Block stall shape (1 in 7,470 fights; 0 in the other
+~54,000 fights of this pass). Request below.
+
+### Deviations (from the plan)
+1. **Heal steps rode along with the enemy steps** (iterations 1-3) instead of a heal-only iteration first: each heal step
+   is read on its own label (T6 / T8) and each row step on its own fight (Svammiel), so the attribution holds; it saved
+   ~2 hours of Chrome (the user: don't crunch the PC).
+2. **Sparrow's `SHARE` not raised** under T8 (0.24 fires against 0.25): the number cannot add fires, her HP to others is
+   inside the band, and a bigger share widens T6's gap (above).
+3. **Readings pooled over iterations whose relevant numbers were identical**: T8 per label (iterations 3-6), T6
+   (iterations 3-6), the T7 act-1 constraint (act-1 rows never moved), the doors (their rows never moved until
+   iteration 6). The plan reads one iteration at a time; at ~210 fights a door or ~200 Svammiel fights, an iteration's
+   point estimate moves ±2-4 points by chance.
+4. **The Ellaria guard, literally**: "undo that iteration's step" undid the goats' ×1.05 damage (iteration 6), a step that
+   does not move her parties (one door, ~1 point of its own losses); the step that moved them was Svammiel's ×1.15 HP
+   (iteration 5), which the guard rule keeps. The lead decides (Requests).
+5. DESIGN **§9** (Svammiel's brief) quotes his row too (the docs suite reads it), so it moved with §5.
+
+### Requests
+- **Lead / the user (the guard bound; plan §9 open question 1):** Ellaria's parties read 48.9% at the kept rows (pooled
+  iterations 5-6; 1,200 runs: 2.24× the median, below her 2.63× before), against the guard's 52% and the baseline's
+  58.1%. The two closest row sets, measured:
+  (a) **kept** — Svammiel ×1.15 HP / ×1.5 damage: campaign 25.3% (iteration 6 with the goats' step: 26.2%), Svammiel
+  80.0%, her parties ~49%;
+  (b) Svammiel ×1.1 HP / ×1.5 damage (iteration 4): campaign 30.2%, Svammiel 89.6%, her parties 61.9% (60.2% pooled
+  with iteration 3).
+  The arithmetic the critic flagged: the lifts raised every party; holding the campaign at ~25% takes points from the
+  parties that reach the finale most, hers first. The question for the user: does "I don't want Ellaria brought down"
+  mean her kit (as read so far) or also her parties' win rate? If the kit: keep (a). If the win rate: (b), and the
+  campaign stays ~30% unless the user accepts that.
+- **Lead:** the goats' door reads 99.4% over iterations 0-5 (T3 ≤ 98.5%); their ×1.05 damage row read 98.5% in iteration 6
+  (every door 98.0-98.5%, campaign 26.2%) and costs Ellaria's parties nothing measurable. Land it if the guard is read as
+  covering only the rows that move her parties.
+- **Lead:** T6 misses by a hair at the plan's limit (Valdris 1.21× Sparrow, 1.25× asked; Josiah and Ellaria far ahead).
+  Options: accept (he is now clearly the third healer: 0.4 → 3.45 HP a fight to others), or widen `dents` past 7.
+- **Lead / AUTOPLAY (non-blocking):** the T8 misses above are AutoPlay-shaped (Kiri never starts in melee; enemies detour
+  around Benedick's slime; Valdris forges himself as often as an ally; Sparrow's share needs a Bleeding drain with a hurt
+  ally in reach). The hero notes carry the specific requests.
+- **AUTOPLAY / encounters (non-blocking):** the `a3_hoarders_lair` stall (above): a lone ranged hero against the Hoarder's
+  bask Block can run out the 30 rounds.
+- **Tools (non-blocking):** add Basanos' Flea Collar to the sim's WORN list (T8's Basanos rail is split by it).
+
+### Tests
+`tests/balance_tests.js`: `A4_ROWS.boss_svammiel` → `{ hp: 1.15, dmg: 1.5 }` with the reason; the Serum comment (5 + 3).
+Hero suites: the four constants' pins and their literal numbers now read the constants (`hero_kiri`, `hero_valdris`,
+`hero_benedick` incl. its items suite, `hero_slate`). The docs suite reads DESIGN §5 / §9 (Svammiel) as edited.
+`hero_slate`'s "AutoPlay grabs and squeezes" asks for the squeeze from Stress Ball II (at I the raised hold heal equals
+Stress Ball's own; `docs/notes/hero-slate.md`). Full run (`bash tools/test.sh`, after every change): **PASS, 1318
+suites, 150,822 assertions, 0 failures**, 0 "Error in" lines (`.tmp/heal/after/test_full.txt`).
+
+## Conditional healing audit (Nov 18) — heal:audit (the independent final gate, plan `.tmp/heal/plan.md` §7)
+
+The balance pass's kept rows measured on the plan's never-used final-gate seeds: normal 40000-40599 (six 100-seed
+pages), casual 41000-41099, brutal 42000-42099. Stock `tools/sim.sh` (every page's "overrides:" line reads `none`),
+`debug=1&healers=ellaria,josiah,valdris&raw=1&verbose=1`, one page at a time; pooled with the baseline's `merge.awk` /
+`split.awk` and `.tmp/heal/lifts.awk`. Raw pages, scripts and replays: `.tmp/heal/audit/` (`run_audit.sh`,
+`compose_audit.sh`, `t6.awk`, `desc_audit.js` + `audit.html` + `run_harness.sh`, `stall_40301.txt`, `stall_41059.txt`,
+`replay_it5.txt`, `test_full.txt`). Wilson 95% intervals for rates, batch-means 95% half-widths for per-fight means.
+
+**What was verified without trusting the reports.**
+- `git diff` of `js/data/heroes/ellaria.js`, `tests/content/hero_ellaria.js`, `docs/notes/hero-ellaria.md`: empty. No
+  code diff names an Ellaria item, status or number (two comments mention her guard); her DESIGN §6 subsection and her
+  v2-digest block sit outside every diff hunk.
+- Rows (`js/data/balance.js`): only `encounters.boss_svammiel` moved, ×1.1 / ×1.3 → ×1.15 HP / ×1.5 damage (+0.05 HP,
+  +0.2 damage: inside §8's Svammiel limits, damage first). `tests/balance_tests.js` `A4_ROWS` pins exactly that; the
+  Serum pin (`SERUM_HEAL` 3, "heals 3 HP") holds. DESIGN §5 and §9 quote ×1.15 / ×1.5, ×1.95 with `act[4]`, 414 HP.
+- Heal numbers (hero constants): all 16 inside §7's ranges. Moved: Valdris `DENTS` 7/8/9 (top), Kiri `GHOSTING` 5/6/7
+  (top), Benedick `MUCIN_HEAL` 5 (top), Slate `HUG` 4/5/5; every other lift and every pre-existing number at the plan's
+  value. DESIGN §6 and v2-digest §2 quote the landed numbers.
+- Desc == execute, independently: a scratch harness (`.tmp/heal/audit/desc_audit.js`) reads each number from the live
+  desc text (skill, passive, item, Grappled status), never from the constants, sets the condition up in a sandbox fight
+  and compares it with the labelled `DD.Act.heal` call and the HP really gained: 26 cases over the 16 lifts (levels I
+  and III where they differ, each hero item), **26 / 26 equal** (Slate 4 / 5, Hjalmar 5 / 9, Pebbles 3 / 5, Basanos 6
+  with 2 foes at I / 8 capped at III, Marbles 5 / 7, Buga 2, Valdris 7 / 9, Sparrow 6 of 11, Betty 3, Benedick 5 / 8,
+  Kiri 5 / 7, Marwyn 12 with 2 Taunted, Corelos 3 / 4, Syllamin 3, Zarathor 3, Josiah 2).
+- Pooling with iteration 5 is sound: seeds 35000-35003 replayed on today's tree give run lines (party, levels, gold,
+  every fight's rounds) identical to iteration 5's page. Iteration 6 (the last iteration) carries the goats' ×1.05
+  damage, so by §7's letter it is not poolable; iteration 5 is the last one at today's rows and heal numbers.
+
+### Every gate (normal unless stated)
+"Kept rows" = the balance pass's iteration 5 (600 runs), with iteration 6 where only it was read. "Gate" = the 600 fresh
+runs. "Pooled" = gate + iteration 5 (1,200 runs at identical rows and heal numbers).
+
+| gate | baseline | balance pass (kept rows) | final gate | pooled | |
+|---|---|---|---|---|---|
+| T1 campaign [23, 28], CI overlaps 22-28 | 26.5% | 25.3% (22.0–29.0) | **26.2%** (157/599, 22.8–29.9; 1 stalled run) | 25.8% (309/1199, 23.4–28.3) | PASS |
+| T2 act 3 cleared [28, 35] | 32.8% | 34.5% | **34.7%** (208/600, 31.0–38.6) | 34.6% (415/1200) | PASS |
+| T3 Svammiel [80, 85] | 92.4% | 80.0% (152/190) | **83.5%** (157/188, 77.5–88.1) | 81.7% (309/378) | PASS |
+| T3 every door [91, 98.5] | 95.7–98.4 | coven 96.0 – goats 100.0 | coven 95.5 · **galbraith 99.5** (199/200) · **gardener 100.0** (196/196) · goats 97.5 · league 98.0; all 98.1% (974/993) | coven 95.8 · galbraith 99.0 · gardener 99.0 · goats 98.7 · league 98.5 | MISS (noise: each door's CI holds 98.5; the doors as a whole run ~98%) |
+| T3 0 round-cap stalls in act 4 | 0 | 0 (48 pages) | **1** (Svammiel, seed 40301) + 1 casual (the Gardener, seed 41059) | 1 | **MISS (new)** |
+| T4 casual [60, 75] | 67% | 74% (iteration 6) | **78.8%** (78/99, 69.7–85.7; 1 stalled run) | — | MISS (inside noise; 77 / 80 / 74 / 79% over four readings) |
+| T4 brutal [5, 13] | 9% | 9% (iteration 6) | **7.0%** (7/100, 3.4–13.7) | — | PASS |
+| Ellaria guard ≥ 52% (n ≥ 150) | 58.1% | 48.9% (iterations 5 + 6: the guard bound) | 56.3% (71/126: n < 150) | **53.4%** (140/262, 47.4–59.4) | PASS at today's rows (iteration 6's goats step was in the 48.9%) |
+| T6 Valdris ≥ 1.25× every non-healer (done to others, HP / fight) | 0.40 vs Marbles 2.33 | 3.45 vs Sparrow 2.85 = 1.21× | **3.28 vs Marbles 2.82 = 1.16×** (Sparrow 2.34) | 3.37 vs Sparrow 2.75 = 1.22× (Marbles 2.14) | MISS (as reported; `dents` at its top) |
+| T6 Josiah, Ellaria ≥ 2× every non-healer | 15.5, 11.8 | 15.2, 10.7 | 15.6, 10.7 (≥ 3.8×) | 15.2, 10.8 | PASS |
+| T8 each lift (table below) | — | 11 of 16 | 12 of 16 (Slate 1.01) | 11 of 16 | MISS: Kiri, Benedick, Sparrow, Valdris' share to others (as reported) |
+| T9 errors / DD.warn / stalls, every page | 0 / 0 / 0 | 0 / 0 / 1 (act 3, iteration 2) | 0 / 0 / **2** (normal_40300, casual_41000) | | MISS (the stalls) |
+| T9 full `tools/test.sh`; Ellaria's diff | — | PASS; empty | **PASS** (1318 suites, 150,822 assertions, 0 failures, 0 "Error in"); empty | | PASS |
+| Svammiel rounds ≤ baseline + 1.5 (§8 limit) | 11.77 | 12.68 | **13.22** (+1.45) | 12.95 (+1.18) | at the limit |
+
+**Reports.** T7: no-healer parties 11.3% (29/257) ÷ 26.2% = **0.43** (expected ≥ 0.45; pooled 0.44; baseline 0.36);
+healer-less runs lost in act 1 **38.8%** (100/258; pooled 37.4%; < 42%, baseline 47.7%). T5 (pooled, median 22.1%):
+Ellaria 2.41× (53.4%), Josiah 1.92, Zarathor 1.56, Syllamin 1.46 (each ≤ its baseline + 0.10); the other 13 at
+0.77-1.27× (Pebbles 0.77 – Kiri 1.27); the baseline's bottom six average **0.95×** (Slate 0.93, Hjalmar 0.79, Pebbles
+0.77, Basanos 1.01, Marbles 1.20, Buga 0.99; ≥ 0.93); nobody above Ellaria. **The T5 lever's condition is met for
+Pebbles**: 17.1% (51/299, 13.2–21.7), point 0.77× < 0.80× and the top of his interval under the median 22.1% (on the
+gate alone Slate too: 16.0%, 10.7–23.3, against a 24.2% median; pooled Slate is 0.93×). The lever is his
+Burning-neighbour heal 3 → 4 (the top of [2*, 4]); not taken here (an audit runs no iteration).
+
+### T8 on the final gate (per fight the hero started; fires · HP, ± batch 95%; pooled in brackets)
+| label | min · band | final gate | pooled | |
+|---|---|---|---|---|
+| lift:slate | 1.0 · 2.5-10 | 1.01 ± 0.04 · 3.20 ± 0.23 | (0.99 ± 0.04 · 3.16) | met (pooled 1% under: noise) |
+| lift:hjalmar | 0.6 · 2-8 | 1.23 · 3.45 | (1.22 · 3.47) | met |
+| lift:pebbles | 1.5 · 2.3-9 | 1.79 · 4.68 (regular 3.39 ≤ 8, boss 5.70 ≤ 12) | (1.77 · 4.54) | met |
+| lift:basanos | 2.0 · 4.5-14 | 2.93 · 7.35 (regular 5.91 ≤ 12) | (2.95 · 7.60) | met |
+| lift:marbles | 0.4 · 1.9-7.6 | 0.98 · 4.15 | (1.01 · 4.33) | met |
+| lift:buga | 2.0 · 2-8 | 4.49 · 4.46 (regular 4.87 ≤ 10) | (4.55 · 4.49) | met |
+| lift:valdris | 0.8 · 2.5-10, others ≥ 60% | 0.80 ± 0.08 · 5.57, others **52%** | (0.78 · 5.38, others 54%) | MISS: share to others |
+| lift:sparrow (to others) | 0.25 · 0.8-3.2 | **0.21** ± 0.05 · 1.20 | (0.22 · 1.27) | MISS: fires |
+| lift:betty | 0.5 · 1.2-5 | 0.82 · 1.77 | (0.82 · 1.80) | met |
+| lift:benedick | 0.4 · 0.9-3.6 | **0.38** ± 0.13 · 1.17 | (0.36 ± 0.06 · 1.14) | MISS: fires |
+| lift:kiri | 0.4 · 1-4 | **0.18** ± 0.04 · **0.90** | (0.18 · 0.91) | MISS: fires and HP |
+| lift:marwyn | 0.3 · 2.5-10 | 0.70 · 5.00 | (0.70 · 4.97) | met |
+| lift:corelos | 0.4 · 0.9-3.6 | 0.66 · 1.49 | (0.64 · 1.49) | met |
+| lift:syllamin (worn) | 0.8 · 1.2-5 | 1.16 · 2.76 a worn fight (worn 45 fights, 3%) | (1.30 · 2.79, 5%) | met |
+| lift:zarathor (worn) | 0.8 · 1.2-5 | 2.22 · 4.40 a worn fight (worn 103, 5%) | (2.33 · 4.60, 5%) | met |
+| lift:josiah | 0.5 · 0.6-2.6 | 0.92 · 1.04 | (0.92 · 1.05) | met |
+
+No guard rail near a breach. Every miss is the balance pass's, at the same size.
+
+### The two act-4 stalls (replayed with `dump=1`: deterministic)
+- **normal, seed 40301, Svammiel, round 31** (`stall_40301.txt`): Pebbles 6/50, Hjalmar 9/37, Zarathor 19/50 standing,
+  Syllamin down; Svammiel 102/414. A grind, not a loop: the party chips 4-6 a turn through Pencilled HP and the Master
+  Dice, catches him only in round 30, and two lifts keep it standing through the last rounds (Pebbles' Hot Dog next to
+  the Burning Svammiel +3, Zarathor's Loyalty Card +3). The ×1.15 HP step lengthens exactly this fight (13.22 rounds,
+  +1.45 of §8's +1.5).
+- **casual, seed 41059, the Gardener, round 31** (`stall_41059.txt`): Benedick 12/48 and Kiri 2/50 standing, Valdris
+  down; the Gardener 6/192, Photosynthesis healing 5 a round; no lift heal in the last 40 log lines. Its row did not
+  move.
+- The balance pass saw no act-4 stall in 48 pages (one act-3 stall in ~62,000 fights); this gate saw two in ~10,000
+  fights (~1% likely at the pass's rate). At the kept rows the Svammiel count is 1 in 576 of his fights (iterations 5,
+  6 and the gate). Not provably beyond chance, but the gate is zero.
+
+### Verdict and levers (the audit moved no row, heal number or kit)
+The campaign, act 3, Svammiel, brutal, Josiah's and Ellaria's lead in healing others, the code and the docs all hold on
+fresh seeds, and nothing of Ellaria's moved. **Fail** on the plan's gates, with these levers:
+1. **T8** Kiri (0.18 fires, 0.90 HP), Valdris (52-54% to others), Benedick (0.36-0.38), Sparrow (0.21-0.22), beyond
+   noise: no number inside §7's ranges reaches them (Kiri's, Benedick's and Valdris' are at their tops). Lever: AutoPlay
+   / content work in the four heroes' files (their notes' requests), or the lead revises those four T8 rows.
+2. **T3 / T9 stalls** (new here): Svammiel back to ×1.1 HP (0 stalls in the ~1,000 Svammiel fights at ×1.1; it also
+   answers the open Ellaria question, at a ~30% campaign), or a stall breaker for the long-fight shape (svammiel.js /
+   gardener.js / AutoPlay owners), or the lead accepts a rare-tail target in place of "0".
+3. **T6** (1.16-1.22×, `dents` at 7): widen `dents` past its range (the lead) or accept him as the clear third healer.
+4. **T3 doors** (Galbraith / the Gardener read 99-100%, noise around ~98.5): §8 step 4 allows door rows (×1.05 damage
+   on the easiest door), measured on 600 fresh runs.
+5. **T4 casual** (78.8%, inside noise): §8 step 5, casual 0.8 → 0.85, if the lead reads four casual pages (77 / 80 / 74
+   / 79%) as a real lean.
+
+The Ellaria guard, read at today's exact rows (1,200 runs), is **53.4%: above 52%**; the 48.9% that stopped the pass
+included iteration 6's goats step. The user's question (does "brought down" cover her parties' win rate: 58.1% before,
+~53% now) stands as the balance pass asked it.
+
+### Fixes made by the audit
+None needed: no doc, desc, pin or test was wrong. (The scratch harness lives in `.tmp/heal/audit/`; it is not a project
+test.)
+
+### Requests
+- **Lead:** the five levers above; the T5 lever's condition for Pebbles (Burning-neighbour heal 3 → 4).
+- **BOSS-SVAMMIEL / BOSS-GARDENER / AUTOPLAY (non-blocking):** the two capped fights above (a weakened party chipping
+  under the boss's self-repair: Pencilled HP, Photosynthesis) reached round 30 twice in the gate's ~1,700 act-4 fights.
+
+## Release gate (Nov 18) — heal:gate: the conditional-healing lift ships in V3.1 (no number moved)
+
+The last check before the lead pushes V3.1 (the local checkpoint 7a47f4d with the Act 4 leftovers, plus the 16 lifts,
+the balance pass, the audit and the QA fixes). Everything below ran on the final tree: no file under `js/`, `tests/` or
+`docs/` changed after the QA fixer's last edit (13:02) and before these runs. Logs: `.tmp/heal/gate/`.
+
+**Tests, twice.** `bash tools/test.sh` (run 1) and `CONSOLE=1 bash tools/test.sh` (run 2): both **PASS — 1319 suites,
+150,900 assertions, 0 failures, 0 failing sections**. The two result lists are identical apart from timings (0 lines of
+diff on suite names, counts and messages): nothing is flaky. 0 swallowed "Error in" lines inside a suite. The console's
+28 "Error in" lines all come from tests that throw on purpose ("boom", "intentional test error", "… exploded", "balloon
+popped"): none comes from a hero file, `autoplay.js`, `combat_hud.js` or the sim.
+
+**Ellaria, untouched.** `git diff 4e811e6` (and `HEAD`) of `js/data/heroes/ellaria.js`, `tests/content/hero_ellaria.js`
+and `docs/notes/hero-ellaria.md`: empty. Her `### Ellaria` subsection of DESIGN §6 and her v2-digest §2 block are
+byte-identical to V3's. Her live kit text matches V3's: the kit generator (`tools/test.sh "suite=docs: v2-digest&kits=1
+&verbose=1"`) prints her 15 kit lines (passive, skills, items) exactly as the digest has them. No code diff names an item,
+status or number of hers (the one hit is a comment in `js/data/balance.js` about her parties' rate).
+
+**All 16 lifted, each the plan's way.** Every lifted hero's file calls `DD.Act.heal(..., { via: 'lift:<id>' })` at its
+one choke point; every `tests/content/hero_<id>.js` has the suite "hero_<id>: conditional heal (Nov 18)"; every hero note
+has its "Conditional heal (Nov 18)" section and its "DESIGN §6 brief (Nov 18)"; each brief's replacement text is in
+DESIGN §6 (Sparrow's as QA-5 extended it, with "heroes first"). The generator's lines for the 15 v2 heroes match the
+digest (the only differences are three older condensed lines, Statue of Me, Raven Dive and Murder of Crows, which this
+work did not touch). Landed heal numbers, read from the code: Slate `HUG` 4/5/5, Hjalmar `LAUGH_HEAL` 5 (+ `CANNED_HEAL`
+4), Pebbles 3 (Dog Bed 5), Basanos `MEND` 2/3/4 + 2 a foe (max +4), Marbles `SLAM` 5/6/7, Buga 2, Valdris `DENTS` 7/8/9,
+Sparrow `SHARE` ½, Betty 3, Benedick `MUCIN_HEAL` 5 (+ `SERUM_HEAL` 3), Kiri `GHOSTING` 5/6/7, Marwyn 8 + 2 a Taunted foe
+(max +6), Corelos `SETTLE` 3/4/4, Syllamin 3, Zarathor 3, Josiah 2. All inside plan §7's ranges.
+
+**The QA fixes leave the numbers alone.** QA-5 (Sparrow's share prefers a hurt hero) is the one QA change a fight can
+feel, so the audit's first page was replayed on the final tree (stock `tools/sim.sh`, the audit's query,
+`seeds=100&from=40000&diff=normal`, `.tmp/heal/gate/normal_40000_postqa.txt`): **byte-identical** to the audit's
+`normal_40000.txt` (100 runs, 1,226 fights, 21 Sparrow runs and her 43 share calls included); 0 errors, 0 `DD.warn`
+lines, 0 stalls. The audit's measurements stand for the tree that ships.
+
+**Seen in the game** (`tools/shot.sh`, `debug=1`, `autoplay=1`, act-1 fights; `.tmp/heal/gate/shot_auto*.png`): Pebbles
+ends his turn next to the goblin he set on fire, and the log reads "Pebbles heals 3 HP." then "Pebbles warms his paws on
+Goblin Grunt. Toasty. For one of them." (`shot_auto2`); the 🔨 Dents rule chip under the objective, and the 🔨 Dented
+chip on Valdris after his Block soaked a rat's bite (`shot_auto4`, `shot_auto5`); his Forge Armor on himself then logs
+"Valdris heals 7 HP." and "Valdris hammers the dents out of himself. Good as new. Better, even." (the fight's "Healed 7",
+`shot_auto3`).
+
+### The audit's "fail", miss by miss: why none blocks the push
+The audit failed the plan's gates on fresh seeds; the release decision reads each miss for what it does to players.
+- **T8, four lifts fire less often than projected under AutoPlay** (Kiri 0.18 a fight, Benedick 0.36-0.38, Sparrow
+  0.21-0.22, Valdris 52-54% to others): each heal fires exactly as its desc says (the audit's desc harness, 26 / 26, and
+  every hero suite); AutoPlay rarely sets the condition up. Three of the four numbers are at the top of their ranges. An
+  AutoPlay request, or a T8 row for the lead to revisit: not a defect.
+- **T6, Valdris at 1.16-1.22× the best non-healer at healing others** (1.25× asked): `DENTS` sits at the top of its
+  range; he went from 0.4 to ~3.4 HP a fight to others and is clearly the third healer. Josiah (15.6) and Ellaria (10.7)
+  stay far ahead. A range question for the lead.
+- **T3 doors** (Galbraith 99.5%, the Gardener 100% on the gate; three doors at 98.7-99.0% pooled, ceiling 98.5%): the
+  doors run about half a point easier than the band, inside each door's interval. No door row moved; §8 step 4 is the
+  lever. Players will not feel it.
+- **T4 casual 78.8%** (69.7-85.7; four readings 74-80%): about 77% pooled against a 75% ceiling, its interval
+  overlapping the band; §8 step 5 (casual 0.8 → 0.85) is the lever. Casual is meant to be kind.
+- **T3 / T9, two round-cap fights** (Svammiel, normal seed 40301, 102/414 HP at round 31; the Gardener, casual seed 41059,
+  6/192): the 30-round cap exists only in AutoPlay's `runBattle` (sims and tests); a player's fight has no cap. Both
+  replays are grinds a few hits from a win, not loops: every lift heal is bounded per event, turn or round, and the
+  Gardener's last 40 log lines hold no lift heal. About 1 in 5,000 fights. Levers: Svammiel back to ×1.1 HP (which also
+  answers the Ellaria question below, at a ~30% campaign), a stall breaker, or a rare-tail target in place of "0".
+- **The stop rule.** The balance pass stopped raising rows because the Ellaria guard read 48.9% over iterations 5 + 6;
+  at today's exact rows it reads 53.4% (above 52%), so the levers above are open again if the lead wants another
+  iteration. That is tuning on top of a sound release, not a fix the release needs.
+
+Every target the user set holds: the campaign at ~25% (26.2% on the gate, 25.8% pooled), Ellaria's kit untouched, the
+16 others all lifted by conditional healing, the healers still the best at healing others.
+
+### Ellaria's parties, plainly (reported; nothing acts on her kit)
+Four-act wins of parties with Ellaria: **58.1% before** (93/160, no lift, V3 rows) → **53.4% now** (140/262, the final
+gate pooled with iteration 5 at today's exact rows, Wilson 47.4-59.4%; the gate alone 56.3%, 71/126). About 5 points
+lower, about one standard error: not provably a drop, but the direction is the expected one (Svammiel's ×1.15 HP brought
+the campaign back to ~25%, and her parties reach him most). Her share of run wins went from 2.63× to 2.41× the median
+because the others came up. Whether "I don't want Ellaria brought down" also covers her parties' win rate is still the
+user's call (plan §9; the balance pass's options: (a) keep, (b) Svammiel ×1.1 HP: her parties ~60%, campaign ~30%).
+
+### Verdict
+**Ready to push.** Tests pass twice with identical results; Ellaria's files, kit text, items, statuses and DESIGN
+subsection are unchanged; all 16 lifts are in with their tests, notes and DESIGN briefs; descs match execute; no
+"Error in" from the new code; the sims show 0 errors and 0 warnings, and the audit's numbers hold on the final tree. The
+audit's misses are AutoPlay coverage, ranges and half-point bands for the lead to tune later, plus one question for the
+user. Players' notes: `.tmp/heal/release-notes.md`.
+
+### Requests
+- **Lead:** do not stage the untracked `bash.exe.stackdump` at the repo root (a Nov 14 crash dump).
+- **Lead / balance owner (non-blocking):** the `boss_svammiel` comment in `js/data/balance.js` quotes the 48.9% that
+  stopped the pass; the audit's 53.4% at today's rows could sit next to it.
+- **Lead (non-blocking):** the audit's levers (T3 doors, T4 casual, the Svammiel stall shape, T6 `DENTS` past 7, the T5
+  lever for Pebbles' Burning-neighbour heal 3 → 4) and the four T8 AutoPlay requests in the hero notes.

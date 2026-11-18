@@ -286,3 +286,151 @@ stay optional.
 - **HERO-6**: `barks.move` / `barks.kill` are getters on the fight's Benedick: the snail's lines, or the Dragonsnail's ALL-CAPS
   lines (`DD.Benedick.FORM_BARKS`). Request (RULES, optional): a per-form bark-key prefix in `Act.bark`.
 - Suite "hero_benedick: QA HERO-2/4/6".
+
+## Conditional heal (Nov 18) — "Moisturising Routine" (build:g3; plan `.tmp/heal/plan.md` §4.10, the user's Nov 18 request)
+
+The user (Nov 18): "I want everyone else brought up but by conditional healing" (D9: "linked to the characters
+themselves"). Benedick's D9 heal (the Snail Mucin Serum's) moves into his passive: snail mucin is skincare, and a monster
+stuck in his slime is a spa day. The Serum becomes an amplifier that keeps its old bonus.
+
+- **What:** a foe gets stuck in **his** Snail Slime (`stuck(foe, tile)`, the surface's `onEnter`, owner from
+  `tile.surface.data.src`; trail and Spit Shine slime alike; the unchanged stop rule: grounded, non-boss, root-able foes)
+  → the owner, when he is a standing Benedick, heals `mucinOf(u)` = `MUCIN_HEAL` **3** + `SERUM_HEAL` **3** with the
+  Serum (6). Slime laid by nobody or by another unit heals nobody (the slime still holds). Self only; no cap (bounded by
+  stops). His transform still never heals (the D9 guard suite passes unchanged).
+- **Constants:** new `MUCIN_HEAL = 3`; `SERUM_HEAL = 3` keeps its value as the Serum's bonus (tests/balance_tests.js pins
+  it and "heals 3 HP"). Exported on `DD.Benedick`: `MUCIN_HEAL`, `mucinOf`, `waitScore`, `slimeBetween`, `slimeEnd`,
+  `trailFor`. Tuning range: MUCIN_HEAL 3 [3, 5]; SERUM_HEAL fixed 3.
+- **The call:** `A().heal(owner, owner, mucinOf(owner), { via: 'lift:benedick' })`, always called (0 HP at full HP);
+  the "Moisturised!" pop-up and the "<name> moisturises." log line only when it healed. The `stuck` bark (0.35, as
+  before) gained three lines: "Moisturised." / "Mucin. Very good for the complexion. Yours less so." / "I did say I'd
+  wait." (6 lines).
+- **Texts (desc == execute):** passive `At the end of his turn, Benedick leaves Snail Slime on the bare floor of every tile
+  he crawled off (3 rounds). Grounded foes, bosses and spiders aside, that walk onto it stop there, and each one that does
+  heals him 3 HP.` (43 words); Serum `Whenever a foe gets stuck in Benedick's Snail Slime, he heals 3 HP more (6 in all).`
+  Both built from the constants. File header updated.
+- **AutoPlay (the plan's two terms):** `spitScore` adds `n × healWorth(u, mucin) × 0.5` (n = its likely-stop count, after
+  its own min(7, …)); `ben_wait` gets an `aiScore` (`waitScore`, both passes: the stop happens on the foe's turn):
+  `1 + healWorth(u, mucin) × 0.6` when the target foe `sticks()` and one of HIS slime tiles lies in the box between the
+  foe and him (the foe's own tile excluded), else 0.
+- **AutoPlay (added, Deviation 1 below):** `PASSIVE.autoplayEnd(unit, x, y)` (engine hook E1) = `slimeEnd`: the slime he
+  lays at turn end if he ends on (x, y) (`trailFor`: the recorded crawl, in a dry run the copy's own walk; for a plain move
+  the `Grid.path` from where he really stands, the unit put back for the query and restored at once). Each fresh trail
+  tile that a foe which sticks can reach next turn and that lies on its way to a hero-side unit (the tile it comes to
+  stand on to hit that unit 0.5; a tile its straight-line walk crosses 0.4) is a likely stop, worth
+  `healWorth(him, mucin)` each (at most 1.5 stops; 0 at full HP, as the Dragonsnail, in the shell or when he lays nothing).
+- **Existing assertions updated to the new truth** (none deleted): the items suite's Serum desc and its +3 / 0 case (now
+  +6 with the Serum / +3 without: the passive), the passive's word cap 34 → 43 (twice: definition and QA HERO-2), the items
+  suite title ("his only heal" → "the bonus on his slime heal"), the zz sim's log label ("slime heals").
+- **Tests:** new suite `hero_benedick: conditional heal (Nov 18)` (50 assertions): constants; passive and Serum descs word
+  for word; the new `stuck` lines; a grunt walks onto his slime → +3 / +6 with the Serum (src Benedick, one labelled call);
+  two stops → +3 each; full HP → one 0-HP call; a flyer, a boss and a root-proof foe walk across → no call; slime laid by
+  nobody or by the knight → no heal call at all (the grunts still stop); a downed Benedick → no call, the slime holds;
+  Spit Shine's and I'll Wait's previews show no heal (delayed); `spitScore` + healWorth × 0.5 with one likely stop;
+  `waitScore` 0 / 1 + healWorth × 0.6 / 1 at full HP / priced at 6 with the Serum / 0 for another owner's slime, for slime
+  only under the foe, for a flyer; the I'll Wait play on the foe's own turn (taunted across his slime → stuck → +3);
+  `autoplayEnd` (a step back from a grunt slimes the tile it comes to → 0.5 × healWorth; a step toward it → 0; staying →
+  0; pure; the same through `DD.AutoPlay.restAt` and after the real step; 0 at full HP, with the grunt stunned, as the
+  Dragonsnail); AutoPlay taunts the grunt whose walk crosses his slime (two grunts alike otherwise).
+- **Sanity sims** (`bash tools/sim.sh "debug=1&raw=1&seeds=30&from=50800&stop=2&party=benedick,kiri,betty,slate"`, 30 runs,
+  acts 1-2; `.tmp/heal/g3/benedick*.txt`):
+  - with the plan's terms only (`benedick_v1.txt`, 221 fights): `lift:benedick` **0.22 fires, 0.4 HP a fight** (overheal
+    45%); regular 0.23 / 0.3, elite 0.3 / 0.7, boss 0.14 / 0.3; Serum worn in 18 fights (8%).
+  - with `autoplayEnd` (shipped; `benedick.txt` = `benedick_v2.txt`, 242 fights): **0.29 fires, 0.6 HP a fight** (overheal
+    32%); regular 0.3 / 0.6, elite 0.48 / 1.2, boss 0.13 / 0.4; Serum worn in 24 fights (10%): 0.17 fires, 0.9 HP a worn
+    fight. 0 errors, 0 DD.warn lines.
+  - a variant that also priced the stop itself (+1 a likely stop, at any HP; `benedick_v3_stopvalue.txt`): 0.28 fires,
+    0.6 HP: no better, so not shipped (the heal-only term stays closest to E1's contract).
+  - **T8 (min 0.4 fires, HP 0.9-3.6 a fight): still under** (0.29 / 0.6). The stops are bounded outside his file: enemy
+    paths take an equal-cost detour around slime (Grid: "equal-cost paths also avoid SNAGS"), the Dragonsnail lays no trail
+    and the shell turn walks nowhere (he is a crawling snail on well under half his turns), and I'll Wait / Spit Shine are
+    pool skills (socketed in ~5-10% of his fights). The balance pass's T8 lever is the next step: raise `MUCIN_HEAL` inside
+    [3, 5] (each +1 is about +0.2 HP a fight at this stop rate); an engine option (out of my files) would be AutoPlay's
+    danger model seeing stops (the old optional request above: `srcPositions` skipping tiles past a stop).
+- **Deviations:**
+  1. **`PASSIVE.autoplayEnd` (E1) added**, which the plan does not list for Benedick (its AutoPlay terms are `spitScore` and
+     `ben_wait`). Reason: the sanity sim put the lift at 0.22 fires a fight against T8's 0.4 minimum, and the build rule is
+     "fix its AutoPlay term (your file)": his trail is laid at turn end, so a turn-end tile value is the one place AutoPlay
+     can see it. Effect: +30% fires (0.22 → 0.29), still under the minimum (above). Pure, heal-priced (E1's contract).
+  2. `waitScore`'s box also skips **his own tile** (the plan excludes the foe's own tile only): a foe never walks onto the
+     tile he stands on, so slime under him is never "between".
+  3. A stuck foe in slime **owned by another unit** heals nobody (the plan: "slime laid by nobody / another owner → 0"); the
+     owner check is `defId === 'benedick'` on a hero unit, so another unit's slime (none exists today but a test's) still
+     stops walkers and lets its owner bark, as before.
+
+### DESIGN §6 brief (Nov 18)
+Anchor 1 (unique in `docs/DESIGN.md`, `### Benedick the Inevitable`, lines 709-710 today):
+
+```
+- Passive *A Sticky Situation*: at the end of his turn the tiles he crawled off become Snail Slime (3 rounds); grounded
+  foes, bosses aside, that walk onto it stop there.
+```
+
+Replacement 1:
+
+```
+- Passive *A Sticky Situation*: at the end of his turn the tiles he crawled off become Snail Slime (3 rounds); grounded
+  foes, bosses aside, that walk onto it stop there, and each one that does heals him 5 HP.
+```
+
+Anchor 2 (unique, lines 720-721 today):
+
+```
+- Sustain (D9): his hero item *Snail Mucin Serum* heals him 3 whenever a foe gets stuck in his slime; the transform never
+  heals.
+```
+
+Replacement 2:
+
+```
+- Sustain (D9 and Nov 18): each foe stuck in his slime heals him 5 (his passive); his hero item *Snail Mucin Serum* adds 3
+  more (8 in all); the transform never heals.
+```
+
+### Conditional heal: test runs (Nov 18, build:g3)
+`tools/test.sh "suite=hero_benedick&isolate=heroes/benedick,hero_benedick"` while iterating (all pass); then ONE full `bash tools/test.sh`: **1317 suites, 150,775 assertions ok, 0 failures**, 0 swallowed "Error in" lines.
+
+### Conditional heal: requests (Nov 18, non-blocking)
+- **Engine builder, phase 2:** apply the two DESIGN §6 briefs above; regenerate his v2-digest §2 lines (passive, Serum);
+  `tests/balance_tests.js`' Benedick message ("his only heal (D9)" → "the Serum's bonus over A Sticky Situation's 3";
+  values unchanged).
+- **Balance pass (T8):** `lift:benedick` read 0.29 fires / 0.6 HP a fight in the sanity sim (min 0.4 / band 0.9-3.6):
+  the next lever is `MUCIN_HEAL` inside [3, 5]; his AutoPlay terms (the plan's two plus `autoplayEnd`) are in.
+- **AUTOPLAY (optional, engine):** a danger model that sees snag stops (`srcPositions` skipping tiles past a stop) would
+  let AutoPlay value his slime on the enemies' turn directly.
+
+### Conditional heal: adversarial review (Nov 18, review:g3)
+Code path read end to end (`stuck` → owner from the surface's `src`, `active` and a Benedick hero before `DD.Act.heal`,
+`mucinOf`; `slimeEnd` / `trailFor` pure: the unit is put back in a `finally`); descs == execute; the suites pass.
+Forced-party sim (`seeds=30&from=55000&stop=2&party=benedick,marwyn,josiah,hjalmar`, `.tmp/heal/review_g3/benedick.txt`,
+264 fights): `lift:benedick` **0.29 fires, 0.6 HP a fight** (regular 0.34 / 0.6, elite 0.31 / 0.7, boss 0.11 / 0.3;
+Serum worn in 12 fights: 1.25 fires / 2.8 HP a worn fight), overheal 46% (Josiah in the party): the same reading as the
+build's, still **under T8** (0.4 fires, 0.9-3.6 HP). No bug found behind it: the stops are bounded by the engine's
+snag-avoiding paths and the trail's geometry (above). The balance pass's lever (`MUCIN_HEAL` inside [3, 5]) moves the HP
+only (5 would read about 0.8-1.0 HP a fight at this stop rate, at the band's floor); the fires minimum (0.4) needs more
+stops, which no number in this file buys: an engine change (enemy paths that do not detour around slime, or the
+danger-model request above) or the lead revisiting the T8 fires row. 0 errors, 0 DD.warn, 0 stalls.
+
+### Balance pass (Nov 18) — heal:balance: `MUCIN_HEAL` 3 → 5 (T8)
+The conditional-healing balance pass (`docs/notes/balance.md` "Conditional healing pass (Nov 18)") measured
+`lift:benedick` at the plan's numbers on 600 fresh campaign runs (seeds 30000-30599, normal): **0.27 fires and 0.54 HP a
+fight** (± 0.12 / ± 0.31; regular 0.30 / 0.58, boss 0.14 / 0.43), under T8's minimum (0.4 fires) and band (0.9-3.6 HP), as
+the build and the review found. The plan's T8 rule: his AutoPlay terms are in (the plan's two and `autoplayEnd`), so his
+number moves one step a iteration inside its range: `MUCIN_HEAL` 3 → 4 (iteration 1: 0.31 fires, 0.79 HP a fight) → 5
+(iteration 2, the top of [3, 5]). `SERUM_HEAL` stays 3 (fixed by the plan; the Serum reads "heals 3 HP more (8 in all)",
+so `tests/balance_tests.js`' "heals 3 HP" pin holds). Only the constant moved (the passive and Serum descs, `mucinOf`
+and the AutoPlay prices read it); his suites read the constant now (the pins say 5 / 8); the DESIGN §6 brief above and
+DESIGN §6 say 5 / 8. The fires stay under 0.4 (the snag-avoiding enemy paths: reported to the lead in the balance notes).
+
+### QA fixes (Nov 18, qa-fix:heal)
+- **[heal QA-4] the moisturised lines only when the slime healed him.** "Moisturised." / "Mucin. Very good for the
+  complexion. Yours less so." / "I did say I'd wait." moved from `barks.stuck` (back to its three old lines) to a new key
+  `barks.moisturised`. `stuck()` now heals first, then barks once (0.35, unchanged): on a stop that healed him (> 0) half
+  the time from `moisturised` (cosmetic `DD.rng`, never while simulating), otherwise from `stuck`. A slime owner other
+  than Benedick still barks `stuck`.
+- Tests: "hero_benedick: conditional heal (Nov 18)" (the two pools; at full HP only `stuck`; a stop that healed him may
+  use `moisturised`). No number changed.
+
+### Deviations (Nov 18, qa-fix:heal)
+- Plan §4.10 added the three lines to the `stuck` pool. QA-4 (the lead decides): their own key, played only on a stop
+  that healed him, so a full-HP Benedick never says "Moisturised." about a heal that did not happen.

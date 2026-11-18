@@ -133,7 +133,9 @@ Review (v2) → Balance and Known issues.
 
 ## Public API (for tests / other content)
 
-`DD.Kiri = { GHOST, phaseLine(ctx), pendingArrows(unit) → [{ unit, st }], landArrows(unit) → n, fizzleArrows(unit) → n }`.
+`DD.Kiri = { GHOST, GHOSTING, markEngaged(unit) → bool, canGhost(unit) → bool, phaseLine(ctx), pendingArrows(unit) →
+[{ unit, st }], landArrows(unit) → n, fizzleArrows(unit) → n }` (Nov 18: `GHOSTING` [3, 4, 5] = Ethereal Step I-III's
+`ghost`; `markEngaged` is her turn-start check, `canGhost` = engaged this turn and not yet ghosted).
 
 ## Deviations
 
@@ -313,3 +315,131 @@ suite pass; no swallowed errors.
   barrel → revealed too. The Stealth tooltip now says "Breaks when it deals damage or attacks an object."
 - Arrow from Beyond stays a D1 opt-out (it lands next turn); her other single-target damage skills hit a crate for
   exactly their 🔨 number (probe `.tmp/wf14/rev/d1.js`).
+
+## Conditional healing (Nov 18) — "Ghosting" (build:g2, plan §4.11)
+
+The user (Nov 18): "I want everyoe else brought up but by conditional healing". Kiri's lift is a skill-rider on her
+starting **Ethereal Step**: leaving a foe she started her turn next to heals her. Ellaria untouched.
+
+**What.** At her turn start, after Arrow from Beyond lands (a foe it kills no longer counts), her passive's `onTurnStart`
+marks her engaged (`unit.data.kir.engaged = state.turn`) when an active unit hostile to her stands at `DD.Grid.dist` 1.
+Ethereal Step on that turn, after a successful teleport, heals her **3 / 4 / 5** (level key `ghost`,
+`DD.Kiri.GHOSTING`), once per turn (`data.kir.ghosted = state.turn`; cd 1 already makes it every other turn).
+- **Ethereal Step** (`kir_step`): levels `{ len: 3, ghost: 3 }`, `{ 4, 4 }`, `{ 5, 5 }`; still `kind 'move'`, a tile target, no
+  `'heal'` tag (never an aimed revive). Execute: teleport; on success `ghost(u, L.ghost)`: if `active(u)` and `canGhost(u)`,
+  spend the turn's mark, then `DD.Act.heal(Kiri, Kiri, L.ghost, { via: 'lift:kiri' })`, always called when the condition holds
+  (0 at full HP); the "👻 Ghosted!" text and the `ghost` bark (0.4) only when it healed (else the old `move` bark, 0.3). A failed
+  teleport neither heals nor spends the mark. Desc (I): "Teleport to an empty tile up to 3 tiles away in a straight line, through
+  walls and units. If a foe was next to you when your turn started, you ghost it: heal 3 HP." (II 4 / 4, III 5 / 5; the range
+  from `reach()` as before.)
+- **Barks** (new key `ghost`, exactly the plan's three): "Leaving you on read." / "It's not you. It's the plane of existence." /
+  "Ghosted."
+- **AutoPlay.** The exact pass dry-runs the heal (it is in the execute; the mark is in `unit.data`, deep-copied). New `aiScore`,
+  quick pass only (0 when `ctx.autoplay`): `healWorth(Kiri, L.ghost)` while she is engaged this turn and has not ghosted
+  (`DD.AutoPlay.healWorth`, E2, local fallback). It adds to `utilQuick`'s estimate for every Step landing (Step is a utility
+  mover), so the Step competes for an exact dry run on an engaged turn.
+- **Code:** `js/data/heroes/kiri.js`: `GHOSTING`, `kirData`, `healWorth`, `markEngaged` / `canGhost` / `ghost` (next to the
+  arrows), the passive's `onTurnStart`, Ethereal Step, `barks.ghost`, the `DD.Kiri` exports.
+
+**Tests** (`tests/content/hero_kiri.js`, new suite "hero_kiri: conditional heal (Nov 18)"): `GHOSTING`; the desc word for word
+at I-III (numbers from `L`), no `heal` key, still a tile-target move; the three barks (she/her, ≤ 70 chars); fires at I-III
+(a grunt next to her at her turn start, hurt Kiri Steps: +3 / +4 / +5, her heals stat grows by it, `previewThenUse` exact with
+`+N` on her, the call `heal(Kiri, Kiri, N, { via: 'lift:kiri' })`); a second Step the same turn (an Encore-style reset) heals
+nothing; at full HP the call is made and heals 0; near misses: nobody next to her at turn start, then a grunt arrives → 0;
+she walks next to a grunt, then Steps → 0; an ally next to her → not engaged; her arrows land first (one that kills the grunt
+next to her → not engaged; one that doesn't → engaged); the mark is per turn (her next turn with nobody next to her → not
+engaged); a failed teleport (tile taken) → no heal, mark kept; Kiri downed → nothing (never a revive); a plain Step's preview
+shows no heal; `aiScore` = `healWorth(Kiri, 5)` (III, engaged, hurt) / 0 in the exact pass / 0 when not engaged; AutoPlay with
+the Cloak (Step free) next to a stunned grunt ghosts (+3), and the same board without the mark never heals her.
+**Updated assertions:** the registry suite checks Ethereal Step's teleport sentence as before (≤ 20 words, ≤ 2 clauses, no
+"if") plus exactly the Ghosting rider (plan §2.10: Step keeps one rider); `ghost` joins the shown-number keys. The suite
+"attacks of opportunity" (AutoPlay steps out of a lethal pin): she started that turn next to both foes, so the Step now also
+ghosts them: `k.hp === 9` became `9 + L('kir_step', 1).ghost` (12), the rest unchanged.
+
+**Sanity sims** (`bash tools/sim.sh "debug=1&raw=1&seeds=30&from=…&stop=2&party=…"`, normal, acts 1-2):
+
+| party (from) | fights | fires / fight | HP / fight | fires by kind |
+|---|---|---|---|---|
+| kiri, marbles, pebbles, basanos (50200) | 189 | 0.11 | 0.4 (self) | regular 0.09 · elite 0.26 · boss 0.13 |
+| kiri, zarathor, syllamin, corelos (50250, probe page) | 263 | 0.11 | 0.3 (self) | |
+
+T8 for `lift:kiri`: min 0.4 fires, band 1-4 HP. **Far under, and not fixable by an AutoPlay term.** A scratch probe
+(`.tmp/g2/probe.js` on a copy of the sim page, `.tmp/g2/simx.sh`) counted her turns: party 1, 969 turns, only 52 (5.4%) started
+with a foe next to her (0.28 a fight), 50 of them hurt; she Stepped on 21 (40%), Step was on cooldown on 6, and on most of the
+rest she shot point blank three times (12) or walked off (11). Party 2: 1,093 turns, 70 engaged (0.27 a fight), 29 ghosted
+(41%), 12 on cooldown, 21 three point-blank shots. So the ceiling, ghosting on every engaged turn Step is ready, is about
+0.22-0.24 fires a fight: the plan's "~0.8 ghosts a fight" assumed she starts many more turns in melee than AutoPlay ever lets
+her (she is a ranged hero who keeps her distance; her damage taken is mostly from range). The remaining choice (Step + 2 shots
+vs 3 shots) is the exact pass weighing a 3-HP heal (2.4-4.5) against a 5-damage shot; I kept the plan's term (an exact-pass
+top-up would count the heal twice). 0 errors, 0 DD.warn lines.
+
+**Full run** (`bash tools/test.sh`, Nov 18, after the G2 build): 1310 suites PASS, 0 failures, 0 swallowed "Error in" lines.
+
+### DESIGN §6 brief (Nov 18)
+
+For the engine builder (phase 2). Anchor in `### Kiri the Half-There — Half-Elf Ranger (she/her)` (unique, DESIGN.md line
+~598, the end of the "Basic" bullet), this whole line:
+
+```
+  units) and *Ethereal Step* (teleport up to 3 tiles in a straight line, through walls and units).
+```
+
+Replace it with these two lines:
+
+```
+  units) and *Ethereal Step* (teleport up to 3 tiles in a straight line, through walls and units; if a foe was next
+  to her when her turn started, she ghosts it and heals 5–7 HP, by level).
+```
+
+### Deviations (Nov 18)
+
+- None from the plan's mechanics, numbers or texts. Notes: the old `move` bark (0.3) now plays only when the Step did not
+  ghost (the `ghost` bark takes that moment); the registry suite's "no if" / ≤ 20-word rule reads the teleport sentence and
+  asserts the exact Ghosting rider in place of the old whole-desc check.
+
+### Requests (Nov 18)
+
+- **Lead / balance pass (decision needed, non-blocking)**: T8's minimum for `lift:kiri` (0.4 fires a fight) is out of reach
+  under AutoPlay: she starts only ~0.28 turns a fight next to a foe (two parties, probe above), so even a Step on every one of
+  them gives ~0.22-0.24. Options: (a) read Kiri's T8 row as met at ~0.1-0.2 fires (tier B, share 1.17: the lift was meant to
+  be light); (b) the plan's lever, `ghost` 3 → 4 → 5 inside [3, 5]: more HP per fire, and a bigger heal wins more of the
+  engaged turns she now spends shooting (fires up to the ~0.22 ceiling, not to 0.4); (c) a wider trigger (e.g. a foe within 2
+  at her turn start) would be a design change for the user, not mine to make.
+
+### Review (Nov 18) — review:g2
+
+Adversarial review of "Ghosting" against plan §4.11 (code path read end to end, suites run, a sim).
+- **Holds:** `markEngaged` runs from the passive's `onTurnStart` (the only `onTurnStart` site, combat.js `beginTurn`, fires
+  for her own turn group only) after `landArrows`; it needs an active hostile unit at Manhattan distance 1 (the game's
+  "next to"); the heal is `DD.Act.heal(Kiri, Kiri, ghost, { via: 'lift:kiri' })` after a successful teleport, once per turn
+  (`ghosted`), only on the turn whose start marked her (a Step on someone else's turn never matches `state.turn`); `active`
+  is checked first; desc == execute at I-III; no HP threshold, nothing at combat start, no loop (the heal makes no foe
+  adjacent). Svammiel's floor halves it; the Radio Edit never picks a Step (no `dmg`).
+- **Observation (no change):** the new quick-pass `aiScore` adds the same value to every Step landing, and every utility
+  skill gets its top 3 landings dry-run anyway (`utilityOptions`, UTIL_REFINE 3), so it changes no AutoPlay choice; the
+  exact dry run is what sees the heal. Harmless and as the plan wrote it.
+- **Sim** (`tools/sim.sh "debug=1&raw=1&seeds=30&from=55100&stop=2&party=kiri,buga,marwyn,benedick"`, normal, acts 1-2):
+  247 fights, **0.16 fires / 0.5 HP a fight** (regular 0.13 / 0.4, elite 0.35 / 1.0, boss 0.17 / 0.5); 0 errors, 0 DD.warn
+  lines, 0 stalls. Confirms the builder's T8 shortfall (min 0.4, band 1-4): the condition is rare under AutoPlay (she keeps
+  her distance). The lead's decision (the Requests above) stands.
+- **Fix:** restored the space in the "playtest fixes (Nov 12)" section rule of `tests/content/hero_kiri.js` (the build had
+  dropped it; cosmetic).
+
+### Balance pass (Nov 18) — heal:balance: `GHOSTING` 3/4/5 → 5/6/7 (T8)
+The conditional-healing balance pass (`docs/notes/balance.md` "Conditional healing pass (Nov 18)") measured `lift:kiri` at
+the plan's numbers on 600 fresh campaign runs (seeds 30000-30599, normal): **0.16 fires and 0.51 HP a fight** (± 0.04 /
+± 0.11; regular 0.13 / 0.41, boss 0.21 / 0.66), under T8's minimum (0.4 fires) and band (1-4 HP), as the build and the
+review found. The plan's T8 rule: the AutoPlay term first (in, and no term can make her start more turns in melee), then
+her number one step a iteration inside its range: `ghost` I 3 → 4 (iteration 1) → 5 (iteration 2, the top of [3, 5];
+II / III = I + 1 / + 2). Only the constant moved (`GHOSTING = [5, 6, 7]`; the desc, the levels and the aiScore read it);
+the suite's pin and its two literal 3 / 5 checks read the constant now; DESIGN §6 and v2-digest §2 say 5–7 / 5/6/7. The
+fires stay under T8's 0.4 (structural: reported to the lead in the balance notes, with the HP a fight at each step).
+
+### QA fixes (Nov 18, qa-fix:heal)
+- **[heal QA-1] the log says why she healed.** A ghosting that heals (> 0) now logs, right after "Kiri heals N HP.":
+  "Kiri ghosts <foe>. Left on read. She feels lighter already." The turn-start mark also keeps the name of the foe she
+  started next to (`data.kir.engagedWith`, the first one found; fresh every fight like `engaged`). No pronoun for the
+  foe (a named boss is never "it"). Test: "hero_kiri: conditional heal (Nov 18)" (the line after the heal line, the
+  grunt by name; none at full HP). No number changed.
+- **[heal QA-3]** her Step's aim hint now names the heal ("💚 you heal N") next to "Click an empty tile"
+  (js/ui/combat_hud.js `previewSummary`).

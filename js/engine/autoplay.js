@@ -53,7 +53,10 @@
  * is pinned.
  * Content hooks (all optional): skill aiScore(ctx) / autoplayValue(ctx) → number (ctx.autoplay = { preview } when exact);
  * object `autoplay: number | (unit, obj, tile, state) => number` puzzle hints (§5.7); enemy def or status
- * hooks.threatAt(enemy, unit, tile, extra) → number | { dmg, label, ignoreBlock } for damage that is not a wind-up.
+ * hooks.threatAt(enemy, unit, tile, extra) → number | { dmg, label, ignoreBlock } for damage that is not a wind-up;
+ * [Nov 18, conditional healing E1] a hero passive's autoplayEnd(unit, x, y) → number: what ending the turn on (x, y) is
+ * worth (a turn-end heal no dry run sees), pure, read in the current state (the dry run's copy inside one; restAt).
+ * AP.healWorth(unit, n) is the shared heal price for such terms (E2).
  * runBattle() always terminates. AP.measure = true records decision times in AP.samples { unit: [ms], step: [ms] }.
  */
 (function () {
@@ -1266,6 +1269,7 @@
     ctx.tm0 = threatModel(ctx);
     hypeValue(ctx);   // from the real state (dry runs read it)
     ctx.tempo0 = tempoAt(ctx, here);
+    ctx.rest0 = restAt(ctx, here);
     ctx.others0 = othersCost(ctx.tm0, unit.id);
     ctx.my0 = myCost(ctx, here, ap);
     ctx.consCost = consumableCost(s, ctx.tm0, unit);
@@ -1274,17 +1278,49 @@
 
   /**
    * The actor's end-of-turn value on pos with apLeft AP: the better of staying there (leftover AP potential minus the
-   * danger of ending the turn there; stay = that danger when a dry run already knows it) and acting with all but a move
-   * then stepping to the safest tile within reach (hit and run: poke out from behind a pillar, then back into cover).
+   * danger of ending the turn there; stay = that danger when a dry run already knows it; plus what its passive's
+   * autoplayEnd makes of the tile, rest = that value from the dry run's state when it ran one) and acting with all but a
+   * move then stepping to the safest tile within reach (hit and run: poke out from behind a pillar, then back into
+   * cover; it ends elsewhere, so no rest term). Valued against where it stands (tempo0, rest0): staying put reads ≈ 0.
    */
-  function endValue(ctx, pos, apLeft, used, stay) {
-    let v = fpAt(ctx, pos, apLeft, used) - (stay !== undefined ? stay : myCost(ctx, pos, apLeft)) + tempoAt(ctx, pos);
+  function endValue(ctx, pos, apLeft, used, stay, rest) {
+    let v = fpAt(ctx, pos, apLeft, used) - (stay !== undefined ? stay : myCost(ctx, pos, apLeft)) + tempoAt(ctx, pos) +
+      (rest !== undefined ? rest : restAt(ctx, pos));
     if (ctx.canWalk && apLeft >= ctx.moveCost) {
       const a = apLeft - ctx.moveCost;
       const esc = escapeCost(ctx, pos, a);
       if (esc !== null) v = Math.max(v, fpAt(ctx, pos, a, used) - esc - 0.5);
     }
-    return v - ctx.tempo0;
+    return v - ctx.tempo0 - ctx.rest0;
+  }
+  /**
+   * [Nov 18, conditional healing E1] What ending the actor's turn on pos is worth by its hero passive's
+   * `autoplayEnd(unit, x, y)` (Pebbles' Hot Dog heals at his turn end on fire or next to a Burning foe: no dry run
+   * sees a turn-end heal). Read in the CURRENT state: inside a dry run that is the copy (unit = the copy, so its HP and
+   * statuses are the post-action ones; the Burn its skill just applied counts), else the real state with the unit
+   * virtually on pos. Through DD.safe; non-finite → 0. Units whose passive has none cost nothing (looked up once per
+   * decision).
+   */
+  function restAt(ctx, pos, unit) {
+    if (ctx.restDef === undefined) {
+      const u = ctx.unit, def = u.kind === 'hero' && DD.getHero ? DD.getHero(u.defId) : null, p = def && def.passive;
+      ctx.restDef = p && typeof p.autoplayEnd === 'function' ? p : null;
+    }
+    const p = ctx.restDef;
+    if (!p) return 0;
+    const call = function () { return num(+DD.safe('autoplayEnd of ' + ctx.unit.defId, p.autoplayEnd, p, [unit || ctx.unit, pos.x, pos.y])); };
+    return unit ? call() : at(ctx.unit, pos, call);
+  }
+  /**
+   * [Nov 18, conditional healing E2] AutoPlay's price of healing unit n HP, the house's heal pricing (quickScore's):
+   * min(n, missing HP) × 1.5 while it misses more than half its max HP, else × 0.8. 0 at full HP, for n ≤ 0 or not a
+   * number, and for a downed or dead unit (these heals never revive).
+   */
+  function healWorth(unit, n) {
+    n = Number(n);
+    if (!active(unit) || !(n > 0)) return 0;
+    const miss = (unit.maxHp || 0) - (unit.hp || 0);
+    return miss > 0 ? Math.min(n, miss) * (miss > unit.maxHp / 2 ? 1.5 : 0.8) : 0;
   }
   /**
    * Danger of the safest tile one move away from pos (a real walk: walls, heights, foes in the way), keeping apAfter,
@@ -1800,11 +1836,12 @@
           out.objects = diff.objects || [];
           out.gold = goldOf(real, sim);
           out.gain = simGain(ctx, real, sim, unit, su, o, diff);
-          out.others1 = 0; out.stay = 0;
+          out.others1 = 0; out.stay = 0; out.rest = 0;
           if (!sim.result) {
             const tm1 = threatModel(ctx);
             out.others1 = othersCost(tm1, unit.id);
-            if (out.ok) out.stay = costAt(tm1, su, true);
+            // E1 (a): the end tile's autoplayEnd value read in this copy, after the action (endValue runs on the real state)
+            if (out.ok) { out.stay = costAt(tm1, su, true); out.rest = restAt(ctx, { x: su.x, y: su.y }, su); }
           }
           return out;
         }, { seed: seed, record: true });
@@ -1877,7 +1914,7 @@
         if (o.def.charges > 0) g -= o.def.charges - (o.slot.uses || 0) <= 1 ? 3 : 1.5;
       }
       if (o.cons) g -= ctx.consCost;
-      const end = r.ok ? endValue(ctx, { x: r.x, y: r.y }, r.ap, o.slot, r.stay) : 0;
+      const end = r.ok ? endValue(ctx, { x: r.x, y: r.y }, r.ap, o.slot, r.stay, r.rest) : 0;
       gain += g;
       total += g + end + ctx.my0 + (ctx.others0 - r.others1);
     }
@@ -1894,7 +1931,7 @@
     // Retreat out of reach of attacks of opportunity, so that the next walk away provokes nothing)
     if (gain <= (o.ap > 0 ? 0.25 : 1) && ctx.my0 + ctx.others0 - first.stay - first.others1 <= 0.25) {
       const moved = first.ok && (first.x !== o.pos.x || first.y !== o.pos.y);
-      if (!moved || !(endValue(ctx, { x: first.x, y: first.y }, first.ap, o.slot, first.stay) - endValue(ctx, o.pos, first.ap, o.slot) > 1)) return null;
+      if (!moved || !(endValue(ctx, { x: first.x, y: first.y }, first.ap, o.slot, first.stay, first.rest) - endValue(ctx, o.pos, first.ap, o.slot) > 1)) return null;
     }
     return { total: total, gain: gain };
   }
@@ -2001,7 +2038,8 @@
     const mover = def.kind === 'move' || tags.indexOf('move') >= 0 || tags.indexOf('teleport') >= 0;
     if (mover && tg.type === 'tile') {
       const left = ctx.ap - sk.ap;
-      q += ctx.my0 - myCost(ctx, t, left) + 0.5 * fpAt(ctx, t, left, sk.slot, true) + 0.5 * progressAt(ctx, t);
+      // E1: the landing tile's autoplayEnd value too (this estimate picks which landings get an exact dry run)
+      q += ctx.my0 - myCost(ctx, t, left) + 0.5 * fpAt(ctx, t, left, sk.slot, true) + 0.5 * progressAt(ctx, t) + restAt(ctx, t) - ctx.rest0;
     } else if (tu && !G().hostile(unit, tu)) {
       q += 0.5 * costAt(ctx.tm0, tu, tu === unit) + (tu === unit ? 0 : 1) + 0.25 * DD.Combat.slotsOf(tu).filter(function (sl) { return sl.cd > 0; }).length;
     } else if (tu && G().hostile(unit, tu)) q += 0.5 * threatOf(ctx.tm0, tu) + (tu.intents && tu.intents.length ? 2 : 0);
@@ -2057,7 +2095,7 @@
   }
   /**
    * Dry run of a hinted interaction from pos with ap AP (on other dice): what it does to the danger — a lever that drops
-   * the vault on the boss, the last Handbook that cancels the doom. { ok, ap, others1, stay, result } or null.
+   * the vault on the boss, the last Handbook that cancels the doom. { ok, ap, others1, stay, rest, result } or null.
    */
   function dryHint(ctx, pos, ix, ap) {
     const real = S(), unit = ctx.unit;
@@ -2071,11 +2109,11 @@
           if (!su) return null;
           su.ap = ap;
           if (!DD.Combat.interact(su, ix.x, ix.y)) return null;
-          const out = { ok: active(su), ap: active(su) ? su.ap || 0 : 0, others1: 0, stay: 0, result: sim.result || null };
+          const out = { ok: active(su), ap: active(su) ? su.ap || 0 : 0, others1: 0, stay: 0, rest: 0, result: sim.result || null };
           if (!sim.result) {
             const tm1 = threatModel(ctx);
             out.others1 = othersCost(tm1, unit.id);
-            if (out.ok) out.stay = costAt(tm1, su, true);
+            if (out.ok) { out.stay = costAt(tm1, su, true); out.rest = restAt(ctx, { x: su.x, y: su.y }, su); }
           }
           return out;
         }, { seed: seed });
@@ -2157,7 +2195,7 @@
       if (r.result === 'defeat') { h.total -= 300; continue; }
       const saved = ctx.my0 + ctx.others0 - r.stay - r.others1;
       if (far && saved < 40) { h.total = -Infinity; continue; }
-      h.total = h.v + (r.ok ? endValue(ctx, h.end, r.ap, null, r.stay) : 0) + ctx.my0 + (ctx.others0 - r.others1) - h.costs;
+      h.total = h.v + (r.ok ? endValue(ctx, h.end, r.ap, null, r.stay, r.rest) : 0) + ctx.my0 + (ctx.others0 - r.others1) - h.costs;
       h.dry = true;
     }
     offers.sort(function (a, b) { return b.total - a.total; });
@@ -2178,13 +2216,14 @@
     const list = [];
     ctx.positions.forEach(function (pos) {
       if (!pos.moving || (ctx.seen && ctx.seen[key(pos.x, pos.y)])) return;
-      // staying there keeps the progress toward the fight; walking on to cover afterwards gives it up again
-      let v = fpAt(ctx, pos, left, null) - myCost(ctx, pos, left) + progressAt(ctx, pos) + tempoAt(ctx, pos);
+      // staying there keeps the progress toward the fight (and E1: the passive's end-tile value); walking on to cover
+      // afterwards gives both up again
+      let v = fpAt(ctx, pos, left, null) - myCost(ctx, pos, left) + progressAt(ctx, pos) + tempoAt(ctx, pos) + restAt(ctx, pos);
       if (ctx.canWalk && left >= ctx.moveCost) {
         const esc = escapeCost(ctx, pos, left - ctx.moveCost);
         if (esc !== null) v = Math.max(v, fpAt(ctx, pos, left - ctx.moveCost, null) - esc - 0.5);
       }
-      list.push({ kind: 'move', pos: pos, total: v - ctx.tempo0 + ctx.my0 - 0.5 - pos.cost * 0.05 - walkCost(unit, pos) });
+      list.push({ kind: 'move', pos: pos, total: v - ctx.tempo0 - ctx.rest0 + ctx.my0 - 0.5 - pos.cost * 0.05 - walkCost(unit, pos) });
     });
     if (!list.length) return null;
     list.sort(function (a, b) { return b.total - a.total; });
@@ -2232,7 +2271,7 @@
         provokes: sw.provokes.map(function (p) { return p.unitId; }), swap: ally.id };
       const hz = G().hazardDamage(from.x, from.y, ally);
       const allyHurt = hz ? Math.max(hz.enter, 2) * (ally.kind === 'hero' ? HURT : 0.8) : 0;
-      const fixed = progressAt(ctx, pos) + tempoAt(ctx, pos) - ctx.tempo0 + ctx.my0 - 0.5 - SWAP_COST - pos.cost * 0.05 - walkCost(unit, pos) - allyHurt;
+      const fixed = progressAt(ctx, pos) + tempoAt(ctx, pos) - ctx.tempo0 + restAt(ctx, pos) - ctx.rest0 + ctx.my0 - 0.5 - SWAP_COST - pos.cost * 0.05 - walkCost(unit, pos) - allyHurt;
       // best case first: the ally's whole danger lifted, the actor's AP potential there with today's danger estimate
       const fp = at(ally, from, function () { return at(unit, pos, function () { return fpAt(ctx, pos, left, null); }); });
       const bound = fixed + fp - myCost(ctx, pos) + costAt(ctx.tm0, ally, false) + 1;
@@ -2750,4 +2789,11 @@
   };
   /** How many of its single hits an AI unit was seen to deal per turn in this fight (1 until it showed more; max 4). */
   AP.hitsPerTurn = function (unit) { return unit ? hitsPerTurn(unit) : 1; };
+  /**
+   * [Nov 18, conditional healing E2] The shared heal price for content AutoPlay terms: healWorth(unit, n) = min(n, missing
+   * HP) × (1.5 when it misses more than half its max HP, else 0.8); 0 at full HP, for n ≤ 0 and for a downed / dead unit.
+   */
+  AP.healWorth = healWorth;
+  /** [Nov 18, E1] The end-of-turn tile value AutoPlay reads for unit on (x, y): its hero passive's autoplayEnd (0 without). */
+  AP.restAt = function (unit, x, y) { return unit ? restAt({ unit: unit }, { x: x, y: y }) : 0; };
 })();

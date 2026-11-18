@@ -393,14 +393,18 @@
   // adds ×1.3 damage; each door carries its own row toward the same campaign band (the long doors trade HP for damage);
   // Svammiel carries the hardest row; the order scaling stays off (the door order is a free choice). His Master Dice break
   // in one hit (AutoPlay caught him in ~20% of wins at 12 HP), the Radio Edit stays a whole-fight ban (the user was shown
-  // exactly that: no pass shortens it), and Benedick's only heal stays the Snail Mucin Serum (D9).
+  // exactly that: no pass shortens it), and the Snail Mucin Serum keeps its 3 (D9; since Nov 18 the bonus over the 5 a
+  // stuck foe heals him through his passive, A Sticky Situation: 3 in the plan, 5 after the healing balance pass).
   // docs/notes/balance.md "V3".
   const A4_ROWS = {
     act: { hp: 1, dmg: 1.3 },
     boss_gardener: { hp: 0.75, dmg: 1.45 }, boss_league: { dmg: 1.05 }, boss_galbraith: { dmg: 0.95 }, boss_coven: { dmg: 0.9 },
     // the audit (Nov 16-17): the goats pay the Radio Edit back on their own row (×1 damage); Svammiel ×1.1 / ×1.3 (91.5% of
     // 142 fights at the pass's rows -> 86% of 167 on fresh seeds, the plan's 80-85%)
-    boss_goats: { hp: 0.8 }, boss_svammiel: { hp: 1.1, dmg: 1.3 },
+    // the conditional-healing pass (Nov 18): the 16 heroes' lifts put him at 90.8% (217 fights); ×1.5 damage (the plan's
+    // limit, +0.2) then ×1.15 HP: 80.0% (190 fights), the campaign 32.8% -> 25.3% (docs/notes/balance.md "Conditional
+    // healing pass (Nov 18)"; the Ellaria guard stopped the pass there)
+    boss_goats: { hp: 0.8 }, boss_svammiel: { hp: 1.15, dmg: 1.5 },
   };
   const A4_FINALE = 'boss_svammiel';
   /** The registered act-4 doors (not the fixture lanes). */
@@ -470,7 +474,7 @@
     } else t.log('(svammiel.js not loaded)');
     const ben = DD.Benedick, serum = DD.getItem && DD.getItem('ben_mucin_serum');
     if (ben && serum) {
-      t.eq(ben.SERUM_HEAL, 3, 'the Snail Mucin Serum heals ' + ben.SERUM_HEAL + ' a stuck foe (his only heal, D9)');
+      t.eq(ben.SERUM_HEAL, 3, 'the Snail Mucin Serum heals ' + ben.SERUM_HEAL + ' a stuck foe (the Serum\'s bonus over A Sticky Situation\'s ' + ben.MUCIN_HEAL + ')');
       t.ok(serum.desc.indexOf('heals ' + ben.SERUM_HEAL + ' HP') >= 0, 'its desc says so: ' + serum.desc);
     } else t.log('(benedick.js not loaded)');
   });

@@ -82,7 +82,12 @@
       boss_galbraith: { dmg: 0.95 },
       boss_coven: { dmg: 0.9 },
       boss_goats: { hp: 0.8 },
-      boss_svammiel: { hp: 1.1, dmg: 1.3 },
+      // Conditional-healing pass (Nov 18, heal:balance): the 16 lifts put the campaign at 32.8% and Svammiel at 90.8% (600
+      // runs; plan 80-85%). His row first (plan §8 step 1, damage first, one ×0.05 step an iteration on 600 fresh runs):
+      // ×1.35 / ×1.4 / ×1.45 / ×1.5 damage read 94.6 / 87.0 / 88.9 / 89.6% (damage barely moves him), then ×1.15 HP: 80.0%,
+      // campaign 25.3%. Ellaria's parties fell to 48.9% (pooled over the last two iterations, guard 52%): the pass stopped
+      // there and handed the question to the lead (docs/notes/balance.md "Conditional healing pass (Nov 18)")
+      boss_svammiel: { hp: 1.15, dmg: 1.5 },
     },
     tierHp: { minion: 1, normal: 1, elite: 1, boss: 1 },
     enemyMov: { minion: 0, normal: 0, elite: 0, boss: 0 },   // + move for enemies that move at all (real fights)

@@ -331,3 +331,62 @@ targetting them" · "Allow targetting o fheals on downed characters to heal and 
   and hits a crate for exactly its 🔨 number. Note for his kit: since FF-6 (engine) a poison-immune foe (undead, oozes,
   constructs: resist poison 0) takes no Poisoned stacks at all, so nothing that reads "a Poisoned foe" counts them —
   before, the stacks sat there doing 0. His run share stays over 1.5× the median (1.76× in the review batch).
+
+## Conditional heal (Nov 18) — "Physician, Heal Thyself" (build:g1; plan `.tmp/heal/plan.md` §4.16, the user's Nov 18 request)
+
+The user (Nov 18): "I want everyone else brought up but by conditional healing". Josiah is a healer (tier C): his
+healing of others is untouched; the contagion now also gives him a little self-sustain.
+
+- **What:** a Poisoned unit dies (the `jos_contagion` rule's `onDeath`, as before) and an active Josiah is hostile to it
+  (the `doc` the rule already picks, the Plague Bell's wearer first): right after `doc` is chosen, BEFORE the neighbour
+  loop and its `if (!n) return` (so a Poisoned foe dying alone counts too), `takeSample(doc, unit, s)` heals him, once
+  per round (`doc.data.jos.sample = state.round`, spent whenever the heal is called, even at full HP). A death without
+  Poison, a Poisoned ally (Onyx) and a downed Josiah (the rule's `docs` filter keeps active Josiahs only; `takeSample`
+  checks `active` again before the heal) give nothing; never a revive.
+- **Numbers:** `SAMPLE_HEAL` **2** (new `DD.Josiah = { SAMPLE_HEAL, sampled, takeSample }` at the end of the file). Tuning
+  range: 2 [2, 3].
+- **The call:** `A().heal(doc, doc, SAMPLE_HEAL, { via: 'lift:josiah' })`; the "Sample!" pop-up, the log line ("…
+  takes a sample from … For science. He feels better. Science!") and the bark (`sample`, 0.35: "Fascinating. Bag it." /
+  "For science!" / "Smells... restorative.") only when it healed > 0.
+- **Texts (desc == execute):** passive "Starts each fight with Onyx, his raven. Poison is contagious: when a Poisoned foe
+  dies, adjacent foes catch all of its Poison, and Josiah takes a sample: he heals 2 HP (once per round). +1 consumable
+  slot." (from `SAMPLE_HEAL`). The Contagion rule's chip text is unchanged. Onyx is still Onyx.
+- **AutoPlay:** none needed (the heal fires inside the killer's action: its dry run shows +2 on him).
+- **Tests:** new suite `hero_josiah: conditional heal (Nov 18)` (22 assertions): a lone Poisoned foe dies → +2 (the early
+  return no longer skips it), one labelled call (src = target = Josiah), the heals stat, the round marked; a second
+  Poisoned death that round → nothing; round 2 → +2 again; a death without Poison → no call; Poisoned Onyx dies → no call;
+  Josiah downed → no call, still down; full HP → one 0-HP call (the round spent); with a neighbour: +2 and the contagion
+  still spreads all 4 stacks, the chip text unchanged, Onyx is Onyx; House Call finishing a Poisoned foe: the preview
+  shows +2 on him (certain) and the kill heals 2; the exact passive; barks.sample. Updated: the registration suite's
+  "passive reads in one breath" cap, 26 → 38 words (the plan's passive is 37; nothing deleted).
+- **Sanity sim** (`bash tools/sim.sh "debug=1&raw=1&seeds=30&from=50300&stop=2&party=josiah,benedick,hjalmar,zarathor"`,
+  `.tmp/heal/g1/josiah.txt`, 30 runs, 295 fights): `lift:josiah` **0.73 fires a fight, 0.9 HP a fight** (overheal 38%);
+  regular 0.82 / 1, elite 0.61 / 0.9, boss 0.51 / 0.6. T8: fires ≥ 0.5 and HP inside 0.6-2.6. OK.
+
+- **Test runs (Nov 18, build:g1):** `tools/test.sh "suite=hero_slate,hero_sparrow,hero_marwyn,hero_josiah&isolate=slate,sparrow,marwyn,josiah"`: 94 suites, all pass but the two that need other heroes loaded (Kiri / Basanos / Valdris; they pass in the full run). One full `bash tools/test.sh`: 1309 suites, 150,284 ok, 3 failures, all in "content: descriptions at every level" (status `val_dented` desc: `fn.apply is not a function`, valdris.js, G2's work in progress); 0 swallowed "Error in" lines from the G1 files.
+- **Review (Nov 18, review:g1, adversarial):** read end to end against plan §4.16 / §3: the sample sits right after
+  `doc` is chosen, before the neighbour loop and its early return; the rule's `docs` keep active Josiahs only and
+  `takeSample` checks `active` again before the heal (a downed Josiah, or one an ally is aiming a revive at, never gets
+  up from it); once per round on `unit.data.jos.sample` (fresh every fight). **Added** to the suite: the combat HUD
+  itself wears the +2 (House Call armed with key 1, the cursor on the Poisoned 3-HP grunt: overlay badge +2 on him, the
+  grunt marked lethal); a hover can't be staged through `tools/shot.sh`, so this stands in for a screenshot. **T8
+  re-measured** on fresh seeds:
+  `bash tools/sim.sh "debug=1&raw=1&seeds=30&from=55300&stop=2&party=josiah,marbles,hjalmar,syllamin"` (285 fights):
+  **0.8 fires, 0.9 HP a fight** (regular 0.95 / 1.1, elite 0.61 / 0.6, boss 0.38 / 0.3; overheal 43%); 0 errors, 0
+  DD.warn, 0 stalls. Inside T8 (≥ 0.5 fires, 0.6-2.6 HP).
+
+### DESIGN §6 brief (Nov 18)
+Anchor (unique in `docs/DESIGN.md`, `### Josiah the Medically Dubious`, lines 511-512 today):
+
+```
+- Passive *Unlicensed Apothecary*: he starts each fight with Onyx. Poison is contagious: when a Poisoned foe dies,
+  adjacent foes catch all of its Poison. +1 consumable slot. (His old post-fight brewing lives on the Portable Alembic.)
+```
+
+Replacement:
+
+```
+- Passive *Unlicensed Apothecary*: he starts each fight with Onyx. Poison is contagious: when a Poisoned foe dies,
+  adjacent foes catch all of its Poison, and he takes a sample: he heals 2 HP (once per round). +1 consumable slot. (His
+  old post-fight brewing lives on the Portable Alembic.)
+```

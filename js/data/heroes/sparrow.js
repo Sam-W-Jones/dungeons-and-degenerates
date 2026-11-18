@@ -3,8 +3,10 @@
  * and her passive Blood Price makes an adjacent Bleeding foe pay those costs instead. Bleed is her signature status:
  * her own payoffs (Juice Box, Blood Puppet Show) and every ally who shoves a Bleeding foe cash it in. Her melee basic
  * is also her attack of opportunity (a foe walking off her gets shivved); Goblin Mode and Vein Glory teleport, so they
- * never provoke. Juice Box is her sustain (D9: heals all the HP it drains). Registers the hero, 12 skills (basic,
- * signature, 10 pool skills), the Blood Clone summon (+2 summon skills), 3 hero items and a loading tip.
+ * never provoke. Juice Box is her sustain (D9: heals all the HP it drains). Conditional heal (Nov 18, "Sharing Is
+ * Caring (Ew)"): when the drained foe was Bleeding, the most hurt ally within 2 of her (heroes before summons) also heals
+ * half of what she drank (rounded up; SHARE), via 'lift:sparrow' (her own drain stays unlabelled). Registers the hero, 12 skills (basic,
+ * signature, 10 pool skills), the Blood Clone summon (+2 summon skills), 3 hero items and a loading tip; DD.Sparrow.
  */
 (function () {
   'use strict';
@@ -17,6 +19,8 @@
   const SLURP = 3;         // Bloodsucker's Bib: HP per blood puddle slurped
   // Juice Box's reach (sustain refit, spec §9 fallback: 2 -> 3; she sat at 0.47x the median run-win share without it)
   const JUICE_RANGE = 3;
+  // Nov 18 conditional heal: Juice Box shares SHARE of a Bleeding foe's drain with the most hurt ally within SHARE_RANGE
+  const SHARE = 0.5, SHARE_RANGE = 2;
 
   // ---- helpers (runtime only) -----------------------------------------------------------------------
   function A() { return DD.Act; }
@@ -99,6 +103,32 @@
     return active(u) && u !== ctx.user && DD.Grid.hostile(ctx.user, u) ? u : null;
   }
   function lunge(ctx, at) { if (at) DD.FX.lunge(ctx.user, at); }
+
+  // ---- Juice Box's share (Nov 18, "Sharing Is Caring (Ew)") --------------------------------------------
+  /** The share of a drain the ally gets (rounded up). */
+  function shareOf(dealt) { return Math.ceil(dealt * SHARE - 1e-9); }
+  /** The desc's word for SHARE (the balance range is ½ to ⅔). */
+  function shareWord() { return SHARE === 0.5 ? 'half' : Math.abs(SHARE - 2 / 3) < 0.01 ? 'two thirds' : Math.round(SHARE * 100) + '%'; }
+  /**
+   * Who drinks along (pure): the most hurt active unit on her side within SHARE_RANGE of her (not her; missing HP > 0);
+   * ties: the lower HP ratio, then party order. [heal QA-5] Heroes first: a summon (her Blood Clone, Zarathor's statue,
+   * the corgis, Onyx) drinks only when no hero in reach is hurt. null when nobody in reach is hurt.
+   */
+  function shareTarget(user) {
+    const s = DD.Combat && DD.Combat.state;
+    if (!s || !active(user)) return null;
+    let best = null, bm = 0, br = 0, bh = false;
+    for (let i = 0; i < s.units.length; i++) {
+      const o = s.units[i];
+      if (o === user || !active(o) || o.side !== user.side || DD.Grid.dist(user, o) > SHARE_RANGE) continue;
+      const miss = (o.maxHp || 0) - (o.hp || 0);
+      if (!(miss > 0)) continue;
+      const ratio = o.hp / o.maxHp, hero = o.kind === 'hero';
+      if (best && bh && !hero) continue;
+      if (!best || (hero && !bh) || miss > bm || (miss === bm && ratio < br)) { best = o; bm = miss; br = ratio; bh = hero; }
+    }
+    return best;
+  }
   function glob(from, to) { DD.FX.projectile(from, to, { kind: 'orb', color: BLOOD, trail: true, size: 1.2 }); }
 
   /** Blood Puppet Show's area: tiles of active hostile Bleeding units within L.r of Sparrow. */
@@ -200,12 +230,14 @@
     levels: [{ dmg: 5, per: 3 }, { dmg: 7, per: 3 }, { dmg: 8, per: 4 }],
     target: { type: 'unit', range: [1, JUICE_RANGE], filter: 'enemy', los: true },
     desc: function (L, user) {
-      return 'Drain a foe within ' + reach(user, 'spa_juicebox', L, JUICE_RANGE) + ': deal ' + L.dmg + ' damage +' + L.per + ' per Bleed on it, and heal the damage dealt.';
+      return 'Drain a foe within ' + reach(user, 'spa_juicebox', L, JUICE_RANGE) + ': deal ' + L.dmg + ' damage +' + L.per + ' per Bleed on it, and heal the damage dealt. ' +
+        'If it was Bleeding, the most hurt ally within ' + SHARE_RANGE + ' of you (heroes first) also heals ' + shareWord() + ' of that (rounded up).';
     },
     flavor: 'Fruit punch flavor. The fruit is you.',
     /**
-     * Bleed on the target, plus (quick pass only) the self-heal: AutoPlay's quick pass credits L.heal to friends in the
-     * area, never a drain aimed at a foe. The exact pass (ctx.autoplay) dry-runs the real heal, so it only gets the Bleed.
+     * Bleed on the target, plus (quick pass only) the self-heal and, on a Bleeding foe, the share the most hurt ally in
+     * reach drinks: AutoPlay's quick pass credits L.heal to friends in the area, never a drain aimed at a foe. The exact
+     * pass (ctx.autoplay) dry-runs both real heals, so it only gets the Bleed.
      */
     aiScore: function (ctx) {
       const t = ctx.targetUnit, u = ctx.user;
@@ -213,9 +245,12 @@
       const stacks = bleedStacks(t);
       if (ctx.autoplay || !u || !ctx.L) return stacks;
       const miss = u.maxHp - u.hp;
-      if (!(miss > 0)) return stacks;
       const est = DD.AI.estimate(u, t, ctx.L.dmg + ctx.L.per * stacks, null);
-      return stacks + Math.min(est, miss) * (miss > u.maxHp / 2 ? 1.5 : 0.8);
+      let v = stacks;
+      if (miss > 0) v += Math.min(est, miss) * (miss > u.maxHp / 2 ? 1.5 : 0.8);
+      const ally = stacks > 0 && est > 0 ? shareTarget(u) : null;
+      if (ally && DD.AutoPlay && DD.AutoPlay.healWorth) v += DD.AutoPlay.healWorth(ally, shareOf(est));
+      return v;
     },
     execute: function (ctx) {
       const user = ctx.user, u = foeOf(ctx), L = ctx.L;
@@ -228,6 +263,17 @@
       if (dealt > 0 && active(user)) {
         A().heal(user, user, dealt);
         DD.FX.text(user, 'Slurrrp!', { color: BLOOD, size: 15 });
+      }
+      // Nov 18: a Bleeding foe's juice is shared with the most hurt ally in reach (active only: never a revive)
+      if (stacks > 0 && dealt > 0 && active(user)) {
+        const ally = shareTarget(user);
+        if (ally && active(ally) && A().heal(user, ally, shareOf(dealt), { via: 'lift:sparrow' }) > 0) {
+          DD.FX.beam(user, ally, { color: BLOOD_HI, width: 2 });
+          DD.FX.text(ally, 'Sip!', { color: BLOOD_HI, size: 14 });
+          // [heal QA-1] the log says why the ally healed (the drained foe was Bleeding)
+          A().log(user.name + ' shares the juice with ' + ally.name + '. Bendy straw. Don\'t make it weird.', 'hero');
+          A().maybeBark(user, 'share', 0.4);
+        }
       }
     },
   });
@@ -684,6 +730,12 @@
         'Everybody gets a blood bath!',
         'Swim in it! SWIM!',
       ],
+      // Nov 18: Juice Box shared with a hurt ally (Sharing Is Caring (Ew))
+      share: [
+        'Here. Sip. Don\'t make it weird.',
+        'Sharing is caring. Ew.',
+        'Bendy straw, best friend edition.',
+      ],
     },
   });
 
@@ -691,4 +743,7 @@
   DD.registerNarration('tips', [
     'Juice Box heals Sparrow for every point it drains. Bleed it first: every Bleed on the foe makes the box bigger.',
   ]);
+
+  // a small public surface (tests and the balance pass read the share's numbers)
+  DD.Sparrow = { SHARE: SHARE, SHARE_RANGE: SHARE_RANGE, JUICE_RANGE: JUICE_RANGE, shareOf: shareOf, shareTarget: shareTarget, shareWord: shareWord };
 })();

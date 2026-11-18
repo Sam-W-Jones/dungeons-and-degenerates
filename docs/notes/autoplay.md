@@ -847,3 +847,43 @@ Full record: `docs/notes/rules.md` "Finish (Nov 14)". AutoPlay changes, each wit
   (numbers in docs/notes/balance.md "Finish" → "Review (finish)").
 - Not changed (polish, noted): AutoPlay's swap pricing doesn't know that Slate swapping away frees the foe he holds; the
   review-open-16 swap / Engulf dry-run half stays as fix:content skipped it.
+
+## Conditional-healing lift (Nov 18) — heal:engine, phase 1 (plan `.tmp/heal/plan.md` §5 E1-E2)
+
+The whole entry (with the sim ledger E3, the docs E4, deviations and tests) is in `docs/notes/rules.md` under the same
+heading; the AutoPlay side in short:
+
+- **E1, the end-of-turn tile value.** A HERO passive may define `autoplayEnd(unit, x, y) → number` (pure; current
+  state; x, y not `unit.x/y`): what ending the turn there is worth, for a turn-end heal no dry run sees (Pebbles' Hot Dog
+  next to a Burning foe). `restAt(ctx, pos, unit = ctx.unit)` asks it through `DD.safe` (non-finite → 0; looked up once
+  per decision, `ctx.restDef`; 0 for units without one, so nothing changed for today's content). It is added where the
+  unit's turn would END on the tile, always against where it stands (`ctx.rest0`, like `tempo0`):
+  - `endValue`'s stay branch (not the hit-and-run escape: that ends elsewhere); `endValue(..., stay, rest)` takes the
+    value from the dry run when one ran;
+  - (a) `dryRun` / `dryHint` read it INSIDE `simulate` after the action, on the copy (`out.rest`, next to `out.stay`):
+    the real state can't know the Burn the skill just applied; every caller passing `r.stay` passes `r.rest`;
+  - (b) `bestMove`'s stay branch (+ `restAt`) and total (− `rest0`); (c) `bestSwap`'s `fixed` (+ `restAt` − `rest0`);
+  - `utilQuick`'s landing estimate for utility movers (Deviation 1 in rules.md: it picks which landings get dry-run).
+- **E2** `AP.healWorth(unit, n)`: the quick pass's heal price (`min(n, missing) × 1.5 / 0.8`), 0 at full HP, for n ≤ 0 /
+  NaN and for a downed or dead unit. `AP.restAt(unit, x, y)` reads E1's value for tests.
+- **Suites** (`tests/autoplay_tests.js`, last block): `autoplay: a passive's autoplayEnd pulls the turn's end tile (E1:
+  plain moves, dry runs, a throwing hook)` and `autoplay: AutoPlay.healWorth prices a heal like the quick pass (E2)`.
+  The dry-run case is the critic's (a): a 3-AP skill marks a foe; `restAt` reads 0 on the real state before it, and the
+  skill's traced exact total is +4 (the passive's value for a marked neighbour) against the same scene with 0.
+- **Cost**: one cached lookup per decision for units without the hook; for a unit with one, a pure call per candidate
+  end tile (reachable tiles, quick options, dry runs).
+
+## Conditional-healing lift (Nov 18) — heal:docs, phase 2 (plan §5 "Phase 2")
+
+No AutoPlay code changed in phase 2; the record is in `docs/notes/rules.md` under the same heading. For this area:
+- **E1 has two users now**: Pebbles' Hot Dog (`autoplayEnd` = `healWorth(cozyHeal)` on a cosy end tile, as planned) and
+  Benedick's A Sticky Situation (`slimeEnd`: the likely stops his turn-end trail sets up, priced with `healWorth`;
+  his notes' Deviation 1, added because the plan's two terms left `lift:benedick` at 0.22 fires a fight). Both are pure
+  and read the dry run's copy, per E1's contract. Pebbles' This Is Fine `aiScore` is 0 in the exact pass (his notes'
+  Deviation: the end tile already carries the heal).
+- **E2** `healWorth` is used by the content terms of Slate, Hjalmar, Pebbles, Marbles, Valdris, Kiri, Sparrow, Benedick,
+  Corelos and Zarathor (each with a local fallback of the same formula).
+- **Not done (routed to the lead):** Benedick's optional request, a danger model that sees snag stops (`srcPositions`
+  skipping tiles past a stop). It prices hero positions only: it would not make foes walk into his slime (enemy paths
+  take an equal-cost detour around snags, `Grid`), which is what bounds his fires; and the plan keeps the engine as
+  phase 1 left it. See rules.md "Requests".

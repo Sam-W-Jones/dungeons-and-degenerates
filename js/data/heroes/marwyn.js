@@ -3,7 +3,8 @@
  * "Simplicity"): one verb per skill, the power is in the combinations (Taunt, throws, pulls, Stun, Root, Wet).
  * Passive MAGNIFICENCE (status mrw_magnificence, 0-5): each of his skills that reaches a foe (a foe in its area) adds 1;
  * at 5 his NEXT skill unleashes a MAGNIFICENT SURGE (a random good DD.WildMagic effect, +10 party Hype, and he heals
- * 8 HP: D9, sustain from his own verbs) and the meter resets. Gains are paid out in onSkillUsed after the surge check,
+ * 8 HP: D9, sustain from his own verbs; Nov 18 "Standing Ovation": +2 for each foe he has Taunted, max +6, the whole
+ * surge heal labelled 'lift:marwyn') and the meter resets. Gains are paid out in onSkillUsed after the surge check,
  * so the surge always belongs to the skill after the one that filled the meter. His melee basic is also his attack of
  * opportunity (DESIGN §4.2): it counts like any other use (+1, and it surges at 5), while his leap, throws, pulls and
  * knockbacks never provoke anyone.
@@ -16,6 +17,8 @@
   const MAX = 5;               // MAGNIFICENCE that fills the meter
   const SURGE_HYPE = 10;       // party Hype per MAGNIFICENT SURGE (DESIGN §4.5: Marwyn's passive adds Hype)
   const SURGE_HEAL = 8;        // MAGNIFICENT SURGE: he heals this much, once per surge (D9: the crowd's applause)
+  // Nov 18 "Standing Ovation": the surge heals +OVATION_PER for each foe he has Taunted (max +OVATION_CAP)
+  const OVATION_PER = 2, OVATION_CAP = 6;
   const GAUNTLET_TILES = 2;    // extra YEET distance with the gauntlets
   const GAUNTLETS = 'mrw_yeet_gauntlets';
   const MIRROR = 'mrw_hand_mirror';
@@ -101,6 +104,23 @@
     addStacks(u, n);
   }
 
+  /** Active foes Marwyn has Taunted right now (their taunt status names him): his audience. */
+  function tauntedBy(u) {
+    const s = DD.Combat && DD.Combat.state;
+    if (!s || !u) return 0;
+    let n = 0;
+    s.units.forEach(function (o) {
+      if (!active(o) || !G().hostile(u, o)) return;
+      const st = DD.Act.getStatus(o, 'taunt');
+      if (st && st.source === u.id) n++;
+    });
+    return n;
+  }
+  /** The surge heal with n Taunted foes watching: 8, +2 each, max +6. */
+  function ovationHeal(n) { return SURGE_HEAL + Math.min(OVATION_CAP, OVATION_PER * Math.max(0, n || 0)); }
+  /** The surge's heal clause (passive, MAXED status, tip all say the same). */
+  function ovationText() { return SURGE_HEAL + ' HP, +' + OVATION_PER + ' for each foe he has Taunted, max +' + OVATION_CAP; }
+
   /**
    * MAGNIFICENT SURGE: the meter resets, the party gains 10 Hype and a random GOOD wild magic effect goes off (two
    * different ones with the Hand Mirror), picked with the combat RNG. Only the good table (the passive says so; it is
@@ -128,14 +148,27 @@
     const banner = DD.FX.banner('MAGNIFICENT SURGE!', { sub: names(picks), color: ORANGE, ms: 900 });
     DD.FX.sound('magic');
     DD.FX.particles(u, { kind: 'glitter', color: '#c9a8ff', count: 24 });
-    DD.Act.bark(u, 'surge');
     DD.Act.log('MAGNIFICENT SURGE! The crowd goes wild, and ' + u.name + ' basks in it.', 'hero');
     DD.Act.gainHype(SURGE_HYPE, 'MAGNIFICENT SURGE');
-    // once per surge (the Hand Mirror's second effect doesn't heal again); he is the one surging, so it never revives
+    // once per surge (the Hand Mirror's second effect doesn't heal again); he is the one surging, so it never revives.
+    // Nov 18: +2 for each foe he has Taunted (his audience), the whole heal labelled for the sim's ledger
+    let ovation = false;
     if (active(u)) {
-      DD.FX.text(u, 'THE CROWD LOVES ME!', { color: ORANGE, size: 16 });
-      DD.Act.heal(u, u, SURGE_HEAL);
+      // [heal QA-2] one label per surge: the ovation is folded into it once the heal is known (queued now, played later,
+      // like the banner's sub line), so nothing is drawn over the green heal number
+      const cheer = DD.FX.text(u, 'THE CROWD LOVES ME!', { color: ORANGE, size: 16 });
+      const fans = tauntedBy(u);
+      const healed = DD.Act.heal(u, u, ovationHeal(fans), { via: 'lift:marwyn' });
+      ovation = healed > 0 && fans > 0;
+      if (ovation) {
+        const capped = OVATION_PER * fans > OVATION_CAP;
+        if (cheer && typeof cheer === 'object') cheer.text = 'THE CROWD LOVES ME! (+' + OVATION_PER + ' ×' + fans + (capped ? ', max +' + OVATION_CAP : '') + ')';
+        DD.Act.log('Standing ovation! ' + DD.util.plural(fans, 'Taunted foe') + ' can\'t take their eyes off ' + u.name +
+          ', and he heals all the more for it.', 'hero');
+      }
     }
+    // [heal QA-4] the ovation lines claim a heal: they only join the surge pool when the audience really healed him
+    DD.Act.bark(u, ovation && !DD.Act.simulating && DD.rng.next() < 0.5 ? 'ovation' : 'surge');
     const s = DD.Combat.state, done = [];
     picks.forEach(function (pick) {
       if (!active(u) || (s && s.result)) return;
@@ -160,7 +193,7 @@
     desc: function (st) {
       const n = Math.max(0, Math.min(MAX, (st && st.stacks) || 0));
       return 'MAGNIFICENCE ' + n + '/' + MAX + '. ' + (n >= MAX ?
-        'MAXED: his next skill unleashes a MAGNIFICENT SURGE (random good wild magic, +' + SURGE_HYPE + ' party Hype, he heals ' + SURGE_HEAL + ' HP).' :
+        'MAXED: his next skill unleashes a MAGNIFICENT SURGE (random good wild magic, +' + SURGE_HYPE + ' party Hype, he heals ' + ovationText() + ').' :
         'At ' + MAX + ', his next skill unleashes a MAGNIFICENT SURGE.');
     },
   });
@@ -177,7 +210,7 @@
   const PASSIVE = {
     name: 'MAGNIFICENCE',
     desc: 'Each of his skills that reaches a foe adds 1 MAGNIFICENCE. At ' + MAX + ', his next skill also unleashes a ' +
-      'MAGNIFICENT SURGE (random good wild magic, +' + SURGE_HYPE + ' party Hype, and he heals ' + SURGE_HEAL + ' HP) and resets the meter.',
+      'MAGNIFICENT SURGE (random good wild magic, +' + SURGE_HYPE + ' party Hype, and he heals ' + ovationText() + ') and resets the meter.',
     hooks: {
       onSkillUsed: function (ctx) {
         const u = ctx && ctx.user;
@@ -740,6 +773,12 @@
         'The beard is glowing again. Stand back.',
         'WILD MAGIC? NO. MARWYN MAGIC!',
       ],
+      // Nov 18: the Standing Ovation (his Taunted audience heals him more). [heal QA-4] its own key, half the surges
+      // whose ovation really healed him; never on a surge with no audience
+      ovation: [
+        'LOOK AT THEM LOOKING AT MARWYN!',
+        'THEIR HATRED IS APPLAUSE!',
+      ],
       maxed: [
         'MAXIMUM MAGNIFICENCE ACHIEVED.',
         'Marwyn is FULL of MAGNIFICENCE. Something must give.',
@@ -780,12 +819,14 @@
 
   // ---- loading-screen tips -------------------------------------------------------------------------------
   DD.registerNarration('tips', [
-    'Every MAGNIFICENT SURGE heals Marwyn ' + SURGE_HEAL + ' HP. Applause is a medical treatment. Ask him.',
+    // [heal QA-6] the cap too, as the passive and the MAXED status say it
+    'Every MAGNIFICENT SURGE heals Marwyn ' + SURGE_HEAL + ' HP, +' + OVATION_PER + ' for each foe he has Taunted (max +' + OVATION_CAP + '). Applause is a medical treatment. Ask him.',
   ]);
 
   /** Small public surface for tests and other content (e.g. events that want to pump Marwyn up). */
   DD.Marwyn = {
     MAX: MAX, SURGE_HYPE: SURGE_HYPE, SURGE_HEAL: SURGE_HEAL, GAUNTLET_TILES: GAUNTLET_TILES, stacksOf: stacksOf, addStacks: addStacks, gain: gain,
     surge: surge, flightPath: flightPath, hasItem: hasItem,
+    OVATION_PER: OVATION_PER, OVATION_CAP: OVATION_CAP, tauntedBy: tauntedBy, ovationHeal: ovationHeal,
   };
 })();

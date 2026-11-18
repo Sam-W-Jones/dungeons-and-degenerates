@@ -137,7 +137,8 @@
     t.eq(h.passive.name, 'Unlicensed Apothecary', 'passive name');
     t.ok(/raven/i.test(h.passive.desc) && /contagious/i.test(h.passive.desc) && /\+1 consumable slot/.test(h.passive.desc), 'passive text: raven, contagion, +1 slot');
     t.eq(Object.keys(h.passive.hooks).join(','), 'onCombatStart', 'passive hooks: onCombatStart only (v2: no brewing, no damage riders)');
-    t.ok(h.passive.desc.split(/\s+/).length <= 26, 'passive reads in one breath (' + h.passive.desc.split(/\s+/).length + ' words)');
+    // [Nov 18] the contagion now also carries his sample heal (the plan's final passive text, 37 words): ≤ 38
+    t.ok(h.passive.desc.split(/\s+/).length <= 38, 'passive reads in one breath (' + h.passive.desc.split(/\s+/).length + ' words)');
 
     // skills: ids, owners, 3 levels, exact + different descs, short descs, emoji icons, AP mix, big skills
     const aps = {};
@@ -1416,5 +1417,120 @@
       const want = Math.round(10 * (100 + 10 * (lv - 1)) / 100);
       t.ok(!!raven && raven.maxHp === want, 'Josiah level ' + lv + ': Onyx has ' + want + ' HP, as the text reads (' + (raven && raven.maxHp) + ')');
     });
+  });
+
+  // ---- Nov 18 conditional heal: "Physician, Heal Thyself" (.tmp/heal/plan.md §4.16) ----------------------------------
+  T.suite('hero_josiah: conditional heal (Nov 18)', function (t) {
+    if (!loaded(t)) return;
+    const p0 = DD.problems.length;
+    const SAMPLE = DD.Josiah && DD.Josiah.SAMPLE_HEAL;
+    t.eq(SAMPLE, 2, 'DD.Josiah.SAMPLE_HEAL = 2');
+    /** The labelled sample heals while fn runs (real ones; previews' dry runs left out). */
+    function lifts(fn) {
+      const out = [], orig = DD.Act.heal;
+      DD.Act.heal = function (src, target, n, opts) {
+        const r = orig.apply(this, arguments);
+        if (!A().simulating && opts && opts.via === 'lift:josiah') out.push({ src: src, target: target, n: n, healed: r });
+        return r;
+      };
+      try { fn(); } finally { DD.Act.heal = orig; }
+      return out;
+    }
+    function healStat(u) { const b = S().stats.units[u.id]; return b ? b.heals : 0; }
+    function poison(u, n) { A().addStatus(u, 'poison', { stacks: n || 3 }, jos()); }
+
+    // 1. fires: a Poisoned foe with no neighbours dies → +2 (the contagion's early return no longer skips it)
+    let j = fight({ enemies: [{ id: 'test_grunt', x: 6, y: 4 }, { id: 'test_grunt', x: 6, y: 7 }, { id: 'test_grunt', x: 8, y: 1 }], ravenAt: null });
+    let f = foes();
+    j.hp -= 10;
+    let hp = j.hp;
+    const h0 = healStat(j);
+    poison(f[0]);
+    let calls = lifts(function () { A().kill(f[0], null); });
+    t.eq(j.hp - hp, SAMPLE, 'a lone Poisoned foe dies: Josiah heals ' + SAMPLE);
+    t.ok(calls.length === 1 && calls[0].src === j && calls[0].target === j && calls[0].n === SAMPLE, 'one labelled heal, src and target Josiah (via lift:josiah)');
+    t.eq(healStat(j) - h0, SAMPLE, 'his heals stat grows by it');
+    t.ok(DD.Josiah.sampled(j), 'this round\'s sample is taken');
+    // 2. caps: a second Poisoned death the same round gives nothing; the next round heals again
+    hp = j.hp;
+    poison(f[1]);
+    calls = lifts(function () { A().kill(f[1], null); });
+    t.ok(j.hp === hp && calls.length === 0, 'two Poisoned deaths in a round: one heal');
+    DD.Combat.endTurn();   // Josiah's turn ends; the foes pass; round 2, Josiah again
+    t.ok(DD.Combat.isTurnOf(j) && S().round === 2 && !DD.Josiah.sampled(j), 'round 2: a fresh sample');
+    hp = j.hp;
+    poison(f[2]);
+    A().kill(f[2], null);
+    t.eq(j.hp - hp, SAMPLE, 'a Poisoned death in round 2: +' + SAMPLE + ' again');
+    // 3. doesn't fire: a death without Poison; a Poisoned ally (Onyx); Josiah downed
+    j = fight({ enemies: [{ id: 'test_grunt', x: 6, y: 4 }, { id: 'test_grunt', x: 8, y: 8 }], ravenAt: { x: 1, y: 6 } });
+    j.hp -= 10;
+    hp = j.hp;
+    calls = lifts(function () { A().kill(foes()[0], j); });
+    t.ok(j.hp === hp && calls.length === 0, 'a foe dies without Poison: no sample');
+    const onyx = raven(j);
+    A().addStatus(onyx, 'poison', { stacks: 2 }, null);
+    calls = lifts(function () { A().kill(onyx, null); });
+    t.ok(onyx.dead && j.hp === hp && calls.length === 0, 'Poisoned Onyx dies: no sample (not a foe)');
+    j = fight({ allies: [{ id: 'test_knight', x: 1, y: 6 }], enemies: [{ id: 'test_grunt', x: 6, y: 4 }, { id: 'test_grunt', x: 8, y: 8 }], ravenAt: null });
+    f = foes();
+    poison(f[0]);
+    A().kill(j, null);
+    t.ok(j.downed, 'Josiah is downed');
+    calls = lifts(function () { A().kill(f[0], null); });
+    t.ok(j.downed && calls.length === 0, 'a Poisoned foe dies while Josiah is down: no sample, he stays down (never a revive)');
+    // full HP: the heal is still called (a fire for the sim), heals 0, and spends the round's sample
+    j = fight({ enemies: [{ id: 'test_grunt', x: 6, y: 4 }, { id: 'test_grunt', x: 8, y: 8 }], ravenAt: null });
+    poison(foes()[0]);
+    calls = lifts(function () { A().kill(foes()[0], null); });
+    t.ok(calls.length === 1 && calls[0].healed === 0 && DD.Josiah.sampled(j), 'full HP: one labelled call that heals 0 (the round\'s sample is spent)');
+    // the contagion and Onyx are unchanged: the neighbour still catches it all, the chip text is the same
+    j = fight({ enemies: [{ id: 'test_grunt', x: 5, y: 4 }, { id: 'test_grunt', x: 6, y: 4 }, { id: 'test_grunt', x: 8, y: 8 }] });
+    f = foes();
+    j.hp -= 10;
+    hp = j.hp;
+    poison(f[0], 4);
+    A().kill(f[0], j);
+    t.ok(j.hp - hp === SAMPLE && stacks(f[1], 'poison') === 4, 'a Poisoned death with a neighbour: +' + SAMPLE + ' and the neighbour catches all 4');
+    t.eq(S().rules.filter(function (x) { return x.id === 'jos_contagion'; })[0].desc, 'Josiah is here: when a Poisoned foe dies, adjacent foes catch all of its Poison.', 'the Contagion chip is unchanged');
+    t.ok(!!raven(j) && raven(j).name === 'Onyx', 'Onyx is still Onyx');
+
+    // 4. preview honesty: his House Call finishing a Poisoned foe shows +2 on him
+    j = fight({ enemies: [{ id: 'test_grunt', x: 3, y: 4 }, { id: 'test_grunt', x: 8, y: 8 }], ravenAt: null });
+    j.hp -= 10;
+    const g = DD.Grid.unitAt(3, 4);
+    g.hp = 3;
+    poison(g, 2);
+    const pv = DD.Combat.preview(j, j.basic, 3, 4);
+    const pe = pv.perUnit[j.id];
+    t.ok(!!pe && pe.heal === SAMPLE && !pv.uncertain, 'House Call\'s preview of the kill shows +' + SAMPLE + ' on Josiah (' + (pe && pe.text) + ')');
+    // [review:g1] and the combat HUD wears it: House Call armed (key 1), the cursor on the Poisoned grunt
+    if (DD.UI && DD.UI.screens && DD.UI.screens.combat && DD.HUD && DD.Render && DD.Render.overlay) {
+      try {
+        DD.UI.show('combat');
+        DD.HUD.select(j.id);
+        DD.HUD.key('1');
+        DD.HUD.hover(3, 4);
+        const ov = DD.Render.overlay.previews || {}, jb = ov[j.id], gb = ov[g.id];
+        t.ok(DD.HUD.mode().kind === 'skill' && !!jb && jb.heal === SAMPLE && !!gb && gb.lethal,
+          'the HUD badges: +' + (jb && jb.heal) + ' on Josiah, the grunt marked lethal');
+      } finally {
+        DD.UI.closeAllModals('test');
+        DD.UI.hideTooltip();
+        if (DD.UI.current === 'combat') DD.UI.show('title');
+      }
+    } else t.log('no combat HUD loaded: the badge check is skipped');
+    hp = j.hp;
+    t.ok(DD.Combat.useSkill(j, j.basic, 3, 4) && g.dead && j.hp - hp === SAMPLE, 'and the kill heals him ' + SAMPLE);
+
+    // 5. desc == execute
+    const h = DD.getHero('josiah');
+    t.eq(h.passive.desc, 'Starts each fight with Onyx, his raven. Poison is contagious: when a Poisoned foe dies, adjacent foes catch all of its Poison, ' +
+      'and Josiah takes a sample: he heals ' + SAMPLE + ' HP (once per round). +1 consumable slot.', 'the plan\'s exact passive (from SAMPLE_HEAL)');
+    t.ok(/heals 2 HP \(once per round\)/.test(h.passive.desc), 'the passive says 2 HP, once per round');
+    // 6. barks
+    t.eq((h.barks.sample || []).join(' | '), 'Fascinating. Bag it. | For science! | Smells... restorative.', 'barks.sample');
+    const errs = DD.problems.slice(p0).filter(function (w) { return /^Error in /.test(w); });
+    t.eq(errs.length, 0, 'no swallowed errors' + (errs.length ? ' — ' + errs[0].slice(0, 160) : ''));
   });
 })();

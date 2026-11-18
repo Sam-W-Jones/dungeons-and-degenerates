@@ -3,9 +3,12 @@
  * §6 Simplicity): one verb per skill, the combos carry the power — Vulnerable marbles, a Stun, a Taunt, a sleepy
  * Lecture, a push, a pull and an Empowered ally. Passive "Absent-Minded Mastery": at the start of each of his turns he
  * remembers one random ready socketed skill, whose first use that turn costs 0 AP. His melee Jab is his attack of
- * opportunity (DESIGN §4.2); his Leap, shoves and hooks never provoke one. Registers the hero, a basic attack, a
- * signature, a 10-skill pool, the Loose Marbles surface (mar_marbles: enemies who slip are Vulnerable), the
- * mar_remembered status and three hero items. Public helpers: DD.Marbles.slip / DD.Marbles.scatter.
+ * opportunity (DESIGN §4.2); his Leap, shoves and hooks never provoke one. Conditional heal (Nov 18, "Respect Your
+ * Elders"): Walking Stick Whack heals him 5/6/7 when its push slams the foe into something (a wall, a unit, an object,
+ * the map edge, a ledge: knockback's blockedBy), via 'lift:marbles'; a quick-pass aiScore reads the same geometry.
+ * Registers the hero, a basic attack, a signature, a 10-skill pool, the Loose Marbles surface (mar_marbles: enemies
+ * who slip are Vulnerable), the mar_remembered status and three hero items. Public helpers: DD.Marbles.slip / scatter /
+ * slamAhead, SLAM.
  */
 (function () {
   'use strict';
@@ -37,6 +40,15 @@
     return !!(u.runHero && u.runHero !== u && wears(u.runHero, id));
   }
   function lv(a, b, c) { return [a, b, c]; }
+  /** AutoPlay's shared heal price (DD.AutoPlay.healWorth, E2), with the same formula as a fallback. */
+  function healWorth(u, n) {
+    if (DD.AutoPlay && typeof DD.AutoPlay.healWorth === 'function') return DD.AutoPlay.healWorth(u, n);
+    n = Number(n);
+    if (!active(u) || !(n > 0)) return 0;
+    const miss = (u.maxHp || 0) - (u.hp || 0);
+    return miss > 0 ? Math.min(n, miss) * (miss > u.maxHp / 2 ? 1.5 : 0.8) : 0;
+  }
+  const SLAM = [5, 6, 7];   // Walking Stick Whack I-III: his heal when the push slams the foe into something (Nov 18)
   function tiles(n) { return n + ' tile' + (n === 1 ? '' : 's'); }
   function skillName(id) { const d = DD.getSkill(id); return d ? d.name : id; }
   function skill(def) { def.owner = 'marbles'; return DD.registerSkill(def); }
@@ -117,7 +129,7 @@
     if (opts.slipNow) placed.forEach(function (tl) { const u = G().unitAt(tl.x, tl.y); if (u) slip(u, tl); });
     return placed;
   }
-  DD.Marbles = { slip: slip, scatter: scatter };
+  DD.Marbles = { slip: slip, scatter: scatter, slamAhead: slamAhead, SLAM: SLAM.slice() };
 
   DD.registerSurface({
     id: 'mar_marbles', name: 'Loose Marbles', color: 'rgba(150,205,255,0.35)', turns: 3,
@@ -293,19 +305,74 @@
     } });
 
   // ---- skill pool ----------------------------------------------------------------------------------------
+  /**
+   * Would pushing `target` n tiles straight away from `user` slam it into something (Walking Stick Whack's heal, Nov 18)?
+   * Pure geometry that walks the tiles the way DD.Act.push does: the map edge, a blocking object, a unit, a wall or a
+   * ledge it can't climb ahead → a slam; a pit or deep water first (it falls), an immovable target or n ≤ 0 → no slam.
+   */
+  function slamAhead(user, target, n) {
+    if (!user || !active(target) || !(n > 0) || A().isImmovable(target)) return false;
+    const d = DD.util.dirTo(user, target);
+    const dir = { x: d.x > 0 ? 1 : d.x < 0 ? -1 : 0, y: d.x ? 0 : d.y > 0 ? 1 : d.y < 0 ? -1 : 0 };
+    if (!dir.x && !dir.y) return false;
+    const fly = G().isFlying(target);
+    let cur = { x: target.x, y: target.y };
+    for (let k = 0; k < n; k++) {
+      const nx = cur.x + dir.x, ny = cur.y + dir.y;
+      if (!G().inBounds(nx, ny)) return true;
+      const tl = G().tile(nx, ny);
+      if (tl.obj && G().objBlocksMove(tl.obj)) return true;
+      const o = G().unitAt(nx, ny);
+      if (o && o !== target) return true;
+      const td = G().terrain(tl);
+      const drop = !!td.pit || td.liquid === 'deep';
+      if (!drop && td.walkable === false && (!fly || !td.liquid)) return true;
+      if (!drop && !G().canStep(target, cur, { x: nx, y: ny })) return true;
+      if (!fly && G().isDrop(nx, ny)) return false;
+      cur = { x: nx, y: ny };
+    }
+    return false;
+  }
   skill({ id: 'mar_whack', name: 'Walking Stick Whack', icon: '🏑', kind: 'attack', tags: ['melee', 'push'], ap: 1, cooldown: 1,
-    levels: lv({ dmg: 5, push: 2 }, { dmg: 6, push: 2 }, { dmg: 7, push: 3 }),
+    levels: lv({ dmg: 5, push: 2, slam: SLAM[0] }, { dmg: 6, push: 2, slam: SLAM[1] }, { dmg: 7, push: 3, slam: SLAM[2] }),
     target: { type: 'unit', range: [1, 1], filter: 'enemy' },
-    // the Cane of Unsolicited Advice pushes 1 tile further: the text says so (playtest heroes-2)
-    desc: function (L, user) { return 'Deal ' + L.dmg + ' damage to an adjacent foe and push it ' + tiles(L.push + (wears(user, 'mar_cane') ? 1 : 0)) + '.'; },
+    // Nov 18: the slam heals him, so the goats' Radio Edit never bleeps it (svammiel.js healsWith)
+    heals: true,
+    // the Cane of Unsolicited Advice pushes 1 tile further: the text says so (playtest heroes-2). Nov 18 (Respect Your
+    // Elders): the push's one clause, the slam heal (plan §2.10 deviation, docs/notes/hero-marbles.md)
+    desc: function (L, user) {
+      return 'Deal ' + L.dmg + ' damage to an adjacent foe and push it ' + tiles(L.push + (wears(user, 'mar_cane') ? 1 : 0)) +
+        '. If it slams into something, heal ' + L.slam + ' HP.';
+    },
     flavor: 'Forty years of walking-stick kata. One tasteful thwack. Into the pit, ideally.',
+    // the exact pass dry-runs the knockback and the heal; the quick pass (which picks what gets a dry run) reads the slam
+    // from the geometry: healWorth(him, slam) when the push would be cut short by a bump and the whack doesn't kill
+    aiScore: function (ctx) {
+      if (!ctx || ctx.autoplay) return 0;
+      const user = ctx.user, u = ctx.targetUnit, L = ctx.L || {};
+      if (!user || !active(u) || !hostile(user, u)) return 0;
+      if (DD.AI && DD.AI.estimate && DD.AI.estimate(user, u, L.dmg || 0, null) >= u.hp + (u.block || 0)) return 0;
+      return slamAhead(user, u, (L.push || 0) + (wears(user, 'mar_cane') ? 1 : 0)) ? healWorth(user, L.slam) : 0;
+    },
     execute: function (ctx) {
       const user = ctx.user, u = ctx.targetUnit;
       if (!active(u)) return;
       melee(ctx);
       DD.FX.text(u, 'WHACK!', { color: '#ffe08a', size: 16 });
       A().damage(user, u, ctx.L.dmg);
-      if (active(u)) A().knockback(user, u, ctx.L.push);
+      if (!active(u)) return;
+      const r = A().knockback(user, u, ctx.L.push);
+      // Respect Your Elders (Nov 18): a push cut short by a bump heals him (a fall, an immovable foe or a cancelled push is
+      // no slam). Always called on a slam (0 at full HP: the sim counts it); he must stand: never a revive
+      if (r && r.blockedBy && active(user)) {
+        const healed = A().heal(user, user, ctx.L.slam, { via: 'lift:marbles' });
+        if (healed > 0) {
+          DD.FX.text(user, '🦴 *pop* Ahh.', { color: '#ffe9a8', size: 14, parallel: true });
+          // [heal QA-1] the log says why he healed (the label fades in a second)
+          A().log(user.name + ' whacks ' + u.name + ' into something solid. His hip pops back in. Respect your elders.', 'hero');
+          A().maybeBark(user, 'slam', 0.4);
+        }
+      }
     } });
 
   skill({ id: 'mar_scatter', name: 'Marble Scatter', icon: '🔮', kind: 'utility', tags: ['ranged', 'aoe', 'surface', 'vulnerable'], ap: 1, cooldown: 2,
@@ -583,6 +650,8 @@
       // his Jab on a foe that walked away from him (an attack of opportunity)
       opportunity: ['Class is NOT dismissed!', 'Sit DOWN. I haven\'t finished the lecture.', 'I didn\'t say you could leave!',
         'No running in the dungeon!', 'Back in my day, we waited to be excused!'],
+      // Nov 18 (Respect Your Elders): a Whack slammed a foe into something and the crunch healed him
+      slam: ['Back in my day, walls hit BACK.', 'Ohoho! My hip just popped back in.', 'Forty years of kata for THAT sound.'],
     },
   });
 

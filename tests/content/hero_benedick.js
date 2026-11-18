@@ -192,7 +192,8 @@
       }
       if (DRAGON_ONLY.indexOf(id) >= 0) t.ok(desc(id, 1).indexOf('Dragonsnail only:') === 0, id + ': its desc names its form');
     });
-    t.ok(words(h.passive.desc) <= 34, 'passive ≤ 34 words (' + words(h.passive.desc) + ')');
+    // Nov 18 (conditional healing): the stop heals him too ("and each one that does heals him 5 HP"): ≤ 43, was ≤ 34
+    t.ok(words(h.passive.desc) <= 43, 'passive ≤ 43 words (' + words(h.passive.desc) + ')');
     t.eq(h.passive.name, 'A Sticky Situation', 'passive: A Sticky Situation');
     // barks: 13 standard keys ≥ 3 lines, the custom keys, every bubble ≤ 70; the dragon's caps lines name nobody
     BARK_KEYS.forEach(function (k) { t.ok((h.barks[k] || []).length >= 3, 'barks.' + k + ': 3+ lines'); });
@@ -903,19 +904,19 @@
   });
 
   // ---- 11. items ------------------------------------------------------------------------------------------------------
-  T.suite('hero_benedick: items — Snail Mucin Serum (his only heal), Racing Stripes, Do Not Disturb Sign', function (t) {
+  T.suite('hero_benedick: items — Snail Mucin Serum (the bonus on his slime heal, Nov 18), Racing Stripes, Do Not Disturb Sign', function (t) {
     if (!ready(t)) return;
-    t.eq(DD.getItem('ben_mucin_serum').desc, 'Whenever a foe gets stuck in Benedick\'s Snail Slime, he heals 3 HP.', 'Serum desc');
+    t.eq(DD.getItem('ben_mucin_serum').desc, 'Whenever a foe gets stuck in Benedick\'s Snail Slime, he heals 3 HP more (8 in all).', 'Serum desc (Nov 18: the bonus over A Sticky Situation\'s 5; the balance pass raised it from 3)');
     t.eq(DD.getItem('ben_racing_stripes').desc, '+3 max HP and +1 move.', 'Stripes desc');
     t.eq(DD.getItem('ben_dnd_sign').desc, '+10% damage. Once per fight, a hit that would down you leaves you at 1 HP, hiding in your shell (as Coming Out of My Shell, without its cooldown).', 'Sign desc');
-    // the Serum: +3 for each stuck foe, only with the item, never while he is down
+    // Nov 18: each stuck foe heals him 5 (A Sticky Situation; the balance pass raised 3 -> 5), 8 with the Serum; never while he is down
     [true, false].forEach(function (withItem) {
       fight({ heroes: [{ x: 1, y: 4, items: withItem ? ['ben_mucin_serum'] : [] }], enemies: [{ id: 'test_grunt', x: 6, y: 4 }], terrain: corridor(4, 3, 6) });
       const u = B(), g = foes()[0];
       u.hp = 15;
       Bn().laySlime(4, 4, 3, u);
       A().moveAlong(g, [{ x: 5, y: 4 }, { x: 4, y: 4 }, { x: 3, y: 4 }], { provoke: true });
-      t.eq(u.hp, withItem ? 18 : 15, (withItem ? 'with' : 'without') + ' the Serum: ' + (withItem ? '+3 HP' : 'no heal'));
+      t.eq(u.hp, withItem ? 23 : 20, (withItem ? 'with' : 'without') + ' the Serum: ' + (withItem ? '+8 HP' : '+5 HP (the passive alone)'));
     });
     fight({ heroes: [{ x: 1, y: 4, items: ['ben_mucin_serum'] }, { id: 'test_knight', x: 1, y: 2 }], enemies: [{ id: 'test_grunt', x: 6, y: 4 }], terrain: corridor(4, 3, 6) });
     let u = B(), g = foes()[0];
@@ -1486,7 +1487,7 @@
     t.ok(proof.every(function (e) { return (e.tags || []).indexOf('spider') >= 0; }), 'every root-proof foe is a spider: ' + proof.map(function (e) { return e.name; }).join(', '));
     t.ok(spiders.every(function (e) { return proof.indexOf(e) >= 0; }), 'every spider is root-proof: ' + spiders.map(function (e) { return e.name; }).join(', '));
     const h = DD.getHero(HERO);
-    t.ok(/bosses and spiders aside/.test(h.passive.desc) && words(h.passive.desc) <= 34, 'the passive names them (' + words(h.passive.desc) + ' words)');
+    t.ok(/bosses and spiders aside/.test(h.passive.desc) && words(h.passive.desc) <= 43, 'the passive names them (' + words(h.passive.desc) + ' words)');
     t.ok(/not bosses or spiders/.test(DD.getSurface('ben_slime').desc), 'the surface names them');
     t.ok((DD.defs.narration.tips || []).some(function (l) { return /Benedick's slime stops any grounded foe \(not a boss or a spider\)/.test(l); }), 'the loading tip names them');
     if (DD.getEnemy('a1_spider')) {
@@ -1594,8 +1595,199 @@
     t.log('basics: Teeth ' + (uses.ben_teeth || 0) + ' · Slow Burn ' + (uses.ben_slow_burn || 0) + ' · The Inevitable ' + (uses.ben_inevitable || 0));
     t.log('shell in ' + shelledLong + '/' + long + ' fights of 4+ rounds (' + (long ? (100 * shelledLong / long).toFixed(0) : '–') + '%) · dragon ' + dragonTurns + '/' + hisTurns + ' turns (' +
       (hisTurns ? (100 * dragonTurns / hisTurns).toFixed(0) : '–') + '%)');
-    t.log('slime stops ' + stops + ' (' + (stops / Math.max(1, fights)).toFixed(2) + '/fight) · Serum heals ' + serum + ' · parcels ' + posts + ', foes hit ' + mailHits + ' (' + (mailHits / Math.max(1, posts)).toFixed(2) + '/post)');
+    t.log('slime stops ' + stops + ' (' + (stops / Math.max(1, fights)).toFixed(2) + '/fight) · slime heals (Nov 18: the passive, + the Serum) ' + serum + ' · parcels ' + posts + ', foes hit ' + mailHits + ' (' + (mailHits / Math.max(1, posts)).toFixed(2) + '/post)');
     t.log('Benedick: damage taken ' + (taken / Math.max(1, fights)).toFixed(1) + '/fight · downed ' + downs + ' · fights ' + fights + ', wins ' + wins);
     t.ok(fights > 0, 'simulated');
+  });
+
+  // ---- Nov 18: conditional healing — "Moisturising Routine" (plan §4.10) -----------------------------------------------
+  /** Every DD.Act.heal call made while fn runs: [{ src, target, n, via, healed, sim }]. */
+  function healCalls(fn) {
+    const list = [], orig = DD.Act.heal;
+    DD.Act.heal = function (src, target, n, opts) {
+      const healed = orig.apply(this, arguments);
+      list.push({ src: src, target: target, n: n, via: opts && opts.via, healed: healed, sim: !!DD.Act.simulating });
+      return healed;
+    };
+    try { fn(); } finally { DD.Act.heal = orig; }
+    return list;
+  }
+  function lifts(calls) { return calls.filter(function (x) { return !x.sim && x.via === 'lift:benedick'; }); }
+  function healsBy(u) { const s = DD.Combat.state.stats.units[u.id]; return s ? s.heals : 0; }
+  /** Walk a foe down the corridor from (6, 4) toward him across (4, 4): it stops on the slime there. */
+  function walkIn(g) { A().moveAlong(g, [{ x: 5, y: 4 }, { x: 4, y: 4 }, { x: 3, y: 4 }], { provoke: true }); }
+
+  T.suite('hero_benedick: conditional heal (Nov 18)', function (t) {
+    if (!ready(t)) return;
+    const h = DD.getHero(HERO), serum = DD.getItem('ben_mucin_serum');
+    // balance pass (Nov 18, T8): MUCIN_HEAL 3 → 5, the top of its range [3, 5] (AutoPlay's foes detour around slime: ~0.3
+    // stops a fight, so the HP a fight sat under T8's band); SERUM_HEAL stays 3 (its old value, now the bonus)
+    const M = Bn().MUCIN_HEAL, SB = Bn().SERUM_HEAL;
+    t.ok(M === 5 && SB === 3, 'DD.Benedick.MUCIN_HEAL = 5, SERUM_HEAL = 3 (the Serum\'s old value, now its bonus)');
+    t.eq(h.passive.desc, 'At the end of his turn, Benedick leaves Snail Slime on the bare floor of every tile he crawled off (3 rounds). Grounded foes, ' +
+      'bosses and spiders aside, that walk onto it stop there, and each one that does heals him 5 HP.', 'passive desc, word for word');
+    t.eq(serum.desc, 'Whenever a foe gets stuck in Benedick\'s Snail Slime, he heals 3 HP more (8 in all).', 'Serum desc, word for word');
+    t.ok(serum.desc.indexOf('heals ' + Bn().SERUM_HEAL + ' HP') >= 0 && serum.desc.length <= 150, 'the Serum still says "heals 3 HP" (tests/balance_tests.js pins it)');
+    // [heal QA-4] the plan's three lines claim the heal: their own key ('moisturised'), played only on a stop that healed
+    // him; barks.stuck keeps its three old lines for every stop
+    const stuckLines = h.barks.stuck || [], moist = h.barks.moisturised || [];
+    ['Moisturised.', 'Mucin. Very good for the complexion. Yours less so.', 'I did say I\'d wait.'].forEach(function (l) {
+      t.ok(moist.indexOf(l) >= 0 && stuckLines.indexOf(l) < 0, 'barks.moisturised (not barks.stuck) has "' + l + '"');
+    });
+    t.ok(stuckLines.length === 3 && moist.length === 3, 'barks.stuck: the three old lines; barks.moisturised: the three new ones');
+    moist.forEach(function (l) { t.ok(l.length <= 70 && !/\b(she|her|hers|herself)\b/i.test(l), 'his moisturised bark: ' + l); });
+
+    // fires: a grunt walks onto his slime → stops, +MUCIN_HEAL (Serum: + SERUM_HEAL more); src Benedick; one labelled call per stop
+    [false, true].forEach(function (withItem) {
+      fight({ heroes: [{ x: 1, y: 4, items: withItem ? ['ben_mucin_serum'] : [] }], enemies: [{ id: 'test_grunt', x: 6, y: 4 }], terrain: corridor(4, 3, 6) });
+      const u = B(), g = foes()[0], n = withItem ? M + SB : M;
+      u.hp = 12;
+      Bn().laySlime(4, 4, 3, u);
+      t.eq(Bn().mucinOf(u), n, (withItem ? 'with' : 'without') + ' the Serum: mucinOf = ' + n);
+      const h0 = healsBy(u);
+      const calls = healCalls(function () { walkIn(g); });
+      const l = lifts(calls);
+      t.ok(g.x === 4 && g.y === 4, (withItem ? 'Serum' : 'plain') + ': the grunt stops on the slime');
+      t.eq(u.hp, 12 + n, (withItem ? 'with' : 'without') + ' the Serum: +' + n);
+      t.eq(healsBy(u) - h0, n, 'the heal\'s src is Benedick (his heals stat grows by ' + n + ')');
+      t.ok(l.length === 1 && l[0].src === u && l[0].target === u && l[0].n === n, 'one DD.Act.heal(Benedick, Benedick, ' + n + ', { via: \'lift:benedick\' })');
+    });
+    // every stop heals (no cap: bounded by stops)
+    fight({ heroes: [{ x: 1, y: 1 }], enemies: [{ id: 'test_grunt', x: 6, y: 3 }, { id: 'test_grunt', x: 6, y: 6 }] });
+    let u = B();
+    u.hp = 10;
+    Bn().laySlime(5, 3, 3, u);
+    Bn().laySlime(5, 6, 3, u);
+    A().moveAlong(foes()[0], [{ x: 5, y: 3 }, { x: 4, y: 3 }], { provoke: true });
+    A().moveAlong(foes()[1], [{ x: 5, y: 6 }, { x: 4, y: 6 }], { provoke: true });
+    t.eq(u.hp, 10 + 2 * M, 'two foes stuck: +' + M + ' each');
+    // at full HP it still fires (one 0-HP call)
+    fight({ heroes: [{ x: 1, y: 4 }], enemies: [{ id: 'test_grunt', x: 6, y: 4 }], terrain: corridor(4, 3, 6) });
+    u = B();
+    Bn().laySlime(4, 4, 3, u);
+    // [heal QA-4] the bark keys he tries (cosmetic rolls forced low, so every roll "speaks")
+    const barkKeys = function (fn) {
+      const keys = [], mb = A().maybeBark, rn = DD.rng.next;
+      A().maybeBark = function (who, key) { if (who === B()) keys.push(key); return mb.apply(this, arguments); };
+      DD.rng.next = function () { return 0; };
+      try { fn(); } finally { A().maybeBark = mb; DD.rng.next = rn; }
+      return keys;
+    };
+    let calls = [];
+    let keys = barkKeys(function () { calls = healCalls(function () { walkIn(foes()[0]); }); });
+    t.ok(keys.indexOf('moisturised') < 0 && keys.indexOf('stuck') >= 0, 'full HP (the stop healed 0): the stuck lines, never the moisturised ones: ' + keys.join(','));
+    t.ok(lifts(calls).length === 1 && lifts(calls)[0].healed === 0 && u.hp === u.maxHp, 'full HP: one call that heals 0');
+    fight({ heroes: [{ x: 1, y: 4 }], enemies: [{ id: 'test_grunt', x: 6, y: 4 }], terrain: corridor(4, 3, 6) });
+    u = B();
+    u.hp = 10;
+    Bn().laySlime(4, 4, 3, u);
+    keys = barkKeys(function () { walkIn(foes()[0]); });
+    t.ok(u.hp === 10 + M && keys.indexOf('moisturised') >= 0, 'a stop that healed him may use the moisturised lines: ' + keys.join(','));
+
+    // doesn't fire: flyers, bosses, spiders (root-proof) and heroes walk on; slime of nobody / of another owner; downed
+    fight({ heroes: [{ x: 1, y: 1 }], enemies: [{ id: 'test_grunt', x: 6, y: 2 }, { id: 'test_boss', x: 6, y: 4 }, { id: 'test_grunt', x: 6, y: 6 }] });
+    u = B();
+    u.hp = 10;
+    const fl = at(6, 2), boss = at(6, 4), spider = at(6, 6);
+    fl.flags = Object.assign({}, fl.flags, { flying: true });
+    spider.flags = Object.assign({}, spider.flags, { immune: ['root'] });
+    [[fl, 2, 'a flyer'], [boss, 4, 'a boss'], [spider, 6, 'a root-proof foe (the spiders)']].forEach(function (c) {
+      Bn().laySlime(5, c[1], 3, u);
+      calls = healCalls(function () { A().moveAlong(c[0], [{ x: 5, y: c[1] }, { x: 4, y: c[1] }], { provoke: true }); });
+      t.ok(c[0].x === 4 && lifts(calls).length === 0 && u.hp === 10, c[2] + ' walks across: no stop, no heal');
+    });
+    fight({ heroes: [{ x: 1, y: 4 }, { id: 'test_knight', x: 1, y: 2 }], enemies: [{ id: 'test_grunt', x: 6, y: 4 }, { id: 'test_grunt', x: 6, y: 6 }] });
+    u = B();
+    u.hp = 10;
+    Bn().laySlime(4, 4, 3, null);
+    Bn().laySlime(4, 6, 3, hero('test_knight'));
+    calls = healCalls(function () {
+      A().moveAlong(foes()[0], [{ x: 5, y: 4 }, { x: 4, y: 4 }, { x: 3, y: 4 }], { provoke: true });
+      A().moveAlong(foes()[1], [{ x: 5, y: 6 }, { x: 4, y: 6 }, { x: 3, y: 6 }], { provoke: true });
+    });
+    t.ok(foes()[0].x === 4 && foes()[1].x === 4, 'both grunts stop (slime is slime)');
+    t.ok(lifts(calls).length === 0 && calls.filter(function (x) { return !x.sim; }).length === 0 && u.hp === 10, 'slime laid by nobody, or by the knight: nobody heals');
+    fight({ heroes: [{ x: 1, y: 4, items: ['ben_mucin_serum'] }, { id: 'test_knight', x: 1, y: 2 }], enemies: [{ id: 'test_grunt', x: 6, y: 4 }], terrain: corridor(4, 3, 6) });
+    u = B();
+    Bn().laySlime(4, 4, 3, u);
+    A().damage(foes()[0], u, 200, { cause: 'other' });
+    calls = healCalls(function () { walkIn(foes()[0]); });
+    t.ok(u.downed && u.hp === 0 && foes()[0].x === 4 && lifts(calls).length === 0, 'Benedick downed: the slime still holds, no heal call, still down');
+    // the actions that set it up show no heal in their previews (the stop happens on the foe's turn; the desc says it)
+    fight({ heroes: [{ x: 1, y: 4, skills: ['ben_spit_shine', 'ben_wait'] }], enemies: [{ id: 'test_grunt', x: 5, y: 4 }] });
+    u = B();
+    u.hp = 10;
+    const pv1 = DD.Combat.preview(u, u.skills[0], 3, 4), pv2 = DD.Combat.preview(u, u.skills[1], 5, 4);
+    t.ok(!(pv1.perUnit[u.id] && pv1.perUnit[u.id].heal) && !(pv2.perUnit[u.id] && pv2.perUnit[u.id].heal), 'Spit Shine and I\'ll Wait previews show no heal (delayed)');
+
+    // AutoPlay: Spit Shine adds n × healWorth × 0.5 (n = its likely stops); I'll Wait 1 + healWorth × 0.6 with slime between
+    const ctx = function (v, i, target) { return DD.Targeting.buildCtx(v, v.skills[i], target); };
+    const spitHurt = Bn().spitScore(ctx(u, 0, { x: 4, y: 4 }));
+    const want = DD.AutoPlay.healWorth(u, M) * 0.5;
+    u.hp = u.maxHp;
+    const spitFull = Bn().spitScore(ctx(u, 0, { x: 4, y: 4 }));
+    t.ok(want > 0 && Math.abs(spitHurt - spitFull - want) < 1e-9, 'Spit Shine with one likely stop: + healWorth(Benedick, ' + M + ') × 0.5 = ' + want.toFixed(2) + ' (' + (spitHurt - spitFull).toFixed(2) + ')');
+    u.hp = 10;
+    t.eq(Bn().waitScore(ctx(u, 1, { x: 5, y: 4 })), 0, 'I\'ll Wait, no slime between: 0');
+    Bn().laySlime(3, 4, 3, u);
+    t.eq(Bn().waitScore(ctx(u, 1, { x: 5, y: 4 })), 1 + DD.AutoPlay.healWorth(u, M) * 0.6, 'I\'ll Wait, his slime between: 1 + healWorth(Benedick, ' + M + ') × 0.6 = ' + (1 + DD.AutoPlay.healWorth(u, M) * 0.6).toFixed(2));
+    t.eq(DD.getSkill('ben_wait').aiScore, Bn().waitScore, 'I\'ll Wait carries it as its aiScore (both passes)');
+    u.hp = u.maxHp;
+    t.eq(Bn().waitScore(ctx(u, 1, { x: 5, y: 4 })), 1, 'at full HP: the stop is still worth 1');
+    u.items = ['ben_mucin_serum'];
+    u.hp = 10;
+    t.eq(Bn().waitScore(ctx(u, 1, { x: 5, y: 4 })), 1 + DD.AutoPlay.healWorth(u, M + SB) * 0.6, 'with the Serum: priced at ' + (M + SB));
+    u.items = [];
+    fight({ heroes: [{ x: 1, y: 4, skills: ['ben_wait'] }, { id: 'test_knight', x: 1, y: 2 }], enemies: [{ id: 'test_grunt', x: 5, y: 4 }, { id: 'test_grunt', x: 5, y: 6 }] });
+    u = B();
+    u.hp = 10;
+    Bn().laySlime(5, 5, 3, hero('test_knight'));
+    t.eq(Bn().waitScore(ctx(u, 0, { x: 5, y: 6 })), 0, 'slime of another owner between: 0');
+    Bn().laySlime(5, 4, 3, u);
+    t.eq(Bn().waitScore(ctx(u, 0, { x: 5, y: 4 })), 0, 'his slime only under the foe itself: 0');
+    at(5, 6).flags = Object.assign({}, at(5, 6).flags, { flying: true });
+    Bn().laySlime(3, 6, 3, u);
+    t.eq(Bn().waitScore(ctx(u, 0, { x: 5, y: 6 })), 0, 'a flyer never sticks: 0');
+    // the I'll Wait play, on the foe's own turn: taunted across his slime, it stops short and he heals
+    fight({ enemyAi: true, heroes: [{ x: 1, y: 4, skills: ['ben_wait'] }, { id: 'test_knight', x: 1, y: 8 }], enemies: [{ id: 'test_grunt', x: 5, y: 4 }, { id: 'test_grunt', x: 8, y: 0 }],
+      terrain: corridor(4, 3, 6) });
+    u = B();
+    u.hp = 12;
+    Bn().laySlime(3, 4, 3, u);
+    use(t, u, u.skills[0], 5, 4, 'I\'ll Wait across the slime');
+    calls = healCalls(function () { toHisTurn(u); });
+    t.ok(at(3, 4) && at(3, 4).side === 'enemy' && lifts(calls).length === 1 && u.hp === 12 + M, 'the taunted grunt walks at him, sticks on his slime, and he heals ' + M + ' (' + u.hp + ' HP)');
+    // AutoPlay's end-tile value (passive.autoplayEnd, engine hook E1): the trail he lays where a foe comes to hit him
+    fight({ heroes: [{ x: 4, y: 4 }, { id: 'test_knight', x: 0, y: 0 }], enemies: [{ id: 'test_grunt', x: 7, y: 4 }] });
+    u = B();
+    u.hp = 10;
+    const g8 = at(7, 4), w = DD.AutoPlay.healWorth(u, M);
+    t.eq(h.passive.autoplayEnd(u, 4, 4), 0, 'staying put lays no slime: 0');
+    t.eq(JSON.stringify(Bn().trailFor(u, 3, 4)), JSON.stringify([{ x: 4, y: 4 }]), 'a step west (3,4) would slime 4,4');
+    const west = h.passive.autoplayEnd(u, 3, 4), east = h.passive.autoplayEnd(u, 5, 4);
+    t.eq(u.x + ',' + u.y, '4,4', 'pure: he is still on 4,4');
+    t.ok(Math.abs(west - 0.5 * w) < 1e-9 && west > 0, 'a step back from the grunt: the slime lies where it comes to hit him: 0.5 × healWorth(' + M + ') = ' + (0.5 * w).toFixed(2) + ' (' + west.toFixed(2) + ')');
+    t.eq(east, 0, 'a step toward it: the slime lies behind him: 0');
+    t.ok(Math.abs(DD.AutoPlay.restAt(u, 3, 4) - west) < 1e-9, 'AutoPlay reads the same through E1 (AutoPlay.restAt)');
+    t.ok(DD.Combat.move(u, 3, 4) && u.x === 3, 'he really steps west');
+    t.ok(Math.abs(h.passive.autoplayEnd(u, 3, 4) - west) < 1e-9, 'standing there, the recorded crawl gives the same value (the dry-run case)');
+    u.hp = u.maxHp;
+    t.eq(h.passive.autoplayEnd(u, 3, 4), 0, 'at full HP: 0 (only the heal is priced)');
+    u.hp = 10;
+    A().addStatus(g8, 'stun', { turns: 1 }, u);
+    t.eq(h.passive.autoplayEnd(u, 3, 4), 0, 'a stunned grunt walks nowhere: 0');
+    A().removeStatus(g8, 'stun', { silent: true });
+    Bn().enterForm(u, 'dragon');
+    t.eq(h.passive.autoplayEnd(u, 3, 4), 0, 'the Dragonsnail lays no trail: 0');
+    // AutoPlay taunts the grunt whose walk crosses his slime (two grunts alike otherwise)
+    fight({ enemyAi: true, heroes: [{ x: 4, y: 4, skills: ['ben_wait'] }, { id: 'test_knight', x: 0, y: 4 }],
+      enemies: [{ id: 'test_grunt', x: 4, y: 0 }, { id: 'test_grunt', x: 4, y: 8 }] });
+    u = B();
+    u.hp = 12;
+    Bn().laySlime(4, 2, 3, u);
+    t.tryRun('AutoPlay turn', function () { DD.AutoPlay.takeTurn(); });
+    const north = foes().filter(function (f) { return f.y < 4; })[0] || foes()[0], south = foes().filter(function (f) { return f.y > 4; })[0];
+    const tn = st(north, 'taunt'), ts = south && st(south, 'taunt');
+    t.ok(!!tn && tn.source === u.id && !ts, 'AutoPlay taunts the grunt with his slime in its way (north ' + !!tn + ', south ' + !!ts + ')');
   });
 })();

@@ -153,17 +153,25 @@
         const txt = DD.skillDesc(d, lv, null);
         t.ok(txt && !/undefined|NaN|\[object/.test(txt), id + ' L' + lv + ' desc with a null user');
         const Lv = DD.skillLevel(d, lv);
-        ['dmg', 'arrow', 'mark', 'len', 'push', 'r'].forEach(function (k) {
+        ['dmg', 'arrow', 'mark', 'len', 'push', 'r', 'ghost'].forEach(function (k) {
           if (typeof Lv[k] === 'number' && Lv[k] > 0) t.ok(new RegExp('(^|[^0-9])' + Lv[k] + '([^0-9]|$)').test(txt), id + ' L' + lv + ' desc shows ' + k + ' ' + Lv[k]);
         });
         if (Lv.turns > 1) t.ok(txt.indexOf(Lv.turns + ' ') >= 0, id + ' L' + lv + ' desc shows turns ' + Lv.turns);
-        // DESIGN §6 Simplicity: one verb, read in one breath (about 12 words + numbers), no if/else clauses
-        const n = txt.split(/\s+/).length;
+        // DESIGN §6 Simplicity: one verb, read in one breath (about 12 words + numbers), no if/else clauses. Nov 18:
+        // Ethereal Step's one rider is the conditional heal (Ghosting, plan §2.10): the teleport sentence stays one
+        // breath, and the one "If" is that rider, exactly
+        let main = txt;
+        if (id === 'kir_step') {
+          const parts = /^(.*\.) (If a foe was next to you when your turn started, you ghost it: heal \d+ HP\.)$/.exec(txt);
+          t.ok(!!parts, id + ' L' + lv + ': the teleport plus the one Ghosting rider: ' + txt);
+          main = parts ? parts[1] : txt;
+        }
+        const n = main.split(/\s+/).length;
         words = Math.max(words, n);
-        t.ok(n <= 20, id + ' L' + lv + ' desc reads in one breath (' + n + ' words): ' + txt);
-        const clauses = txt.split(/[.:;!?](\s|$)/).filter(function (x) { return x && x.trim(); }).length;
-        t.ok(clauses <= 2, id + ' L' + lv + ' desc is one sentence (a colon or one more clause at most): ' + txt);
-        t.ok(!/\bif\b|\bunless\b|\botherwise\b/i.test(txt), id + ' L' + lv + ' desc has no conditions: ' + txt);
+        t.ok(n <= 20, id + ' L' + lv + ' desc reads in one breath (' + n + ' words): ' + main);
+        const clauses = main.split(/[.:;!?](\s|$)/).filter(function (x) { return x && x.trim(); }).length;
+        t.ok(clauses <= 2, id + ' L' + lv + ' desc is one sentence (a colon or one more clause at most): ' + main);
+        t.ok(!/\bif\b|\bunless\b|\botherwise\b/i.test(main), id + ' L' + lv + ' desc has no conditions: ' + main);
       }
       t.ok(!d.flavor || d.flavor.length <= 120, id + ' flavor ≤ 120');
     });
@@ -829,8 +837,9 @@
       fresh();
       DD.AutoPlay.takeTurn();
       t.ok(a.slot('kir_step').cd > 0, 'AutoPlay uses Ethereal Step');
-      t.ok(seen.length === 0 && !k.downed && k.hp === 9 && DD.Grid.dist(k, a.foes[0]) > 1 && DD.Grid.dist(k, a.foes[1]) > 1,
-        'and gets out of reach without provoking anything (' + k.x + ',' + k.y + ')');
+      // Nov 18: she started the turn next to both, so the Step also ghosts them (+3 at I: 9 → 12)
+      t.ok(seen.length === 0 && !k.downed && k.hp === 9 + L('kir_step', 1).ghost && DD.Grid.dist(k, a.foes[0]) > 1 && DD.Grid.dist(k, a.foes[1]) > 1,
+        'and gets out of reach without provoking anything, ghosting them on the way (' + k.x + ',' + k.y + ', ' + k.hp + ' HP)');
       if (T.contentHelpers && T.contentHelpers.sanity) T.contentHelpers.sanity(t, 'attacks of opportunity');
     } finally { off(); DD.Act.maybeBark = mb; }
   });
@@ -932,6 +941,144 @@
     t.eq(prev.detonates, 'barrel_explosive', 'the preview detonates it');
     t.ok(!DD.Grid.tile(4, 4).obj && g.hp < g0, 'it went off: the grunt next to it takes the blast');
     t.eq(b.k.ap, 2, '1 AP');
+  });
+
+  // ---- Nov 18: conditional healing — "Ghosting" (plan §4.11) -----------------------------------------------------------
+  /** Every DD.Act.heal call made while fn runs: [{ src, target, n, via, healed, sim }]. */
+  function healCalls(fn) {
+    const list = [], orig = DD.Act.heal;
+    DD.Act.heal = function (src, target, n, opts) {
+      const healed = orig.apply(this, arguments);
+      list.push({ src: src, target: target, n: n, via: opts && opts.via, healed: healed, sim: !!DD.Act.simulating });
+      return healed;
+    };
+    try { fn(); } finally { DD.Act.heal = orig; }
+    return list;
+  }
+  function lifts(calls) { return calls.filter(function (x) { return !x.sim && x.via === 'lift:kiri'; }); }
+  function healsBy(u) { const st = DD.Combat.state.stats.units[u.id]; return st ? st.heals : 0; }
+
+  T.suite('hero_kiri: conditional heal (Nov 18)', function (t) {
+    const K = DD.Kiri, def = sk('kir_step');
+    // balance pass (Nov 18, T8): the plan's 3/4/5 raised two steps to the top of its range (ghost I 3 [3, 5]): AutoPlay
+    // rarely starts her turn in melee (~0.16 ghostings a fight), so the HP a fight sat under T8's band
+    t.ok(!!K && JSON.stringify(K.GHOSTING) === '[5,6,7]', 'DD.Kiri.GHOSTING = 5/6/7');
+    [1, 2, 3].forEach(function (lv) {
+      const Lv = L('kir_step', lv);
+      t.ok(Lv.ghost === K.GHOSTING[lv - 1] && Lv.len === [3, 4, 5][lv - 1] && Lv.heal === undefined, 'L' + lv + ': len ' + Lv.len + ', ghost ' + Lv.ghost + ' (no level key named heal)');
+      t.eq(DD.skillDesc(def, lv, null), 'Teleport to an empty tile up to ' + Lv.len + ' tiles away in a straight line, through walls and units. If a foe was next to you when your turn started, you ghost it: heal ' + Lv.ghost + ' HP.',
+        'L' + lv + ': the desc, word for word');
+    });
+    t.ok(def.kind === 'move' && def.tags.indexOf('heal') < 0 && def.target.type === 'tile', 'still a move (a tile target, no heal tag: never an aimed revive)');
+    const gb = DD.getHero('kiri').barks.ghost || [];
+    t.eq(gb.join(' | '), ['Leaving you on read.', 'It\'s not you. It\'s the plane of existence.', 'Ghosted.'].join(' | '), 'barks.ghost: the plan\'s three lines');
+    gb.forEach(function (l) { t.ok(!MASC.test(l) && l.length <= 70, 'her ghost bark: ' + l); });
+
+    // fires: a foe next to her at her turn start, then Ethereal Step → +5 / +6 / +7 (she starts hurt: nothing capped)
+    [1, 2, 3].forEach(function (lv) {
+      const Lv = L('kir_step', lv);
+      const a = arena({ at: [1, 4], skills: [['kir_step', lv]], enemies: [E(2, 4, 'test_grunt', 2), E(8, 8)] });
+      const k = a.k;
+      t.ok(K.canGhost(k), 'L' + lv + ': a grunt next to her at her turn start: engaged');
+      k.hp = k.maxHp - 12;
+      const hp0 = k.hp, heals0 = healsBy(k);
+      let prev = null;
+      const calls = healCalls(function () { prev = previewThenUse(t, k, a.slot('kir_step'), 1, 1, 'L' + lv + ' ghost'); });
+      t.ok(k.x === 1 && k.y === 1, 'L' + lv + ': she teleported');
+      t.eq(k.hp - hp0, Lv.ghost, 'L' + lv + ': she heals ' + Lv.ghost);
+      t.eq(healsBy(k) - heals0, Lv.ghost, 'L' + lv + ': the heal\'s src is Kiri (her heals stat grows by ' + Lv.ghost + ')');
+      t.eq(prev && prev.perUnit[k.id] && prev.perUnit[k.id].heal, Lv.ghost, 'L' + lv + ': the Step\'s preview shows +' + Lv.ghost + ' on her');
+      const real = lifts(calls);
+      t.ok(real.length === 1 && real[0].src === k && real[0].target === k && real[0].n === Lv.ghost, 'L' + lv + ': DD.Act.heal(Kiri, Kiri, ' + Lv.ghost + ', { via: \'lift:kiri\' })');
+      // a second Step the same turn (an Encore-style reset): no second ghosting
+      a.slot('kir_step').cd = 0;
+      k.ap = 3;
+      const hp1 = k.hp;
+      const again = healCalls(function () { use(t, k, a.slot('kir_step'), 1, 4, 'L' + lv + ' second step'); });
+      t.ok(k.hp === hp1 && lifts(again).length === 0 && !K.canGhost(k), 'L' + lv + ': a second Step the same turn heals nothing (once per turn)');
+    });
+    // at full HP it still fires (0 HP): the sim counts it, nothing shows
+    const fu = arena({ at: [1, 4], skills: [['kir_step', 1]], enemies: [E(2, 4)] });
+    let n0 = DD.Combat.state.log.length;
+    const fc = healCalls(function () { use(t, fu.k, fu.slot('kir_step'), 1, 1, 'full HP'); });
+    t.ok(lifts(fc).length === 1 && lifts(fc)[0].healed === 0 && fu.k.hp === fu.k.maxHp, 'at full HP: the heal is called and heals 0');
+    t.ok(!DD.Combat.state.log.slice(n0).some(function (l) { return /ghosts/.test(l.text); }), '[heal QA-1] full HP: no reason line');
+    // [heal QA-1] the log says why she healed, right after the engine's heal line: the foe she started next to, by name
+    const lg = arena({ at: [1, 4], skills: [['kir_step', 1]], enemies: [E(2, 4, 'test_grunt', 2), E(8, 8)] });
+    lg.k.hp = lg.k.maxHp - 12;
+    n0 = DD.Combat.state.log.length;
+    use(t, lg.k, lg.slot('kir_step'), 1, 1, 'ghost for the log');
+    const lines = DD.Combat.state.log.slice(n0).map(function (l) { return l.text; });
+    const hl = lines.indexOf('Kiri heals ' + L('kir_step', 1).ghost + ' HP.');
+    t.ok(hl >= 0 && lines[hl + 1] === 'Kiri ghosts ' + lg.foes[0].name + '. Left on read. She feels lighter already.', 'the log: the heal, then why (' + lines.join(' | ') + ')');
+
+    // doesn't fire: nobody next to her at her turn start, even if a foe walks up (or she walks up) before she steps
+    const w = arena({ at: [1, 4], skills: [['kir_step', 1]], enemies: [E(5, 4)] });
+    w.k.hp = w.k.maxHp - 10;
+    t.ok(!K.canGhost(w.k), 'no foe next to her at her turn start: not engaged');
+    t.ok(DD.Act.teleport(w.foes[0], 2, 4), 'the grunt turns up next to her mid-turn');
+    let c = healCalls(function () { use(t, w.k, w.slot('kir_step'), 1, 1, 'foe walked up'); });
+    t.ok(w.k.hp === w.k.maxHp - 10 && lifts(c).length === 0, 'a foe that arrived mid-turn: no ghosting');
+    const wk = arena({ at: [1, 4], skills: [['kir_step', 1]], enemies: [E(3, 4)] });
+    wk.k.hp = wk.k.maxHp - 10;
+    t.ok(DD.Combat.move(wk.k, 2, 4) && DD.Grid.dist(wk.k, wk.foes[0]) === 1, 'she walks next to the grunt');
+    c = healCalls(function () { use(t, wk.k, wk.slot('kir_step'), 2, 1, 'walked up then stepped'); });
+    t.ok(lifts(c).length === 0 && wk.k.hp <= wk.k.maxHp - 10, 'walking next to a foe, then stepping: no ghosting');
+    const al = arena({ at: [1, 4], skills: [['kir_step', 1]], heroes: [{ id: 'test_knight', x: 2, y: 4 }], enemies: [E(8, 8)] });
+    t.ok(!K.canGhost(al.k), 'an ally next to her at her turn start: not engaged');
+    // her arrows land first: one that kills the foe next to her leaves her unengaged; one that doesn't, engaged
+    [[99, false], [2, true]].forEach(function (p) {
+      const ar = arena({ at: [1, 4], skills: [['kir_step', 1]], enemies: [E(2, 4, 'test_grunt', 2)] });
+      DD.Act.addStatus(ar.foes[0], 'kir_incoming', { stacks: p[0] }, ar.k);
+      DD.Combat.endRound();
+      t.ok(DD.Combat.current() === ar.k && ar.foes[0].dead === !p[1] && K.canGhost(ar.k) === p[1],
+        'an arrow from beyond for ' + p[0] + ' lands first: ' + (p[1] ? 'the grunt lives, she is engaged' : 'the grunt dies, nobody is next to her'));
+    });
+    // the mark is per turn: engaged on one turn, nobody next to her on the next: no ghosting then
+    const nt = arena({ at: [1, 4], skills: [['kir_step', 1]], enemies: [E(2, 4)] });
+    t.ok(DD.Act.teleport(nt.foes[0], 6, 4), 'the grunt leaves');
+    DD.Combat.endRound();
+    t.ok(DD.Combat.current() === nt.k && !K.canGhost(nt.k), 'her next turn with nobody next to her: not engaged (the mark is this turn\'s)');
+    // a failed teleport (its tile taken after aiming) heals nothing; a downed Kiri neither (never a revive)
+    const ft = arena({ at: [1, 4], skills: [['kir_step', 1]], heroes: [{ id: 'test_knight', x: 1, y: 2 }], enemies: [E(2, 4)] });
+    ft.k.hp = ft.k.maxHp - 10;
+    c = healCalls(function () { def.execute(DD.Targeting.buildCtx(ft.k, ft.slot('kir_step'), { x: 1, y: 2 })); });
+    t.ok(ft.k.x === 1 && ft.k.y === 4 && ft.k.hp === ft.k.maxHp - 10 && lifts(c).length === 0 && K.canGhost(ft.k), 'the teleport fails: no heal (and the turn\'s ghosting is not spent)');
+    DD.Act.kill(ft.k, null);
+    c = healCalls(function () { def.execute(DD.Targeting.buildCtx(ft.k, ft.slot('kir_step'), { x: 1, y: 1 })); });
+    t.ok(ft.k.downed && ft.k.hp === 0 && lifts(c).length === 0, 'Kiri downed: nothing (never a revive)');
+    // the preview of a Step from an unengaged turn shows no heal
+    const np = arena({ at: [1, 4], skills: [['kir_step', 1]], enemies: [E(6, 6)] });
+    np.k.hp = np.k.maxHp - 10;
+    const pv = previewThenUse(t, np.k, np.slot('kir_step'), 1, 1, 'plain step');
+    t.ok(!(pv.perUnit[np.k.id] && pv.perUnit[np.k.id].heal), 'a plain Step\'s preview shows no heal');
+
+    // AutoPlay: the quick pass prices the ghosting (healWorth) while it is unspent; the exact pass leaves it to the dry run
+    const q = arena({ at: [1, 4], skills: [['kir_step', 3]], enemies: [E(2, 4, 'test_grunt', 2)] });
+    const qctx = function () { return DD.Targeting.buildCtx(q.k, q.slot('kir_step'), { x: 1, y: 1 }); };
+    q.k.hp = q.k.maxHp - 14;
+    const g3 = K.GHOSTING[2];
+    t.eq(def.aiScore(qctx()), DD.AutoPlay.healWorth(q.k, g3), 'aiScore: engaged, unspent, hurt: healWorth(Kiri, ' + g3 + ') = ' + DD.AutoPlay.healWorth(q.k, g3));
+    t.ok(DD.AutoPlay.healWorth(q.k, g3) > 0, '(more than 0)');
+    const ex = qctx();
+    ex.autoplay = { preview: {} };
+    t.eq(def.aiScore(ex), 0, 'aiScore: 0 in the exact pass (the dry run sees the heal)');
+    q.k.data.kir.engaged = -1;
+    t.eq(def.aiScore(qctx()), 0, 'aiScore: not engaged this turn, 0');
+    // AutoPlay ghosts when she starts next to a (stunned, harmless) foe and the Step is free: the same board without the
+    // mark (as if the grunt had walked up mid-turn) never heals her
+    [true, false].forEach(function (mark) {
+      const m = arena({ at: [4, 4], skills: [['kir_step', 1]], items: ['kir_cloak_elsewhere'], enemies: [E(5, 4, 'test_grunt', 3)] });
+      DD.Act.addStatus(m.foes[0], 'stun', { turns: 2 }, m.k);
+      m.k.hp = m.k.maxHp - 16;
+      if (!mark) m.k.data.kir.engaged = -1;
+      const hp0 = m.k.hp;
+      const calls = healCalls(function () { DD.AutoPlay.takeTurn(); });
+      const got = lifts(calls);
+      const g1 = K.GHOSTING[0];
+      if (mark) t.ok(got.length === 1 && got[0].healed === g1 && m.k.hp >= hp0 + g1, 'AutoPlay, engaged: she steps away and ghosts (+' + g1 + ')');
+      else t.ok(got.length === 0, 'AutoPlay, not engaged: no ghosting (she ' + (m.k.x === 4 && m.k.y === 4 ? 'stayed' : 'moved to ' + m.k.x + ',' + m.k.y) + ')');
+    });
   });
 })();
 

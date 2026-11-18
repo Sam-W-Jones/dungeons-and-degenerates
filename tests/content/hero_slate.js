@@ -110,8 +110,10 @@
           t.ok(d.length > 20 && !/undefined|NaN|\[object/.test(d), id + ' L' + lv + ' desc ' + (user ? 'with' : 'without') + ' a user: ' + d.slice(0, 60));
         });
         const d = desc(id, lv);
-        // DESIGN §6 v2 simplicity: one breath, one verb (+ one rider), no hidden Rage clauses, no removed mechanics
-        t.ok(d.length <= 160, id + ' L' + lv + ' desc reads in one breath (' + d.length + ' chars): ' + d);
+        // DESIGN §6 v2 simplicity: one breath, one verb (+ one rider), no hidden Rage clauses, no removed mechanics.
+        // [Nov 18, Deviation in hero-slate.md] Hold Still prints its hold heal as a second sentence: ≤ 250 for it
+        const cap = id === 'sla_hold_still' ? 250 : 160;
+        t.ok(d.length <= cap, id + ' L' + lv + ' desc reads in one breath (' + d.length + ' chars ≤ ' + cap + '): ' + d);
         t.ok(!/Rage 3\+|if you are holding|instead\b/i.test(d), id + ' L' + lv + ': no per-skill Rage or holding clauses');
         t.ok(!REMOVED.test(d), id + ' L' + lv + ': no removed v1 mechanics in "' + d + '"');
         const Lv = DD.skillLevel(s, lv);
@@ -1607,42 +1609,51 @@
       if (used.indexOf('sla_stress_ball') < 0 && !f.s.result) { untilTurnOf(f.u); DD.AutoPlay.takeTurn(); }
       const gi = used.indexOf('sla_hold_still'), si = used.indexOf('sla_stress_ball');
       t.ok(gi >= 0 && first.indexOf('sla_hold_still') >= 0, 'L' + lv + ': AutoPlay grabs on its first turn (' + first.join(', ') + ')');
-      t.ok(si > gi, 'L' + lv + ': and squeezes it the same turn or the next (' + used.join(', ') + ')');
+      // [balance pass, Nov 18] Hold Still I's hold heal went 3 → 4 (T8), Stress Ball I's own heal: a squeeze at I trades
+      // the hold heal for an equal one plus 3 damage, so AutoPlay rightly prefers Love Tap's 5 there; at II it squeezes
+      if (lv > 1) t.ok(si > gi, 'L' + lv + ': and squeezes it the same turn or the next (' + used.join(', ') + ')');
+      else t.ok(L('sla_stress_ball', 1).heal <= DD.Slate.HUG[0], 'L1: no squeeze asked (Stress Ball I heals ' + L('sla_stress_ball', 1).heal + ', the hold heal it replaces ' + DD.Slate.HUG[0] + '; ' + used.join(', ') + ')');
       t.ok(f.u.hp > hp0, 'L' + lv + ': Slate healed (' + hp0 + ' → ' + f.u.hp + ')');
       t.log('L' + lv + ': turn 1 ' + first.join(', ') + (used.length > first.length ? '; turn 2 ' + used.slice(first.length).join(', ') : ''));
     });
-    // holdValue: HOLD_AI alone without Stress Ball; more with it ready (now, or next turn)
+    // holdValue: HOLD_AI alone without Stress Ball; more with it ready (now, or next turn). [Nov 18] Every case also
+    // carries the hold-heal term (hug × (1 + 0.8 × turns), priced by healWorth): `hug1` below is that term at level I.
+    const hug1 = function (u) { return DD.AutoPlay.healWorth(u, L('sla_hold_still', 1).hug) * (1 + 0.8 * L('sla_hold_still', 1).turns); };
     let f = fight({ slate: { x: 4, y: 4, skills: [{ id: 'sla_hold_still', level: 1 }] }, enemies: [{ id: 'test_grunt', x: 5, y: 4 }, { id: 'test_brute', x: 3, y: 4 }] });
     f.u.hp = Math.round(f.u.maxHp * 0.4);
-    t.eq(hv(f, 5, 4), AI, 'no Stress Ball socketed: holdValue = HOLD_AI');
+    const near = function (a, b) { return Math.abs(a - b) < 1e-9; };
+    t.ok(near(hv(f, 5, 4), AI + hug1(f.u)), 'no Stress Ball socketed: holdValue = HOLD_AI + the hold heals (' + hv(f, 5, 4) + ')');
     t.eq(hv(f, 3, 4), 0, 'an immovable brute: nothing to hold, 0');
     f = fight({ slate: { x: 4, y: 4, skills: [{ id: 'sla_hold_still', level: 1 }, { id: 'sla_stress_ball', level: 1 }] }, enemies: [{ id: 'test_grunt', x: 5, y: 4 }] });
     const sb = L('sla_stress_ball', 1);
-    const near = function (a, b) { return Math.abs(a - b) < 1e-9; };
     f.u.hp = Math.round(f.u.maxHp * 0.4);   // below half: a heal is worth 1.5 a point
     let v = hv(f, 5, 4);
-    t.ok(v > AI && near(v, AI + sb.heal * 1.5 + 0.5 * sb.dmg), 'Stress Ball ready, Slate below half HP: HOLD_AI + heal × 1.5 + ½ dmg (' + v + ')');
+    t.ok(v > AI && near(v, AI + sb.heal * 1.5 + 0.5 * sb.dmg + hug1(f.u)), 'Stress Ball ready, Slate below half HP: HOLD_AI + heal × 1.5 + ½ dmg + the hold heals (' + v + ')');
     f.u.hp = f.u.maxHp - 2;
     v = hv(f, 5, 4);
-    t.ok(near(v, AI + 2 * 0.8 + 0.5 * sb.dmg), 'Slate missing 2 HP: HOLD_AI + 2 × 0.8 + ½ dmg (' + v + ')');
+    t.ok(near(v, AI + 2 * 0.8 + 0.5 * sb.dmg + 2 * 0.8 * 1.8), 'Slate missing 2 HP: HOLD_AI + 2 × 0.8 + ½ dmg + 2 × 0.8 × 1.8 (' + v + ')');
     f.u.hp = f.u.maxHp;
     v = hv(f, 5, 4);
-    t.ok(near(v, AI + 0.5 * sb.dmg), 'at full HP: the squeeze\'s damage only (' + v + ')');
+    t.ok(near(v, AI + 0.5 * sb.dmg), 'at full HP: the squeeze\'s damage only (no heal to price) (' + v + ')');
     const sl = slotOf(f.u, 'sla_stress_ball');
+    f.u.hp = f.u.maxHp - 2;
     sl.cd = 1; sl.fresh = false;
-    t.ok(hv(f, 5, 4) > AI, 'Stress Ball off cooldown by his next turn (cd 1, not fresh): still counted (the hold lasts through it)');
+    t.ok(hv(f, 5, 4) > AI + hug1(f.u), 'Stress Ball off cooldown by his next turn (cd 1, not fresh): still counted (the hold lasts through it)');
     sl.cd = 1; sl.fresh = true;
-    t.eq(hv(f, 5, 4), AI, 'Stress Ball just used (cd 1, fresh): not ready next turn, HOLD_AI only');
+    t.ok(near(hv(f, 5, 4), AI + hug1(f.u)), 'Stress Ball just used (cd 1, fresh): not ready next turn, HOLD_AI + the hold heals only');
     sl.cd = 0; sl.fresh = false;
-    // the quick pass prices the self-heal; the exact pass leaves it to the dry run
+    // the quick pass prices the self-heal; the exact pass leaves it to the dry run. [Nov 18] Holding a foe with no squeeze
+    // yet this turn, both subtract the hold heal the squeeze forfeits (HUG[0] for a direct grab, priced by healWorth)
     f.u.hp = Math.round(f.u.maxHp * 0.4);
     DD.Slate.grab(f.u, at(5, 4), 1);
     const ctx = DD.Targeting.buildCtx(f.u, sl, { x: 5, y: 4 });
     ctx.L = sb;
+    const forfeit = DD.AutoPlay.healWorth(f.u, DD.Slate.HUG[0]);
+    t.ok(near(forfeit, DD.Slate.HUG[0] * 1.5), 'the forfeit below half HP: hug × 1.5 (' + forfeit + ')');
     const q = DD.getSkill('sla_stress_ball').aiScore(ctx);
-    t.ok(near(q, sb.heal * 1.5), 'Stress Ball aiScore (quick pass, below half HP): heal × 1.5 (' + q + ')');
+    t.ok(near(q, sb.heal * 1.5 - forfeit), 'Stress Ball aiScore (quick pass, below half HP): heal × 1.5 − the forfeited hold heal (' + q + ')');
     ctx.autoplay = { preview: null };
-    t.eq(DD.getSkill('sla_stress_ball').aiScore(ctx), 0, 'Stress Ball aiScore with ctx.autoplay (exact pass): 0');
+    t.ok(near(DD.getSkill('sla_stress_ball').aiScore(ctx), -forfeit), 'Stress Ball aiScore with ctx.autoplay (exact pass): − the forfeited hold heal');
     noErrors(t, 'AutoPlay squeeze', p0);
   });
 
@@ -1805,5 +1816,188 @@
       t.eq(has(g, 'sla_grappled'), c[1], 'L' + lv + ': the prediction came true (held at its turn: ' + has(g, 'sla_grappled') + ')');
     });
     noErrors(t, 'grappled heldThrough', p0);
+  });
+
+  // ---- Nov 18 conditional heal: "It Is Not a Hug" (.tmp/heal/plan.md §4.1) ----------------------------------------
+  T.suite('hero_slate: conditional heal (Nov 18)', function (t) {
+    const p0 = DD.problems.length;
+    const HUG = DD.Slate.HUG;
+    const near = function (a, b) { return Math.abs(a - b) < 1e-9; };
+    // balance pass (Nov 18, T8): the plan's 3/4/4 raised one step (hug I 3 [2*, 5], II / III = I + 1): 0.98 hold heals a fight
+    // against T8's 1.0 over 1,800 campaign runs; holdValue prices the hug, so a bigger one buys grabs (docs/notes/balance.md)
+    t.eq(JSON.stringify(HUG), '[4,5,5]', 'DD.Slate.HUG = [4, 5, 5]');
+    [1, 2, 3].forEach(function (lv) { t.eq(L('sla_hold_still', lv).hug, HUG[lv - 1], 'Hold Still L' + lv + ': hug ' + HUG[lv - 1] + ' (never a key named heal)'); });
+    t.ok(!L('sla_hold_still', 1).heal && DD.getSkill('sla_hold_still').tags.indexOf('heal') < 0 && DD.getSkill('sla_hold_still').kind !== 'heal', 'no L.heal, no heal tag, not kind heal');
+    /** The labelled lift heals while fn runs: [{ src, target, n, healed }]. */
+    function lifts(fn) {
+      const out = [], orig = DD.Act.heal;
+      DD.Act.heal = function (src, target, n, opts) {
+        const r = orig.apply(this, arguments);
+        if (opts && opts.via === 'lift:slate') out.push({ src: src, target: target, n: n, healed: r });
+        return r;
+      };
+      try { fn(); } finally { DD.Act.heal = orig; }
+      return out;
+    }
+    function healStat(u) { const b = DD.Combat.state.stats.units[u.id]; return b ? b.heals : 0; }
+    /** Slate at (2, 4) with Hold Still at lv (+ extra.skills), extra.enemies / extra.allies; foes pass their turns. */
+    function grabFight(lv, extra) {
+      const sk = [{ id: 'sla_hold_still', level: lv }].concat((extra && extra.skills) || []);
+      return fight({ slate: { x: 2, y: 4, skills: sk }, enemies: extra.enemies, allies: extra.allies });
+    }
+    const ENEMY = [{ id: 'test_grunt', x: 3, y: 4, hpMult: 4 }, { id: 'test_grunt', x: 8, y: 8 }];
+
+    // 1. fires: the grab turn's end and each held turn end after it, then he lets go (I/II: 2 heals, III: 3)
+    [1, 2, 3].forEach(function (lv) {
+      const f = grabFight(lv, { enemies: ENEMY });
+      const u = f.u, g = at(3, 4);
+      u.hp -= 20;
+      t.eq(use(u, 'sla_hold_still', 3, 4), true, 'L' + lv + ': grabbed');
+      const want = L('sla_hold_still', lv).turns + 1;
+      const got = [];
+      let calls = [];
+      const h0 = healStat(u);
+      for (let k = 0; k < want + 1; k++) {
+        const hp = u.hp;
+        calls = calls.concat(lifts(function () { pass(); }));
+        got.push(u.hp - hp);
+      }
+      const exp = [];
+      for (let k = 0; k < want; k++) exp.push(HUG[lv - 1]);
+      exp.push(0);
+      t.eq(got.join(','), exp.join(','), 'L' + lv + ': +' + HUG[lv - 1] + ' at the grab turn\'s end and each held turn end, then none (' + got.join(',') + ')');
+      t.ok(!has(g, 'sla_grappled'), 'L' + lv + ': and he let go');
+      t.eq(calls.length, want, 'L' + lv + ': one labelled heal per held turn end (' + calls.length + ')');
+      t.ok(calls.every(function (c) { return c.src === u && c.target === u && c.n === HUG[lv - 1]; }), 'L' + lv + ': src and target are Slate, via lift:slate');
+      t.eq(healStat(u) - h0, HUG[lv - 1] * want, 'L' + lv + ': his heals stat grows by it (src = Slate)');
+      t.eq(rage(u), 0, 'L' + lv + ': his own hold heal gives him no Rage (nobody touched him)');
+    });
+    // a direct DD.Slate.grab heals the default (HUG[0])
+    let f = grabFight(1, { enemies: ENEMY });
+    f.u.hp -= 20;
+    DD.Slate.grab(f.u, at(3, 4), 1);
+    let hp = f.u.hp;
+    pass();
+    t.eq(f.u.hp - hp, HUG[0], 'a direct DD.Slate.grab: the default hug ' + HUG[0]);
+    // full HP: the heal is still called (a fire for the sim), heals 0
+    f = grabFight(1, { enemies: ENEMY });
+    use(f.u, 'sla_hold_still', 3, 4);
+    let calls = lifts(function () { pass(); });
+    t.ok(calls.length === 1 && calls[0].healed === 0 && f.u.hp === f.u.maxHp, 'full HP: one labelled call that heals 0');
+
+    // 2. doesn't fire otherwise: a Stress Ball turn, the foe killed / pushed apart / Slate stunned
+    f = grabFight(1, { enemies: ENEMY, skills: [{ id: 'sla_stress_ball', level: 1 }] });
+    f.u.hp -= 20;
+    use(f.u, 'sla_hold_still', 3, 4);
+    hp = f.u.hp;
+    t.eq(use(f.u, 'sla_stress_ball', 3, 4), true, 'Stress Ball: squeezed on the grab turn');
+    t.eq(f.u.hp - hp, L('sla_stress_ball', 1).heal, 'Stress Ball: its own ' + L('sla_stress_ball', 1).heal);
+    t.ok(DD.Slate.squeezed(f.u), 'Stress Ball: the squeeze marker is this turn');
+    hp = f.u.hp;
+    calls = lifts(function () { pass(); });
+    t.ok(f.u.hp === hp && calls.length === 0, 'Stress Ball turn: no hold heal at its end (one grapple heal per turn)');
+    t.ok(has(at(3, 4), 'sla_grappled') && !DD.Slate.squeezed(f.u), 'next turn: still held, the marker is stale');
+    hp = f.u.hp;
+    pass();
+    t.eq(f.u.hp - hp, HUG[0], 'next turn without a squeeze: the hold heal is back (+' + HUG[0] + ')');
+    [['killed', function (c) { DD.Act.kill(c.g, c.u); }],
+      ['pushed apart', function (c) { DD.Act.push(c.k, c.g, { x: 1, y: 0 }, 2); }],
+      ['Slate stunned', function (c) { DD.Act.addStatus(c.u, 'stun', { turns: 1 }, c.g); }],
+      ['Slate sheeped', function (c) { DD.Act.addStatus(c.u, 'sheep', { turns: 1 }, c.g); }]].forEach(function (cs) {
+      const f2 = grabFight(1, { enemies: ENEMY, allies: [{ id: 'test_knight', x: 3, y: 3 }] });
+      const c = { u: f2.u, g: at(3, 4), k: at(3, 3) };
+      c.u.hp -= 20;
+      use(c.u, 'sla_hold_still', 3, 4);
+      cs[1](c);
+      const hp2 = c.u.hp;
+      const cl = lifts(function () { pass(); });
+      t.ok(c.u.hp === hp2 && cl.length === 0, cs[0] + ': no hold heal (' + (c.u.hp - hp2) + ', ' + cl.length + ' calls)');
+    });
+    // 3. caps: one heal per turn end, even after a second grab that turn (one hold at a time)
+    f = grabFight(3, { enemies: [{ id: 'test_grunt', x: 3, y: 4, hpMult: 4 }, { id: 'test_grunt', x: 1, y: 4, hpMult: 4 }] });
+    f.u.hp -= 20;
+    use(f.u, 'sla_hold_still', 3, 4);
+    slotOf(f.u, 'sla_hold_still').cd = 0;
+    use(f.u, 'sla_hold_still', 1, 4);
+    hp = f.u.hp;
+    calls = lifts(function () { pass(); });
+    t.ok(f.u.hp - hp === HUG[2] && calls.length === 1, 'two grabs in a turn: one hold, one heal of ' + HUG[2] + ' (' + (f.u.hp - hp) + ')');
+    // 4. never revives: a downed Slate's tick heals nobody and he stays down
+    f = grabFight(1, { enemies: ENEMY, allies: [{ id: 'test_knight', x: 0, y: 0 }] });
+    use(f.u, 'sla_hold_still', 3, 4);
+    DD.Act.damage(null, f.u, 999);
+    t.ok(f.u.downed && !has(at(3, 4), 'sla_grappled'), 'downed: he let go');
+    DD.Act.addStatus(at(3, 4), 'sla_grappled', { turns: 1, silent: true }, f.u);   // a stale hold record, as if nothing released it
+    calls = lifts(function () { DD.Slate.tickHold(f.u); });
+    t.ok(f.u.downed && f.u.hp <= 0 && calls.length === 0, 'downed Slate + a stale hold: no heal call, still downed');
+
+    // 5. desc == execute: the numbers from the level, the Stress Ball clause only when it is socketed
+    [1, 2, 3].forEach(function (lv) {
+      const Lv = L('sla_hold_still', lv);
+      const base = 'Grab an adjacent foe: ' + Lv.dmg + ' damage, and it is Grappled until the end of your next ' +
+        (Lv.turns === 1 ? 'turn' : Lv.turns + ' turns') + ' (can\'t move; dragged along when you walk). You heal ' + Lv.hug + ' HP at the end of each of your turns while you hold it';
+      t.eq(desc('sla_hold_still', lv), base + '.', 'L' + lv + ' desc');
+      t.eq(desc('sla_hold_still', lv, { id: 'p', statuses: [], flags: {}, data: {}, items: [], skills: [{ id: 'sla_stress_ball', level: 1 }] }),
+        base + ' (not on a turn you squeeze it with Stress Ball).', 'L' + lv + ' desc with Stress Ball socketed');
+    });
+    t.eq(desc('sla_hold_still', 1), 'Grab an adjacent foe: 4 damage, and it is Grappled until the end of your next turn (can\'t move; dragged along when you walk). You heal 4 HP at the end of each of your turns while you hold it.', 'the plan\'s exact sentence (I), at the balance pass\'s hug 4');
+    f = grabFight(3, { enemies: ENEMY });
+    use(f.u, 'sla_hold_still', 3, 4);
+    const gd = DD.getStatus('sla_grappled').desc(st(at(3, 4), 'sla_grappled'));
+    t.ok(gd.indexOf('Slate heals ' + HUG[2] + ' HP at the end of each of his turns while he holds it.') > 0, 'Grappled (III) names the heal: ' + gd);
+    t.ok(DD.getStatus('sla_grappled').desc({ id: 'sla_grappled', stacks: 1, turns: 1, source: null, data: {} }).indexOf('heals ' + HUG[0] + ' HP') >= 0, 'Grappled with no level stored: the default ' + HUG[0]);
+    // 6. preview honesty: Hold Still's heal is delayed, so its preview shows none on Slate
+    f = grabFight(1, { enemies: ENEMY });
+    f.u.hp -= 20;
+    const prev = DD.Combat.preview(f.u, slotOf(f.u, 'sla_hold_still'), 3, 4);
+    const pe = prev.perUnit[f.u.id];
+    t.ok(!pe || !(pe.heal > 0), 'Hold Still\'s preview shows no heal on Slate (the desc carries the turn-end heal)');
+    t.eq((prev.perUnit[at(3, 4).id] || {}).dmg, L('sla_hold_still', 1).dmg, 'and its damage as before');
+
+    // 7. AutoPlay: holdValue prices the hold heals (0 when the grab likely kills); Stress Ball's forfeit
+    [1, 3].forEach(function (lv) {
+      const f3 = grabFight(lv, { enemies: ENEMY });
+      const Lv = L('sla_hold_still', lv);
+      const hv = function () { return DD.Targeting.pure(function () { return DD.Slate.holdValue(DD.Targeting.buildCtx(f3.u, slotOf(f3.u, 'sla_hold_still'), { x: 3, y: 4 })); }); };
+      const full = hv();
+      t.ok(near(full, DD.Slate.HOLD_AI), 'L' + lv + ' full HP: holdValue = HOLD_AI (nothing to heal)');
+      f3.u.hp = Math.round(f3.u.maxHp * 0.4);
+      const want = DD.Slate.HOLD_AI + DD.AutoPlay.healWorth(f3.u, Lv.hug) * (1 + 0.8 * Lv.turns);
+      t.ok(near(hv(), want) && hv() > full, 'L' + lv + ' hurt: holdValue = HOLD_AI + healWorth(hug) × (1 + 0.8 × ' + Lv.turns + ') (' + hv() + ')');
+      at(3, 4).hp = 2;
+      t.ok(near(hv(), DD.Slate.HOLD_AI), 'L' + lv + ': a grab that kills holds nothing: no heal term');
+    });
+    f = grabFight(1, { enemies: ENEMY, skills: [{ id: 'sla_stress_ball', level: 1 }] });
+    f.u.hp = Math.round(f.u.maxHp * 0.4);
+    const sctx = function () { const c = DD.Targeting.buildCtx(f.u, slotOf(f.u, 'sla_stress_ball'), { x: 3, y: 4 }); c.L = L('sla_stress_ball', 1); return c; };
+    const SB = DD.getSkill('sla_stress_ball');
+    t.ok(near(SB.aiScore(sctx()), DD.AutoPlay.healWorth(f.u, 4)), 'Stress Ball, nobody held: no forfeit');
+    use(f.u, 'sla_hold_still', 3, 4);
+    const forfeit = DD.AutoPlay.healWorth(f.u, HUG[0]);
+    t.ok(forfeit > 0 && near(SB.aiScore(sctx()), DD.AutoPlay.healWorth(f.u, 4) - forfeit), 'Stress Ball while holding, no squeeze yet: − the hold heal it forfeits (' + forfeit + ')');
+    use(f.u, 'sla_stress_ball', 3, 4);
+    t.ok(near(SB.aiScore(sctx()), DD.AutoPlay.healWorth(f.u, 4)), 'after a squeeze this turn: nothing left to forfeit');
+    // 8. Radio Edit: Hold Still heals, so it is never bleeped
+    const B = DD.BossSvammiel;
+    t.eq(DD.getSkill('sla_hold_still').heals, true, 'Hold Still: heals: true');
+    if (B && B.healsWith) [1, 2, 3].forEach(function (lv) { t.ok(B.healsWith(DD.getSkill('sla_hold_still'), L('sla_hold_still', lv), null), 'healsWith(Hold Still L' + lv + ')'); });
+    else t.log('svammiel not loaded: healsWith checked as heals: true only');
+    // 9. barks
+    const hb = DD.getHero('slate').barks.hug || [];
+    t.eq(hb.join(' | '), 'It is NOT a hug. | Hmph. Therapeutic. | Stop. Wiggling.', 'barks.hug: the three lines');
+    // 10. Short Fuse: someone else's conditional heal annoys him (Sparrow's Juice Box share: +1 Rage, intended)
+    if (DD.getHero('sparrow') && DD.getSkill('spa_juicebox')) {
+      const f4 = fight({ slate: { x: 2, y: 4 }, allies: [{ id: 'sparrow', x: 2, y: 5, level: 1, skills: [{ id: 'spa_juicebox', level: 1 }] }],
+        enemies: [{ id: 'test_grunt', x: 4, y: 5, hpMult: 3 }, { id: 'test_grunt', x: 8, y: 8 }], order: ['sparrow'] });
+      const sp = DD.Combat.heroes().filter(function (x) { return x.defId === 'sparrow'; })[0];
+      if (!DD.Combat.isTurnOf(sp)) DD.Combat.giveTurnTo(sp);
+      f4.u.hp -= 20;
+      DD.Act.addStatus(at(4, 5), 'bleed', { stacks: 2 }, null);
+      const hp4 = f4.u.hp;
+      const jb = sp.skills.filter(function (x) { return x.id === 'spa_juicebox'; })[0];
+      t.ok(DD.Combat.useSkill(sp, jb, 4, 5), 'Sparrow drains the Bleeding grunt');
+      t.ok(f4.u.hp > hp4 && rage(f4.u) === 1, 'Slate, the most hurt ally within 2, drinks along (+' + (f4.u.hp - hp4) + ') and gains 1 Rage (' + rage(f4.u) + ')');
+    } else t.log('sparrow not loaded: run with isolate=slate,sparrow for the Short Fuse share check');
+    noErrors(t, 'conditional heal', p0);
   });
 })();

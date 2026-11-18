@@ -137,6 +137,10 @@ naming Zarathor, Syllamin, Marbles, Marwyn, Ellaria, Josiah, Buga, Kiri, Betty, 
   the victim is still held for exactly N of its own turns. (Statuses normally count their bearer's turns, ARCHITECTURE's
   `decay`; this one counts its source's, so that "while grappling" lasts into his next turn for Stress Ball, drags and
   throws.) Side effect, accepted by the spec: a foe with two turns a round stays held through both.
+- **Hold Still's desc carries two sentences (Nov 18, plan §2.10 / §4.1):** grab + Grappled + the turn-end hold heal ("You
+  heal 3 HP at the end of each of your turns while you hold it."). DESIGN §6 "one verb + at most one rider": the heal
+  lives in the Grappled status (Hold Still's one rider), the desc prints it. The definition suite's "one breath" cap is
+  250 characters for Hold Still (160 for the rest). See "Conditional heal (Nov 18)" below.
 
 ## Requests
 
@@ -602,3 +606,111 @@ Requests:
   preview doesn't warn about it (HUD, polish).
 - Campaign check (review batch, 200 normal runs, seeds 53000+): Slate's parties won 29% against a 29% median (1.0×; the
   content batch: 0.78×; the audit: 0.54×). n = 52 runs, so ±0.2×.
+
+## Conditional heal (Nov 18) — "It Is Not a Hug" (build:g1; plan `.tmp/heal/plan.md` §4.1, the user's Nov 18 request)
+
+The user (Nov 12, D9): "Slate gets a skill for healing while grappling something"; (Nov 18): "I want everyone else
+brought up but by conditional healing". The D9 grapple heal moves from the pool Stress Ball onto his STARTING Hold Still.
+
+- **What:** at the end of each of Slate's own turns, if he holds a foe (`heldBy(slate)` → v and `holdOk(slate, v)`: he
+  can hold on and they are adjacent) and he did not squeeze with Stress Ball this turn, he heals Hold Still's `hug`. The
+  grab turn counts (the heal runs in `tickHold` BEFORE the `slaFresh` early return and before the countdown / release),
+  so a hold heals 2 times at I/II (the grab turn's end and the next turn's end) and 3 times at III, if the foe lives.
+  Self only, active only (`holdOk` checks `active` before `DD.Act.heal`; a downed Slate never heals, never revives).
+  Bosses are immovable (never held). One grapple heal per turn: Stress Ball's execute sets
+  `slate.data.sla.squeeze = state.turn` (any use) and that turn's hold heal is skipped (Stress Ball's 4/5/6 unchanged).
+- **Numbers:** `hug` = **3 / 4 / 4** (`HUG`, exported as `DD.Slate.HUG`); Hold Still's levels
+  `[{ dmg: 4, turns: 1, hug: 3 }, { dmg: 5, turns: 1, hug: 4 }, { dmg: 6, turns: 2, hug: 4 }]` (the key is never `heal`).
+  The level's hug is stored on the Grappled instance after a successful grab (`st.data.hug = ctx.L.hug`); `grab()` writes
+  the default 3, so a direct `DD.Slate.grab` heals 3. Tuning range (balance pass only): hug I 3 [floor 2 on a
+  guard-rail breach, max 5]; II/III = I + 1, capped 6.
+- **The call:** `DD.Act.heal(slate, slate, hug, { via: 'lift:slate' })`, always called when the condition holds (0 at
+  full HP: the sim counts every fire); the log line ("… very, very still. It is NOT a hug. …") and the bark (`hug`, 0.35:
+  "It is NOT a hug." / "Hmph. Therapeutic." / "Stop. Wiggling.") only when it healed > 0.
+- **Texts (desc == execute):** Hold Still I: "Grab an adjacent foe: 4 damage, and it is Grappled until the end of your
+  next turn (can't move; dragged along when you walk). You heal 3 HP at the end of each of your turns while you hold it."
+  (II: 5 damage, heal 4; III: 6 damage, "next 2 turns", heal 4.) With Stress Ball socketed on the user, the last sentence
+  ends "… while you hold it (not on a turn you squeeze it with Stress Ball)." Grappled's desc appends "Slate heals N HP at
+  the end of each of his turns while he holds it." (N = the instance's hug). Stress Ball's desc and numbers unchanged.
+- **Radio Edit:** Hold Still gets `heals: true` (Svammiel's `healsWith` never bleeps it; `hug` doesn't match /heal/).
+- **AutoPlay:** `holdValue` (Hold Still's `autoplayValue`, both passes) adds `healWorth(u, L.hug) × (1 + 0.8 × L.turns)`
+  for the turn-end heals no dry run sees, and 0 for that whole term when `DD.AI.estimate(u, v, L.dmg) >= v.hp` (the grab
+  likely kills). `stressScore` subtracts the hold heal a squeeze forfeits (`forfeit = healWorth(u, heldHug)` while he
+  holds a foe and the squeeze marker is unspent this turn): the quick pass returns `healWorth(u, L.heal) − forfeit`, the
+  exact pass `−forfeit`. `healWorth` is now the shared `DD.AutoPlay.healWorth` (E2), the old local copy as the fallback.
+- **Short Fuse:** his own hold heal is nobody touching him (no Rage). Sparrow's Juice Box share and Valdris' dents heal him
+  with another src: +1 Rage each (intended; the new suite checks Sparrow's share with a sandbox Sparrow).
+- **Tests:** new suite `hero_slate: conditional heal (Nov 18)` (66 assertions with `isolate=slate,sparrow`, 69 with
+  svammiel loaded): +hug at the grab turn's end and each held turn end at I/II/III (2/2/3 heals), src = target = Slate,
+  `via` lift:slate, the heals stat grows, no Rage; a direct grab heals 3; full HP = one 0-HP call; a Stress Ball turn → no
+  hold heal, the next turn's is back; foe killed / pushed apart / Slate stunned / sheeped → no call; two grabs in a turn →
+  one heal; downed Slate with a stale hold record → no call, still down; the exact descs (with / without Stress Ball);
+  Grappled names the heal (III 4, default 3); Hold Still's preview shows no heal on him; holdValue = HOLD_AI at full HP,
+  + the hug term when hurt (I and III), no term when the grab kills; Stress Ball's forfeit (none unheld, − hug held, none
+  after a squeeze); `heals: true` / `healsWith`; barks.hug; Sparrow's share → +1 Rage. Updated: the definition suite's
+  one-breath cap (250 for Hold Still: the Deviation above), and the "AutoPlay grabs and squeezes" suite's holdValue /
+  Stress Ball aiScore expectations (each now carries the hug term / the forfeit; none deleted). The old grab tests that
+  end his turn while holding (Hold Still, Stress Ball, edge cases) still pass unchanged: they assert relative HP or start
+  him at full HP.
+- **Sanity sim** (`bash tools/sim.sh "debug=1&raw=1&seeds=30&from=50000&stop=2&party=slate,corelos,marbles,syllamin"`,
+  `.tmp/heal/g1/slate.txt`, 30 runs, 214 fights): `lift:slate` **0.73 fires a fight, 1.6 HP a fight** (self 1.6, overheal
+  32%); regular 0.69 / 1.4, elite 0.83 / 2, boss 0.86 / 2. **Under T8's minimum (1.0 fires) and band (2.5-10 HP).**
+  Diagnosis (a temporary probe suite, act 1-2 regular encounters, the same party at levels 2-3, then removed): 28 grabs in
+  23 fights, 5 of them killed the foe outright, 21 still held at the grab turn's end, 23 hold heals in all: about one
+  held turn end per grab, because the held foe usually dies before his next turn ends (allies and his own Love Tap kill
+  it: good play). Hold Still was off cooldown at 78 of his 126 turn starts but had a liftable foe next to him at only 5:
+  the grabs come after he walks up, so fires are limited by opportunity, not by the price. A tried extra AutoPlay term
+  (Personal Space / Putting My Foot Down pricing the hold heals a throw or stomp forfeits) changed nothing on the same
+  seeds (0.73 → 0.73: the probe saw no throws of a held foe) and was removed to keep the plan literal. Raising `hug`
+  inside its range (balance pass) lifts HP a fight, not fires; the fires minimum is a question for the balance pass.
+
+- **Test runs (Nov 18, build:g1):** `tools/test.sh "suite=hero_slate,hero_sparrow,hero_marwyn,hero_josiah&isolate=slate,sparrow,marwyn,josiah"`: 94 suites, all pass but the two that need other heroes loaded (Kiri / Basanos / Valdris; they pass in the full run). One full `bash tools/test.sh`: 1309 suites, 150,284 ok, 3 failures, all in "content: descriptions at every level" (status `val_dented` desc: `fn.apply is not a function`, valdris.js, G2's work in progress); 0 swallowed "Error in" lines from the G1 files.
+- **Review (Nov 18, review:g1, adversarial):** read end to end against plan §4.1 / §3. `tickHold` heals before the
+  `slaFresh` return and before the countdown / release (2 / 2 / 3 heals a grab at I / II / III); the squeeze marker keys
+  on `state.turn` (one per unit turn, so a squeeze on another unit's turn never blanks his); `holdOk` (active, not
+  stunned or sheeped, adjacent) runs before `DD.Act.heal`, src = Slate (no Rage), `via` lift:slate; `heals: true` is read
+  only by Svammiel's `healsWith`; `unit.data` is fresh every fight (`baseUnit`), so no stale squeeze marker crosses
+  fights; `holdValue` / `stressScore` are the plan's formulas (the exact pass's aiScore × 0.75 is the engine's, as for
+  every aiScore). Mutations read against the suite (the heal after the fresh-turn return, no squeeze marker, no
+  `st.data.hug` write, no `holdOk`, no label): each would fail it. No code change. **T8 re-measured** on fresh seeds:
+  `bash tools/sim.sh "debug=1&raw=1&seeds=30&from=55000&stop=2&party=slate,corelos,hjalmar,zarathor"` (243 fights):
+  **0.72 fires, 1.8 HP a fight** (regular 0.69 / 1.7, elite 0.92 / 1.8, boss 0.71 / 2.1; overheal 22%); Hold Still 1.0
+  use a fight (baseline 1.0-1.2); 0 errors, 0 DD.warn, 0 stalls. Slate also sat in the review's Sparrow page (from 55100,
+  226 fights): 0.79 fires, 2.0 HP. Pooled with the build page (683 fights): ~0.75 fires, ~1.8 HP a fight, under T8's
+  1.0 fires and its 2.5-10 HP band. Confirmed cause: opportunity (about one grab a fight, the held foe rarely outlives
+  his next turn), not a bug and not the AutoPlay price. `hug` I 5 (the top of its range) would put HP a fight near ~3
+  (inside the band); nothing inside the plan's levers lifts fires to 1.0: the lead's call (balance pass, plan §7).
+
+### DESIGN §6 brief (Nov 18)
+Anchor (unique in `docs/DESIGN.md`, `### Slate the Unamused`, lines 559-561 today):
+
+```
+- Basic *Love Tap* (5, adjacent). Starters: *Hold Still* (grab an adjacent foe: it is Grappled until the end of his next
+  turn — it can't move and is dragged along when he walks) and *Personal Space* (throw an adjacent foe or object; it and
+  what it hits take damage).
+```
+
+Replacement (keeps "move 4" and Short Fuse's "gives him a buff status (Block doesn't count)", which sit elsewhere in the
+subsection, untouched):
+
+```
+- Basic *Love Tap* (5, adjacent). Starters: *Hold Still* (grab an adjacent foe: it is Grappled until the end of his next
+  turn — it can't move and is dragged along when he walks — and he heals 4–5 HP at the end of each of his turns while he
+  holds it, except a turn he squeezes it with Stress Ball) and *Personal Space* (throw an adjacent foe or object; it and
+  what it hits take damage).
+```
+
+### Balance pass (Nov 18) — heal:balance: `HUG` 3/4/4 → 4/5/5 (T8)
+The conditional-healing balance pass (`docs/notes/balance.md` "Conditional healing pass (Nov 18)") read `lift:slate` at
+the plan's numbers on 1,800 fresh campaign runs (iterations 0-2, seeds 30000-32599, normal; his number unchanged across
+them): **0.98 fires (± 0.04) and 2.57 HP a fight** (regular 0.76 / 1.84, boss 1.14 / 3.20) against T8's minimum 1.0 fires
+(band 2.5-10, rail ≤ 10 a regular fight). The plan's T8 rule: his AutoPlay term is in (`holdValue` prices the hug), so
+his number moved one step inside its range: `hug` I 3 → 4 (II / III = I + 1 = 5, `HUG = [4, 5, 5]`; range I [2*, 5]).
+Since `holdValue` prices the hug, the bigger heal also buys grabs: iterations 3-4 (1,200 runs) read **1.02 fires and
+3.3 HP a fight** (regular ~2.4, rail ≤ 10 held). Only the constant moved (the levels, the desc, the Grappled status and
+`holdValue` read it); the suite's pin and its literal "default hug 3" read the constant now; DESIGN §6, v2-digest §2 and
+the brief above say 4–5 / 4/5.
+One behaviour moved with it, and its test with it: at level I the hold heal (now 4) equals Stress Ball I's own heal, so a
+squeeze trades the turn-end heal for an equal one plus 3 damage, and AutoPlay rightly prefers Love Tap's 5; at II (and
+in the campaign sims) it still squeezes. "AutoPlay grabs and squeezes" asks for the squeeze from II and, at I, checks
+that Stress Ball I's heal is no more than the hold heal it replaces. Stress Ball's numbers and desc are unchanged.

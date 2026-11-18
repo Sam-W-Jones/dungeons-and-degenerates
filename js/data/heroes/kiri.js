@@ -7,6 +7,9 @@
  * Attacks of opportunity (DESIGN §4.2): her bow is ranged, so she never makes one; walking off a melee foe provokes one
  * like for anybody, but Ethereal Step is a teleport and Fade Out a Stealth, so both slip away (her escape tools), and
  * Banishing Shot's push never provokes. A cosmetic passive hook barks ('provoked') when she gets hit by one.
+ * Conditional heal (Nov 18, "Ghosting"): at her turn start (after her arrows land) the passive marks her engaged
+ * (unit.data.kir.engaged = state.turn) when a foe stands next to her; Ethereal Step on that turn heals her 5/6/7 after a
+ * successful teleport (via 'lift:kiri'), once per turn (data.kir.ghosted).
  * Registers: hero kiri, 11 skills, status kir_incoming, surface kir_ghost_mist, 3 items (all ids kir_*).
  */
 (function () {
@@ -15,10 +18,23 @@
 
   const HERO = 'kiri';
   const GHOST = '#a99bff', GHOST_BLUE = '#8fd3ff', GHOST_DEEP = '#6f5fe0';
+  // Ethereal Step I-III: the heal when she leaves a foe she started next to (the conditional-healing balance pass, Nov 18:
+  // the plan's 3/4/5 raised to the top of its range, T8: AutoPlay rarely starts her turn in melee; docs/notes/balance.md)
+  const GHOSTING = [5, 6, 7];
 
   // ---- helpers ------------------------------------------------------------------------------------
   function active(u) { return !!u && !u.dead && !u.downed; }
   function has(u, id) { return DD.Act.hasStatus(u, id); }
+  /** Her per-fight scratch (unit.data is fresh every fight and deep-copied by dry runs). */
+  function kirData(u) { const d = u.data || (u.data = {}); return d.kir || (d.kir = {}); }
+  /** AutoPlay's shared heal price (DD.AutoPlay.healWorth, E2), with the same formula as a fallback. */
+  function healWorth(u, n) {
+    if (DD.AutoPlay && typeof DD.AutoPlay.healWorth === 'function') return DD.AutoPlay.healWorth(u, n);
+    n = Number(n);
+    if (!active(u) || !(n > 0)) return 0;
+    const miss = (u.maxHp || 0) - (u.hp || 0);
+    return miss > 0 ? Math.min(n, miss) * (miss > u.maxHp / 2 ? 1.5 : 0.8) : 0;
+  }
   /**
    * A range number in a desc as targeting resolves it for this user: the Ghostwood Longbow and the generic range items
    * (+1 on skills reaching 2+), Dazzle, modifyRange hooks (playtest heroes-2 / heroes-v1). No user: the listed number.
@@ -92,6 +108,35 @@
     });
     return list.length;
   }
+  // ---- Ghosting (Nov 18): Ethereal Step out of melee heals her ------------------------------------------
+  /** Turn start, after her arrows land: a foe next to her now makes this turn's Step a ghosting. */
+  function markEngaged(u) {
+    const s = DD.Combat && DD.Combat.state;
+    if (!active(u) || !s) return false;
+    const foe = s.units.filter(function (f) { return f !== u && active(f) && DD.Grid.hostile(u, f) && DD.Grid.dist(u, f) === 1; })[0];
+    if (foe) { kirData(u).engaged = s.turn; kirData(u).engagedWith = foe.name; }
+    return !!foe;
+  }
+  /** Engaged at this turn's start and not yet ghosted this turn. */
+  function canGhost(u) {
+    const s = DD.Combat && DD.Combat.state, d = u && u.data && u.data.kir;
+    return !!s && !!d && d.engaged === s.turn && d.ghosted !== s.turn;
+  }
+  /** After a successful Step: she ghosts the foe she started next to (once per turn). Returns HP healed. */
+  function ghost(u, n) {
+    const s = DD.Combat && DD.Combat.state;
+    if (!active(u) || !canGhost(u)) return 0;
+    kirData(u).ghosted = s.turn;
+    const healed = DD.Act.heal(u, u, n, { via: 'lift:kiri' });
+    if (healed > 0) {
+      DD.FX.text(u, '👻 Ghosted!', { color: GHOST, size: 14, parallel: true });
+      // [heal QA-1] the log says why she healed (the foe she started her turn next to)
+      DD.Act.log(u.name + ' ghosts ' + (kirData(u).engagedWith || 'the foe she started next to') + '. Left on read. She feels lighter already.', 'hero');
+      DD.Act.maybeBark(u, 'ghost', 0.4);
+    }
+    return healed;
+  }
+
   /** The shooter went down before her next turn: her arrows lose their way. */
   function fizzleArrows(shooter) {
     const list = pendingArrows(shooter);
@@ -289,16 +334,24 @@
     },
   });
 
-  // Ethereal Step (starter): straight-line teleport through walls and units
+  // Ethereal Step (starter): straight-line teleport through walls and units. Nov 18 (conditional healing): its one rider
+  // heals her when she started the turn next to a foe (the level key is `ghost`, never `heal`)
   skill({
     id: 'kir_step', name: 'Ethereal Step', icon: '🌀', kind: 'move', tags: ['move', 'teleport', 'ethereal'],
     ap: 1, cooldown: 1,
-    levels: [{ len: 3 }, { len: 4 }, { len: 5 }],
+    levels: [{ len: 3, ghost: GHOSTING[0] }, { len: 4, ghost: GHOSTING[1] }, { len: 5, ghost: GHOSTING[2] }],
     target: { type: 'tile', range: function (L) { return [1, L.len]; }, los: false, filter: 'empty', straight: true },
     desc: function (L, user) {
-      return 'Teleport to an empty tile up to ' + reach(user, 'kir_step', L.len) + ' tiles away in a straight line, through walls and units.';
+      return 'Teleport to an empty tile up to ' + reach(user, 'kir_step', L.len) + ' tiles away in a straight line, through walls and units. ' +
+        'If a foe was next to you when your turn started, you ghost it: heal ' + L.ghost + ' HP.';
     },
     flavor: 'Excuse me. Coming through. Through the wall. Through you. No, you don\'t get a free swing.',
+    // the exact pass dry-runs the heal; the quick pass (which picks the landings worth a dry run) is told about it here
+    aiScore: function (ctx) {
+      if (ctx.autoplay) return 0;
+      const u = ctx.user;
+      return u && canGhost(u) ? healWorth(u, (ctx.L || {}).ghost) : 0;
+    },
     execute: function (ctx) {
       const u = ctx.user, p = ctx.target;
       if (!active(u) || !p) return;
@@ -306,7 +359,7 @@
       DD.FX.particles(from, { kind: 'runes', color: GHOST, count: 12 });
       if (DD.Act.teleport(u, p.x, p.y)) {
         DD.FX.particles(u, { kind: 'runes', color: GHOST_BLUE, count: 12, parallel: true });
-        DD.Act.maybeBark(u, 'move', 0.3);
+        if (!ghost(u, ctx.L.ghost)) DD.Act.maybeBark(u, 'move', 0.3);
       }
     },
   });
@@ -526,7 +579,8 @@
       // the rule itself is data (every Kiri skill has target.los === false; a generic skill from a tome keeps its own
       // rule, hence "own"); these hooks deliver Arrow from Beyond (+ one cosmetic bark)
       hooks: {
-        onTurnStart: function (unit) { landArrows(unit); },
+        // her arrows land first (a foe they kill no longer counts), then Ghosting checks who is next to her (Nov 18)
+        onTurnStart: function (unit) { landArrows(unit); markEngaged(unit); },
         onDowned: function (unit) { fizzleArrows(unit); },
         // cosmetic: she walked off a foe like a mortal and paid for it (fired on the mover's own sources)
         onOpportunityAttack: function (o) {
@@ -567,12 +621,17 @@
       // extra key (passive hook): an attack of opportunity hit her as she walked off a foe
       provoked: ['Walked off like a mortal. Never again.', 'Should have stepped through. Noted.', 'That is what I get for using legs.',
         'Next time I leave through the wall.', 'Free swing, huh? Enjoy it. It was your last.'],
+      // Nov 18: Ethereal Step out of melee heals her (Ghosting, the heal > 0)
+      ghost: ['Leaving you on read.', 'It\'s not you. It\'s the plane of existence.', 'Ghosted.'],
     },
   });
 
   /** Small public surface for tests and other content (read-only helpers). */
   DD.Kiri = {
     GHOST: GHOST,
+    GHOSTING: GHOSTING.slice(),
+    markEngaged: markEngaged,
+    canGhost: canGhost,
     phaseLine: phaseLine,
     pendingArrows: pendingArrows,
     landArrows: landArrows,

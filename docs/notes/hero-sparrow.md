@@ -240,6 +240,10 @@ suite and the HUD donor suite pass; no swallowed errors.
   HP-cost skill from a tome costs her HP as usual.
 - No "can't be opportunity-attacked" rule for her (rules.md suggested it for skirmishers): her escapes already are
   Goblin Mode and Vein Glory, and walking off a brute should stay a real cost for the high-risk goblin.
+- **Juice Box's desc is two sentences with an "If" (Nov 18, plan §4.8):** the plan's final text adds the share ("If it
+  was Bleeding, the most hurt ally within 2 of you also heals half of that (rounded up).", 37 words at I). Her simplicity
+  suite's one-breath rule (≤ 22 words, no if/else) now exempts Juice Box: ≤ 40 words, ≤ 2 sentences, its one "If it was
+  Bleeding" clause. See "Conditional heal (Nov 18)" below.
 
 ## Requests
 
@@ -396,3 +400,95 @@ before the foe's Block and uncapped by its HP, so a drink at a 2-HP foe is over-
 
 - D1 / D4 with her real kit: Hemoglobin and Juice Box now hit a crate for exactly their 🔨 number and drain nothing (no
   heal from a crate: D1's "no lifesteal"); Vein Glory stays an opt-out. Her twin death line and the range texts hold.
+
+## Conditional heal (Nov 18) — "Sharing Is Caring (Ew)" (build:g1; plan `.tmp/heal/plan.md` §4.8, the user's Nov 18 request)
+
+The user (Nov 18): "I want everyone else brought up but by conditional healing". Sparrow's D9 heal (Juice Box) is
+broadened: a Bleeding foe's juice is shared with a hurt friend.
+
+- **What:** Juice Box drains a foe that was Bleeding at the cast (`stacks > 0`, read before the damage, as before) and
+  `dealt > 0`: her own heal is unchanged (all the damage dealt, unlabelled), then the most hurt active ally within 2 of her
+  (`shareTarget`: any active unit on her side, not her, Manhattan ≤ `SHARE_RANGE` 2, missing HP > 0; most missing HP,
+  ties: the lower HP ratio, then party order) heals `ceil(dealt × SHARE)`. Nobody hurt in reach, a downed ally, Block
+  soaking it all (dealt 0) or Sparrow down mid-drain → no share (no call). Never a revive (`active(ally)` and her own
+  `active` are checked before the heal).
+- **Numbers:** `SHARE = 0.5`, `SHARE_RANGE = 2` (new `DD.Sparrow = { SHARE, SHARE_RANGE, JUICE_RANGE, shareOf,
+  shareTarget, shareWord }` at the end of the file). I with 2 Bleed: she drains and heals 11, the ally heals 6. Tuning
+  range: SHARE ½ [½, ⅔] (the desc word comes from `shareWord()`: "half" / "two thirds").
+- **The call:** `A().heal(sparrow, ally, ceil(dealt × SHARE), { via: 'lift:sparrow' })` (the share only; her own drain stays
+  unlabelled); a "Sip!" pop-up, a beam and the bark (`share`, 0.4: "Here. Sip. Don't make it weird." / "Sharing is caring.
+  Ew." / "Bendy straw, best friend edition.") only when it healed > 0.
+- **Texts (desc == execute):** Juice Box I: "Drain a foe within 3: deal 5 damage +3 per Bleed on it, and heal the damage
+  dealt. If it was Bleeding, the most hurt ally within 2 of you also heals half of that (rounded up)." (II 7 / +3, III 8 /
+  +4; the reach from `reach()` as before; "Drain a foe within 3:" kept for the docs tests.) Tags / kind unchanged
+  (`['blood', 'drain', 'heal']`, spell; no `L.heal`).
+- **AutoPlay:** the exact pass dry-runs the share (both heals in the preview). The quick-pass branch of `aiScore` adds,
+  when the target is Bleeding, `DD.AutoPlay.healWorth(ally, ceil(est / 2))` for the ally `shareTarget` would pick (est =
+  the drain estimate it already computed); the exact pass still returns the Bleed only.
+- **Short Fuse:** the share healing Slate gives him +1 Rage (another src: intended; checked in hero_slate's new suite).
+- **Tests:** new suite `hero_sparrow: conditional heal (Nov 18)` (51 assertions): at I/II/III with 2 Bleed she heals the
+  dealt and the knight 2 tiles away heals ceil(dealt / 2) (preview == reality), one labelled share call (src Sparrow) and
+  her drain unlabelled, her heals stat grows by both; the plan's case (11 / 6); the more hurt of two allies; a tie → the
+  lower HP ratio; an ally 3 tiles away → no share; only a full-HP ally → no call; no Bleed → her heal only; a downed
+  ally skipped for the hurt mage (and stays down); only a downed ally → no share; Block soaking all → no share; Sparrow
+  down mid-drain → neither heal; three hurt allies → one share; the exact descs at I/II/III and the plan's sentence;
+  the preview shows +11 on her and +6 on the knight; aiScore: nobody hurt → Bleed only, a hurt knight → + healWorth(knight,
+  ceil(est / 2)), exact pass → Bleed only, no Bleed → 0; barks.share. Updated: the simplicity suite's one-breath rule
+  (the Deviation above; nothing deleted).
+- **Sanity sim** (`bash tools/sim.sh "debug=1&raw=1&seeds=30&from=50100&stop=2&party=sparrow,basanos,marbles,zarathor"`,
+  `.tmp/heal/g1/sparrow.txt`, 30 runs, 225 fights): `lift:sparrow` **0.23 fires a fight, 1.4 HP a fight to others**
+  (overheal 8%); regular 0.17 / 0.6, elite 0.5 / 2.8, boss 0.3 / 3.5. T8: HP inside the band (0.8-3.2); fires a hair under
+  the 0.25 minimum (n = 225 fights, within the noise of a 30-run page). Juice Box was cast 1.0 times a fight; about a
+  quarter of the drains had a Bleeding target and a hurt friend within 2. No AutoPlay change made (the exact pass already
+  dry-runs the share from every tile it walks to).
+
+- **Test runs (Nov 18, build:g1):** `tools/test.sh "suite=hero_slate,hero_sparrow,hero_marwyn,hero_josiah&isolate=slate,sparrow,marwyn,josiah"`: 94 suites, all pass but the two that need other heroes loaded (Kiri / Basanos / Valdris; they pass in the full run). One full `bash tools/test.sh`: 1309 suites, 150,284 ok, 3 failures, all in "content: descriptions at every level" (status `val_dented` desc: `fn.apply is not a function`, valdris.js, G2's work in progress); 0 swallowed "Error in" lines from the G1 files.
+- **Review (Nov 18, review:g1, adversarial):** read end to end against plan §4.8 / §3. Bleed is read before the damage,
+  `dealt` is the HP the foe really lost, the share needs `stacks > 0`, `dealt > 0`, an active Sparrow and an active,
+  hurt unit on her side within Manhattan 2 (`DD.Grid.dist`), most missing HP, then the lower ratio, then `state.units`
+  order (heroes in party order, summons after); src = Sparrow, `via` lift:sparrow, her drain unlabelled; Juice Box only
+  ever targets a foe, so no aimed revive can ride on it. **Added** to the suite: the combat HUD itself wears both
+  heals (Juice Box armed with key 2, the cursor on the Bleeding grunt: overlay badges +11 on her, +6 on the knight; the
+  renderer's green "+N" badge reads exactly these). A hover can't be staged through `tools/shot.sh`, so this HUD-level
+  assertion stands in for a screenshot. **T8 re-measured** on fresh seeds:
+  `bash tools/sim.sh "debug=1&raw=1&seeds=30&from=55100&stop=2&party=sparrow,slate,pebbles,syllamin"` (226 fights):
+  **0.14 fires, 0.8 HP a fight to others** (regular 0.07 / 0.2, elite 0.35 / 2.0, boss 0.34 / 2.5; overheal 5%); Juice
+  Box 1.0 a fight (baseline 1.1); 0 errors, 0 DD.warn, 0 stalls. Pooled with the build page (451 fights): ~0.19 fires,
+  ~1.1 HP to others: HP inside T8's 0.8-3.2 band, fires under its 0.25 minimum. Cause: opportunity (a Bleeding target
+  AND a hurt friend within 2 at the cast, Juice Box on cooldown 2), not a bug; the plan's AutoPlay terms are as written
+  (the exact pass dry-runs the share). `SHARE` ⅔ would lift HP, not fires: the lead's call (balance pass, plan §7).
+
+### DESIGN §6 brief (Nov 18)
+Anchor (unique in `docs/DESIGN.md`, `### Sparrow the Hemogoblin`, lines 527-528 today):
+
+```
+- Basic *Shiv Happens* (4 and Bleed 1, adjacent). Starters: *Hemo-Glob* (2 HP: a ranged hit and Bleed) and *Juice
+  Box* (drain a foe within 3: more damage per Bleed on it, and she heals the damage dealt).
+```
+
+Replacement (keeps the pinned "*Juice Box* (drain a foe within 3:", i.e. "Box* (drain a foe within 3:" after the wrap):
+
+```
+- Basic *Shiv Happens* (4 and Bleed 1, adjacent). Starters: *Hemo-Glob* (2 HP: a ranged hit and Bleed) and *Juice
+  Box* (drain a foe within 3: more damage per Bleed on it, and she heals the damage dealt; if it was Bleeding, the most
+  hurt ally within 2 of her also heals half of that, rounded up).
+```
+
+### QA fixes (Nov 18, qa-fix:heal)
+- **[heal QA-1] the log says why the ally healed.** A share that heals (> 0) now logs, right after "<ally> heals N HP
+  (Sparrow).": "Sparrow shares the juice with <ally>. Bendy straw. Don't make it weird." Test: "hero_sparrow:
+  conditional heal (Nov 18)".
+- **[heal QA-5] heroes first.** `shareTarget` prefers a hurt hero: a summon (her Blood Clone, Zarathor's Statue of Me,
+  Ellaria's corgis, Onyx) drinks only when no hero within 2 is hurt; inside each group the order is as before (most
+  missing HP, then the lower HP ratio, then party order). The desc says so: "... the most hurt ally within 2 of you
+  (heroes first) also heals half of that (rounded up)." Fires are unchanged (any hurt unit in reach still fires); only
+  the target moves (the audit measured 0.07 HP a fight to summons against 1.20 to others). DESIGN §6 and v2-digest §2
+  carry "heroes first". Tests: "hero_sparrow: conditional heal (Nov 18)" (a more hurt summon loses to a hurt hero; the
+  summon drinks when no hero is hurt; the desc).
+
+### Deviations (Nov 18, qa-fix:heal)
+- Plan §4.8 says "any unit on her side" and gives the desc without "(heroes first)". QA-5 (the lead decides) offered
+  "say so in the desc" or "prefer heroes"; this fix takes "prefer heroes" AND says it in the desc, so desc == execute.
+  The user's words ("I want everyone else brought up") are about the heroes; a decoy statue built to be beaten was the
+  "most hurt" ally too often. To revert: drop the `bh` (hero) test in `shareTarget` and " (heroes first)" in the desc
+  (and in DESIGN §6 / v2-digest §2).

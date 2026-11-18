@@ -196,7 +196,8 @@ next n turns):
   `zar_drip` (stacks = +10% each).
 - Summon `zar_statue`: `unit.data.r` (taunt radius).
 - `DD.Zarathor` (read-only helpers): `dripStep(unit)`, `dripTier(unit)`, `assessDrip(unit)`, `strutPath(unit, tile)`,
-  `statueTaunt(statue, quiet)`, `wildSurge(unit, source, good)`.
+  `statueTaunt(statue, quiet)`, `wildSurge(unit, source, good)`; (Nov 18) `CARD` ('zar_loyalty_card'), `CARD_HEAL` (3),
+  `cardReady(unit)` → bool (he stands, wears the card, not yet paid out this turn).
 
 ## Deviations
 
@@ -348,3 +349,110 @@ Suite: `hero_zarathor: v2 requests — …`. Rules: `docs/notes/rules.md` "v2 re
   can't move it." — the engine no longer adds "it can start a swap" for a unit that never moves (the UI reviewer's
   request; `engine: finish review — a statue that never moves …`). Throw Money At It stays a D1 opt-out (its gold is paid
   in execute).
+
+## Conditional healing (Nov 18) — "Loyalty Card (Platinum Pending)" (build:g4, plan §4.15)
+
+The user (Nov 18): "I want everyoe else brought up but by conditional healing". Zarathor (tier C, a strong hero) gets the
+lightest delivery: a new **common hero trinket**. Ellaria untouched.
+
+**What.** While he wears the card, `payGold(ctx)` paying a skill's gold cost **from the purse** (`have >= cost &&
+spendGold(cost)`) heals him **`CARD_HEAL` = 3**, once per turn (`unit.data.zar.card = state.turn`, spent even at full HP).
+The Platinum Hellcard branch (the missing gold paid in HP) never counts. Self, active only (`cardReady` checks it before
+the heal: never a revive). Gold is sandboxed in previews and dry runs and `spendGold` still succeeds there, so previews
+show the +3.
+- **Item** `zar_loyalty_card`: "Loyalty Card (Platinum Pending)", trinket, **common**, 🎫, `hero: 'zarathor'`, `stats: {}`,
+  `hooks: {}` (the rule lives in `payGold`, the Canned / Serum pattern). Desc "Whenever Zarathor pays for one of his skills
+  with gold, he heals 3 HP (once per turn)." (86 chars) · flavor "Every purchase earns points. The points are feelings.
+  Platinum status: pending." (79). The id is exactly the plan's (the sim's WORN table reads it).
+- **Code** (`js/data/heroes/zarathor.js`): `CARD`, `CARD_HEAL`, the local `healWorth` (E2 with a fallback),
+  `cardReady(u)` (pure: active, wears the card, not yet this turn), `retailTherapy(u)` called from `payGold`'s purse
+  branch: `DD.Act.heal(Zarathor, Zarathor, 3, { via: 'lift:zarathor' })`; the "🎫 Points earned!" pop-up and the new
+  `retail` bark (0.4) only when it healed. Barks `retail`: "Retail therapy. Literally." / "Ka-ching. I feel better
+  already." / "Points! I love points!"
+- **Radio Edit:** `zar_bling_throw.heals = function (L, u) { return hasItem(u, 'zar_loyalty_card'); }` (svammiel.js
+  `healsWith`: with the card the throw heals him, so it is never bleeped; without it, as before).
+- **AutoPlay.** The exact pass dry-runs the payout (in execute). Throw Money At It gets a quick-pass `aiScore` (0 when
+  `ctx.autoplay`) = `healWorth(Zarathor, 3)` when he wears the card, it is unspent this turn and the purse covers the cost
+  (`DD.Act.gold() >= L.gold`; the Hellcard path heals nothing). Gold Plating (no `dmg`, no hooks) is left as it was: its
+  dry run sees the payout too.
+
+**Tests** (`tests/content/hero_zarathor.js`, new suite "hero_zarathor: conditional heal (Nov 18)", 44 ok with svammiel.js loaded): `DD.Zarathor.CARD`
+/ `CARD_HEAL`; the item (common trinket, his only, no stats or hooks, desc and flavor word for word, ≤ 150 / ≤ 120, ends
+with "."); he/him; the three `retail` barks; Throw Money still an attack (no heal tag); fires: Throw Money At It with 40
+gold and the card → 5 gold paid, +3, his heals stat grows by 3, one call `heal(Zarathor, Zarathor, 3, { via:
+'lift:zarathor' })`; Gold Plating the same turn → 6 gold paid, no second heal; his next turn → ready again, +3; full HP →
+the call is made (0) and the turn's payout spent; no card → 0; the Hellcard paying 3 of the 5 in HP → 0 (and the payout
+not spent); a downed Zarathor (execute run directly) → no call, stays down; the preview shows +3 and leaves the fight
+untouched (fingerprint: gold, HP, his turn mark), the use heals exactly that; `heals(L, u)` true only with the card,
+`healsWith` likewise when svammiel.js is loaded; `aiScore` = `healWorth(Zarathor, 3)` / 0 in the exact pass / 0 when the
+purse can't cover it / 0 after this turn's payout / 0 without the card; the exact pass: the throw's total with the card
+minus without ≥ `healWorth(Zarathor, 3)`.
+**Updated assertions:** none needed (his existing suites list his three original items explicitly).
+
+**Sanity sims** (`bash tools/sim.sh "debug=1&raw=1&seeds=30&from=…&stop=2&party=…"`, normal, acts 1-2, one page at a
+time; the `lift:zarathor` row of "== conditional heals", worn = fights he started wearing the card):
+
+| party (from) | fights | worn fights (share) | per worn fight: fires, HP | all fights: fires, HP | not worn |
+|---|---|---|---|---|---|
+| hjalmar, marbles, pebbles, zarathor (51200) | 254 | 34 (13%) | 2.0, 4.2 | 0.27, 0.6 | 0, 0 |
+| zarathor, benedick, buga, marwyn (51600) | 263 | 17 (6%) | 1.88, 5.2 | 0.12, 0.3 | 0, 0 |
+
+T8 for `lift:zarathor` (per worn fight: min 0.8 fires, band 1.2-5 HP): fires met on both pages; HP 4.2 and 5.2 (the
+second page's 17 worn fights just over the band's top, 51 worn fights pooled ≈ 4.5, inside). He pays gold about twice a
+fight (Throw Money At It 1.6-1.8 times, cd 2, plus Gold Plating 1.1 when socketed), at ~3 HP each with little overheal. The measured worn
+share (6-13% of his fights) sits at the low end of the critic's 10-30% guess: a common hero trinket competes with every
+generic common. Every page: 0 errors, 0 DD.warn lines, 0 stalls.
+
+**Full run** (`bash tools/test.sh`, Nov 18, after the G4 build; G3 building in parallel): 1318 suites PASS, 150,819
+assertions, 0 failures, 0 swallowed "Error in" lines (the one Bark-B-Q content advisory is the known, expected one).
+
+### DESIGN §6 brief (Nov 18)
+
+For the engine builder (phase 2), in `### Zarathor the Bedazzled — Tiefling Warlock (he/him)` (DESIGN.md ~432). Anchor,
+these two whole lines (the end of his subsection):
+```
+- Combos: Hex and Bedazzle before an ally's big hit; Lasso foes into the Fireball; Burning foes feed Valdris and
+  Pebbles. Every coin he throws (Throw Money At It, Gold Plating) is a coin his Drip Check no longer counts.
+```
+Replace with these four lines (the same two, then the hero item):
+```
+- Combos: Hex and Bedazzle before an ally's big hit; Lasso foes into the Fireball; Burning foes feed Valdris and
+  Pebbles. Every coin he throws (Throw Money At It, Gold Plating) is a coin his Drip Check no longer counts.
+- Hero item *Loyalty Card (Platinum Pending)* (common trinket): whenever he pays for one of his skills with gold, he
+  heals 3 HP (once per turn).
+```
+
+### Deviations (Nov 18)
+
+- None from the plan's mechanics, numbers or texts.
+
+### Requests (Nov 18)
+
+- None.
+
+### Conditional heal: adversarial review (Nov 18, review:g4)
+Code path read end to end: both gold skills (Throw Money At It, Gold Plating) pay through `payGold`; only the purse
+branch calls `retailTherapy` (the Hellcard branch never does), `cardReady` checks `active`, the card and the turn mark
+(`state.turn` is a fight-wide turn counter, so the mark never collides across rounds) before the heal; the mark is
+deep-copied by previews and dry runs (the preview fingerprint test). `heals(L, u)` reads a combat unit's items, which
+is what svammiel.js `healsWith` passes. HUD preview shot (`.tmp/heal/review-g4/shot/zarathor.png`, debug=1, fixtures,
+40 gold): Throw Money At It shows **+3** on Zarathor. Forced-party sim (`seeds=30&from=55300&stop=2&party=zarathor,
+josiah,betty,marwyn`, `.tmp/heal/review-g4/zarathor_55300.txt`, 266 fights): the card was worn in **0** fights, so no
+`lift:zarathor` call at all (correct: no card, no heal). With the build's pages: 51 worn fights of 783 (6.5%), at the
+low end of the critic's 10-30% guess (the sim equips a common only into an empty slot); per worn fight 1.9-2.0 fires,
+4.2-5.2 HP. The balance report should state that worn share. 0 errors, 0 DD.warn, 0 stalls. Nothing changed.
+
+### QA fixes (Nov 18, qa-fix:heal)
+- **[heal QA-1] the log says why he healed.** He pays first, so the engine's "Zarathor heals 3 HP." came before the
+  throw's damage line with no reason. A payout that heals (> 0) now logs right after it: "The Loyalty Card pays out:
+  Zarathor earns points for spending gold. The points are feelings. He feels better."
+- **[heal QA-7, desc-sweep-7 convention] the gold skills say what the card does.** Wearing `zar_loyalty_card`, Throw
+  Money At It and Gold Plating end with " Loyalty Card: paying in gold heals him 3 HP (once per turn)." (built from
+  `CARD_HEAL`; `cardClause(user)`, with a `wears()` helper that reads a combat unit's item list or a run hero's slot map,
+  so tooltips outside a fight agree). Without the card the descs are unchanged.
+- Tests: "hero_zarathor: conditional heal (Nov 18)" (the reason line follows the heal line; none at full HP; both descs
+  at I-III with the card on a combat unit and on a run hero, and without it). No number changed.
+
+### Deviations (Nov 18, qa-fix:heal)
+- Plan §4.15 asked only for the item text; QA-7 (optional) adds the card's clause to both gold skills' descs, as the
+  house does for every item that changes a skill (Wolfsbane Coat, Coconut, Electric Lute, Cane, Pen).

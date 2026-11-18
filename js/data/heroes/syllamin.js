@@ -7,7 +7,9 @@
  * further), Hype Man (Empowered + AP for the big hitter), Lullaby III (Marked sleepers), Heckle (Charm). Attacks of
  * opportunity: his basic is ranged (he never makes one), but Charm / Sleep / Stun / Dazzle switch a foe's off and Fae
  * Blink (a teleport) pulls a pinned ally out without provoking.
- * Registers: hero syllamin, basic + signature + 10 pool skills, status syl_roasted, surface syl_glitter, 3 items,
+ * Conditional heal (Nov 18, "Jar of Tears (Theirs)"): the common trinket syl_tear_jar; while he wears it, an enemy's
+ * Emotional Damage from his roasts heals him 3 (once per turn, unit.data.syl.jar = state.turn, labelled 'lift:syllamin').
+ * Registers: hero syllamin, basic + signature + 10 pool skills, status syl_roasted, surface syl_glitter, 4 items,
  * narration keys syl_*. Helpers for other content: DD.Syllamin.roast / emotionalDamage / blinkSpot.
  * Swearing is bleeped (#$%&) and stays PG-13 by implication; mechanics text is exact.
  */
@@ -30,6 +32,9 @@
   const EMO_HYPE = 6;       // party Hype per Emotional Damage on an enemy
   const EMO_WEAK = 2;       // elites and bosses are Weakened this many turns instead of Stunned
   const MIX_HYPE = 4;       // Platinum Diss Mixtape: extra Hype per Emotional Damage
+  const HERO = 'syllamin';
+  const JAR = 'syl_tear_jar';
+  const JAR_HEAL = 3;       // Jar of Tears (Theirs): a foe's Emotional Damage from his roasts heals him this, once per turn
 
   const JOKES = [
     'Your mom\'s so big she counts as difficult terrain!',
@@ -112,8 +117,31 @@
     if (unit.side === 'enemy') {
       A().gainHype(EMO_HYPE + (hasItem(src, 'syl_mixtape') ? MIX_HYPE : 0), 'Emotional Damage');
       if (cosmetic() && DD.rng.next() < 0.3) A().narrate('syl_emotional_damage', { hero: src ? src.name : 'Syllamin', enemy: unit.name });
+      drinkTears(src, unit);
     }
     return true;
+  }
+  /** The Jar can drink this turn: Syllamin himself, standing, wearing it, not yet this turn (pure). */
+  function jarReady(u) {
+    const s = S(), d = u && u.data && u.data.syl;
+    return !!s && !!u && u.defId === HERO && u.kind === 'hero' && active(u) && hasItem(u, JAR) && !(d && d.jar === s.turn);
+  }
+  /**
+   * Jar of Tears (Theirs) (Nov 18): an enemy's Emotional Damage from his roasts heals him JAR_HEAL, once per turn. Always
+   * called while the condition holds (0 at full HP, the turn's drink spent all the same); FX and bark only when it healed.
+   */
+  function drinkTears(src, victim) {
+    if (!jarReady(src)) return 0;
+    const d = src.data || (src.data = {});
+    (d.syl || (d.syl = {})).jar = S().turn;
+    const healed = A().heal(src, src, JAR_HEAL, { via: 'lift:syllamin' });
+    if (healed > 0) {
+      // [heal QA-1] the log says why he healed; [heal QA-2] one cue over his head: the tears bark, or else the label
+      // (the label used to rise under the bark's bubble)
+      A().log(src.name + ' bottles the tears of ' + (victim ? victim.name : 'his victim') + ' and drinks them. Salty. Restorative.', 'hero');
+      if (!A().maybeBark(src, 'tears', 0.4)) DD.FX.text(src, '🫙 Delicious tears', { color: TEAR, size: 13, parallel: true });
+    }
+    return healed;
   }
 
   DD.registerStatus({
@@ -534,6 +562,15 @@
     hooks: {},
   });
 
+  // Nov 18 (conditional healing): his lift is this common trinket; the rule lives in emotionalDamage (drinkTears)
+  DD.registerItem({
+    id: JAR, name: 'Jar of Tears (Theirs)', slot: 'trinket', rarity: 'common', icon: '🫙', hero: HERO,
+    stats: {},
+    desc: 'Whenever a foe suffers Emotional Damage from his roasts, Syllamin drinks its tears and heals ' + JAR_HEAL + ' HP (once per turn).',
+    flavor: 'Faerie cuisine. Sustainably harvested from people who deserved it.',
+    hooks: {},
+  });
+
   // ---- the hero -----------------------------------------------------------------------------------------
   const PASSIVE_DESC = 'His damaging skills Roast each foe they hit. At ' + ROAST_MAX + ' Roasted the foe suffers Emotional Damage: ' +
     'the stacks clear, it is Stunned (elites and bosses: Weakened for ' + EMO_WEAK + ' turns instead) and the party gains ' + EMO_HYPE + ' Hype.';
@@ -729,6 +766,8 @@
         'Verse one: YOU. Verse two: ALSO YOU.',
         'Hit it! Three verses, zero mercy!',
       ],
+      // Nov 18: the Jar of Tears (Theirs) drinks a foe's Emotional Damage (the heal > 0)
+      tears: ['Mm. Salty. Like your mom.', 'Your tears: delicious. Your face: still not.', 'Bottled. Labelled. Savoured.'],
     },
   });
 
@@ -760,5 +799,7 @@
     /** Where Fae Blink would put `ally` (pure): {x, y} | null. */
     blinkSpot: function (user, ally) { return blinkSpot(user, ally); },
     ROAST_MAX: ROAST_MAX, EMO_HYPE: EMO_HYPE, EMO_WEAK: EMO_WEAK, MIX_HYPE: MIX_HYPE,
+    /** Jar of Tears (Theirs) (Nov 18): its id, its heal, and whether it can drink this turn (pure). */
+    JAR: JAR, JAR_HEAL: JAR_HEAL, jarReady: function (u) { return jarReady(u); },
   };
 })();

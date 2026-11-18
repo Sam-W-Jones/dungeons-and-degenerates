@@ -244,15 +244,18 @@
 
   // ---- simplicity ------------------------------------------------------------------------------------------
   T.suite('hero_sparrow: simplicity — one verb + at most one rider, one-breath descs, honest levels', function (t) {
-    // 1. every desc reads in one breath: ≤ 22 words, ≤ 2 sentences, no if/else clauses
+    // 1. every desc reads in one breath: ≤ 22 words, ≤ 2 sentences, no if/else clauses. [Nov 18, Deviation in
+    // hero-sparrow.md] Juice Box carries the plan's share sentence ("If it was Bleeding, ..."): ≤ 40 words, its one "If"
     HERO_SKILLS.concat(CLONE_SKILLS).forEach(function (id) {
       for (let lv = 1; lv <= sk(id).levels.length; lv++) {
         const d = DD.skillDesc(sk(id), lv, null);
         const words = d.split(/\s+/).filter(Boolean).length;
         const sentences = 1 + (d.match(/[.!?]\s+[A-Z0-9]/g) || []).length;
-        t.ok(words <= 22, id + ' L' + lv + ' desc ≤ 22 words (' + words + '): ' + d);
+        const juice = id === 'spa_juicebox';
+        t.ok(words <= (juice ? 40 : 22), id + ' L' + lv + ' desc ≤ ' + (juice ? 40 : 22) + ' words (' + words + '): ' + d);
         t.ok(sentences <= 2, id + ' L' + lv + ' desc ≤ 2 sentences (' + sentences + ')');
-        t.ok(!/\b(if|unless|otherwise|instead|except|then)\b/i.test(d), id + ' L' + lv + ' desc has no if/else clauses');
+        const rest = juice ? d.replace(/ If it was Bleeding, /, ' ') : d;
+        t.ok(!/\b(if|unless|otherwise|instead|except|then)\b/i.test(rest), id + ' L' + lv + ' desc has no if/else clauses' + (juice ? ' (but the share\'s "If it was Bleeding")' : ''));
       }
     });
     const pdesc = passive().desc;
@@ -1424,5 +1427,198 @@
       });
     });
     s.rangeBonus = 0;
+  });
+
+  // ---- Nov 18 conditional heal: "Sharing Is Caring (Ew)" (.tmp/heal/plan.md §4.8) -----------------------------------
+  T.suite('hero_sparrow: conditional heal (Nov 18)', function (t) {
+    const p0 = DD.problems.length;
+    const SP = DD.Sparrow;
+    t.ok(!!SP && SP.SHARE === 0.5 && SP.SHARE_RANGE === 2, 'DD.Sparrow: SHARE ½, SHARE_RANGE 2');
+    const def = sk('spa_juicebox');
+    /** Her real heals while fn runs (previews' dry runs left out): { own: [...] (unlabelled), share: [...] (via lift:sparrow) }. */
+    function heals(fn) {
+      const out = { own: [], share: [], other: [] }, orig = DD.Act.heal;
+      DD.Act.heal = function (src, target, n, opts) {
+        const r = orig.apply(this, arguments);
+        if (DD.Act.simulating) return r;
+        const e = { src: src, target: target, n: n, healed: r };
+        if (opts && opts.via === 'lift:sparrow') out.share.push(e);
+        else if (opts && opts.via) out.other.push(e);
+        else if (src && src.defId === 'sparrow') out.own.push(e);
+        return r;
+      };
+      try { fn(); } finally { DD.Act.heal = orig; }
+      return out;
+    }
+    function healStat(u) { const b = DD.Combat.state.stats.units[u.id]; return b ? b.heals : 0; }
+    function noFx(fn) { const b0 = DD.Act.maybeBark; DD.Act.maybeBark = function () { return ''; }; try { return fn(); } finally { DD.Act.maybeBark = b0; } }
+
+    // 1. fires: a Bleeding foe (2 stacks); she heals all of it, the most hurt ally within 2 half of it (rounded up)
+    [1, 2, 3].forEach(function (lv) {
+      const Lv = L('spa_juicebox', lv);
+      const a = arena({ level: 3, skills: [['spa_juicebox', lv]], heroes: [{ id: 'test_knight', x: 2, y: 6 }], enemies: [E(4, 4, 'test_grunt', 4), E(8, 8)] });
+      const kn = at(2, 6);
+      DD.Act.addStatus(at(4, 4), 'bleed', { stacks: 2 }, null);
+      a.spa.hp = 6;
+      kn.hp = 3;
+      const dealt = Lv.dmg + Lv.per * 2, share = Math.ceil(dealt / 2);
+      const h0 = healStat(a.spa), k0 = kn.hp;
+      let r = null;
+      noFx(function () { r = heals(function () { previewThenUse(t, a.spa, a.slot('spa_juicebox'), 4, 4, 'share L' + lv); }); });
+      t.eq(a.spa.hp, 6 + dealt, 'L' + lv + ': she heals the ' + dealt + ' dealt');
+      t.eq(kn.hp - k0, share, 'L' + lv + ': the hurt knight 2 tiles away heals ' + share + ' (half of ' + dealt + ', rounded up)');
+      t.ok(r.share.length === 1 && r.share[0].src === a.spa && r.share[0].target === kn && r.share[0].n === share, 'L' + lv + ': one labelled share heal, src Sparrow');
+      t.ok(r.own.length === 1 && r.own[0].target === a.spa && r.other.length === 0, 'L' + lv + ': her own drain stays unlabelled');
+      t.eq(healStat(a.spa) - h0, dealt + share, 'L' + lv + ': her heals stat grows by both');
+    });
+    t.eq(L('spa_juicebox', 1).dmg + L('spa_juicebox', 1).per * 2, 11, 'the plan\'s case: I with 2 Bleed drains 11 (she heals 11, the ally 6)');
+    t.eq(SP.shareOf(11), 6, 'shareOf(11) = 6');
+    t.eq(SP.shareOf(10), 5, 'shareOf(10) = 5');
+
+    // 2. who drinks along: the more hurt of two; ties go to the lower HP ratio; reach 2; hurt only; never the downed
+    function setup(heroes, bleed) {
+      const a = arena({ skills: [['spa_juicebox', 1]], heroes: heroes, enemies: [E(4, 4, 'test_grunt', 4), E(8, 8)] });
+      if (bleed) DD.Act.addStatus(at(4, 4), 'bleed', { stacks: bleed }, null);
+      a.spa.hp = 5;
+      return a;
+    }
+    function juice(a) { let r = null; noFx(function () { r = heals(function () { use(t, a.spa, a.slot('spa_juicebox'), 4, 4, 'juice'); }); }); return r; }
+    let a = setup([{ id: 'test_knight', x: 2, y: 5 }, { id: 'test_mage', x: 1, y: 4 }], 2);
+    at(2, 5).hp = at(2, 5).maxHp - 4; at(1, 4).hp = at(1, 4).maxHp - 9;
+    let r = juice(a);
+    t.ok(r.share.length === 1 && r.share[0].target === at(1, 4), 'two hurt allies: the more hurt one (the mage, −9) drinks');
+    a = setup([{ id: 'test_knight', x: 2, y: 5 }, { id: 'test_mage', x: 1, y: 4 }], 2);
+    const kn = at(2, 5), mg = at(1, 4);
+    kn.hp = kn.maxHp - 6; mg.hp = mg.maxHp - 6;
+    const lower = kn.hp / kn.maxHp <= mg.hp / mg.maxHp ? kn : mg;   // equal ratios too: party order (the knight first)
+    r = juice(a);
+    t.ok(r.share.length === 1 && r.share[0].target === lower, 'a tie in missing HP: the lower HP ratio drinks (' + lower.name + ')');
+    a = setup([{ id: 'test_knight', x: 2, y: 7 }], 2);
+    at(2, 7).hp = 3;
+    r = juice(a);
+    t.ok(r.share.length === 0 && at(2, 7).hp === 3, 'an ally 3 tiles away: no share');
+    a = setup([{ id: 'test_knight', x: 2, y: 5 }], 2);
+    r = juice(a);
+    t.ok(r.share.length === 0 && r.own.length === 1, 'the only ally in reach is at full HP: no share (no call)');
+    a = setup([{ id: 'test_knight', x: 2, y: 5 }], 0);
+    at(2, 5).hp = 3;
+    r = juice(a);
+    t.ok(r.share.length === 0 && at(2, 5).hp === 3 && a.spa.hp === 5 + L('spa_juicebox', 1).dmg, 'the foe was not Bleeding: her heal only');
+    a = setup([{ id: 'test_knight', x: 2, y: 5 }, { id: 'test_mage', x: 1, y: 4 }], 2);
+    DD.Act.kill(at(2, 5), null);
+    at(1, 4).hp = 3;
+    const dk = DD.Combat.heroes().filter(function (u) { return u.defId === 'test_knight'; })[0];
+    r = juice(a);
+    t.ok(dk.downed && r.share.length === 1 && r.share[0].target === at(1, 4), 'a downed ally in reach is skipped (never revived): the hurt mage drinks');
+    a = setup([{ id: 'test_knight', x: 2, y: 5 }], 2);
+    DD.Act.kill(at(2, 5), null);
+    const dk2 = DD.Combat.heroes().filter(function (u) { return u.defId === 'test_knight'; })[0];
+    r = juice(a);
+    t.ok(dk2.downed && r.share.length === 0, 'only a downed ally in reach: no share, he stays down');
+    // Block soaks the whole drain: nothing dealt, nothing shared
+    a = setup([{ id: 'test_knight', x: 2, y: 5 }], 2);
+    at(2, 5).hp = 3;
+    DD.Act.addBlock(at(4, 4), 50);
+    r = juice(a);
+    t.ok(r.share.length === 0 && at(2, 5).hp === 3, 'Block soaked it all (dealt 0): no share');
+    // she goes down mid-drain (a stand-in for a reflected hit: she drops right after the drain lands): no share either
+    a = setup([{ id: 'test_knight', x: 2, y: 5 }, { id: 'test_mage', x: 0, y: 0 }], 2);
+    at(2, 5).hp = 3;
+    const dmg0 = DD.Act.damage;
+    DD.Act.damage = function (src, tg) {
+      const out = dmg0.apply(this, arguments);
+      if (src === a.spa && tg !== a.spa && !DD.Act.simulating) dmg0(null, a.spa, 999);
+      return out;
+    };
+    try { r = juice(a); } finally { DD.Act.damage = dmg0; }
+    t.ok(a.spa.downed && r.share.length === 0 && r.own.length === 0 && at(2, 5).hp === 3, 'Sparrow downed mid-drain: no heal for her, no share');
+
+    // [heal QA-5] heroes first: a more hurt summon in reach (a hound standing in for the statue, the clone, the corgis,
+    // Onyx) loses to a hurt hero; it drinks only when no hero in reach is hurt
+    a = setup([{ id: 'test_knight', x: 2, y: 5 }], 2);
+    let pup = DD.Act.summon(a.spa, 'test_hound', 1, 4, { noFx: true });
+    at(2, 5).hp = at(2, 5).maxHp - 2;
+    pup.hp = 1;
+    t.ok(!!pup && pup.side === a.spa.side && pup.kind !== 'hero' && pup.maxHp - pup.hp > 2, 'premise: a much more hurt summon of hers in reach');
+    t.eq(SP.shareTarget(a.spa), at(2, 5), 'shareTarget: the hurt hero, not the more hurt summon');
+    r = juice(a);
+    t.ok(r.share.length === 1 && r.share[0].target === at(2, 5) && pup.hp === 1, 'the hurt knight drinks; the summon does not');
+    a = setup([{ id: 'test_knight', x: 2, y: 5 }], 2);
+    pup = DD.Act.summon(a.spa, 'test_hound', 1, 4, { noFx: true });
+    pup.hp = 4;
+    r = juice(a);
+    t.ok(r.share.length === 1 && r.share[0].target === pup && pup.hp > 4, 'no hero in reach is hurt: the hurt summon drinks (' + pup.hp + ')');
+    // [heal QA-1] the log says why the ally healed
+    a = setup([{ id: 'test_knight', x: 2, y: 5 }], 2);
+    at(2, 5).hp = 3;
+    let n0 = DD.Combat.state.log.length;
+    juice(a);
+    let lines = DD.Combat.state.log.slice(n0).map(function (l) { return l.text; });
+    const hl = lines.indexOf('Sir Testsalot heals 6 HP (Sparrow).');
+    t.ok(hl >= 0 && lines[hl + 1] === 'Sparrow shares the juice with Sir Testsalot. Bendy straw. Don\'t make it weird.', 'the log: the heal, then why (' + lines.join(' | ') + ')');
+    a = setup([{ id: 'test_knight', x: 2, y: 5 }], 0);
+    at(2, 5).hp = 3;
+    n0 = DD.Combat.state.log.length;
+    juice(a);
+    lines = DD.Combat.state.log.slice(n0).map(function (l) { return l.text; });
+    t.ok(!lines.some(function (l) { return /shares the juice/.test(l); }), 'no share, no share line');
+
+    // 3. caps: one share per Juice Box (one ally), even with several hurt allies in reach
+    a = setup([{ id: 'test_knight', x: 2, y: 5 }, { id: 'test_mage', x: 1, y: 4 }, { id: 'test_cleric', x: 2, y: 3 }], 2);
+    ['test_knight', 'test_mage', 'test_cleric'].forEach(function (id) { const u = DD.Combat.heroes().filter(function (x) { return x.defId === id; })[0]; u.hp = 3; });
+    r = juice(a);
+    t.eq(r.share.length, 1, 'three hurt allies in reach: one share');
+
+    // 4. desc == execute
+    [1, 2, 3].forEach(function (lv) {
+      const Lv = L('spa_juicebox', lv);
+      t.eq(DD.skillDesc(def, lv, null), 'Drain a foe within 3: deal ' + Lv.dmg + ' damage +' + Lv.per + ' per Bleed on it, and heal the damage dealt. ' +
+        'If it was Bleeding, the most hurt ally within ' + SP.SHARE_RANGE + ' of you (heroes first) also heals ' + SP.shareWord() + ' of that (rounded up).', 'L' + lv + ' desc');
+    });
+    // [heal QA-5] the plan's desc + "(heroes first)": a summon drinks only when no hero in reach is hurt
+    t.eq(DD.skillDesc(def, 1, null), 'Drain a foe within 3: deal 5 damage +3 per Bleed on it, and heal the damage dealt. If it was Bleeding, the most hurt ally within 2 of you (heroes first) also heals half of that (rounded up).', 'the plan\'s desc (I), heroes first');
+    t.eq(SP.shareWord(), 'half', 'SHARE ½ reads "half"');
+    t.ok(def.kind !== 'heal' && def.levels.every(function (Lv) { return Lv.heal === undefined; }), 'no kind heal, no L.heal (the tags are unchanged)');
+
+    // 5. preview honesty: both heals in the preview (the previewThenUse above compares every unit); the badge on the ally
+    a = setup([{ id: 'test_knight', x: 2, y: 5 }], 2);
+    at(2, 5).hp = 3;
+    const pv = DD.Combat.preview(a.spa, a.slot('spa_juicebox'), 4, 4);
+    const ke = pv.perUnit[at(2, 5).id], se = pv.perUnit[a.spa.id];
+    t.ok(!!ke && ke.heal === 6 && !!se && se.heal === 11, 'the preview shows +11 on her and +6 on the knight (' + (se && se.heal) + ', ' + (ke && ke.heal) + ')');
+    // [review:g1] and the combat HUD wears both as badges: Juice Box armed (key 2: socket 0), the cursor on the Bleeding foe
+    if (DD.UI && DD.UI.screens && DD.UI.screens.combat && DD.HUD && DD.Render && DD.Render.overlay) {
+      try {
+        DD.UI.show('combat');
+        DD.HUD.select(a.spa.id);
+        DD.HUD.key('2');
+        DD.HUD.hover(4, 4);
+        const ov = DD.Render.overlay.previews || {}, kb = ov[at(2, 5).id], sb = ov[a.spa.id];
+        t.ok(DD.HUD.mode().kind === 'skill' && !!kb && kb.heal === 6 && !kb.dmg && !!sb && sb.heal === 11,
+          'the HUD badges read +' + (sb && sb.heal) + ' on her and +' + (kb && kb.heal) + ' on the knight');
+      } finally {
+        DD.UI.closeAllModals('test');
+        DD.UI.hideTooltip();
+        if (DD.UI.current === 'combat') DD.UI.show('title');
+      }
+    } else t.log('no combat HUD loaded: the badge check is skipped');
+
+    // 6. AutoPlay: the quick pass prices the share on a Bleeding target with a hurt ally in reach; the exact pass leaves it to the dry run
+    a = setup([{ id: 'test_knight', x: 2, y: 5 }], 2);
+    a.spa.hp = a.spa.maxHp;
+    const ctxOf = function (exact) { const c = DD.Targeting.buildCtx(a.spa, a.slot('spa_juicebox'), { x: 4, y: 4 }); if (exact) c.autoplay = { preview: true }; return c; };
+    const est = DD.AI.estimate(a.spa, at(4, 4), L('spa_juicebox', 1).dmg + L('spa_juicebox', 1).per * 2, null);
+    t.eq(def.aiScore(ctxOf(false)), 2, 'nobody hurt: the Bleed only (2)');
+    at(2, 5).hp = 3;
+    const want = 2 + DD.AutoPlay.healWorth(at(2, 5), Math.ceil(est / 2));
+    t.ok(Math.abs(def.aiScore(ctxOf(false)) - want) < 1e-9 && want > 2, 'a hurt knight in reach: + healWorth(knight, ceil(est / 2)) (' + def.aiScore(ctxOf(false)) + ')');
+    t.eq(def.aiScore(ctxOf(true)), 2, 'exact pass: the Bleed only (the dry run sees the share)');
+    DD.Act.removeStatus(at(4, 4), 'bleed', { silent: true });
+    t.eq(def.aiScore(ctxOf(false)), 0, 'not Bleeding: no share term');
+
+    // 7. barks
+    t.eq((DD.getHero('sparrow').barks.share || []).join(' | '), 'Here. Sip. Don\'t make it weird. | Sharing is caring. Ew. | Bendy straw, best friend edition.', 'barks.share');
+    const errs = DD.problems.slice(p0).filter(function (w) { return /^Error in /.test(w); });
+    t.eq(errs.length, 0, 'no swallowed errors' + (errs.length ? ' — ' + errs[0].slice(0, 160) : ''));
   });
 })();

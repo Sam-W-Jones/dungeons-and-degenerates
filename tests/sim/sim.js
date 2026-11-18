@@ -22,7 +22,9 @@
  *                         groups of the heal-pass sections (e.g. healers=ellaria,josiah,valdris)
  *   dump=1                print the units left and the last 40 log lines of every fight that hit the round cap
  *   raw=1                 append "== raw tallies": R<TAB>key<TAB>value lines of additive counts (runs, wins, act clears,
- *                         per hero, per healer group, bosses, encounters, lanes), to merge 100-seed pages with a sum
+ *                         per hero, per healer group, bosses, encounters, lanes; the conditional heals: heal.<label>.*
+ *                         and each hero's fights by kind hero.<id>.fk.<kind> and worn fights hero.<id>.worn.<item>), to
+ *                         merge 100-seed pages with a sum
  * Output (#out): campaign win rate (Wilson 95% interval) and its 3-act equivalent, act clears, levels at bosses, per-kind
  * table (party HP lost, rounds, short wins, fights with downs, signatures, Hype by source, attacks of opportunity, boss
  * wind-ups), encounter table, the gauntlet (per lane with each door's puzzle counters, by position 1..L, order
@@ -38,6 +40,13 @@
  * what the losses lost to; 'none' = no healer in the starting party) and the permanent deaths by fight. The ledger
  * wraps DD.Act.heal / revive / addBlock, Combat.interact, DD.Hooks.fire / fireOwn / some and DD.safe (for the channel:
  * the innermost hook or execute frame) on this page only.
+ * Conditional-healing lift (Nov 18, plan E3): a heal called with DD.Act.heal(src, target, n, { via: 'lift:<heroId>' }) is
+ * also counted under its label in "== conditional heals" (right after "== healing per hero"): per label, the fights its
+ * giver hero started (the hero the label names), fires per fight (every call with the label, 0-HP calls included), HP
+ * per fight realized and of it to self / to others / to summons, the overheal (asked minus gained, share of asked), the
+ * same by fight kind (regular / elite / mini / boss: per fight of that kind the hero started), and for the item-gated
+ * labels (WORN: the Loyalty Card, the Jar of Tears, Canned Laughter, the Snail Mucin Serum, the Fireproof Dog Bed) the
+ * fights the hero started wearing the item, with fires and HP per worn fight.
  * Stalls (balance audit, audit-4): a fight that hits the round cap is a STALL, neither a win nor a loss. timeout= only
  * decides how the run goes on; every win rate (encounters, fight kinds, bosses, lanes, the campaign, hero shares) leaves
  * stalls out of both sides, and the "== stalls" section lists each one. A run is a stalled run when its result hangs on a
@@ -131,6 +140,8 @@
       a4: { runs: 0, deaths: [], rounds: [], twist: 0, dmWins: 0 }, runRounds: [], shapeshiftKept: 0,
       // heal pass: runs by healer group (healers=), permanent deaths by the fight they happened in
       groups: {}, fallenAt: {},
+      // conditional-healing lift (E3): per opts.via label (LB)
+      lifts: {},
     };
   }
   let G = newTally();
@@ -157,10 +168,54 @@
     return null;
   }
   // heal pass (Nov 18): the healing ledger (rcv / from / rcvOver / done / doneBy / doneOver / rev / helpUps / block),
-  // fights ended down, permanent deaths from the run's fallen list, act-(L-1) clears and where the hero's runs end
+  // fights ended down, permanent deaths from the run's fallen list, act-(L-1) clears and where the hero's runs end;
+  // E3: fights started by kind (fk) and wearing an item-gated label's item (worn: { itemId: fights })
   function H(id) {
     return G.heroes[id] || (G.heroes[id] = { runs: 0, wins: 0, fights: 0, dmg: 0, kills: 0, taken: 0, heals: 0, downs: 0, deaths: 0, summonDmg: 0, oppMade: 0, oppTaken: 0,
-      rcv: {}, from: {}, src: {}, rcvOver: 0, done: {}, doneBy: {}, doneOver: 0, rev: {}, helpUps: 0, block: 0, endDown: 0, fallen: 0, aPrev: 0, losses: 0, lossAct: {}, lossTo: {} });
+      rcv: {}, from: {}, src: {}, rcvOver: 0, done: {}, doneBy: {}, doneOver: 0, rev: {}, helpUps: 0, block: 0, endDown: 0, fallen: 0, aPrev: 0, losses: 0, lossAct: {}, lossTo: {},
+      fk: {}, worn: {} });
+  }
+  // ---- conditional heals (Nov 18, plan E3): DD.Act.heal's opts.via labels ------------------------------------------
+  // the item-gated labels: the item whose wearer's fights the "worn" columns count (plan §4: the two new trinkets and the
+  // three amplifiers that keep their old bonus over the passive's heal)
+  const WORN = { 'lift:zarathor': 'zar_loyalty_card', 'lift:syllamin': 'syl_tear_jar', 'lift:hjalmar': 'hja_canned_laughter',
+    'lift:benedick': 'ben_mucin_serum', 'lift:pebbles': 'peb_dog_bed' };
+  /** A label's tally: calls (0-HP ones too), HP realized, to self / others / summons / foes, overheal, by fight kind, worn. */
+  function LB(label) {
+    return G.lifts[label] || (G.lifts[label] = { hero: null, calls: 0, hp: 0, self: 0, others: 0, summons: 0, foes: 0, over: 0, k: {}, worn: { calls: 0, hp: 0 } });
+  }
+  /** The hero a label belongs to: 'lift:<heroId>' names it; any other label, its first giver. */
+  function labelHero(label, g) {
+    const m = /^lift:([a-z0-9_]+)$/.exec(label);
+    return m && (!DD.getHero || DD.getHero(m[1])) ? m[1] : g || null;
+  }
+  /** Does the hero behind u (a summon's owner) wear the item? */
+  function wears(u, id) {
+    if (u && u.kind === 'summon' && u.ownerId && DD.Combat.state && DD.Combat.byId) u = DD.Combat.byId(u.ownerId);
+    return !!(u && Array.isArray(u.items) && u.items.indexOf(id) >= 0);
+  }
+  /** Count the fights the starting heroes start: all, by kind (E3's split) and wearing an item-gated label's item. */
+  function started(units, kind) {
+    (units || []).forEach(function (u) {
+      if (!u || u.kind !== 'hero') return;
+      const h = H(u.defId);
+      h.fights++;
+      inc(h.fk, kind || '?');
+      for (const lb in WORN) if (wears(u, WORN[lb])) inc(h.worn, WORN[lb]);
+    });
+  }
+  /** One labelled heal (E3): giver = the unit behind the heal (giverOf), kind = the fight kind (default: this fight's). */
+  function liftHeal(via, src, ch, target, got, want, revived, kind) {
+    const giver = giverOf(src, ch), g = heroOf(giver);
+    const x = LB(via);
+    if (!x.hero) x.hero = labelHero(via, g);
+    const over = !revived && want !== null && want !== undefined ? Math.max(0, want - got) : 0;
+    const tid = target.kind === 'hero' ? target.defId : null;
+    const to = tid && tid === g ? 'self' : tid ? 'others' : target.side === 'hero' ? 'summons' : 'foes';
+    const kk = kind || (curFight && curFight.kind) || '?';
+    const k = x.k[kk] || (x.k[kk] = { calls: 0, hp: 0, self: 0, others: 0, summons: 0, foes: 0, over: 0 });
+    [x, k].forEach(function (y) { y.calls++; y.hp += got; y[to] += got; y.over += over; });
+    if (WORN[via] && wears(giver, WORN[via])) { x.worn.calls++; x.worn.hp += got; }
   }
   function K(key) {
     return G.kinds[key] || (G.kinds[key] = { n: 0, wins: 0, hpLost: [], taken: [], rounds: [], short: 0, withDowns: 0, downs: 0, sigs: 0, hype: 0, hype100: 0, timeouts: 0,
@@ -328,9 +383,12 @@
     return giverHero ? 'ally' : 'other';
   }
   /** Count one heal (got = HP gained, want = HP asked for or null when it never got that far, revived = it stood a downed
-   *  hero up). Exposed as DD_SIM.ledgerHeal for the tools suite (it then passes ch). */
-  function ledgerHeal(src, target, got, want, revived, ch) {
-    if (!target || target.side !== 'hero') return;
+   *  hero up; via = its opts.via label, also counted under "== conditional heals"; kind = the fight kind, default this
+   *  fight's). Exposed as DD_SIM.ledgerHeal for the tools suite (it then passes ch, and kind for a labelled heal). */
+  function ledgerHeal(src, target, got, want, revived, ch, via, kind) {
+    if (!target) return;
+    if (via) { ch = ch || healChannel(); liftHeal(String(via), src, ch, target, got, want, revived, kind); }
+    if (target.side !== 'hero') return;
     ch = ch || healChannel();
     const g = heroOf(giverOf(src, ch));
     const tid = target.kind === 'hero' ? target.defId : null;
@@ -363,10 +421,12 @@
     DD.Act.heal = function (src, target) {
       if (DD.Act.simulating || !curFight || !target) return heal.apply(this, arguments);
       const frame = { want: null }, wasDown = !!target.downed;
+      // E3: the conditional heals' label (opts.via; the engine ignores it)
+      const opts = arguments[3], via = opts && typeof opts === 'object' && typeof opts.via === 'string' && opts.via ? opts.via : null;
       healFrames.push(frame);
       let got;
       try { got = heal.apply(this, arguments); } finally { healFrames.pop(); }
-      ledgerHeal(src, target, +got || 0, frame.want, wasDown && !target.downed && got > 0);
+      ledgerHeal(src, target, +got || 0, frame.want, wasDown && !target.downed && got > 0, null, via);
       return got;
     };
     // revives that are not a heal: a help-up (Combat.interact) or a hook (Phoenix jacket, a Blessing)
@@ -721,7 +781,7 @@
       h.dmg += x.dmg || 0; h.kills += x.kills || 0; h.heals += x.heals || 0;
       if (u.kind === 'hero') h.taken += x.taken || 0; else h.summonDmg += x.dmg || 0;
     });
-    heroes0.forEach(function (u) { H(u.defId).fights++; });
+    started(heroes0, kind);
     // heal pass: who ended a fight the party did not lose down (a scar, or a death at the third), and permanent deaths
     if (outcome !== 'loss') heroes1.forEach(function (u) { if (u.downed || u.dead) H(u.defId).endDown++; });
     const rs = S();
@@ -1191,6 +1251,7 @@
         ' · overheal ' + r1(h.doneOver / f) + ' (' + pct(h.doneOver, doneTot + h.doneOver) + ') · help-ups given ' + r2(h.helpUps / f) +
         (srcs ? '\n' + ''.padEnd(13) + 'top non-ally sources (column:channel:id per fight): ' + srcs : ''));
     });
+    liftLines();
     // the run-win share and the act-(L-1) share with intervals and the ratio to the median
     const prev = FINAL - 1;
     const sh = ids.map(function (k) { const h = G.heroes[k]; return h.runs ? h.wins / h.runs : 0; }).sort(function (a, b) { return a - b; });
@@ -1227,6 +1288,40 @@
     const fa = Object.keys(G.fallenAt).sort(function (a, b) { return G.fallenAt[b] - G.fallenAt[a]; });
     if (fa.length) out.push('== permanent deaths by fight (top 12): ' + fa.slice(0, 12).map(function (e) { return e + ' ' + G.fallenAt[e]; }).join(' · '));
   }
+  const KIND_COLS = [['normal', 'regular'], ['elite', 'elite'], ['miniboss', 'mini'], ['boss', 'boss']];
+  /**
+   * E3: "== conditional heals": per opts.via label, per fight its giver hero started (all fights, then by kind: per fight
+   * of that kind he or she started), and for an item-gated label per fight started wearing the item.
+   */
+  function liftLines() {
+    const labels = Object.keys(G.lifts).sort();
+    out.push('\n== conditional heals (DD.Act.heal opts.via labels; per fight the giver hero started · fires = calls with the label, 0-HP calls ' +
+      'included · HP realized, to self / others / summons · overheal = asked minus gained (share of asked) · by kind: per fight of that kind ' +
+      '(regular / elite / mini / boss) · worn = fights started wearing the label\'s item, with fires and HP per worn fight)' + (labels.length ? '' : ': none fired'));
+    const cell = function (y, f) {
+      const n = Math.max(1, f);
+      return r2(y.calls / n) + ' fires · HP ' + r1(y.hp / n) + ' (self ' + r1(y.self / n) + ', others ' + r1(y.others / n) + ', summons ' + r1(y.summons / n) +
+        (y.foes ? ', foes ' + r1(y.foes / n) : '') + ') · overheal ' + r1(y.over / n) + ' (' + pct(y.over, y.hp + y.over) + ')';
+    };
+    labels.forEach(function (lb) {
+      const x = G.lifts[lb], hid = x.hero, h = hid ? G.heroes[hid] : null, f = h ? h.fights : 0;
+      const kinds = KIND_COLS.filter(function (c) { return (h && h.fk[c[0]]) || x.k[c[0]]; }).map(function (c) {
+        const kn = (h && h.fk[c[0]]) || 0, y = x.k[c[0]] || { calls: 0, hp: 0, self: 0, others: 0, summons: 0, over: 0 };
+        return c[1] + ' (n ' + kn + ') ' + r2(y.calls / Math.max(1, kn)) + ' fires, ' + r1(y.hp / Math.max(1, kn)) + ' HP' +
+          (y.others || y.summons ? ' (others ' + r1(y.others / Math.max(1, kn)) + ', summons ' + r1(y.summons / Math.max(1, kn)) + ')' : '');
+      });
+      let line = '  ' + lb.padEnd(16) + ' ' + String(hid || '?').padEnd(9) + ' fights ' + String(f).padStart(4) + ' · calls ' + x.calls + ' · per fight: ' + cell(x, f) +
+        '\n' + ''.padEnd(19) + 'by kind: ' + (kinds.length ? kinds.join(' · ') : '-');
+      const item = WORN[lb];
+      if (item) {
+        const wf = (h && h.worn[item]) || 0;
+        line += '\n' + ''.padEnd(19) + 'worn ' + item + ': ' + wf + ' fights (' + pct(wf, f) + ' of ' + (hid || '?') + '\'s) · per worn fight ' +
+          r2(x.worn.calls / Math.max(1, wf)) + ' fires, ' + r1(x.worn.hp / Math.max(1, wf)) + ' HP · not worn ' +
+          r2((x.calls - x.worn.calls) / Math.max(1, f - wf)) + ' fires, ' + r1((x.hp - x.worn.hp) / Math.max(1, f - wf)) + ' HP';
+      }
+      out.push(line);
+    });
+  }
   /** him / her for a hero id (the pronoun table: DD.Act.pronouns). */
   function pron(id) {
     try { return DD.Act.pronouns({ kind: 'hero', defId: id }).obj; } catch (e) { return 'them'; }
@@ -1247,6 +1342,9 @@
     arr('actEnter', G.actEnter); arr('actClear', G.actClear); arr('downsByAct', G.downsByAct);
     emit('lossAt', G.lossAt); emit('lossTo', G.lossTo); emit('fallenAt', G.fallenAt); emit('downs', G.downs);
     Object.keys(G.heroes).forEach(function (k) { emit('hero.' + k, G.heroes[k]); });
+    // E3: per label (heal.<label>.calls / hp / self / others / summons / foes / over, .k.<kind>.*, .worn.calls / hp); the
+    // denominators are the label's hero's hero.<id>.fights, .fk.<kind> and .worn.<item>
+    Object.keys(G.lifts).forEach(function (k) { emit('heal.' + k, G.lifts[k]); });
     Object.keys(G.groups).forEach(function (k) {
       const g = G.groups[k];
       emit('grp.' + k, { runs: g.runs, wins: g.wins, stalled: g.stalled, sv: g.sv, lossAt: g.lossAt, lossTo: g.lossTo });
@@ -1267,14 +1365,17 @@
   }
 
   // the tallies and the report, for the tools suite (tests/docs_tests.js) and the integration suite: reset() starts a
-  // fresh tally; replaceIdx(runHero) is the socket a new skill would replace (never a 'shapeshift' one, -1 = skip it)
+  // fresh tally; replaceIdx(runHero) is the socket a new skill would replace (never a 'shapeshift' one, -1 = skip it);
+  // started(heroUnits, kind) counts the fights they start (all, by kind, worn: E3)
   window.DD_SIM = {
     fightOutcome: fightOutcome, runOutcome: runOutcome, recordFight: recordFight, finishRun: finishRun,
     replaceIdx: replaceIdx, isShapeshift: isShapeshift, LANE_STATS: LANE_STATS, wantsBribe: wantsBribe,
-    ledgerHeal: ledgerHeal, rcvColumn: rcvColumn, groupsOf: groupsOf,
+    ledgerHeal: ledgerHeal, rcvColumn: rcvColumn, groupsOf: groupsOf, started: started, WORN: WORN,
     reset: function () { FINAL = DD.finalAct(); G = newTally(); return G; }, tally: function () { return G; },
     startRun: function (party) { G.runs++; G.actEnter[1]++; (party || []).forEach(function (id) { H(id).runs++; }); },
     reportText: function (overrides) { return reportLines(overrides || []).join('\n'); },
+    // the raw=1 block alone (whatever raw= says on this page)
+    rawText: function () { const keep = out.slice(); out.length = 0; rawLines(); const r = out.join('\n'); out.length = 0; Array.prototype.push.apply(out, keep); return r; },
   };
 
   function start() {

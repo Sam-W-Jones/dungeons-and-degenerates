@@ -5,7 +5,9 @@
  * the party, Kick 'Em on whatever the party Stunned or Rooted). Goats climb: flags.hop (up 2 levels per step).
  * Attacks of opportunity: his hammer is melee, so foes that walk away from him get hit; You Shall Not Pasture! makes
  * those hits bigger and Roots the walker, while his charges, leaps and flips never provoke anything.
- * Passive Eats Anything: Betty heals 4 HP for every foe he kills and every object one of his skills breaks.
+ * Passive Eats Anything: Betty heals 4 HP for every foe he kills and every object one of his skills breaks; and (Nov 18,
+ * conditional healing, "Leftovers") 3 HP when a foe dies next to him at someone else's hands (onAnyDeath, via
+ * 'lift:betty'; his own kills keep their 4, never both).
  * Registers: hero betty, 12 skills (bet_*), 1 status (bet_pasture), 3 hero items. No summons.
  */
 (function () {
@@ -23,6 +25,7 @@
   }
 
   const EAT_HEAL = 4;                       // Eats Anything
+  const LEFTOVER_HEAL = 3;                  // ... a foe that dies next to him at someone else's hands (Nov 18)
   const PASTURE = 'bet_pasture';            // You Shall Not Pasture! (skill and status)
   const MALLET = 'bet_grandmas_mallet';
   const PLATE = 'bet_name_plate';
@@ -84,11 +87,29 @@
     DD.Act.maybeBark(u, 'eat', 0.3);
     return DD.Act.heal(u, u, EAT_HEAL);
   }
+  /**
+   * Leftovers (Nov 18): a foe died next to Betty and the kill was not his (his own kills heal 4 through onKill: never
+   * two heals for one foe). Fired on his passive for every death (onAnyDeath); bounded by deaths, no cap.
+   */
+  function leftovers(u, dead, d) {
+    if (!active(u) || !dead || dead === u || !G().hostile(u, dead) || G().dist(u, dead) !== 1) return 0;
+    if (d && d.credit === u) return 0;
+    const n = DD.Act.heal(u, u, LEFTOVER_HEAL, { via: 'lift:betty' });
+    if (n > 0) {
+      DD.FX.text(u, 'Nom! (leftovers)', { color: '#ffe3a8', size: 14 });
+      // [heal QA-1] the log says why he healed (a foe died next to him at someone else's hands)
+      DD.Act.log(u.name + ' eats the leftovers of ' + dead.name + '. Don\'t ask.', 'hero');
+      DD.Act.maybeBark(u, 'leftovers', 0.4);
+    }
+    return n;
+  }
 
   const PASSIVE = {
     name: 'Eats Anything',
-    desc: 'Whenever Betty kills a foe or one of his skills breaks an object, he eats it and heals ' + EAT_HEAL + ' HP. Don\'t ask.',
+    desc: 'Whenever Betty kills a foe or one of his skills breaks an object, he eats it and heals ' + EAT_HEAL + ' HP. ' +
+      'A foe that dies next to him at someone else\'s hands is leftovers: he heals ' + LEFTOVER_HEAL + ' HP. Don\'t ask.',
     hooks: {
+      onAnyDeath: function (unit, dead, d) { leftovers(unit, dead, d); },
       // Objects (the engine has no "object broken by" hook): bookmark the count when he pays for a skill (not a
       // consumable) and after each skill; a skill's breaks = what it added. A free re-use in the same turn (an Echo
       // Chamber echo) counts from the last bookmark; a free swing on someone else's turn (Delegate) has none.
@@ -805,6 +826,12 @@
         'Don\'t tell the DM.',
         'Was that important? Oops.',
       ],
+      // Nov 18: Leftovers (a foe dies next to him at someone else's hands, the heal > 0)
+      leftovers: [
+        'Leftovers!',
+        'You gonna finish that? ...BAAAH, too late.',
+        'Nom. Crunchy.',
+      ],
       // his hammer on a foe that walked away from him, and You Shall Not Pasture!
       opportunity: [
         'Turning your back on a goat? Bold, kid.',
@@ -823,7 +850,7 @@
 
   /** Small public surface for tests and other content. */
   DD.Betty = {
-    EAT_HEAL: EAT_HEAL, PASTURE: PASTURE, hasItem: hasItem, chargePlan: chargePlan, tossLanding: tossLanding, tramplePlan: tramplePlan,
+    EAT_HEAL: EAT_HEAL, LEFTOVER_HEAL: LEFTOVER_HEAL, PASTURE: PASTURE, leftovers: leftovers, hasItem: hasItem, chargePlan: chargePlan, tossLanding: tossLanding, tramplePlan: tramplePlan,
     trampleEnd: trampleEnd, hammerTarget: hammerTarget, helpless: helpless, objectsBroken: objectsBroken,
   };
 })();

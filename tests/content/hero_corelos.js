@@ -111,7 +111,10 @@
         const d = DD.skillDesc(s, lv, null);
         t.ok(d && !/undefined|NaN|null/.test(d), id + ' L' + lv + ' desc without a user: ' + d);
         t.ok(!v1.test(d), id + ' L' + lv + ': no v1 wording (telegraphs / intents / Guard / planning): ' + d);
-        t.ok(words(d) <= 26, id + ' L' + lv + ': the desc reads in one breath (' + words(d) + ' words): ' + d);
+        // Nov 18 (conditional healing): Glyph's one rider is the class-action sentence; the rune sentence stays ≤ 26
+        const main = id === 'cor_glyph' ? d.replace(/ A burst that hits \d+ or more foes is a class action: you heal \d+ HP \(once per round\)\.$/, '') : d;
+        if (id === 'cor_glyph') t.ok(main !== d, id + ' L' + lv + ': the rune sentence plus the one class-action rider: ' + d);
+        t.ok(words(main) <= 26, id + ' L' + lv + ': the desc reads in one breath (' + words(main) + ' words): ' + main);
       }
       t.ok(!s.flavor || s.flavor.length <= 120, id + ' flavor ≤ 120 chars');
     });
@@ -1059,5 +1062,141 @@
     use(t, f.me, f.slot, 3, 4, 'Restraining Order: push both 2 tiles');
     t.ok(fl.x === 6 && hasRune(5, 4) && fl.hp === 14 - 2, 'the flyer sails over the rune: only the order\'s 2 damage');
     t.ok(wk.y === 7 && !hasRune(3, 6) && wk.hp === 14 - 2 - 5, 'the walker is shoved over the rune: it bursts (2 + 5)');
+  });
+
+  // ---- Nov 18: conditional healing — "Class Action Settlement" (plan §4.13) --------------------------------------------
+  /** Every DD.Act.heal call made while fn runs: [{ src, target, n, via, healed, sim }]. */
+  function healCalls(fn) {
+    const list = [], orig = DD.Act.heal;
+    DD.Act.heal = function (src, target, n, opts) {
+      const healed = orig.apply(this, arguments);
+      list.push({ src: src, target: target, n: n, via: opts && opts.via, healed: healed, sim: !!DD.Act.simulating });
+      return healed;
+    };
+    try { fn(); } finally { DD.Act.heal = orig; }
+    return list;
+  }
+  function lifts(calls) { return calls.filter(function (x) { return !x.sim && x.via === 'lift:corelos'; }); }
+  function healsBy(u) { const s = S().stats.units[u.id]; return s ? s.heals : 0; }
+
+  T.suite(P + 'conditional heal (Nov 18)', function (t) {
+    const C = DD.Corelos, def = DD.getSkill('cor_glyph');
+    t.ok(JSON.stringify(C.SETTLE) === '[3,4,4]' && C.CLASS_SIZE === 2, 'DD.Corelos.SETTLE = 3/4/4, CLASS_SIZE = 2');
+    const texts = [
+      'Inscribe a rune (max 3): when a foe steps on it, foes on and next to it take 5 damage. A burst that hits 2 or more foes is a class action: you heal 3 HP (once per round).',
+      'Inscribe a rune (max 3): when a foe steps on it, foes on and next to it take 6 damage. A burst that hits 2 or more foes is a class action: you heal 4 HP (once per round).',
+      'Inscribe a rune (max 3): when a foe steps on it, that foe is Rooted and foes on and next to it take 6 damage. A burst that hits 2 or more foes is a class action: you heal 4 HP (once per round).',
+    ];
+    [1, 2, 3].forEach(function (lv) {
+      const Lv = L('cor_glyph', lv);
+      t.ok(Lv.settle === C.SETTLE[lv - 1] && Lv.heal === undefined, 'L' + lv + ': settle ' + Lv.settle + ' (no level key named heal)');
+      t.eq(desc('cor_glyph', lv), texts[lv - 1], 'L' + lv + ': the desc, word for word');
+    });
+    const q = fight({ skills: [{ id: 'cor_glyph', level: 1 }], items: ['cor_quill'] });
+    t.ok(desc('cor_glyph', 1, q.me).indexOf('take 7 damage. A burst that hits 2 or more foes is a class action: you heal 3 HP') >= 0, 'with the Quill: 7 damage, the heal unchanged');
+    t.ok(def.tags.indexOf('heal') < 0 && def.target.type === 'tile', 'Glyph: a tile target, no heal tag (never an aimed revive)');
+    t.eq((DD.getHero('corelos').barks.settle || []).join(' | '), ['Class action! I\'m the class.', 'Settled out of court. Mostly out of you.', 'Pleasure doing business.'].join(' | '),
+      'barks.settle: the plan\'s three lines');
+
+    /** Corelos (hurt) inscribes a Glyph at lv on (4, 4); grunts at the given tiles; returns { f, g: grunts }. */
+    function board(lv, tiles, miss) {
+      const f = fight({ cx: 2, cy: 4, skills: [{ id: 'cor_glyph', level: lv }, { id: 'cor_detonate', level: 1 }], ap: 10,
+        enemies: tiles.map(function (p) { return { id: 'test_grunt', x: p[0], y: p[1], hpMult: 3 }; }) });
+      f.me.hp = f.me.maxHp - (miss === undefined ? 14 : miss);
+      use(t, f.me, f.slot, 4, 4, 'glyph L' + lv);
+      return { f: f, g: units('test_grunt') };
+    }
+    // fires: a foe steps on the rune with another foe next to it → +3 / +4 / +4 (III: the stepper is Rooted too)
+    [1, 2, 3].forEach(function (lv) {
+      const b = board(lv, [[6, 4], [5, 4]]), me = b.f.me;
+      t.eq(DD.Grid.tile(4, 4).obj.data.settle, C.SETTLE[lv - 1], 'L' + lv + ': the rune carries settle ' + C.SETTLE[lv - 1]);
+      const hp0 = me.hp, h0 = healsBy(me);
+      const calls = healCalls(function () { A().teleport(b.g[0], 4, 4); });
+      const l = lifts(calls);
+      t.ok(!hasRune(4, 4) && b.g[0].hp < b.g[0].maxHp && b.g[1].hp < b.g[1].maxHp, 'L' + lv + ': the burst hit both grunts');
+      t.eq(me.hp - hp0, C.SETTLE[lv - 1], 'L' + lv + ': a class action: Corelos heals ' + C.SETTLE[lv - 1]);
+      t.eq(healsBy(me) - h0, C.SETTLE[lv - 1], 'L' + lv + ': the heal\'s src is Corelos (his heals stat)');
+      t.ok(l.length === 1 && l[0].src === me && l[0].target === me && l[0].n === C.SETTLE[lv - 1], 'L' + lv + ': one DD.Act.heal(Corelos, Corelos, ' + C.SETTLE[lv - 1] + ', { via: \'lift:corelos\' })');
+      t.eq(!!st(b.g[0], 'root'), lv === 3, 'L' + lv + ': the stepper is Rooted only at III');
+    });
+    // doesn't fire: one foe in the burst; a foe and an ally; a placeRune without settle defaults to 3
+    let b = board(1, [[6, 4], [8, 8]]);
+    let calls = healCalls(function () { A().teleport(b.g[0], 4, 4); });
+    t.ok(!hasRune(4, 4) && lifts(calls).length === 0 && b.f.me.hp === b.f.me.maxHp - 14, 'one foe in the burst: no class action, no heal call');
+    const fa = fight({ cx: 2, cy: 4, allies: [{ id: 'test_mage', x: 5, y: 4 }], enemies: [{ id: 'test_grunt', x: 6, y: 4, hpMult: 3 }] });
+    fa.me.hp = 10;
+    C.placeRune(fa.me, 4, 4, { dmg: 5 });
+    calls = healCalls(function () { A().teleport(units('test_grunt')[0], 4, 4); });
+    t.ok(lifts(calls).length === 0 && fa.me.hp === 10, 'a foe and an ally next to the burst: one foe hit, no heal');
+    const fd = fight({ cx: 2, cy: 4, enemies: [{ id: 'test_grunt', x: 6, y: 4, hpMult: 3 }, { id: 'test_grunt', x: 5, y: 4, hpMult: 3 }] });
+    fd.me.hp = 10;
+    C.placeRune(fd.me, 4, 4, { dmg: 5 });
+    t.eq(DD.Grid.tile(4, 4).obj.data.settle, 3, 'a rune placed without settle (other content) carries the default 3');
+    A().teleport(units('test_grunt')[0], 4, 4);
+    t.eq(fd.me.hp, 13, 'and heals 3 on a class action');
+    // once per round: a second class action the same round heals nothing; the next round's does
+    b = board(1, [[6, 4], [5, 4], [7, 7], [5, 6]]);
+    const me = b.f.me;
+    use(t, me, b.f.slot, 4, 6, 'second glyph, next to the fourth grunt');
+    A().teleport(b.g[0], 4, 4);
+    t.eq(me.hp, me.maxHp - 14 + 3, 'first class action this round: +3');
+    t.ok(!C.canSettle(me), 'the round\'s settlement is spent');
+    calls = healCalls(function () { A().teleport(b.g[2], 4, 6); });
+    t.ok(!hasRune(4, 6) && lifts(calls).length === 0 && me.hp === me.maxHp - 14 + 3, 'a second class action the same round: no heal call');
+    DD.Combat.endRound();
+    t.ok(DD.Combat.current() === me && C.canSettle(me), 'next round: unspent again');
+    use(t, me, b.f.slot, 3, 6, 'glyph next round');
+    A().teleport(b.g[3], 3, 6);
+    t.eq(me.hp, me.maxHp - 14 + 6, 'next round, a class action heals 3 again');
+    // Runic Detonation: two runes each bursting on 2+ foes → one heal
+    const fr = fight({ cx: 1, cy: 1, skills: [{ id: 'cor_detonate', level: 1 }],
+      enemies: [[4, 4], [3, 5], [7, 7], [8, 6]].map(function (p) { return { id: 'test_grunt', x: p[0], y: p[1], hpMult: 3 }; }) });
+    fr.me.hp = 10;
+    C.placeRune(fr.me, 4, 5, { dmg: 5, settle: 3 });
+    C.placeRune(fr.me, 7, 6, { dmg: 5, settle: 3 });
+    calls = healCalls(function () { use(t, fr.me, fr.slot, fr.me.x, fr.me.y, 'Runic Detonation'); });
+    t.ok(lifts(calls).length === 1 && fr.me.hp === 13, 'Runic Detonation: two class actions at once, one heal (+3)');
+    // at full HP it still fires (one 0-HP call) and spends the round
+    b = board(1, [[6, 4], [5, 4]], 0);
+    calls = healCalls(function () { A().teleport(b.g[0], 4, 4); });
+    t.ok(lifts(calls).length === 1 && lifts(calls)[0].healed === 0 && !C.canSettle(b.f.me), 'full HP: one call that heals 0; the round\'s settlement is spent');
+    // never revives: Corelos downed, the burst still bites, no heal
+    b = board(1, [[6, 4], [5, 4]]);
+    A().damage(b.g[1], b.f.me, 200, { cause: 'other' });
+    t.ok(b.f.me.downed && b.f.me.hp === 0, 'Corelos is down');
+    calls = healCalls(function () { A().teleport(b.g[0], 4, 4); });
+    t.ok(!hasRune(4, 4) && b.g[1].hp < b.g[1].maxHp && lifts(calls).length === 0 && b.f.me.downed && b.f.me.hp === 0, 'the burst still hits both, Corelos stays down (no heal call)');
+    // Rune Bolt next to a rune between two foes: the preview shows +3 on Corelos, and it happens
+    const fb = fight({ cx: 1, cy: 4, enemies: [{ id: 'test_grunt', x: 5, y: 4, hpMult: 3 }, { id: 'test_grunt', x: 5, y: 6, hpMult: 3 }] });
+    fb.me.hp = 12;
+    C.placeRune(fb.me, 5, 5, { dmg: 5, settle: 3 });
+    const pv = DD.Combat.preview(fb.me, fb.me.basic, 5, 4);
+    t.eq(pv && pv.perUnit[fb.me.id] && pv.perUnit[fb.me.id].heal, 3, 'Rune Bolt setting off a rune between two foes: the preview shows +3 on Corelos');
+    previewMatches(t, fb.me, fb.me.basic, 5, 4, 'class-action bolt');
+    t.eq(fb.me.hp, 15, 'and he heals 3');
+    // Glyph's own preview shows no heal (the heal comes later; the desc carries it)
+    b = board(1, [[6, 4], [5, 3]]);
+    const gp = DD.Combat.preview(b.f.me, b.f.slot, 5, 5);
+    t.ok(!(gp.perUnit[b.f.me.id] && gp.perUnit[b.f.me.id].heal), 'Glyph\'s preview shows no heal (delayed: the desc says it)');
+
+    // AutoPlay: runeValue adds 0.4 × healWorth(Corelos, settle) with 2+ foes within 2 of the rune tile, while unspent
+    const fv = fight({ cx: 1, cy: 4, skills: [{ id: 'cor_glyph', level: 2 }], enemies: [{ id: 'test_grunt', x: 6, y: 3 }, { id: 'test_grunt', x: 6, y: 5 }] });
+    fv.me.hp = 8;
+    const ctx = function (x, y) { return DD.Targeting.buildCtx(fv.me, fv.slot, { x: x, y: y }); };
+    const want = 0.4 * DD.AutoPlay.healWorth(fv.me, 4);
+    const v1 = C.runeValue(ctx(6, 4));
+    fv.me.data.cor = { settled: S().round };
+    const v0 = C.runeValue(ctx(6, 4));
+    t.ok(want > 0 && Math.abs(v1 - v0 - want) < 1e-9, 'runeValue, 2 foes within 2, unspent: + 0.4 × healWorth(Corelos, 4) = ' + want.toFixed(2) + ' (' + (v1 - v0).toFixed(2) + ')');
+    fv.me.data.cor = {};
+    const fv1 = fight({ cx: 1, cy: 4, skills: [{ id: 'cor_glyph', level: 2 }], enemies: [{ id: 'test_grunt', x: 6, y: 3 }, { id: 'test_grunt', x: 8, y: 8 }] });
+    fv1.me.hp = 8;
+    const lone = C.runeValue(DD.Targeting.buildCtx(fv1.me, fv1.slot, { x: 6, y: 4 }));
+    fv1.me.data.cor = { settled: S().round };
+    t.eq(C.runeValue(DD.Targeting.buildCtx(fv1.me, fv1.slot, { x: 6, y: 4 })), lone, 'one foe within 2: no class-action term');
+    const fv2 = fight({ cx: 1, cy: 4, skills: [{ id: 'cor_glyph', level: 2 }], enemies: [{ id: 'test_grunt', x: 6, y: 3 }, { id: 'test_grunt', x: 6, y: 5 }] });
+    const full = C.runeValue(DD.Targeting.buildCtx(fv2.me, fv2.slot, { x: 6, y: 4 }));
+    fv2.me.data.cor = { settled: S().round };
+    t.eq(C.runeValue(DD.Targeting.buildCtx(fv2.me, fv2.slot, { x: 6, y: 4 })), full, 'at full HP: no class-action term');
   });
 })();

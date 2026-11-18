@@ -885,3 +885,16 @@ The QA findings for `js/render/*`, `js/ui/*`, `css/style.css` (most severe first
   gold, still marked, a shared tile stays red), "render: QA HERO-5 …" (the status row changes with `showTurns`).
 - Isolated (`suite=QA &isolate=benedick,consumables,skills_generic`): 9 suites, 68 assertions, 0 failures.
 - No balance numbers move: every fix is display only (no engine, AI or AutoPlay path reads these fields); no sim run.
+
+## Conditional-healing QA (Nov 18) — qa-fix:heal (QA-3, the hint bar names the actor's own heal)
+- **What:** `previewSummary` skipped the acting unit for heals (`if (!t || t === u) return;`) and only reported its
+  self-damage ("costs you N HP"). The Nov 18 conditional heals happen inside actions (Marbles' Whack into a wall, Kiri's
+  Ethereal Step out of melee, Basanos' crowded Transform, Syllamin's Jar, Zarathor's Loyalty Card, Josiah's sample,
+  Corelos' class action, Marwyn's surge), so the only cue before the click was the small badge over the hero's head.
+  Now, when `perUnit[u.id].heal > 0` and the entry is not a revive, the summary adds "💚 you heal N" (a range "lo–hi"
+  when the preview carries `healMin` / `healMax` that differ). E.g. "Hits 1 foe for 6 · 💚 you heal 5". A heal aimed at
+  yourself (Patch Notes on the cleric) now reads the same way; an ally's heal still reads "💚 heals 1 ally".
+- **Test:** tests/hud_tests.js "hud: heal QA-3 — the aim hint says "💚 you heal N" when the action heals its user"
+  (self-aimed heal; the ally case unchanged; nothing at full HP; with Marbles loaded, the Whack into a wall reads
+  "Hits 1 foe for N · 💚 you heal 5").
+- Display only: no engine, AI or AutoPlay path reads the hint; no balance number moves.

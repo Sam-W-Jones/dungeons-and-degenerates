@@ -181,7 +181,10 @@
         t.ok(words(d) <= 25, id + ' L' + lv + ': desc reads in one breath (' + words(d) + ' words): ' + d);
       }
     });
-    t.ok(words(h.passive.desc) <= 25 && /4 HP/.test(h.passive.desc), 'passive: one rule, one breath, exact number');
+    // Nov 18: Eats Anything broadened (Leftovers): its first rule still reads in one breath with the exact 4; the second
+    // sentence is the leftovers (exact text: the suite "hero_betty: conditional heal (Nov 18)")
+    const eat = /^(Whenever Betty kills a foe or one of his skills breaks an object, he eats it and heals 4 HP\.) A foe that dies next to him at someone else's hands is leftovers: he heals 3 HP\. Don't ask\.$/.exec(h.passive.desc);
+    t.ok(!!eat && words(eat[1]) <= 25 && words(h.passive.desc) <= 40, 'passive: the eating rule in one breath (exact 4), then the leftovers (exact 3): ' + h.passive.desc);
     Object.keys(DD.defs.skills).forEach(function (k) { if (DD.defs.skills[k].owner === 'betty') t.ok(ALL_SKILLS.indexOf(k) >= 0, 'skill ' + k + ' is known'); });
     // his icons share the action bar with each other and with any generic skill he learns from a tome
     const icons = ALL_SKILLS.map(function (id) { return DD.getSkill(id).icon; });
@@ -202,7 +205,8 @@
       const lines = h.barks[k] || [];
       t.ok(lines.length >= 4 && lines.length <= 6, 'barks.' + k + ': 4-6 lines (' + lines.length + ')');
     });
-    t.eq(Object.keys(h.barks).sort().join(','), BARK_KEYS.concat(EXTRA_BARKS).sort().join(','), 'bark keys: the standard ones + his skills\' extras');
+    // Nov 18: 'leftovers' (the plan's three lines, checked in the conditional-heal suite)
+    t.eq(Object.keys(h.barks).sort().join(','), BARK_KEYS.concat(EXTRA_BARKS, ['leftovers']).sort().join(','), 'bark keys: the standard ones + his skills\' extras + leftovers');
     for (const k in h.barks) {
       h.barks[k].forEach(function (l) {
         t.ok(typeof l === 'string' && l.length > 0 && l.length <= 70, 'bark ≤ 70 chars: ' + JSON.stringify(l) + ' (' + l.length + ')');
@@ -1491,5 +1495,105 @@
     t.ok(!valid(b2, b2.basic, 3, 4), 'the hammer won\'t swing at the keg the party protects');
     t.ok(!valid(b2, b2.basic, 2, 3), 'nor at an object that says targetable: false');
     t.ok(valid(b2, b2.basic, 1, 4), 'a plain crate is fair game');
+  });
+
+  // ---- Nov 18: conditional healing — "Leftovers" (plan §4.9) ---------------------------------------------------------
+  /** Every DD.Act.heal call made while fn runs: [{ src, target, n, via, healed, sim }]. */
+  function healCalls(fn) {
+    const list = [], orig = DD.Act.heal;
+    DD.Act.heal = function (src, target, n, opts) {
+      const healed = orig.apply(this, arguments);
+      list.push({ src: src, target: target, n: n, via: opts && opts.via, healed: healed, sim: !!DD.Act.simulating });
+      return healed;
+    };
+    try { fn(); } finally { DD.Act.heal = orig; }
+    return list;
+  }
+  function lifts(calls) { return calls.filter(function (x) { return !x.sim && x.via === 'lift:betty'; }); }
+  function healsBy(u) { const st = S().stats.units[u.id]; return st ? st.heals : 0; }
+
+  T.suite('hero_betty: conditional heal (Nov 18)', function (t) {
+    const h = DD.getHero('betty');
+    t.eq(DD.Betty.LEFTOVER_HEAL, 3, 'DD.Betty.LEFTOVER_HEAL = 3 (Eats Anything keeps its 4)');
+    t.eq(DD.Betty.EAT_HEAL, 4, 'EAT_HEAL still 4');
+    t.eq(h.passive.desc, 'Whenever Betty kills a foe or one of his skills breaks an object, he eats it and heals ' + DD.Betty.EAT_HEAL + ' HP. A foe that dies next to him at someone else\'s hands is leftovers: he heals ' +
+      DD.Betty.LEFTOVER_HEAL + ' HP. Don\'t ask.', 'the passive desc, word for word, numbers from the constants');
+    t.eq((h.barks.leftovers || []).join(' | '), ['Leftovers!', 'You gonna finish that? ...BAAAH, too late.', 'Nom. Crunchy.'].join(' | '), 'barks.leftovers: the plan\'s three lines');
+    t.ok(typeof h.passive.hooks.onAnyDeath === 'function', 'the passive listens to every death (onAnyDeath)');
+
+    // an ally kills a foe next to him: +3, src Betty, via lift:betty; the killing blow's preview shows it on him
+    fight({ heroes: [{ x: 2, y: 4, hp: 20 }, { id: 'test_knight', x: 4, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }, { id: 'test_grunt', x: 8, y: 8 }] });
+    let b = B();
+    const k = hero('test_knight');
+    DD.Combat.endTurn();
+    t.ok(DD.Combat.current() === k, 'the knight\'s turn');
+    at(3, 4).hp = 2;
+    const hp0 = b.hp, heals0 = healsBy(b);
+    let prev = null;
+    let calls = healCalls(function () { prev = previewMatches(t, k, k.basic, 3, 4, 'the knight kills the grunt next to Betty'); });
+    t.eq(b.hp - hp0, 3, 'a foe dies next to him at the knight\'s hands: leftovers, +3 (20 → 23)');
+    t.eq(healsBy(b) - heals0, 3, 'the heal\'s src is Betty (his heals stat +3)');
+    t.eq(prev && prev.perUnit[b.id] && prev.perUnit[b.id].heal, 3, 'the knight\'s killing-blow preview shows +3 on a hurt Betty');
+    t.ok(lifts(calls).length === 1 && lifts(calls)[0].src === b && lifts(calls)[0].target === b && lifts(calls)[0].n === 3, 'DD.Act.heal(Betty, Betty, 3, { via: \'lift:betty\' })');
+
+    // his own kill: Eats Anything's 4 only (never 7)
+    fight({ heroes: [{ x: 2, y: 4, hp: 20 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }, { id: 'test_grunt', x: 8, y: 8 }] });
+    b = B();
+    at(3, 4).hp = 2;
+    calls = healCalls(function () { use(t, b, b.basic, 3, 4, 'Betty kills it himself'); });
+    t.ok(b.hp === 24 && lifts(calls).length === 0, 'his own kill: +4 (Eats Anything), no leftovers on top (' + b.hp + ')');
+
+    // near misses: a foe dying 2 tiles away; an ally (a summon) dying next to him; Betty downed
+    fight({ heroes: [{ x: 2, y: 4, hp: 20 }, { id: 'test_summoner', x: 0, y: 0 }, { id: 'test_knight', x: 6, y: 6 }],
+      enemies: [{ id: 'test_grunt', x: 4, y: 4 }, { id: 'test_grunt', x: 2, y: 5 }, { id: 'test_grunt', x: 8, y: 8 }] });
+    b = B();
+    const kn = hero('test_knight');
+    calls = healCalls(function () { DD.Act.damage(kn, at(4, 4), 99); });
+    t.ok(b.hp === 20 && lifts(calls).length === 0, 'a foe dying 2 tiles away: nothing');
+    const hound = S().units.filter(function (u) { return u.defId === 'test_hound' && !u.dead; })[0];
+    if (hound) {
+      t.ok(DD.Act.teleport(hound, 1, 4), 'the summoner\'s hound next to Betty');
+      calls = healCalls(function () { DD.Act.damage(at(2, 5), hound, 99); });
+      t.ok(hound.dead && b.hp === 20 && lifts(calls).length === 0, 'an ally (a hero summon) dying next to him: nothing');
+    } else t.log('no hound summoned: the ally case is skipped');
+    DD.Act.kill(b, null);
+    const g25 = at(2, 5);
+    calls = healCalls(function () { DD.Act.damage(kn, g25, 99); });
+    t.ok(g25.dead && b.downed && b.hp === 0 && lifts(calls).length === 0, 'Betty downed: the foe next to him dies, nothing (never a revive)');
+
+    // no cap: two foes next to him die in one cleave (+6); a sourceless death next to him counts too; at full HP it still
+    // fires (the sim counts it) and heals 0
+    fight({ heroes: [{ x: 4, y: 4, hp: 10 }, { id: 'test_knight', x: 4, y: 2, skills: [{ id: 'test_cleave', level: 1 }] }],
+      enemies: [{ id: 'test_grunt', x: 3, y: 3 }, { id: 'test_grunt', x: 4, y: 3 }, { id: 'test_grunt', x: 5, y: 3 }, { id: 'test_grunt', x: 4, y: 5 }, { id: 'test_grunt', x: 8, y: 8 }] });
+    b = B();
+    const kc = hero('test_knight');
+    DD.Combat.endTurn();
+    [at(3, 3), at(4, 3), at(5, 3)].forEach(function (g) { g.hp = 1; });
+    const cleave = DD.Combat.slotsOf(kc).filter(function (sl) { return sl.id === 'test_cleave'; })[0];
+    calls = healCalls(function () { use(t, kc, cleave, 4, 3, 'the knight cleaves three grunts'); });
+    t.ok(b.hp === 10 + 3 && lifts(calls).length === 1, 'only the one next to him (4,3) is leftovers: +3 (' + b.hp + ')');
+    calls = healCalls(function () { DD.Act.damage(null, at(4, 5), 99); });
+    t.ok(b.hp === 16 && lifts(calls).length === 1, 'a death nobody is credited with, next to him: leftovers too (+3)');
+    fight({ heroes: [{ x: 4, y: 4, hp: 10 }, { id: 'test_knight', x: 4, y: 1, skills: [{ id: 'test_cleave', level: 1 }] }],
+      enemies: [{ id: 'test_grunt', x: 3, y: 4 }, { id: 'test_grunt', x: 5, y: 4 }, { id: 'test_grunt', x: 8, y: 8 }] });
+    b = B();
+    calls = healCalls(function () { DD.Act.damage(hero('test_knight'), at(3, 4), 99); DD.Act.damage(hero('test_knight'), at(5, 4), 99); });
+    t.ok(b.hp === 16 && lifts(calls).length === 2, 'two foes dead next to him: +3 each, no cap (' + b.hp + ')');
+    fight({ heroes: [{ x: 4, y: 4 }, { id: 'test_knight', x: 6, y: 6 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }, { id: 'test_grunt', x: 8, y: 8 }] });
+    b = B();
+    let n0 = S().log.length;
+    calls = healCalls(function () { DD.Act.damage(hero('test_knight'), at(3, 4), 99); });
+    t.ok(b.hp === b.maxHp && lifts(calls).length === 1 && lifts(calls)[0].healed === 0, 'at full HP: the heal is called and heals 0');
+    t.ok(!S().log.slice(n0).some(function (l) { return /eats the leftovers/.test(l.text); }), '[heal QA-1] full HP: no reason line');
+
+    // [heal QA-1] the log says why he healed, right after the engine's heal line: whose leftovers, by name
+    fight({ heroes: [{ x: 4, y: 4, hp: 10 }, { id: 'test_knight', x: 6, y: 6 }], enemies: [{ id: 'test_grunt', x: 3, y: 4 }, { id: 'test_grunt', x: 8, y: 8 }] });
+    b = B();
+    const meal = at(3, 4), mealName = meal.name;
+    n0 = S().log.length;
+    DD.Act.damage(hero('test_knight'), meal, 99);
+    const lines = S().log.slice(n0).map(function (l) { return l.text; });
+    const hl = lines.indexOf('Betty heals 3 HP.');
+    t.ok(hl >= 0 && lines[hl + 1] === 'Betty eats the leftovers of ' + mealName + '. Don\'t ask.', 'the log: the heal, then why (' + lines.join(' | ') + ')');
   });
 })();

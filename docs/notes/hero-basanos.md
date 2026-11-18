@@ -445,3 +445,79 @@ unspent (`base = then − now − 2`, negative allowed), so the heal has to pay 
 - heroes-4 re-played with the real kit: Step In lists no Slate (immovable), and its `A().swap` without `force` refuses only
   what `canTarget` already refuses, so no AP is ever spent on a "Won't budge!". heroes-1: the locks name the way out he
   has. D1: Pounce stays an opt-out; his other single-target damage skills hit a crate for exactly their 🔨 number.
+
+## Conditional heal (Nov 18) — "Sorry, It's Crowded In Here" (build:g3; plan `.tmp/heal/plan.md` §4.4, the user's Nov 18 request)
+
+The user (Nov 18): "I want everyone else brought up but by conditional healing" (D9: "Basanos gets to heal on trasnform
+(not by HP threshold)"). His D9 heal, Transform's mend, is broadened: the change is roomier when monsters are pressing in.
+
+- **What:** his first Transform each turn (either direction, through the skill: the `d.mend !== s.turn` gate, unchanged)
+  heals `mend + min(foeCap, perFoe × adjacent foes)`, the foes counted AFTER the switch (`crowdAt(u)`: active units
+  hostile to him at `DD.Grid.dist` 1; allies, dead foes and foes at distance 2 / diagonal don't count). Self, once per
+  turn (the existing marker, still spent at full HP). Hair Trigger, Blood Moon and `syncForm` still never heal. Flea
+  Collar / Coat unchanged.
+- **Numbers:** MEND 2 / 3 / 4 (unchanged) + `CROWD_PER` **2** per adjacent foe, max `CROWD_CAP` **+4**: I 2-6, II 3-7,
+  III 4-8. Level keys `perFoe` / `foeCap` (never `heal`). Exported on `DD.Basanos`: `CROWD_PER`, `CROWD_CAP`, `crowdAt`,
+  `mendWith(L, n)`. Tuning range: perFoe 2 [1 on a guard-rail breach only, 3]; foeCap 4 [2 on a breach, 6].
+- **The call:** `A().heal(u, u, mendWith(ctx.L, crowd), { via: 'lift:basanos' })` — the WHOLE mend carries the label
+  (the sim reads base and crowd together). The old `if (u.hp < u.maxHp)` guard is gone: always called (0 HP at full HP,
+  counted as a fire), the marker spent as before; "Good as new-ish!" (no crowd) / "Sorry! Crowded!" (a crowd), the
+  "knits him back together" log line and the new `crowd` bark (0.35, only with ≥ 1 foe adjacent) only when it healed.
+  The `active(u)` check before the heal is the existing `if (!switched || !active(u)) return;` (nothing revives).
+- **Text (desc == execute):** `Switch between human and werewolf. Your first Transform each turn heals you 2 HP, +2 for
+  each adjacent foe (max +4)` + (spent this turn: `; used this turn`) + `. Werewolf: +2 move; basic attack Claw (4 damage,
+  1 Bleed).` + the Coat sentence (II: 3 HP / Claw 5, 1; III: 4 HP / Claw 5, 2). The live marker moved from
+  " (used this turn)" to "; used this turn" (it follows the crowd clause). Keeps "heals you 2/3/4 HP" (v2-digest docs test).
+- **Barks** (new key `crowd`): "Sorry. It's crowded in here." / "Nobody look. NOBODY LOOK." / "Bad dog. Good knees."
+- **AutoPlay:** the exact pass dry-runs the real heal from every reachable tile (it walks into contact, then flips: the
+  new suite pins it with a 2-AP turn between two stunned grunts → a walk, then Transform for 6). `transformScore` (quick
+  pass, unspent mend) prices `mendWith(L, crowdAt(u))` with the house heal formula (outside the form friction's max).
+- **Existing assertions updated to the new truth** (none deleted): the mend suite's desc lines ("heals you M HP, +2 for
+  each adjacent foe (max +4)." and "…(max +4); used this turn."), the live desc's one-breath cap 28 → 34 words, the
+  definition suite's Transform cap 28 → 32 words (the crowd clause; every other skill stays ≤ 28), the Hair Trigger case
+  with the grunt next to him (2 → 2 + 2), and the quick-pass mend case with an adjacent grunt (min(mend + 2, missing)).
+- **Tests:** new suite `hero_basanos: conditional heal (Nov 18)` (104 assertions): constants and level keys; the desc
+  word for word at I-III; the crowd table 0/1/2/3/4 foes at I → 2/4/6/6/6, II 1 foe → 5, III 2 / 4 foes → 8 (src
+  Basanos, one labelled call, no other heal); an adjacent ally, foes at distance 2 (straight and diagonal), a dead
+  neighbour → no bonus; once per turn and fresh next turn; full HP → one 0-HP call; Hair Trigger and Blood Moon in a crowd
+  → no lift heal; a downed Basanos can't Transform and a forced resolve heals nothing; the preview shows +6 with two
+  foes and matches reality; the live desc; the quick-pass term = healWorth(mend + crowd) for 0-3 foes; the AutoPlay turn.
+- **Sanity sim** (`bash tools/sim.sh "debug=1&raw=1&seeds=30&from=50900&stop=2&party=basanos,sparrow,buga,marwyn"`,
+  `.tmp/heal/g3/basanos.txt`, 30 runs, 183 Basanos fights): `lift:basanos` (the whole mend) **2.73 fires a fight, 6.6 HP
+  a fight** (self; overheal 10%); regular 2.56 / 6.2, elite 3.5 / 9.4, boss 3.06 / 7.0. T8: fires ≥ 2.0 and HP inside
+  4.5-14: OK; guard rail (≤ 12 a regular fight without the Flea Collar): 6.2 with the Collar fights in, OK. 0 errors,
+  0 DD.warn lines.
+- **Deviations:** none.
+
+### DESIGN §6 brief (Nov 18)
+Anchor (unique in `docs/DESIGN.md`, `### Basanos the Mostly Housebroken`, lines 634-635 today):
+
+```
+  Starters: *Transform* (1 AP: switch forms; his first Transform each turn heals him 2–4 HP, by level — Hair Trigger and
+  Blood Moon never heal) and *Shoulder Check* (human: hit and push).
+```
+
+Replacement (keeps the pinned "heals him 2–4 HP"; appends "+2 per adjacent foe, max +4"):
+
+```
+  Starters: *Transform* (1 AP: switch forms; his first Transform each turn heals him 2–4 HP, by level, +2 per adjacent
+  foe, max +4 — Hair Trigger and Blood Moon never heal) and *Shoulder Check* (human: hit and push).
+```
+
+### Conditional heal: test runs (Nov 18, build:g3)
+`tools/test.sh "suite=hero_basanos&isolate=heroes/basanos,hero_basanos"` while iterating (all pass but the Step In suite, which needs Slate loaded: it passes in the full run); then ONE full `bash tools/test.sh`: **1317 suites, 150,775 assertions ok, 0 failures**, 0 swallowed "Error in" lines.
+
+### Conditional heal: requests (Nov 18, non-blocking)
+- **Engine builder, phase 2:** apply the DESIGN §6 brief above; regenerate his v2-digest §2 Transform line (it keeps
+  "heals you 2/3/4 HP", which the docs test pins). Its hand-written note after the generated text (line 342 today: "in a
+  fight the desc adds "(used this turn)" once the heal is spent") now reads "; used this turn" (review:g3, Nov 18: the
+  live marker follows the crowd clause).
+
+### Conditional heal: adversarial review (Nov 18, review:g3)
+Code path read end to end (the `d.mend !== s.turn` gate, the switch, `active` before `DD.Act.heal`, `crowdAt` after the
+switch, `mendWith` capped; Hair Trigger, Blood Moon and `syncForm` never reach it); desc == execute; the suites pass.
+Forced-party sim with Ellaria in the party (`seeds=30&from=55100&stop=2&party=basanos,zarathor,ellaria,pebbles`,
+`.tmp/heal/review_g3/basanos.txt`, 297 fights): `lift:basanos` **2.01 fires, 4.5 HP a fight** (regular 1.85 / 3.9,
+elite 2.41 / 5.9, boss 2.32 / 6.1), overheal 15%: on T8's floor (≥ 2.0 fires, 4.5-14 HP), guard rail far below (3.9 a
+regular fight). The build's sim (no healer: 2.73 / 6.6) read higher: with Ellaria topping him up, the quick pass prices
+the mend lower and he flips less. Worth watching on the final gate. 0 errors, 0 DD.warn, 0 stalls.

@@ -850,8 +850,10 @@
   }
 
   /**
-   * Heal (not downed/dead units). opts: silent, cause. The source's item heal bonus applies, then the target's
-   * modifyHeal(h) hooks (h = { unit, src, base, amount, cause, cancel, revive }: incoming healing). Returns HP healed.
+   * Heal (not downed/dead units). opts: silent, cause; via: a label for measurement (the campaign sim's ledger, e.g.
+   * 'lift:slate' for a conditional heal, Nov 18); the engine ignores it. The source's item heal bonus applies, then
+   * the target's modifyHeal(h) hooks (h = { unit, src, base, amount, cause, cancel, revive }: incoming healing).
+   * Returns HP healed.
    * v2: a heal aimed at a downed ally (aimedRevive) gets it back on its feet with the healed amount as HP (at least 1, at
    * most its max HP; 0 AP, it acts on its own slot) — a normal revive (Act.revive: log, FX, narration, bark); a
    * cancelled heal (modifyHeal) does not revive.

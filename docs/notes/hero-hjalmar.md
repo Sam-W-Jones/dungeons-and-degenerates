@@ -130,7 +130,8 @@ of sight is now checked on a foe in range behind a wall (it was out of range bef
 
 ## Public API (for tests / other content)
 
-`DD.Hjalmar = { KINDS, TRAP_HYPE, SLIPPED, CANNED ('hja_canned_laughter'), CANNED_HEAL (4), isTrap(obj), traps(owner?) → [tiles], canTrapAt(p) → true | reason,
+`DD.Hjalmar = { KINDS, TRAP_HYPE, SLIPPED, CANNED ('hja_canned_laughter'), CANNED_HEAL (4), LAUGH_HEAL (5, Nov 18),
+laughHeal(unit) → 5 | 9, isTrap(obj), traps(owner?) → [tiles], canTrapAt(p) → true | reason,
 setTrap(owner, x, y, kind, opts) → obj | null, spring(x, y, foe) → bool, springOn(tile, unit) → bool, gloveTiles(ctx),
 trapValue(ctx, kind), crossChance(foe, p, party) }`. Kinds: `peel`, `bear` (`{ snap }`), `cushion` / `paint` (`{ turns }`),
 `boom` (`{ boom }`), `glove` (`{ push, dir }`).
@@ -366,3 +367,105 @@ with Hjalmar wearing Canned Laughter, Basanos, Sparrow and Slate (Stress Ball), 
   Bait and Switch, Prank War's aim) prints `DD.Targeting.reach`.
 - **text-tone-24 / review-open-11 (fixed)**: Pickpocket says "it is Weakened through its next turn" (the status's name).
 - Suite `hero_hjalmar: finish — texts follow his items …` covers all three. D7: two swap barks. Numbers: none changed.
+
+## Conditional healing (Nov 18) — "The Laugh Track" (build:g4, plan §4.2)
+
+The user (Nov 18): "I want everyoe else brought up but by conditional healing". Hjalmar's lift broadens his D9 heal:
+Canned Laughter's heal moves into his passive **Monkey Business** (broaden-existing-heal), and the can becomes the
+amplifier that keeps its old 4. Ellaria untouched.
+
+**What.** A foe springs one of his traps (`spring(x, y, foe)`, the one choke point for every trap kind on any turn: walked
+in, pushed, pulled, swapped, teleported): the party gains 5 Hype (as before) and, while he is active, he laughs so hard he
+heals **`LAUGH_HEAL` = 5**, plus **`CANNED_HEAL` = 4** more with Canned Laughter (9 in all). Self, once per trap (a
+Firecracker that hits three foes is one laugh). A downed Hjalmar's traps still bite and cheer; `active(owner)` is checked
+before the heal (never a revive).
+- **Code** (`js/data/heroes/hjalmar.js`): `LAUGH_HEAL`, `laughHeal(u)` (5, or 9 with the can), the local `healWorth`
+  (E2 with a fallback), `spring()` calls `DD.Act.heal(Hjalmar, Hjalmar, laughHeal, { via: 'lift:hjalmar' })` on every spring
+  (0 at full HP: the sim counts the fire); the pop-up ("🤣 HA-HA!", or "🥫 HA-HA-HA!" with the can), the log line and the
+  new `laugh` bark (0.35) only when it healed, else the old `trap` bark (0.35).
+- **Texts** (built from the constants): passive "Every time a foe springs one of Hjalmar's traps, the party gains 5 Hype
+  and he laughs so hard he heals 5 HP. The crowd loves a pratfall." · Canned Laughter "Whenever a foe springs one of
+  Hjalmar's traps, he heals 4 HP more (9 in all)." · the **loading tip** (critic, Nov 18: the old one said only the can
+  healed) "Every trap a foe springs makes Hjalmar laugh so hard he heals 5 HP. Canned Laughter adds 4 more. Josiah has
+  filed a complaint." · barks `laugh`: "HA! HAHA! Ow, my ribs. No wait, that's better." / "Comedy heals!" / "Laughter is the
+  best medicine. Bananas are second."
+- **AutoPlay.** The laugh mostly lands on a foe's turn (no dry run sees it), so `trapValue` adds `(1 − miss) ×
+  healWorth(Hjalmar, laughHeal)` whenever he is active and hurt, with or without the can (the same pricing as before:
+  min(heal, missing) × 1.5 below half HP, else × 0.8; the `Math.min(v, 14)` cap kept). A push / swap onto his trap inside
+  a hero's action is dry-run (the preview shows his +5 / +9).
+- **Exports:** `DD.Hjalmar.LAUGH_HEAL`, `laughHeal` (+ `CANNED_HEAL` as before).
+
+**Tests** (`tests/content/hero_hjalmar.js`, new suite "hero_hjalmar: conditional heal (Nov 18)", 39 ok): the constants
+(5 / 4, `laughHeal` 5 or 9); the passive, Canned Laughter and the tip word for word; the old item-only tip gone; the three
+`laugh` barks (he/him, ≤ 70); a grunt walks onto his Bear Trap on its own turn → +5 and +5 Hype (with the can +9), his heals
+stat grows by it, one call `heal(Hjalmar, Hjalmar, N, { via: 'lift:hjalmar' })`; at full HP the call is made (0) and the
+`trap` bark plays, hurt the `laugh` bark; a Firecracker hitting three foes → one laugh; an ally pushed onto the trap, an
+ownerless trap, a flyer floating over → no laugh; a downed Hjalmar → no call, stays down, the trap still bites; previews:
+setting a trap shows no heal (delayed), Bait and Switch onto his own trap shows and heals +5; `trapValue` hurt − full =
+chance × `healWorth(Hjalmar, 5)` without the item.
+**Updated assertions (never deleted):** the Canned Laughter suite (renamed "… he heals 4 HP more (9 in all) … (D9; Nov 18
+the amplifier)"): desc text, worn +9 (was +4), **not worn +5** (was 0), the foe's-turn and firecracker cases at 9 / 18,
+the rest unchanged; the review (sustain) suite (renamed "… AutoPlay prices the laugh's heal …"): the hint gains the laugh
+without the item (chance × 5 × 0.8 missing 10), missing 3 is the same worn or not, below half HP + chance × 9 × 1.5 worn /
+× 5 × 1.5 bare, Shoulder Check's preview shows +9 (was +4).
+
+**Sanity sims** (`bash tools/sim.sh "debug=1&raw=1&seeds=30&from=…&stop=2&party=…"`, normal, acts 1-2, one page at a
+time; the `lift:hjalmar` row of "== conditional heals"):
+
+| party (from) | fights | fires / fight | HP / fight (self) | by kind (fires, HP) | Canned Laughter worn |
+|---|---|---|---|---|---|
+| hjalmar, marbles, pebbles, zarathor (51200) | 257 | 1.11 | 2.5 (overheal 56%) | regular 1.22, 2.7 · elite 1.65, 3.5 · boss 0.4, 1.1 | 8 fights (3%): 1.13 fires, 5.3 HP |
+| hjalmar, basanos, sparrow, corelos (51400) | 196 | 1.36 | 4.2 (overheal 39%) | regular 1.47, 4.2 · elite 1.75, 7.5 · boss 0.59, 2 | 5 fights (3%): 1 fire, 3.6 HP |
+
+T8 for `lift:hjalmar` (min 0.6 fires, band 2-8 HP, guard rail ≤ 10 in regular fights): met on both pages (regular 2.7 /
+4.2). The high overheal is honest: most springs land on a foe's turn while he is still at full HP (the call counts as a
+fire all the same). Every page: 0 errors, 0 DD.warn lines, 0 stalls.
+
+**Full run** (`bash tools/test.sh`, Nov 18, after the G4 build; G3 building in parallel): 1318 suites PASS, 150,819
+assertions, 0 failures, 0 swallowed "Error in" lines (the one Bark-B-Q content advisory is the known, expected one).
+
+### DESIGN §6 brief (Nov 18)
+
+For the engine builder (phase 2), in `### Hjalmar the Menace — Monkey Trickster (he/him)` (DESIGN.md ~664). Two unique
+anchors.
+
+Anchor 1, these two whole lines:
+```
+- Passive *Monkey Business*: every time a foe springs one of his traps, the party gains 5 Hype. The crowd loves a
+  pratfall.
+```
+Replace with:
+```
+- Passive *Monkey Business*: every time a foe springs one of his traps, the party gains 5 Hype and he laughs so hard
+  he heals 5 HP. The crowd loves a pratfall.
+```
+Anchor 2, this whole line:
+```
+- Hero item *Canned Laughter* (rare trinket): he heals 4 HP whenever a foe springs one of his traps.
+```
+Replace with:
+```
+- Hero item *Canned Laughter* (rare trinket): whenever a foe springs one of his traps, he heals 4 HP more (9 in all).
+```
+
+### Deviations (Nov 18)
+
+- None from the plan's mechanics, numbers or texts. Notes: the laugh's pop-up and log line now show only when it healed
+  (the old item pop-up showed even at full HP: convention §3, FX gated on the return value); the pop-up reads "🤣 HA-HA!"
+  without the can (the "🥫 HA-HA-HA!" can stays for the item).
+
+### Requests (Nov 18)
+
+- None.
+
+### Conditional heal: adversarial review (Nov 18, review:g4)
+Code path read end to end: every trap kind goes through `spring()` (the objects' `onEnter` → `springOn`: a foe of the
+owner, on the floor), one `DD.Act.heal(Hjalmar, Hjalmar, laughHeal, { via: 'lift:hjalmar' })` per spring after the
+effect (a Firecracker's blast loop is inside the switch, the laugh outside it), `active(owner)` checked first (a downed
+Hjalmar, or one an ally is mid-revive on, is never healed by it); no trap ever feeds a heal back into a trap; ownerless
+map traps heal nobody. Texts == execute (passive, Canned Laughter, the tip, all from the constants); `laugh` bark only
+when the heal > 0. Mutations checked against the suite: LAUGH_HEAL ≠ 5, the heal per blast victim, a missing `active`
+check, the item-gated `trapValue` term would each fail it. Forced-party sim (`seeds=30&from=55000&stop=2&party=hjalmar,
+slate,kiri,buga`, `.tmp/heal/review-g4/hjalmar_55000.txt`, 209 fights): `lift:hjalmar` **1.49 fires, 4.5 HP a fight**
+(regular 1.57 / 4.6, elite 1.48 / 4.1, boss 1.2 / 4.6), overheal 42%; Canned Laughter worn in 6 fights (2.83 fires, 12.3
+HP each): inside T8 (≥ 0.6, 2-8, regular ≤ 10). 0 errors, 0 DD.warn, 0 stalls. Nothing changed.

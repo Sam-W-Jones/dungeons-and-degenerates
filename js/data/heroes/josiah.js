@@ -6,7 +6,9 @@
  * Attacks of opportunity: his cane reaches 2 tiles and flags.noOpportunity keeps it that way (he never makes them, even
  * Dazzled); the raven's Peck is melee, so the raven does. Raven Dive moves the raven by teleport (never provokes).
  * Passive "Unlicensed Apothecary": his raven (summon jos_raven) at combat start, contagious Poison (combat rule
- * jos_contagion) and +1 consumable slot (hero def consumableSlots, read by DD.Run).
+ * jos_contagion) and +1 consumable slot (hero def consumableSlots, read by DD.Run). Conditional heal (Nov 18,
+ * "Physician, Heal Thyself"): when a Poisoned foe dies while he stands, the contagion rule's doctor takes a sample and
+ * heals SAMPLE_HEAL (2) HP, once per round (unit.data.jos.sample), via 'lift:josiah'. DD.Josiah: constants.
  * Registers: hero josiah, 14 skills (jos_*: basic, signature, 10 pool, 2 raven), status jos_vaccinated, surface
  * jos_miasma, summon jos_raven and the items jos_beak_mask, jos_raven_treats, jos_alembic (rare) and jos_plague_bell
  * (legendary: the contagion reaches 2 tiles).
@@ -33,6 +35,8 @@
   const BELL_REACH = 2;
   /** Chance that the Portable Alembic brews a potion after a won fight. */
   const BREW_CHANCE = 0.5;
+  /** Nov 18 "Physician, Heal Thyself": HP a sample from a Poisoned foe's death heals him (once per round). */
+  const SAMPLE_HEAL = 2;
   /** What counts as a potion for the Alembic (anything liquid); other consumables are only a fallback. */
   const LIQUID = /potion|draught|drink|flask|tonic|elixir|brew|antidote|water|jar|juice|courage|tea|philt|vial|bottle|soda|ale/i;
 
@@ -127,6 +131,31 @@
   }
 
   // ---- passive: Unlicensed Apothecary -------------------------------------------------------------------
+  /** His per-fight bookkeeping (unit.data.jos; dry runs deep-copy it). */
+  function josData(u) {
+    const d = u.data || (u.data = {});
+    return d.jos || (d.jos = { sample: -1 });
+  }
+  /** True when he already took this round's sample (pure: never creates his bookkeeping). */
+  function sampled(u) {
+    const s = S(), d = u && u.data && u.data.jos;
+    return !!s && !!d && d.sample === s.round;
+  }
+  /**
+   * Nov 18 "Physician, Heal Thyself": a Poisoned foe died while he stands (the contagion's doctor): he heals
+   * SAMPLE_HEAL, once per round (the round is spent even at full HP; the sim counts every call). Never a revive.
+   */
+  function takeSample(doc, dead, s) {
+    if (!active(doc) || sampled(doc)) return 0;
+    josData(doc).sample = s.round;
+    const n = A().heal(doc, doc, SAMPLE_HEAL, { via: 'lift:josiah' });
+    if (n > 0) {
+      DD.FX.text(doc, '🧪 Sample!', { color: GREEN, size: 14 });
+      A().log(doc.name + ' takes a sample from ' + dead.name + '. For science. He feels better. Science!', 'hero');
+      A().maybeBark(doc, 'sample', 0.35);
+    }
+    return n;
+  }
   /** Combat rule added by Josiah: a hook source of every unit, so it sees every death. */
   const CONTAGION_HOOKS = {
     onDeath: function (unit) {
@@ -137,6 +166,8 @@
       if (!docs.length) return;
       const belled = docs.filter(function (j) { return hasItem(j, BELL); });
       const doc = belled[0] || docs[0];
+      // Nov 18: he takes a sample first (before the neighbours: a foe dying alone counts too), once per round
+      takeSample(doc, unit, s);
       const reach = belled.length ? BELL_REACH : 1;
       let n = 0;
       s.units.slice().forEach(function (v) {
@@ -160,7 +191,7 @@
   const PASSIVE = {
     name: 'Unlicensed Apothecary',
     desc: 'Starts each fight with Onyx, his raven. Poison is contagious: when a Poisoned foe dies, adjacent foes catch all of its ' +
-      'Poison. +1 consumable slot.',
+      'Poison, and Josiah takes a sample: he heals ' + SAMPLE_HEAL + ' HP (once per round). +1 consumable slot.',
     hooks: {
       onCombatStart: function (unit) {
         if (!active(unit)) return;
@@ -727,6 +758,11 @@
         'Pandemic! Everyone but us! Probably!'],
       raven_down: ['Onyx! Who is going to judge me now?', 'NEVERMORE?! ...that is not funny.', 'I\'ll bring you back! With science! And seeds!',
         'No! He still owes me three shiny buttons!', 'Don\'t worry. Onyx always comes back. Ravens are like that.'],
+      // Nov 18: a sample from a Poisoned foe's death heals him (Physician, Heal Thyself)
+      sample: ['Fascinating. Bag it.', 'For science!', 'Smells... restorative.'],
     },
   });
+
+  // a small public surface (tests and the balance pass read the sample's number)
+  DD.Josiah = { SAMPLE_HEAL: SAMPLE_HEAL, sampled: sampled, takeSample: takeSample };
 })();

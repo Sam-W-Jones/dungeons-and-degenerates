@@ -1468,4 +1468,172 @@
     DD.Act.moveAlong(wk, [{ x: 1, y: 3 }, { x: 2, y: 3 }, { x: 2, y: 4 }]);
     t.ok(wk.y === 4 && has(wk, 'burn'), 'a walker stepping into it catches fire');
   });
+
+  // ---- Nov 18: conditional healing — "Loyalty Card (Platinum Pending)" (plan §4.15) ----------------------------------------
+  /** Every real DD.Act.heal call made while fn runs (previews and dry runs left out). */
+  function healCalls(fn) {
+    const list = [], orig = DD.Act.heal;
+    DD.Act.heal = function (src, target, n, opts) {
+      const healed = orig.apply(this, arguments);
+      if (!DD.Act.simulating) list.push({ src: src, target: target, n: n, via: opts && opts.via, healed: healed });
+      return healed;
+    };
+    try { fn(); } finally { DD.Act.heal = orig; }
+    return list;
+  }
+  function payouts(calls) { return calls.filter(function (x) { return x.via === 'lift:zarathor'; }); }
+  function healsBy(u) { const st = DD.Combat.state.stats.units[u.id]; return st ? st.heals : 0; }
+  const FEM = /\b(she|her|hers|herself)\b/i;
+
+  T.suite('hero_zarathor: conditional heal (Nov 18)', function (t) {
+    if (!ready(t)) return;
+    const Zr = DD.Zarathor, CARD = 'zar_loyalty_card', HEAL = 3, throwDef = DD.getSkill('zar_bling_throw');
+    const p0 = DD.problems.length;
+    t.ok(Zr.CARD === CARD && Zr.CARD_HEAL === HEAL, 'DD.Zarathor.CARD = zar_loyalty_card (the sim\'s WORN table reads it), CARD_HEAL = 3');
+    // the item, word for word; the shared item rules (desc ends with '.', ≤ 150; flavor ≤ 120); he/him
+    const it = DD.getItem(CARD);
+    if (!t.ok(!!it, 'Loyalty Card (Platinum Pending) registered')) return;
+    t.ok(it.name === 'Loyalty Card (Platinum Pending)' && it.slot === 'trinket' && it.rarity === 'common' && it.icon === '🎫' && it.hero === ZAR,
+      'a common trinket only Zarathor wears');
+    t.eq(JSON.stringify(it.stats || {}) + JSON.stringify(it.hooks || {}), '{}{}', 'no stats, no hooks (the rule lives in payGold)');
+    t.eq(it.desc, 'Whenever Zarathor pays for one of his skills with gold, he heals 3 HP (once per turn).', 'desc, word for word');
+    t.ok(it.desc.indexOf('heals ' + HEAL + ' HP') >= 0, 'desc built from CARD_HEAL');
+    t.eq(it.flavor, 'Every purchase earns points. The points are feelings. Platinum status: pending.', 'flavor, word for word');
+    t.ok(/\.$/.test(it.desc) && it.desc.length <= 150 && it.flavor.length <= 120, 'item text lengths (' + it.desc.length + ' / ' + it.flavor.length + ')');
+    t.ok(!FEM.test(it.desc + ' ' + it.flavor) && !REMOVED.test(it.desc), 'he/him; no removed mechanic');
+    const rb = DD.getHero(ZAR).barks.retail || [];
+    t.eq(rb.join(' | '), ['Retail therapy. Literally.', 'Ka-ching. I feel better already.', 'Points! I love points!'].join(' | '), 'barks.retail: the plan\'s three lines');
+    rb.forEach(function (l) { t.ok(!FEM.test(l) && l.length <= 70, 'his retail bark: ' + l); });
+    t.ok(throwDef.tags.indexOf('heal') < 0 && throwDef.kind === 'attack', 'Throw Money At It is still an attack (no heal tag: never an aimed revive)');
+
+    // fires: Throw Money At It paid from the purse with the card on → +3, his own heal, labelled
+    fight({ heroes: [Z(1, 4, [sk('zar_bling_throw', 1), sk('zar_gold_plating', 1)], { items: [CARD] })], enemies: [E(5, 4), E(8, 8)], gold: 40 });
+    let z = zar();
+    z.hp = z.maxHp - 10;
+    let hp0 = z.hp;
+    const heals0 = healsBy(z);
+    let c = healCalls(function () { t.ok(use(z, 'zar_bling_throw', 5, 4), 'money thrown'); });
+    t.eq(DD.Act.gold(), 35, '5 gold paid from the purse');
+    t.eq(z.hp - hp0, HEAL, 'the card pays out: +' + HEAL);
+    t.eq(healsBy(z) - heals0, HEAL, 'the heal\'s src is Zarathor (his heals stat grows by ' + HEAL + ')');
+    t.ok(payouts(c).length === 1 && payouts(c)[0].src === z && payouts(c)[0].target === z && payouts(c)[0].n === HEAL, 'one DD.Act.heal(Zarathor, Zarathor, 3, { via: \'lift:zarathor\' })');
+    // once per turn: Gold Plating (another gold skill) the same turn pays, but no second payout
+    hp0 = z.hp;
+    c = healCalls(function () { t.ok(use(z, 'zar_gold_plating', 1, 4), 'gold-plates himself the same turn'); });
+    t.ok(DD.Act.gold() === 29 && z.hp === hp0 && payouts(c).length === 0 && !Zr.cardReady(z), 'a second gold skill this turn: 6 gold paid, no second heal (once per turn)');
+    // a new turn: the card is ready again
+    DD.Combat.endTurn();
+    t.ok(cur() === z && Zr.cardReady(z), 'his next turn: the card is ready again');
+    slotOf(z, 'zar_gold_plating').cd = 0;   // test setup: Gold Plating off its cooldown 2
+    hp0 = z.hp;
+    c = healCalls(function () { t.ok(use(z, 'zar_gold_plating', 1, 4), 'Gold Plating on his next turn'); });
+    t.ok(z.hp === Math.min(z.maxHp, hp0 + HEAL) && payouts(c).length === 1, 'his next turn\'s first gold skill heals again');
+    // at full HP the call is still made (0 HP), and the turn's payout is spent
+    fight({ heroes: [Z(1, 4, [sk('zar_bling_throw', 1)], { items: [CARD] })], enemies: [E(5, 4), E(8, 8)], gold: 40 });
+    z = zar();
+    c = healCalls(function () { use(z, 'zar_bling_throw', 5, 4); });
+    t.ok(payouts(c).length === 1 && payouts(c)[0].healed === 0 && z.hp === z.maxHp && !Zr.cardReady(z), 'full HP: the heal is called, heals 0, the turn\'s payout is spent');
+
+    // doesn't fire otherwise: no card; the Hellcard paying the missing gold in HP
+    fight({ heroes: [Z(1, 4, [sk('zar_bling_throw', 1)])], enemies: [E(5, 4), E(8, 8)], gold: 40 });
+    z = zar();
+    z.hp = z.maxHp - 10;
+    c = healCalls(function () { use(z, 'zar_bling_throw', 5, 4); });
+    t.ok(DD.Act.gold() === 35 && z.hp === z.maxHp - 10 && payouts(c).length === 0, 'no card: the gold is paid, no heal');
+    fight({ heroes: [Z(1, 4, [sk('zar_bling_throw', 1)], { items: [CARD, 'zar_hellcard'] })], enemies: [E(5, 4), E(8, 8)], gold: 2 });
+    z = zar();
+    z.hp = z.maxHp - 10;
+    hp0 = z.hp;
+    c = healCalls(function () { t.ok(use(z, 'zar_bling_throw', 5, 4), 'short on gold: charged to the Platinum Hellcard'); });
+    t.ok(DD.Act.gold() === 0 && z.hp === hp0 - 3 && payouts(c).length === 0 && Zr.cardReady(z), 'the Hellcard pays 3 of it in HP: no heal (and the payout is not spent)');
+    // never revives: a downed Zarathor's gold skill (run directly) heals nothing and he stays down
+    fight({ heroes: [Z(1, 4, [sk('zar_bling_throw', 1)], { items: [CARD] }), H('test_knight', 1, 7)], enemies: [E(5, 4), E(8, 8)], gold: 40 });
+    z = zar();
+    DD.Act.damage(at(5, 4), z, 999, { cause: 'other' });
+    t.ok(z.downed, 'premise: Zarathor is down');
+    c = healCalls(function () { throwDef.execute(DD.Targeting.buildCtx(z, slotOf(z, 'zar_bling_throw'), { x: 5, y: 4 })); });
+    t.ok(z.downed && z.hp === 0 && payouts(c).length === 0, 'downed: no heal is called, he stays down');
+
+    // preview: the heal is inside the action (gold is sandboxed in previews), so the preview shows +3 and changes nothing
+    fight({ heroes: [Z(1, 4, [sk('zar_bling_throw', 1)], { items: [CARD] })], enemies: [E(5, 4), E(8, 8)], gold: 40 });
+    z = zar();
+    z.hp = z.maxHp - 10;
+    hp0 = z.hp;
+    const fp0 = fingerprint(DD.Combat.state);
+    const pv = DD.Combat.preview(z, slotOf(z, 'zar_bling_throw'), 5, 4);
+    t.eq(fingerprint(DD.Combat.state), fp0, 'the preview leaves the fight untouched (gold, HP, the card\'s turn mark)');
+    t.ok(pv && pv.perUnit[z.id] && pv.perUnit[z.id].heal === HEAL, 'Throw Money At It\'s preview shows +' + HEAL + ' on Zarathor');
+    let n0 = DD.Combat.state.log.length;
+    use(z, 'zar_bling_throw', 5, 4);
+    t.eq(z.hp, hp0 + HEAL, 'and the use heals exactly that');
+    // [heal QA-1] he pays first, so the heal line comes before the throw's damage line: the next line says why
+    let lines = DD.Combat.state.log.slice(n0).map(function (l) { return l.text; });
+    const hl = lines.indexOf('Zarathor heals ' + HEAL + ' HP.');
+    t.ok(hl >= 0 && lines[hl + 1] === 'The Loyalty Card pays out: Zarathor earns points for spending gold. The points are feelings. He feels better.',
+      'the log: the heal, then why, before the damage (' + lines.join(' | ') + ')');
+    fight({ heroes: [Z(1, 4, [sk('zar_bling_throw', 1)], { items: [CARD] })], enemies: [E(5, 4), E(8, 8)], gold: 40 });
+    z = zar();
+    n0 = DD.Combat.state.log.length;
+    use(z, 'zar_bling_throw', 5, 4);
+    lines = DD.Combat.state.log.slice(n0).map(function (l) { return l.text; });
+    t.ok(!lines.some(function (l) { return /Loyalty Card pays out/.test(l); }), 'full HP (the payout healed 0): no reason line');
+
+    // [heal QA-7, desc-sweep-7] wearing the card, both gold skills say what it does (combat unit and run hero alike)
+    const plateDef = DD.getSkill('zar_gold_plating');
+    const clause = ' Loyalty Card: paying in gold heals him ' + Zr.CARD_HEAL + ' HP (once per turn).';
+    [1, 2, 3].forEach(function (lv) {
+      [throwDef, plateDef].forEach(function (d) {
+        const bare = DD.skillDesc(d, lv, null);
+        t.ok(bare.indexOf('Loyalty Card') < 0, d.name + ' L' + lv + ': no card, no clause');
+        t.eq(DD.skillDesc(d, lv, { items: [CARD] }), bare + clause, d.name + ' L' + lv + ' with the card (combat unit)');
+        t.eq(DD.skillDesc(d, lv, { items: { trinket: CARD } }), bare + clause, d.name + ' L' + lv + ' with the card (run hero)');
+      });
+    });
+
+    // the Radio Edit: healsWith(Throw Money At It) only while he wears the card
+    t.ok(throwDef.heals({}, { items: [CARD] }) === true && throwDef.heals({}, { items: [] }) === false && throwDef.heals({}, null) === false, 'heals(L, u): true only with the card');
+    const B = DD.BossSvammiel;
+    if (B && B.healsWith) {
+      t.ok(B.healsWith(throwDef, L('zar_bling_throw', 1), { items: [CARD] }), 'healsWith: with the card, Throw Money At It counts as a heal (never bleeped)');
+      t.ok(!B.healsWith(throwDef, L('zar_bling_throw', 1), { items: [] }), 'healsWith: without it, it does not');
+    } else t.log('svammiel not loaded: healsWith checked through heals() only');
+
+    // AutoPlay quick pass: aiScore = healWorth(Zarathor, 3) with the card, unspent, the purse covering the cost; else 0
+    fight({ heroes: [Z(1, 4, [sk('zar_bling_throw', 1)], { items: [CARD] })], enemies: [E(5, 4), E(8, 8)], gold: 40 });
+    z = zar();
+    z.hp = z.maxHp - 14;
+    const qctx = function () { return DD.Targeting.buildCtx(z, slotOf(z, 'zar_bling_throw'), { x: 5, y: 4 }); };
+    const w3 = DD.AutoPlay.healWorth(z, HEAL);
+    t.ok(w3 > 0 && throwDef.aiScore(qctx()) === w3, 'aiScore: card worn, unspent, 40 gold: healWorth(Zarathor, 3) = ' + w3);
+    const ex = qctx();
+    ex.autoplay = { preview: {} };
+    t.eq(throwDef.aiScore(ex), 0, 'aiScore: 0 in the exact pass (its dry run sees the heal)');
+    DD.Combat.state.sandboxGold = 4;
+    t.eq(throwDef.aiScore(qctx()), 0, 'aiScore: the purse can\'t cover the 5 gold: 0');
+    DD.Combat.state.sandboxGold = 40;
+    z.data.zar = { card: DD.Combat.state.turn };
+    t.eq(throwDef.aiScore(qctx()), 0, 'aiScore: already paid out this turn: 0');
+    z.data.zar = {};
+    z.items = [];
+    t.eq(throwDef.aiScore(qctx()), 0, 'aiScore: no card: 0');
+
+    // AutoPlay exact pass: with the card, Throw Money At It's total includes the payout (the same scene without the card)
+    const throwTotal = function (items) {
+      fight({ heroes: [Z(1, 4, [sk('zar_bling_throw', 1)], { items: items })], enemies: [E(5, 4), E(8, 8)], gold: 40 });
+      const u = zar();
+      u.hp = u.maxHp - 14;
+      const w = DD.AutoPlay.healWorth(u, HEAL);
+      DD.AutoPlay.trace = 'all'; DD.AutoPlay.log = [];
+      try { DD.AutoPlay.takeTurn(); } finally { DD.AutoPlay.trace = false; }
+      const cand = DD.AutoPlay.log.filter(function (l) { return l.cand && l.cand.indexOf('zar_bling_throw > 5,4') === 0 && typeof l.total === 'number'; })[0];
+      return { total: cand ? cand.total : null, w: w };
+    };
+    const on = throwTotal([CARD]), off = throwTotal([]);
+    t.ok(on.total !== null && off.total !== null, 'the exact pass priced the throw both times (' + on.total + ' / ' + off.total + ')');
+    if (on.total !== null && off.total !== null) {
+      const d = on.total - off.total;
+      t.ok(d >= on.w - 0.15 && d <= on.w + 3, 'the throw\'s exact total includes the card\'s heal (+' + d.toFixed(1) + ', healWorth ' + on.w + ')');
+    }
+    t.eq(DD.problems.slice(p0).filter(function (p) { return /^Error in /.test(p); }).length, 0, 'no swallowed errors');
+  });
 })();

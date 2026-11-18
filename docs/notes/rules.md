@@ -2125,3 +2125,198 @@ real engine and AutoPlay, and a sim page without Benedick).
   `Encounter.build`): every solo act-4 boss replaces its flavor with its own line (Galbraith, Svammiel, the Gardener).
   The HUD tooltip's generic "the minions flee the moment it drops" is HUD's (`combat_hud.js objectiveTip`); I did not
   file a request for it.
+
+## Conditional-healing lift (Nov 18) — heal:engine, phase 1 (plan `.tmp/heal/plan.md` §5 E1-E4)
+
+The user (Nov 18): "I don't wan't Ellaria brought down. I want everyoe else brought up but by conditional healing". The
+plan lifts the other 16 heroes, each by one conditional heal in his or her own file; this phase lands the four shared
+hooks first, so the hero builders only touch their own files. No hero, no item and nothing of Ellaria's changed here.
+No hero defines `autoplayEnd` or passes `via` yet, so AutoPlay and the sim behave exactly as before for today's content
+(the new terms are 0; the sim's new section reads "none fired").
+
+### For the hero builders: what you can call
+- **The heal** (plan §3): `DD.Act.heal(<the hero unit>, <target>, n, { via: 'lift:<heroId>' })`. `src` is always the
+  hero (sim credit, `healBonus`); `via` is only a label (the engine ignores it; `js/engine/actions.js` doc comment,
+  ARCHITECTURE §5.4). Check `active(target)` and the hero's own `active` BEFORE the call; then always call when the
+  condition holds (it returns 0 at full HP) and gate FX / barks on the return value: the sim counts every labelled call
+  as a fire, 0-HP calls included. Never `opts.cause: 'status'`.
+- **Labels the sim expects** (one per hero, never Ellaria): `lift:slate`, `lift:hjalmar`, `lift:pebbles` (the fire case
+  too), `lift:basanos` (the whole Transform mend), `lift:marbles`, `lift:buga`, `lift:valdris`, `lift:sparrow` (the
+  share only; her own drain stays unlabelled), `lift:betty`, `lift:benedick`, `lift:kiri`, `lift:marwyn` (the whole surge
+  heal), `lift:corelos`, `lift:syllamin`, `lift:zarathor`, `lift:josiah`. The hero a label belongs to is the one it
+  names (its fights started are the denominator).
+- **Item-gated labels** (the sim's `WORN` table: "worn" fights = fights the hero started wearing the item; a fire counts
+  as worn when the src wears it): `lift:zarathor` → `zar_loyalty_card`, `lift:syllamin` → `syl_tear_jar`,
+  `lift:hjalmar` → `hja_canned_laughter`, `lift:benedick` → `ben_mucin_serum`, `lift:pebbles` → `peb_dog_bed`. Keep
+  those item ids.
+- **E2** `DD.AutoPlay.healWorth(unit, n)` → `min(n, maxHp − hp) × (1.5 if missing > maxHp / 2 else 0.8)`; 0 at full HP,
+  for `n ≤ 0` / not a number, and for a downed or dead unit. The shared price for `aiScore` / `autoplayValue` /
+  `autoplayEnd` terms (a local copy, like Slate's, is fine).
+- **E1** an optional `passive.autoplayEnd(unit, x, y) → number` on the HERO def's passive (only the acting unit's own
+  hero passive is asked; summons and Blessings are not): what ending that unit's turn on (x, y) is worth, in AutoPlay
+  units (price a heal with `healWorth`). PURE; read the current state (`DD.Combat.state`, `DD.Grid`, `DD.Act.hasStatus`)
+  and use x, y, not `unit.x` / `unit.y`. Inside a dry run the state is the copy and `unit` is the copy (post-action HP and
+  statuses: the Burn Nibble just applied counts); elsewhere the real state with the unit virtually on (x, y). Called
+  through `DD.safe` (a throw is a DD.warn and worth 0; non-finite → 0). `DD.AutoPlay.restAt(unit, x, y)` reads it for
+  tests. Pebbles is the one planned user.
+
+### What landed
+- **E1** (`js/engine/autoplay.js`): `restAt(ctx, pos, unit = ctx.unit)` (the passive looked up once per decision,
+  `ctx.restDef`); `makeCtx` sets `ctx.rest0 = restAt(ctx, here)`; `endValue(ctx, pos, apLeft, used, stay, rest)` adds
+  `rest` (or `restAt(ctx, pos)` when no dry run passed one) to the STAY branch only and returns `v − tempo0 − rest0`
+  (staying put ≈ 0; the hit-and-run escape ends elsewhere, no rest). Critic fixes: (a) `dryRun` and `dryHint` compute
+  `out.rest = restAt(ctx, { x: su.x, y: su.y }, su)` inside `simulate` after the action, next to `out.stay`, and every
+  `endValue` that passes `r.stay` passes `r.rest` (`exactTotal` ×2, `bestHint`); (b) `bestMove` adds `restAt(ctx, pos)`
+  to its stay branch and subtracts `ctx.rest0` from its total; (c) `bestSwap`'s `fixed` adds `restAt(ctx, pos) −
+  ctx.rest0`. Also `utilQuick` (Deviation 1). Header comment and ARCHITECTURE §5.7 (+ a pointer on §3.1's passive line).
+- **E2** (`autoplay.js`): `healWorth` and `AP.healWorth`; `AP.restAt(unit, x, y)` (inspection).
+- **E3**: `js/engine/actions.js` — `Act.heal`'s doc comment names `opts.via` (no behaviour change). `tests/sim/sim.js` —
+  the ledger's `DD.Act.heal` wrapper reads `arguments[3].via` (a non-empty string) and passes it to `ledgerHeal(src,
+  target, got, want, revived, ch, via, kind)`, which counts the label BEFORE the hero-side check (`liftHeal`: calls, HP,
+  to self / others / summons / foes, overheal, the same per fight kind, worn calls / HP). `fight()` now counts each
+  starting hero through `started(heroes0, kind)`: `fights` as before, plus `fk.<kind>` and `worn.<item>` (the WORN
+  items). New report section **"== conditional heals"** right after "== healing per hero": per label, the hero's fights,
+  fires and HP per fight (self / others / summons), overheal (share of asked), "by kind" (regular / elite / mini / boss,
+  per fight of that kind the hero started) and for WORN labels the worn fights (share), fires and HP per worn fight and
+  per fight not worn. `raw=1` adds `R heal.<label>.*` (calls, hp, self, others, summons, foes, over; `.k.<kind>.*`;
+  `.worn.calls/hp`) and the denominators `hero.<id>.fk.<kind>`, `hero.<id>.worn.<item>`. Header param docs updated;
+  `DD_SIM.started`, `DD_SIM.WORN`, `DD_SIM.rawText()` exposed for the tools suite.
+- **E4** (docs): DESIGN §6's "Sustain (D9 …)" bullet replaced by the plan's paragraph, word for word; ARCHITECTURE §5.7
+  (E1, E2: "Conditional healing (Nov 18, plan E1-E2)") and §5.4 (`heal` opts: `via`).
+- **Pooling helper** (scratch, for the balance pass): `.tmp/heal/lifts.awk` pools "== conditional heals" from the R
+  lines of 100-seed pages (`awk -f .tmp/heal/lifts.awk <pages>`): per label fires / HP per fight with batch-means 95%
+  half-widths, self / others / summons, overheal, by kind, and the worn table (worn share, fires and HP per worn fight).
+
+### Deviations
+1. **E1 also feeds `utilQuick`** (the quick estimate that picks which landing tiles of a utility mover — a dash or
+   teleport with no dmg / heal numbers, e.g. Pebbles' Hot Zoomies — get one of the `UTIL_REFINE` exact dry runs): `+
+   restAt(ctx, t) − ctx.rest0`. Without it a Zoomies landing next to a Burning foe could never be dry-run, so the exact
+   pass (which does read it) would never see it. 0 for every unit without `autoplayEnd` (today: all).
+2. **`healWorth` returns 0 for a downed or dead unit and for a non-number `n`** (the plan's formula is the quick pass's,
+   which only prices active units; a downed hero's "missing HP" would otherwise price a heal these lifts can't give).
+3. **`AP.restAt(unit, x, y)`**: an additive inspection helper (tests: the E1 suite, Pebbles' `autoplayEnd` values).
+4. **The sim's "foes" column**: a labelled heal on a unit not on the hero side (none planned) is counted in the label's
+   calls / HP and shown as "foes", never dropped. The label is counted before the ledger's hero-side check.
+5. **"by kind" per fight of that kind**: each kind's fires / HP are divided by the fights of that kind the label's hero
+   started (`fk`), so the boss column reads a per-boss-fight number (T8's guard rails).
+
+### Requests
+- None blocking. Phase 2 (same builder, after the four groups): apply the 16 "DESIGN §6 brief (Nov 18)" texts from
+  `docs/notes/hero-<id>.md`, regenerate the v2-digest §2 kit lines (Ellaria's block unchanged), the Benedick message in
+  `tests/balance_tests.js`, a full run, a phase-2 entry here.
+- Balance pass: pool "== conditional heals" with `.tmp/heal/lifts.awk` (above); the existing `.tmp/heal/baseline/
+  merge.awk` already ignores the new R keys (its hero regex matches `hero.<id>.fights` only).
+
+### Tests
+- `tests/autoplay_tests.js` (new last block): `autoplay: a passive's autoplayEnd pulls the turn's end tile (E1: plain
+  moves, dry runs, a throwing hook)` — a temp fixture hero (`test_ap_rester`, removed after): a tile its passive values 6
+  is where a plain move ends its turn (without the value it walks elsewhere); a 3-AP skill that tucks a foe in (a test
+  status) is priced +4 in its exact total when `autoplayEnd` reads that status in the dry run's copy (`restAt` on the real
+  state reads 0 before the action); a throwing `autoplayEnd` is worth 0, the turn plays as without it, the DD.warn lines
+  are spliced out (expected there only). `autoplay: AutoPlay.healWorth prices a heal like the quick pass (E2)`: 0 / 2.4 /
+  4 / 7.5 / capped at missing × 1.5 / 0 for n ≤ 0, NaN, downed, null.
+- `tests/docs_tests.js`, `tools: the campaign sim sorts heals by source and runs by healer group` extended: the WORN
+  table; two labelled heals for `lift:slate` (one at 0 HP still fires), two for `lift:zarathor` (worn / not, regular /
+  boss, self / others); fights by kind and worn; the report's section order, its lines (per fight, by kind, worn); the
+  `R heal.*` and `hero.<id>.fk|worn` raw lines.
+- Scratch end-to-end probe (not a suite): `.tmp/heal/engine/probe.html` + `probe.js` give every hero a 2-HP labelled
+  turn-end heal; `bash .tmp/heal/engine/probe.sh "debug=1&seeds=3&from=777&stop=1&raw=1&healers=ellaria,josiah,valdris"`
+  printed the section for 10 heroes (per kind, worn line for Benedick's Serum), 0 errors, 0 DD.warn lines; the R lines
+  pooled with `lifts.awk`.
+- Isolated: `tools/test.sh "suite=autoplay&isolate=nothing_here"` 73 suites PASS; `suite=tools: the campaign sim` 3 PASS.
+- Full `bash tools/test.sh` (Nov 18, all of the above landed): **PASS — 1301 suites, 149,837 assertions, 0 failures**,
+  0 swallowed "Error in" lines, missing scripts 0. Stock sim smoke (`tools/sim.sh "debug=1&seeds=2&from=4242&stop=1&
+  raw=1"`): "== conditional heals …: none fired", 0 errors, 0 DD.warn lines, the `hero.<id>.fk.*` R lines present.
+
+### Not verified / known
+- No suite drives a real swap or a real hinted interaction with an `autoplayEnd` (fixes (c) and the `dryHint` half of
+  (a) are code-reviewed, and run in every AutoPlay decision with the term at 0).
+- The `opts.via` wrapper path in a real fight is covered by the scratch probe only (the tools suite calls `ledgerHeal`
+  directly; installing the sim's wrappers in the test page would wrap `DD.safe` page-wide).
+
+## Conditional-healing lift (Nov 18) — heal:docs, phase 2 (plan `.tmp/heal/plan.md` §5 "Phase 2")
+
+The same engine builder's second phase, after G1-G4 landed and were reviewed. Only shared docs and one test message
+changed: no engine code, no hero file, nothing of Ellaria's.
+
+### What landed
+- **DESIGN §6** (`docs/DESIGN.md`): the 16 "DESIGN §6 brief (Nov 18)" texts from `docs/notes/hero-<id>.md`, each applied
+  with one Edit on the note's anchor, the subsection re-read before each edit (18 edits: Hjalmar and Benedick have two
+  anchors; Zarathor's Loyalty Card and Syllamin's Jar of Tears are new bullets after their anchors). Zarathor, Syllamin,
+  Marbles, Marwyn, Josiah, Sparrow, Corelos, Slate, Buga, Kiri, Betty, Basanos, Valdris, Hjalmar, Pebbles, Benedick.
+  Checked by script: every replacement is in DESIGN (whitespace folded) and every replaced anchor is gone. The pinned
+  phrases hold: Basanos "heals him 2–4 HP", Sparrow "Box* (drain a foe within 3:", Valdris "*Forge Armor*" (never
+  "Armour"), Slate "move 4" and Short Fuse's "gives him a buff status (Block doesn't count)". Ellaria's subsection is
+  byte for byte the committed one (md5 of `### Ellaria` → `### Josiah`). The §6 intro (the E4 paragraph) was already in.
+- **v2-digest §2** (`docs/notes/v2-digest.md`): the generator (`tools/test.sh "suite=docs: v2-digest&kits=1&verbose=1"`,
+  run on the landed tree) diffed block by block against the digest; the 18 lines the lift changed were replaced by its
+  output: the passives of Marwyn, Josiah, Buga, Betty, Hjalmar and Pebbles; Walking Stick Whack, Juice Box, Glyph of
+  Warding, Hold Still, Ethereal Step, Transform and Forge Armor; the item lines of Zarathor (+ Loyalty Card), Syllamin
+  (+ Jar of Tears) and Hjalmar (Canned Laughter "4 HP more (9 in all)"); and Slate's header (move 3 → 4, a Nov 14 drift
+  the same diff showed). Hand notes after the generated text: Glyph "(II: 6 damage, heal 4 …)" and Hold Still "(II: 5
+  damage, heal 4 …)" (the generator prints I and III only), Hold Still / Stress Ball "a squeeze replaces that turn's hold
+  heal", Transform's live marker "; used this turn" (review:g3's request in hero-basanos.md). A re-diff leaves only the
+  hand-merged / annotated lines (Statue of Me, Raven Dive, Murder of Crows, Glyph, Hold Still, Stress Ball, Transform).
+  Ellaria's block: byte for byte unchanged. A dated "Nov 18" paragraph in the §2 header says all this.
+- **`tests/balance_tests.js`**: the Benedick message "(his only heal, D9)" → "(the Serum's bonus over A Sticky
+  Situation's 3)", values unchanged (`SERUM_HEAL` 3, "heals 3 HP" in the Serum desc); the block comment above `A4_ROWS`
+  that said "Benedick's only heal" says the same.
+
+### The reviewers' remaining items and the builders' requests
+| item (from) | lands in | done |
+|---|---|---|
+| Basanos: the digest's Transform note "(used this turn)" → "; used this turn" (review:g3) | v2-digest | yes (above) |
+| Basanos, Benedick, Corelos, Syllamin: "engine builder, phase 2" (their briefs, digest lines, Benedick's balance message; build:g3) | DESIGN, digest, balance_tests | yes (above); Benedick has no digest block (Deviation 1) |
+| Benedick: enemy paths that don't detour around slime, or AutoPlay's danger model seeing snag stops (build:g3 optional, review:g3) | `js/engine/grid.js` / `autoplay.js` | **no**: routed to the lead (Requests) |
+| T8 under its fires minimum: Slate ~0.75 (min 1.0), Sparrow ~0.19 (0.25), Valdris 0.56-0.64 (0.8), Kiri 0.11-0.16 (0.4; ceiling ~0.22), Benedick 0.29 (0.4) | balance pass / lead | nothing in my files (no bug found by any review) |
+| At the edge: Pebbles 1.53 pooled (1.5), Basanos 2.01 with Ellaria in the party (2.0); worn shares Zarathor 6.5% (51/783), Syllamin 0/206 (a forced-wear scratch read 0.94 fires / 2.4 HP per worn fight) | balance pass report | nothing in my files |
+
+### For the balance pass: where each tunable heal number is quoted
+A heal raised inside its plan §7 range changes the hero's desc (built from the constants) and these doc lines, which
+nothing checks automatically except the three pinned ones (Basanos' MEND "2–4", Juice Box's range, Forge Armor's name):
+DESIGN §6 subsections — Buga "heals him 2 HP"; Basanos "+2 per adjacent foe, max +4" (also the §6 intro: "Basanos'
+Transform, +2 per adjacent foe"); Slate "3–4 HP" (hug I/II/III = 3/4/4); Pebbles "heals him 3 HP" (one number for both
+cases: raising the neighbour case splits the sentence, plan §4.3); Marbles "5–7 HP"; Hjalmar "heals 5 HP" and Canned
+Laughter "(9 in all)"; Valdris "4–6 HP"; Sparrow "half of that, rounded up"; Betty "he heals 3 HP"; Benedick "heals him 3
+HP" (passive) and "heals him 3 (his passive) … adds 3 more (6 in all)" (sustain bullet; the balance test's message reads
+`MUCIN_HEAL`); Kiri "3–5 HP"; Marwyn "+2 for each foe he has Taunted, max +6" (also the §6 intro: "+2 per foe he
+Taunted"); Corelos "3–4 HP"; Syllamin, Zarathor "heals 3 HP"; Josiah "heals 2 HP". The digest §2 line: rerun the
+generator and copy the hero's line.
+
+### Deviations
+1. **Benedick has no v2-digest §2 block**, so none was regenerated: §2 is v2's "16 kits" and the generator's `ORDER`
+   (`tests/docs_tests.js`) lists exactly those 16 (Ellaria in, Benedick out). Adding a 17th block would grow a v2 document
+   and the generator past the plan's "no other shared file changes"; his texts live in DESIGN §6 (both briefs applied)
+   and `docs/notes/hero-benedick.md`. The plan's "16 changed heroes" therefore reads as 15 blocks here.
+2. **Two DESIGN lines re-wrapped** (Marwyn's surge, Benedick's sustain bullet): the briefs' words exactly, wrapped one
+   word earlier (as written they ran 121 / 122 columns; the docs wrap at 120 and the tests fold whitespace).
+3. **Slate's digest header** was regenerated with his Hold Still line (move 3 → 4): not a lift change, a drift the
+   generator diff showed in the same block (DESIGN §6 and the game say move 4 since Nov 14).
+4. **The Benedick message builds "A Sticky Situation's N" from `DD.Benedick.MUCIN_HEAL`** (reads 3 today, the plan's
+   text) so a balance-pass raise inside [3, 5] keeps it true. The suite's name ("… Benedick's one heal") is unchanged:
+   still one heal trigger, and `docs/notes/balance.md` quotes the name.
+
+### Requests
+- **Lead (decision, non-blocking): Benedick's T8 fires.** `lift:benedick` reads 0.29 fires a fight against 0.4 on two
+  independent pages, and review:g3 found no number in benedick.js that raises the fires (MUCIN_HEAL moves HP only). The
+  two engine options are not phase-2 work: (a) enemy paths that walk through slime instead of an equal-cost detour
+  (`Grid`, "equal-cost paths also avoid SNAGS") changes every enemy's pathing around every snag and reverses the
+  combat-controls-2 playtest fix: an enemy-AI rule change for the lead / the user; (b) AutoPlay's danger model seeing
+  stops (`srcPositions` skipping tiles past a stop) prices hero positions only and would not make a foe walk into his
+  slime, so it is unlikely to move the fires; plan §5 keeps the engine as phase 1 left it. The plain option is the lead
+  revisiting Benedick's T8 fires row (as for Kiri's), with `MUCIN_HEAL` [3, 5] for the HP band.
+- **Balance pass:** the T8 readings and edges in the table above; the doc lines to update with any heal raise (above).
+
+### Tests
+- `tools/test.sh "suite=docs: v2-digest&kits=1&verbose=1"` (the generator, before and after: the digest re-diff above);
+  `tools/test.sh "suite=docs:,balance: V3 act 4"`: 8 suites PASS, 143 assertions (the DESIGN §6 pins, the digest
+  costs / Juice Box / Transform / Forge Armor lines, the new Benedick message).
+- **Full `bash tools/test.sh` (Nov 18, after phase 2): PASS — 1318 suites, 150,822 assertions, 0 failures**, missing
+  scripts 0, 0 swallowed "Error in" lines; the `warnings:` lines are the known deliberate ones (Benedick's move-2 and
+  Bark-B-Q content advisories, the junk-content tests). No hero file needed a fix. Output kept in
+  `.tmp/heal/docs/full_test.txt` (scratch: the generator output, the per-hero diffs and the brief checks are beside it).
+
+### Not verified / known
+- Phase 1's two items stand (no suite drives a real swap or hinted interaction with an `autoplayEnd`; the `opts.via`
+  wrapper in a real fight is covered by the scratch probe and, since the builds, by every hero's forced-party sim page).
+- No sim was run in phase 2 (docs only); the balance pass measures next (plan §7).

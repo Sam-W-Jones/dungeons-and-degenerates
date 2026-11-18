@@ -1050,4 +1050,187 @@
     t.eq(c.p.hp, p0, 'Pebbles, in the blast, is fireproof');
     t.eq(c.p.ap, 2, '1 AP');
   });
+
+  // ---- Nov 18: conditional healing — "Warming His Paws on a Goblin" (plan §4.3) ------------------------------------------
+  /** Every real DD.Act.heal call made while fn runs (previews and dry runs left out): [{ src, target, n, via, healed }]. */
+  function healCalls(fn) {
+    const list = [], orig = DD.Act.heal;
+    DD.Act.heal = function (src, target, n, opts) {
+      const healed = orig.apply(this, arguments);
+      if (!DD.Act.simulating) list.push({ src: src, target: target, n: n, via: opts && opts.via, healed: healed });
+      return healed;
+    };
+    try { fn(); } finally { DD.Act.heal = orig; }
+    return list;
+  }
+  function cozies(calls) { return calls.filter(function (x) { return x.via === 'lift:pebbles'; }); }
+  function healsBy(u) { const st = DD.Combat.state.stats.units[u.id]; return st ? st.heals : 0; }
+  /** End Pebbles' turn (enemies pass) and return the HP his turn end healed, plus the lift calls made. */
+  function endHisTurn(p) {
+    const hp0 = p.hp;
+    let atEnd = null;
+    const off = DD.Events.on('turn:end', function (e) { if (e.unit === p && atEnd === null) atEnd = p.hp; });
+    let calls = [];
+    try { calls = healCalls(function () { DD.Combat.endTurn(); }); } finally { off(); }
+    return { gained: (atEnd === null ? p.hp : atEnd) - hp0, calls: cozies(calls) };
+  }
+
+  T.suite('hero_pebbles: conditional heal (Nov 18)', function (t) {
+    const P = DD.Pebbles, hd = DD.getHero('pebbles'), COZY = P.COZY_HEAL, BED = P.COZY_HEAL_BED;
+    const p0 = DD.problems.length;
+    t.ok(COZY === 3 && BED === 5, 'COZY_HEAL 3, COZY_HEAL_BED 5 (the numbers did not move)');
+    // desc == execute: the passive says the three places, the number from the constant; the Dog Bed text unchanged
+    t.eq(hd.passive.desc, 'Pebbles is made of fire: fire damage and Burn can\'t hurt him, and ending his turn on fire, on lava or next to a Burning foe heals him 3 HP.',
+      'Hot Dog, word for word');
+    t.ok(hd.passive.desc.indexOf('heals him ' + COZY + ' HP') >= 0, 'built from COZY_HEAL');
+    t.eq(DD.getItem('peb_dog_bed').desc, '+6 max HP, +1 armor. Hot Dog heals 5 instead of 3.', 'the Fireproof Dog Bed\'s text is unchanged');
+    t.eq((hd.barks.cozy || []).join(' | '), ['Warm! Warm warm warm!', 'Cozy fire! Why is the fire yelling?', '*happy crackle*'].join(' | '), 'barks.cozy: the plan\'s three lines');
+    (hd.barks.cozy || []).forEach(function (l) { t.ok(!FEM.test(l) && l.length <= 70, 'his cozy bark: ' + l); });
+    t.ok(typeof hd.passive.autoplayEnd === 'function', 'the passive carries autoplayEnd (E1)');
+
+    // fires: he Nibbles a grunt (Burn 1) and ends his turn next to it → +3 (+5 with the Dog Bed), his own heal
+    [[], ['peb_dog_bed']].forEach(function (items) {
+      const want = items.length ? BED : COZY, lb = items.length ? 'Dog Bed' : 'no item';
+      const a = arena({ at: [1, 4], items: items, enemies: [E(2, 4, 'test_grunt', 3), E(8, 8)] });
+      a.p.hp = a.p.maxHp - 12;
+      use(t, a.p, a.p.basic, 2, 4, lb + ': nibble');
+      t.ok(has(a.foes[0], 'burn'), lb + ': the grunt is Burning');
+      const heals0 = healsBy(a.p);
+      const r = endHisTurn(a.p);
+      t.eq(r.gained, want, lb + ': ending his turn next to it heals ' + want);
+      t.eq(healsBy(a.p) - heals0, want, lb + ': the heal\'s src is Pebbles (his heals stat grows by ' + want + ')');
+      t.ok(r.calls.length === 1 && r.calls[0].src === a.p && r.calls[0].target === a.p && r.calls[0].n === want,
+        lb + ': one DD.Act.heal(Pebbles, Pebbles, ' + want + ', { via: \'lift:pebbles\' })');
+    });
+    // the fire / lava case is labelled too; on fire next to a Burning foe: one heal, not two
+    const both = arena({ at: [2, 4], surfaces: [{ x: 2, y: 4, id: 'fire', turns: 9 }], enemies: [E(3, 4, 'test_grunt', 3), E(8, 8)] });
+    DD.Act.addStatus(both.foes[0], 'burn', { stacks: 2 }, null);
+    both.p.hp = both.p.maxHp - 12;
+    let r = endHisTurn(both.p);
+    t.ok(r.gained === COZY && r.calls.length === 1, 'on fire AND next to a Burning foe: +' + COZY + ' once, not ' + 2 * COZY + ' (' + r.gained + ')');
+    const lava = arena({ at: [2, 4], terrain: { '2,4': 'lava' }, enemies: [E(8, 8)] });
+    lava.p.hp = lava.p.maxHp - 12;
+    r = endHisTurn(lava.p);
+    t.ok(r.gained === COZY && r.calls.length === 1, 'on lava: +' + COZY + ', labelled lift:pebbles too');
+    // at full HP the call is still made (0 HP: the sim counts the fire)
+    const fu = arena({ at: [1, 4], enemies: [E(2, 4, 'test_grunt', 3), E(8, 8)] });
+    DD.Act.addStatus(fu.foes[0], 'burn', { stacks: 1 }, null);
+    let n0 = DD.Combat.state.log.length;
+    r = endHisTurn(fu.p);
+    t.ok(r.gained === 0 && r.calls.length === 1 && fu.p.hp === fu.p.maxHp, 'full HP: the heal is called and heals 0');
+    t.ok(!DD.Combat.state.log.slice(n0).some(function (l) { return /warms his paws|curls up in the flames/.test(l.text); }), '[heal QA-1] full HP: no reason line');
+
+    // [heal QA-1] the log says why he healed, right after the engine's heal line: the Burning foe by name, or his fire
+    const lg = arena({ at: [1, 4], enemies: [E(2, 4, 'test_grunt', 3), E(8, 8)] });
+    DD.Act.addStatus(lg.foes[0], 'burn', { stacks: 2 }, null);
+    lg.p.hp = lg.p.maxHp - 12;
+    n0 = DD.Combat.state.log.length;
+    endHisTurn(lg.p);
+    let lines = DD.Combat.state.log.slice(n0).map(function (l) { return l.text; });
+    let hl = lines.indexOf('Pebbles heals 3 HP.');
+    t.ok(hl >= 0 && lines[hl + 1] === 'Pebbles warms his paws on ' + lg.foes[0].name + '. Toasty. For one of them.', 'next to a Burning foe, the log: the heal, then why (' + lines.join(' | ') + ')');
+    const lgf = arena({ at: [2, 4], surfaces: [{ x: 2, y: 4, id: 'fire', turns: 9 }], enemies: [E(3, 4, 'test_grunt', 3), E(8, 8)] });
+    DD.Act.addStatus(lgf.foes[0], 'burn', { stacks: 2 }, null);
+    lgf.p.hp = lgf.p.maxHp - 12;
+    n0 = DD.Combat.state.log.length;
+    endHisTurn(lgf.p);
+    lines = DD.Combat.state.log.slice(n0).map(function (l) { return l.text; });
+    hl = lines.indexOf('Pebbles heals 3 HP.');
+    t.ok(hl >= 0 && lines[hl + 1] === 'Pebbles curls up in the flames. So cozy.', 'on fire (a Burning foe too: one heal), the log names his fire (' + lines.join(' | ') + ')');
+
+    // doesn't fire otherwise: a foe that is not Burning, a Burning ally, a Burning foe 2 tiles away
+    const cold = arena({ at: [1, 4], enemies: [E(2, 4, 'test_grunt', 3), E(8, 8)] });
+    cold.p.hp = cold.p.maxHp - 12;
+    r = endHisTurn(cold.p);
+    t.ok(r.gained === 0 && r.calls.length === 0, 'next to a foe that is not Burning: nothing');
+    const ally = arena({ at: [1, 4], heroes: [{ id: 'test_knight', x: 2, y: 4 }], enemies: [E(8, 8)] });
+    DD.Act.addStatus(at(2, 4), 'burn', { stacks: 2 }, null);
+    t.ok(has(at(2, 4), 'burn'), 'premise: the knight next to him is Burning');
+    ally.p.hp = ally.p.maxHp - 12;
+    r = endHisTurn(ally.p);
+    t.ok(r.gained === 0 && r.calls.length === 0, 'a Burning ALLY next to him: nothing (he warms his paws on goblins only)');
+    const far = arena({ at: [1, 4], enemies: [E(3, 4, 'test_grunt', 3), E(8, 8)] });
+    DD.Act.addStatus(far.foes[0], 'burn', { stacks: 2 }, null);
+    far.p.hp = far.p.maxHp - 12;
+    r = endHisTurn(far.p);
+    t.ok(r.gained === 0 && r.calls.length === 0, 'a Burning foe 2 tiles away: nothing');
+    // a flying Pebbles: next to a Burning foe he still warms up (no floor needed); over fire he does not (as before)
+    const fly = arena({ at: [1, 4], enemies: [E(2, 4, 'test_grunt', 3), E(8, 8)] });
+    DD.Act.addStatus(fly.foes[0], 'burn', { stacks: 2 }, null);
+    fly.p.flags.flying = true;
+    fly.p.hp = fly.p.maxHp - 12;
+    r = endHisTurn(fly.p);
+    t.ok(r.gained === COZY && r.calls.length === 1, 'flying, next to a Burning foe: +' + COZY);
+    const flyFire = arena({ at: [2, 4], surfaces: [{ x: 2, y: 4, id: 'fire', turns: 9 }], enemies: [E(8, 8)] });
+    flyFire.p.flags.flying = true;
+    flyFire.p.hp = flyFire.p.maxHp - 12;
+    r = endHisTurn(flyFire.p);
+    t.ok(r.gained === 0 && r.calls.length === 0, 'flying over fire: nothing (as before)');
+    // never revives: a downed Pebbles next to a Burning foe gets nothing from his passive's turn-end hook
+    const dn = arena({ at: [1, 4], heroes: [{ id: 'test_knight', x: 1, y: 7 }], enemies: [E(2, 4, 'test_grunt', 3), E(8, 8)] });
+    DD.Act.addStatus(dn.foes[0], 'burn', { stacks: 2 }, null);
+    DD.Act.damage(dn.foes[0], dn.p, 999, { cause: 'other' });
+    t.ok(dn.p.downed, 'premise: Pebbles is down');
+    const dc = healCalls(function () { hd.passive.hooks.onTurnEnd(dn.p); });
+    t.ok(cozies(dc).length === 0 && dn.p.downed && dn.p.hp === 0, 'downed: no heal is called, he stays down');
+
+    // preview: the heal is delayed (his turn end): Nibble's preview shows no heal on him (the passive's text carries it)
+    const pv = arena({ at: [1, 4], enemies: [E(2, 4, 'test_grunt', 3), E(8, 8)] });
+    pv.p.hp = pv.p.maxHp - 12;
+    const prev = previewThenUse(t, pv.p, pv.p.basic, 2, 4, 'nibble (cozy later)');
+    t.ok(!(prev.perUnit[pv.p.id] && prev.perUnit[pv.p.id].heal), 'Spicy Nibble\'s preview: no heal on Pebbles (it comes at his turn end)');
+
+    // autoplayEnd (E1): healWorth(Pebbles, his cozy heal) on a fire tile or next to a Burning foe, else 0; 0 at full HP
+    const ae = arena({ at: [1, 4], surfaces: [{ x: 1, y: 1, id: 'fire', turns: 9 }], enemies: [E(6, 4, 'test_grunt', 3), E(8, 8)] });
+    DD.Act.addStatus(ae.foes[0], 'burn', { stacks: 1 }, null);
+    const end = hd.passive.autoplayEnd;
+    ae.p.hp = ae.p.maxHp - 16;
+    const w3 = DD.AutoPlay.healWorth(ae.p, COZY);
+    t.ok(w3 > 0, 'premise: healWorth(Pebbles, 3) = ' + w3);
+    t.eq(end(ae.p, 1, 1), w3, 'autoplayEnd on a fire tile: healWorth(3)');
+    t.eq(end(ae.p, 5, 4), w3, 'autoplayEnd next to a Burning foe: healWorth(3)');
+    t.eq(end(ae.p, 6, 6), 0, 'autoplayEnd 2 tiles from the Burning foe, no fire: 0');
+    t.eq(end(ae.p, 1, 4), 0, 'autoplayEnd where nothing is cosy: 0');
+    t.eq(DD.AutoPlay.restAt(ae.p, 5, 4), w3, 'AutoPlay.restAt reads it (the unit virtually on 5,4)');
+    ae.p.items = ['peb_dog_bed'];
+    t.eq(end(ae.p, 5, 4), DD.AutoPlay.healWorth(ae.p, BED), 'with the Dog Bed: healWorth(5)');
+    ae.p.items = [];
+    ae.p.hp = ae.p.maxHp;
+    t.eq(end(ae.p, 5, 4), 0, 'full HP: 0');
+
+    // AutoPlay (E1 a): hurt, next to an unburnt grunt, Spicy Nibble's exact total includes the cozy value its Burn makes
+    // (read in the dry run's copy)
+    const nibTotal = function (fn) {
+      const keep = hd.passive.autoplayEnd;
+      if (fn) hd.passive.autoplayEnd = fn;
+      try {
+        const s = arena({ at: [4, 5], enemies: [E(5, 5, 'test_grunt', 3), E(8, 8)] });
+        // stunned: staying next to it is safe either way, so the stay branch (the one the end-tile value adds to) wins
+        DD.Act.addStatus(s.foes[0], 'stun', { turns: 2 }, s.p);
+        s.p.hp = s.p.maxHp - 16;
+        DD.AutoPlay.trace = 'all'; DD.AutoPlay.log = [];
+        try { DD.AutoPlay.takeTurn(); } finally { DD.AutoPlay.trace = false; }
+        const c = DD.AutoPlay.log.filter(function (l) { return l.cand && l.cand.indexOf('peb_basic > 5,5') === 0 && typeof l.total === 'number'; })[0];
+        return { total: c ? c.total : null, hp: s.p.maxHp - 16 };
+      } finally { hd.passive.autoplayEnd = keep; }
+    };
+    const withIt = nibTotal(null), without = nibTotal(function () { return 0; });
+    t.ok(withIt.total !== null && without.total !== null, 'the exact pass priced the Nibble both times (' + withIt.total + ' / ' + without.total + ')');
+    if (withIt.total !== null && without.total !== null) {
+      const want = DD.AutoPlay.healWorth({ hp: withIt.hp, maxHp: hd.stats.hp, dead: false, downed: false }, COZY);
+      t.near(withIt.total - without.total, want, 0.15, 'Nibble\'s exact total includes the cozy heal its Burn sets up (healWorth ' + want + ')');
+    }
+    // AutoPlay (E1 b): a plain move, two grunts mirrored around him, one Burning: he ends his turn next to the Burning one
+    [[4, 1], [4, 7]].forEach(function (hot) {
+      const m = arena({ at: [4, 4], enemies: [E(4, 1, 'test_grunt', 3), E(4, 7, 'test_grunt', 3)] });
+      m.foes.forEach(function (f) { DD.Act.addStatus(f, 'stun', { turns: 2 }, m.p); });
+      const burning = at(hot[0], hot[1]);
+      DD.Act.addStatus(burning, 'burn', { stacks: 1 }, null);
+      m.p.hp = m.p.maxHp - 16;
+      m.p.ap = 1;   // one move, no bite after it: only where his turn ends differs
+      DD.AutoPlay.takeTurn();
+      t.ok(DD.Grid.dist(m.p, burning) === 1, 'one move between two stunned grunts (the Burning one at ' + hot.join(',') + '): he ends next to it (' + m.p.x + ',' + m.p.y + ')');
+    });
+    t.eq(DD.problems.slice(p0).filter(function (p) { return /^Error in /.test(p); }).length, 0, 'no swallowed errors');
+  });
 })();

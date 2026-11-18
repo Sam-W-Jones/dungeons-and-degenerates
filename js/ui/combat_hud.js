@@ -845,6 +845,12 @@
     (p.spawned || []).slice(0, 2).forEach(function (sp) { parts.push('✨ ' + sp.name); });
     const self = per[u.id];
     if (self && self.dmg > 0) parts.push(det ? '⚠ ' + u.name + ' is in the blast: −' + self.dmg + (self.lethal ? ' 💀' : '') : 'costs you ' + self.dmg + ' HP');
+    // [heal QA-3] the actor's own heal inside the action (a slam into a wall, a ghosting, a crowded Transform, a drain):
+    // the hint names it too, not only the small badge over the hero's head
+    // (an uncertain preview carries healMin / healMax: the range, as the badge prints it)
+    const selfLo = self && self.healMin !== undefined ? num(self.healMin) : num(self && self.heal);
+    const selfHi = self && self.healMax !== undefined ? num(self.healMax) : num(self && self.heal);
+    if (self && !revivedIn(self) && selfHi > 0) parts.push('💚 you heal ' + (selfLo !== selfHi ? selfLo + '–' + selfHi : selfHi));
     return parts.join(' · ');
   }
   /**

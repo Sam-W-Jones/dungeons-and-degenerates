@@ -5,8 +5,10 @@
  * as status zar_drip. Combo hooks: his basic pays off Burning foes (Pebbles, Valdris, fire lanes, burning oil),
  * Fireball / Strut ignite the ground (DD.Act.applyElement: oil, webs, barrels, water → steam), Hex / Bedazzle / Lasso
  * set up the party. Starters: Gold-Plated Fireball + Throw Money At It. Gold skills spend real run gold through
- * DD.Act.spendGold (sandbox: state.sandboxGold).
- * Registers: hero zarathor, 12 skills, 3 statuses, summon zar_statue, 3 items (all ids zar_*).
+ * DD.Act.spendGold (sandbox: state.sandboxGold). Conditional heal (Nov 18, "Loyalty Card (Platinum Pending)"): the
+ * common trinket zar_loyalty_card; while he wears it, paying for one of his skills with gold from the purse (payGold,
+ * never the Hellcard's HP) heals him 3, once per turn (unit.data.zar.card = state.turn, via 'lift:zarathor').
+ * Registers: hero zarathor, 12 skills, 3 statuses, summon zar_statue, 4 items (all ids zar_*).
  */
 (function () {
   'use strict';
@@ -24,15 +26,33 @@
   const U = DD.util;
 
   const DRIP_STEP = 50, DRIP_STEP_RING = 30, DRIP_MAX = 3;
+  const CARD = 'zar_loyalty_card', CARD_HEAL = 3;   // Loyalty Card (Nov 18): a gold-paid skill heals him 3, once per turn
   const GOLD = '#ffd23a', FLAME = '#ff7a1a', PURPLE = '#b46cff';
 
   // ---- helpers ------------------------------------------------------------------------------------
   function active(u) { return !!u && !u.dead && !u.downed; }
   function hasItem(u, id) { return !!u && Array.isArray(u.items) && u.items.indexOf(id) >= 0; }
+  /** Worn by a combat unit (items list) or a run hero (slot map): for skill texts read outside a fight too. */
+  function wears(u, id) {
+    if (!u || !u.items) return false;
+    if (Array.isArray(u.items)) return u.items.indexOf(id) >= 0;
+    for (const k in u.items) if (u.items[k] === id) return true;
+    return false;
+  }
+  /** [heal QA-7, desc-sweep-7 convention] the Loyalty Card changes what a gold skill does, so the skill's text says so. */
+  function cardClause(user) { return wears(user, CARD) ? ' Loyalty Card: paying in gold heals him ' + CARD_HEAL + ' HP (once per turn).' : ''; }
   function inCombat() { return !!(DD.Combat && DD.Combat.state); }
   /** The fight is won or lost (the killing blow's onSkillUsed still runs after Combat.finish). */
   function fightOver() { const s = DD.Combat && DD.Combat.state; return !s || !!s.result; }
   function hostile(a, b) { return DD.Grid.hostile(a, b); }
+  /** AutoPlay's shared heal price (DD.AutoPlay.healWorth, E2), with the same formula as a fallback. */
+  function healWorth(u, n) {
+    if (DD.AutoPlay && typeof DD.AutoPlay.healWorth === 'function') return DD.AutoPlay.healWorth(u, n);
+    n = Number(n);
+    if (!active(u) || !(n > 0)) return 0;
+    const miss = (u.maxHp || 0) - (u.hp || 0);
+    return miss > 0 ? Math.min(n, miss) * (miss > u.maxHp / 2 ? 1.5 : 0.8) : 0;
+  }
   /** Fire reacts with the ground (oil ignites, webs burn, barrels blow, water steams); units there are left alone. */
   function ignite(tiles, src) { tiles.forEach(function (q) { DD.Act.applyElement(q.x, q.y, 'fire', src, { noUnits: true }); }); }
 
@@ -75,11 +95,35 @@
     if (!user || !hasItem(user, 'zar_hellcard') || !inCombat()) return 0;
     return Math.max(0, goldCost(L) - DD.Act.gold());
   }
+  // ---- Loyalty Card (Platinum Pending), Nov 18: retail therapy, literally ----------------------------------
+  /** The card can pay out this turn: he stands, wears it, and has not cashed in this turn yet (pure). */
+  function cardReady(u) {
+    const s = DD.Combat && DD.Combat.state, d = u && u.data && u.data.zar;
+    return !!s && active(u) && hasItem(u, CARD) && !(d && d.card === s.turn);
+  }
+  /**
+   * He just paid for a skill with gold from the purse: the card heals him CARD_HEAL, once per turn. Always called while
+   * the condition holds (0 at full HP, the turn's payout spent all the same); FX and bark only when it healed.
+   */
+  function retailTherapy(u) {
+    if (!cardReady(u)) return 0;
+    const d = u.data || (u.data = {});
+    (d.zar || (d.zar = {})).card = DD.Combat.state.turn;
+    const healed = DD.Act.heal(u, u, CARD_HEAL, { via: 'lift:zarathor' });
+    if (healed > 0) {
+      DD.FX.text(u, '🎫 Points earned!', { color: GOLD, size: 13, parallel: true });
+      // [heal QA-1] the heal line comes before the skill's own lines (he pays first): this one says why
+      DD.Act.log('The Loyalty Card pays out: ' + u.name + ' earns points for spending gold. The points are feelings. He feels better.', 'hero');
+      DD.Act.maybeBark(u, 'retail', 0.4);
+    }
+    return healed;
+  }
   function payGold(ctx) {
     const u = ctx.user, cost = goldCost(ctx.L), have = DD.Act.gold();
     if (!cost) return true;
     if (have >= cost && DD.Act.spendGold(cost)) {
       DD.FX.text(u, '−' + cost + ' gold', { color: GOLD, size: 14 });
+      retailTherapy(u);   // the purse paid: the card counts it (the Hellcard's HP below never does)
       return true;
     }
     if (hasItem(u, 'zar_hellcard')) {
@@ -305,8 +349,17 @@
     // never at an object: the gold is paid in execute, so a shot at a barrel or a crate would be free (Eldritch Bling does those)
     target: { type: 'unit', range: [1, 5], los: true, filter: 'enemy', objects: false },
     canUse: canPay,
-    desc: function (L, user) { return 'Spend ' + L.gold + ' gold: hit a foe within ' + reach(user, 'zar_bling_throw', 5) + ' for ' + L.dmg + ' damage and Dazzle it.'; },
+    // Nov 18: with the Loyalty Card the throw heals him, so the goats' Radio Edit never bleeps it then (healsWith)
+    heals: function (L, u) { return hasItem(u, CARD); },
+    desc: function (L, user) { return 'Spend ' + L.gold + ' gold: hit a foe within ' + reach(user, 'zar_bling_throw', 5) + ' for ' + L.dmg + ' damage and Dazzle it.' + cardClause(user); },
     flavor: 'When fire can\'t solve it, throw money at it. He has never once picked the coins back up.',
+    // the exact pass dry-runs the card's heal (gold is sandboxed there); the quick pass is told about it here: the card
+    // worn, unspent this turn, and the purse (not the Hellcard) covering the cost
+    aiScore: function (ctx) {
+      if (!ctx || ctx.autoplay) return 0;
+      const u = ctx.user;
+      return u && cardReady(u) && DD.Act.gold() >= goldCost(ctx.L) ? healWorth(u, CARD_HEAL) : 0;
+    },
     execute: function (ctx) {
       const u = ctx.user, t = ctx.targetUnit;
       if (!active(t) || !payGold(ctx)) return;
@@ -456,7 +509,7 @@
     levels: [{ block: 8, gold: 6 }, { block: 10, gold: 6 }, { block: 12, gold: 6 }],
     target: { type: 'unit', range: [0, 4], los: false, filter: 'allyOrSelf' },
     canUse: canPay,
-    desc: function (L, user) { return 'Spend ' + L.gold + ' gold: gold-plate himself or an ally within ' + reach(user, 'zar_gold_plating', 4) + ' for ' + L.block + ' Block.'; },
+    desc: function (L, user) { return 'Spend ' + L.gold + ' gold: gold-plate himself or an ally within ' + reach(user, 'zar_gold_plating', 4) + ' for ' + L.block + ' Block.' + cardClause(user); },
     flavor: 'Armor is just jewelry that commits.',
     execute: function (ctx) {
       const t = ctx.targetUnit;
@@ -554,6 +607,14 @@
     flavor: 'Buy now, pay later. Interest rate: 666%. Customer service: eternal.',
     hooks: {},
   });
+  // Nov 18 (conditional healing): his lift is this common trinket; the rule lives in payGold (retailTherapy)
+  DD.registerItem({
+    id: CARD, name: 'Loyalty Card (Platinum Pending)', slot: 'trinket', rarity: 'common', icon: '🎫', hero: 'zarathor',
+    stats: {},
+    desc: 'Whenever Zarathor pays for one of his skills with gold, he heals ' + CARD_HEAL + ' HP (once per turn).',
+    flavor: 'Every purchase earns points. The points are feelings. Platinum status: pending.',
+    hooks: {},
+  });
   DD.registerItem({
     id: 'zar_shades', name: 'Shades of Indoor Brilliance', slot: 'armor', rarity: 'legendary', icon: '🕶️', hero: 'zarathor',
     stats: { hp: 6, armor: 1 },
@@ -624,6 +685,8 @@
         'Slate, you\'d look amazing in gold leaf.', 'Basanos, you are shedding on the velvet. Again.', 'Wild magic is just magic with ambition.'],
       signature: ['BLING SUPERNOVA! Avert your eyes!', 'Behold! MAXIMUM DRIP!', 'Feel the shine! FEEL IT!', 'Fire, gold and bad decisions!',
         'Look upon my bling, ye mighty, and despair!'],
+      // Nov 18: the Loyalty Card paid out (the heal > 0)
+      retail: ['Retail therapy. Literally.', 'Ka-ching. I feel better already.', 'Points! I love points!'],
     },
   });
 
@@ -635,5 +698,7 @@
     strutPath: strutPath,
     statueTaunt: statueTaunt,
     wildSurge: wildSurge,
+    /** Loyalty Card (Nov 18): its id, its heal, and whether it can pay out this turn (pure). */
+    CARD: CARD, CARD_HEAL: CARD_HEAL, cardReady: function (u) { return cardReady(u); },
   };
 })();

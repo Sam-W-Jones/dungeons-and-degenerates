@@ -310,3 +310,76 @@ Suite: `hero_corelos: v2 requests: …`. Rules: `docs/notes/rules.md` "v2 reques
 ## Review (finish, Nov 14) — REVIEWER
 
 - D1: Collect Debt now breaks a crate for exactly its 🔨 number and nothing else (no riders on an object, D4); a spell's break reads "Corelos turns Collect Debt on the Crate…".
+
+## Conditional heal (Nov 18) — "Class Action Settlement" (build:g3; plan `.tmp/heal/plan.md` §4.13, the user's Nov 18 request)
+
+The user (Nov 18): "I want everyone else brought up but by conditional healing". Corelos' lift is a rider on his starting
+Glyph of Warding: a rune that catches a crowd is a class action, and he is the class.
+
+- **What:** one of his runes bursts (`burst()`: a foe steps on it, a Rune Bolt next to it, Runic Detonation) and its
+  `hits` list holds **2 or more** foes → Corelos (the rune's owner, a standing Corelos: `collateral(owner)` and `active`)
+  heals the rune's `settle`, **once per round** (`corelos.data.cor.settled = state.round`, spent even at full HP: the heal
+  is always called while the condition holds). Self only. A burst with one foe (or a foe and an ally) → nothing; a downed
+  owner → nothing (the burst still bites).
+- **Numbers:** `SETTLE` = **3 / 4 / 4** (Glyph's level at placement, stored on the rune: `placeRune(..., { settle })`;
+  default 3 for a rune placed without it), `CLASS_SIZE` 2. Levels `{ rune: 5, settle: 3 }, { rune: 6, settle: 4 },
+  { rune: 6, root: true, settle: 4 }` (key `settle`, never `heal`). Exported on `DD.Corelos`: `SETTLE`, `CLASS_SIZE`,
+  `canSettle`. Tuning range: settle I 3 [3, 5]; II/III = I + 1.
+- **The call:** `settleUp(owner, n)` → `A().heal(owner, owner, n, { via: 'lift:corelos' })`; "⚖️ Settled!", the log line
+  ("Class action! Corelos settles out of court and pockets N HP.") and the `settle` bark (0.4) only when it healed.
+- **Text (desc == execute):** I `Inscribe a rune (max 3): when a foe steps on it, foes on and next to it take 5 damage. A
+  burst that hits 2 or more foes is a class action: you heal 3 HP (once per round).` II 6 / heal 4. III `… when a foe
+  steps on it, that foe is Rooted and foes on and next to it take 6 damage. A burst … you heal 4 HP (once per round).`
+  The Quill's +2 is printed as before (damage only).
+- **Barks** (new key `settle`): "Class action! I'm the class." / "Settled out of court. Mostly out of you." / "Pleasure doing
+  business."
+- **AutoPlay:** Rune Bolt's and Runic Detonation's dry runs see multi-foe bursts and the heal (exact pass). `runeValue`
+  (Glyph's `autoplayValue`, both passes: the burst comes later) adds `0.4 × healWorth(Corelos, L.settle)` when 2+ foes
+  stand within distance 2 of the rune tile and the round's settlement is unspent (after its own 1.5 × dmg cap).
+- **Existing assertion updated** (none deleted): the registry suite's one-breath cap (≤ 26 words) now reads Glyph's rune
+  sentence with the one class-action rider stripped (and checks the rider is there, exactly).
+- **Tests:** new suite `hero_corelos: conditional heal (Nov 18)` (63 assertions): constants and level keys; the three descs
+  word for word (and the Quill's 7 damage with the heal unchanged); I/II/III: a foe steps on the rune next to another →
+  +3 / +4 / +4 (src Corelos, one labelled call; III Roots the stepper); one foe, or a foe and an ally → no call; a rune
+  placed without settle → 3; once per round (a second class action the same round → no call; next round → +3 again);
+  Runic Detonation with two class actions → one heal; full HP → one 0-HP call that spends the round; a downed Corelos →
+  no call, the burst still hits both; Rune Bolt next to a rune between two foes → its preview shows +3 on him and matches
+  reality; Glyph's own preview shows no heal (delayed); `runeValue` +0.4 × healWorth with 2 foes within 2, nothing with
+  one foe or at full HP.
+- **Sanity sim** (`bash tools/sim.sh "debug=1&raw=1&seeds=30&from=51000&stop=2&party=corelos,kiri,buga,betty"`,
+  `.tmp/heal/g3/corelos.txt`, 30 runs, 219 Corelos fights): `lift:corelos` **0.76 fires a fight, 1.6 HP a fight** (self;
+  overheal 32%); regular 0.95 / 1.9, elite 0.57 / 1.8, boss 0.25 / 0.6 (bosses come alone or with few adds). T8: fires
+  ≥ 0.4 and HP inside 0.9-3.6: OK. 0 errors, 0 DD.warn lines.
+- **Deviations:** none. (Glyph's desc carries the rune plus one rider at I/II, plus III's Root: the plan's one-rider note,
+  §2.10, already counts the heal as Glyph's one rider and the Root as its III rider.)
+
+### DESIGN §6 brief (Nov 18)
+Anchor (unique in `docs/DESIGN.md`, `### Corelos the Undersigned`, lines 541-542 today):
+
+```
+- Basic *Rune Bolt* (4; his runes on or next to the target burst). Starters: *Glyph of Warding* (a rune, max 3: when
+  a foe steps on it, foes on and next to it take damage) and *Dark Bargain* (0 AP: gain 2 AP, take Debt).
+```
+
+Replacement:
+
+```
+- Basic *Rune Bolt* (4; his runes on or next to the target burst). Starters: *Glyph of Warding* (a rune, max 3: when
+  a foe steps on it, foes on and next to it take damage; a burst that hits 2 or more foes is a class action that heals
+  him 3–4 HP by level, once per round) and *Dark Bargain* (0 AP: gain 2 AP, take Debt).
+```
+
+### Conditional heal: test runs (Nov 18, build:g3)
+`tools/test.sh "suite=hero_corelos&isolate=heroes/corelos,hero_corelos"` while iterating (all pass); then ONE full `bash tools/test.sh`: **1317 suites, 150,775 assertions ok, 0 failures**, 0 swallowed "Error in" lines.
+
+### Conditional heal: requests (Nov 18, non-blocking)
+- **Engine builder, phase 2:** apply the DESIGN §6 brief above; regenerate his v2-digest §2 Glyph of Warding line.
+
+### Conditional heal: adversarial review (Nov 18, review:g3)
+Code path read end to end (`burst` → `settleUp` → `canSettle`: 2+ foes in `hits`, the owner a standing Corelos hero,
+once per round, `active` before `DD.Act.heal`; Glyph is the only `placeRune` caller, so every rune carries its level's
+`settle`); desc == execute; the suites pass. HUD preview shot (`.tmp/heal/review_g3/shot/`, debug=1, fixtures): Rune
+Bolt at a grunt next to a rune between two grunts shows **+3** on Corelos (and −9 / −5 on the grunts). Forced-party sim
+(`seeds=30&from=55200&stop=2&party=corelos,slate,valdris,sparrow`, `.tmp/heal/review_g3/corelos.txt`, 202 fights):
+`lift:corelos` **0.83 fires, 1.6 HP a fight** (regular 0.98 / 1.8, elite 0.86 / 2.3, boss 0.22 / 0.6), overheal 36%:
+inside T8 (≥ 0.4, 0.9-3.6). 0 errors, 0 DD.warn, 0 stalls.

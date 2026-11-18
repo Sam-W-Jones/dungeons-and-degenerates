@@ -128,8 +128,9 @@ skills used). Full `tools/test.sh`: see Review (v2).
 
 ## Public API (for tests / other content)
 
-`DD.Valdris = { IRON, FORGED, EDGE, hammerGrip(g) → { x, y, r }, foesInReach(u) → [Units] }` (read-only helpers;
-`BRIGHT_BURN` is gone with Brightforge's old rider).
+`DD.Valdris = { IRON, FORGED, EDGE, DENTED, DENT_RULE, DENTS, hammerGrip(g) → { x, y, r }, foesInReach(u) → [Units],
+ensureDents() }` (read-only helpers; `BRIGHT_BURN` is gone with Brightforge's old rider; Nov 18: `DENTED` 'val_dented',
+`DENT_RULE` 'val_dents', `DENTS` [4, 5, 6] = Forge Armor I-III's `dents`, `ensureDents()` adds the rule once per fight).
 
 ## Deviations
 
@@ -291,3 +292,149 @@ errors. (Baseline before the review: 790 suites, 7 failing sections, the same ow
 ## Review (finish, Nov 14) — REVIEWER
 
 - D1: Anvil Drop now breaks a crate for exactly its 🔨 number and stuns nothing (a spell: "Valdris turns Anvil Drop on the Crate…"); his Forge Armour on Slate gives Block and, as Short Fuse now says, no Rage.
+
+## Conditional healing (Nov 18) — "Hammer Out the Dents" (build:g2, plan §4.7)
+
+The user (Nov 18): "I want everyoe else brought up but by conditional healing". Valdris is the third healer of others
+(skill-rider on his starting **Forge Armor**), so his lift heals mostly allies. Ellaria untouched.
+
+**What.** When Block soaks a foe's hit on a unit of his side, that unit is **Dented**; his next Forge Armor on it hammers
+the dents out: Block as before, then the status goes and it heals **4 / 5 / 6** (Forge Armor I / II / III, level key
+`dents`, `DD.Valdris.DENTS`).
+- **The rule** `val_dents` ("Dents", 🔨, `silent: true`, `turns: -1`): added once per fight by his passive's new
+  `onCombatStart` through `ensureDents()` (the `ensureContagion` pattern). Silent = no "New rule" log line; the HUD chip stays,
+  with the plan's desc: "Valdris is here: when Block soaks a foe's hit on his side, the one it hit is Dented; his next Forge
+  Armor on it hammers the dents out and heals it." Its `onTakeDamage(d)` (rule hooks fire for every unit) dents the target when
+  `d.blocked > 0`, the target is active **with `hp > 0`** (the hook runs before the down / death check), `d.source` is hostile
+  to it **or null** (a friendly bump or splash never dents), some non-dead Valdris is not hostile to it (himself and summons
+  included), and it is not Dented already. `addStatus(target, 'val_dented', {}, null)`: source null, so no Rage for Slate.
+- **The status** `val_dented` "Dented": icon 🔨, type `'buff'` (debuff cleanses leave it), `refresh`, max 1, decay `'never'`,
+  `defaultTurns: -1`; desc (a function, like every status desc: the content registry suite calls `desc(st)`) "Its Block
+  soaked a hit. Valdris's next Forge Armor on it hammers the dents out and heals it."
+- **Forge Armor** (`val_forge_armour`): levels `{ block: 6, dents: 4 }`, `{ 8, 5 }`, `{ 10, 6 }`; `kind 'buff'`, tags unchanged
+  (no `'heal'`), `target.revive: false` (never an aimed revive). Execute: Block; if the target is Dented, remove it (silent),
+  then, both units active, `DD.Act.heal(Valdris, target, L.dents, { via: 'lift:valdris' })`, always called on a Dented target
+  (0 at full HP); the FX text and the `dents` bark (0.35) only when it healed. Desc (I): "Valdris or an ally within 3 gains 6
+  Block (until the start of its next turn). If it is Dented (its Block soaked a hit), he hammers the dents out: it heals 4 HP."
+  (II 8 / 5, III 10 / 6; the range from `reach()`; "Armor", never "Armour".)
+- **Barks** (new key `dents`, exactly the plan's three): "Hold still. This'll only sting a lot." / "Good as new. Better,
+  actually: I used conditioner." / "Every dent tells a story. This one says 'ow'."
+- **AutoPlay.** The exact pass dry-runs the heal (it is in the execute; the rule dents inside dry runs too). New Forge Armor
+  `aiScore`, quick pass only (0 when `ctx.autoplay`): `healWorth(target, L.dents)` on a Dented target (`DD.AutoPlay.healWorth`,
+  E2, with a local fallback of the same formula). It only adds to the utility quick estimate (`utilQuick`), which picks the
+  targets the exact pass dry-runs; Forge Armor puts no outgoing-damage status, so `ctx.ownValue` changes nothing else.
+- **Code:** `js/data/heroes/valdris.js`: the `DENTED` / `DENT_RULE` / `DENTS` constants, the status + `smithFor` +
+  `DENT_HOOKS` + `ensureDents` after the forge statuses, Forge Armor, the passive's `onCombatStart`, `barks.dents`, the
+  `DD.Valdris` exports.
+
+**Tests** (`tests/content/hero_valdris.js`, new suite "hero_valdris: conditional heal (Nov 18)", 67 assertions isolated, 69
+with `isolate=valdris,slate`): exports; the desc word for word at I-III (numbers from `L`), no `heal` key, kind / tags /
+`target.revive: false`, `revivesWith` false; the status fields and desc; the three barks; the rule in once (a second
+`onCombatStart` / `ensureDents()` adds nothing), silent (no "New rule" line), the chip's name / icon / desc, no rule without
+Valdris; dents: a foe's hit soaked by Block → Dented; no Block → not; an ally's bump into a Blocking ally → not; a sourceless
+soaked hit → Dented; a foe's Block soaking a hero's hit → never; a soaked hit that downs the target → not; Valdris himself →
+Dented; a debuff cleanse and a round end leave it; the heal at I-III (+4 / +5 / +6 on a hurt knight, Block as before, status
+gone, his heals stat grows by it, `previewThenUse` exact with `+N` on the knight, the call is
+`heal(Valdris, target, N, { via: 'lift:valdris' })`); not Dented → Block only, no lift call; Dented at full HP → status gone,
+the call made, 0 healed; on himself (II: +5, 8 Block); a downed Dented ally is no target and stays down; Slate (with
+`isolate=valdris,slate`; slate.js read only): the grunt's hit gives 1 Rage and Dented none, Valdris' heal +4 HP and +1 Rage
+(Short Fuse: another src; the Block none); `aiScore` 0 / `healWorth(target, 6)` / 0 in the exact pass / 0 at full HP;
+AutoPlay forges the Dented one of two mirror-image hurt knights, on either side (+4).
+**Updated assertion** (registry suite): Forge Armor's desc is checked as one breath of Block (≤ 24 words, no "if") plus
+exactly the Dented rider (≤ 34 words, one "If" in all), the other skills as before; `dents` joins the shown-number keys; the
+pronoun sweep reads the Dented desc and the `dents` barks.
+
+**Sanity sims** (`bash tools/sim.sh "debug=1&raw=1&seeds=30&from=…&stop=2&party=…"`, `== conditional heals`, normal,
+acts 1-2):
+
+| party (from) | fights | fires / fight | HP / fight (self · others) | fires by kind |
+|---|---|---|---|---|
+| valdris, corelos, hjalmar, zarathor (50100) | 232 | 0.56 | 2.2 (1.0 · 1.2 = 55%) | regular 0.51 · elite 0.54 · boss 0.73 |
+| valdris, betty, basanos, marbles (50500) | 192 | 0.74 | 3.0 (1.1 · 1.9 = 63%) | regular 0.72 · elite 0.70 · boss 0.86 |
+| pooled | 424 | 0.64 | 2.6 (others 59%) | |
+
+T8 for `lift:valdris`: min 0.8 fires, band 2.5-10 HP, to others ≥ 60%. **Short of the minimum** (0.64 pooled, about 80% of it;
+the HP at the band's floor; to others 55-63%), not "far under". A scratch probe (`.tmp/g2/probe.js` on a copy of the sim page,
+run by `.tmp/g2/simx.sh`; 30 seeds, the first party): of his 1,132 turns, 268 started with Forge Armor ready and a hurt Dented
+unit on his side; he forged the Dented one in 125 (47%), another unit in 41, and spent his AP elsewhere in 102 (the exact pass
+prices 4 HP at 0.8-1.5 per HP, below a basic attack's 5 damage or Flame-Forged Edge); 114 of 232 fights ended with a hero
+still Dented. So the quick-pass term does its job (it picks the Dented target 3 to 1); what is left is the exact pass's price
+of a small heal against damage. I kept the plan's term as written (an exact-pass top-up would count the heal twice). The
+plan's lever (§7 T6 / T8) is `dents` 4 → 5 → … inside [4, 7]: a bigger heal wins more of those 102 turns and raises HP per
+fire. Boss fights already fire more (0.73-0.86). 0 errors, 0 DD.warn lines on both pages.
+
+**Full run** (`bash tools/test.sh`, Nov 18, after the G2 build): 1310 suites PASS, 0 failures, 0 swallowed "Error in" lines.
+
+### DESIGN §6 brief (Nov 18)
+
+For the engine builder (phase 2). Anchor in `### Valdris the Well-Conditioned — Human Forge Cleric (he/him)` (unique,
+DESIGN.md line ~653, the end of the "Basic" bullet), this whole line:
+
+```
+  skill sets each foe it hits Burning) and *Forge Armor* (Block for him or an ally).
+```
+
+Replace it with these two lines (keeps "*Forge Armor*", never "Forge Armour"):
+
+```
+  skill sets each foe it hits Burning) and *Forge Armor* (Block for him or an ally; if its Block soaked a foe's hit,
+  it is Dented, and he hammers the dents out: it heals 7–9 HP, by level).
+```
+
+### Deviations (Nov 18)
+
+- None from the plan's mechanics, numbers or texts. Two notes: the rule skips a unit that is already Dented (re-adding a
+  `refresh` / max-1 / never-decaying status changes nothing but would float "+Dented" again on every soaked hit); and the
+  registry suite's "no if" rule now exempts exactly Forge Armor's Dented rider (plan §2.10: Forge Armor keeps one rider),
+  with the exact rider text asserted in its place.
+
+### Requests (Nov 18)
+
+- **Lead / balance pass (FYI)**: `lift:valdris` measured 0.64 fires and 2.6 HP a fight (pooled, acts 1-2) against T8's
+  0.8 / 2.5-10; the probe says the gap is the exact pass preferring damage to a 4-HP heal, which the plan's own lever (`dents`
+  inside [4, 7]) addresses. T6 (Valdris to others ≥ 1.25× every non-healer) will want the same lever.
+
+### Review (Nov 18) — review:g2
+
+Adversarial review of "Hammer Out the Dents" against plan §4.7 (code path read end to end, suites run, a sim, a shot).
+- **Holds:** the rule is added once by the passive's `onCombatStart`, silent (no "New rule" line) and shows as the 🔨 Dents
+  chip with the plan's desc (shot `debug=1&screen=combat&party=valdris,kiri,betty,buga&act=1&kind=normal&seed=3`); it
+  dents only on `d.blocked > 0`, `hp > 0`, a hostile or null source and a non-hostile Valdris (the single `onTakeDamage`
+  site in actions.js fires rules); Forge Armor heals `dents` 4/5/6 only on a Dented target, removes the status even at full
+  HP, `target.revive: false`, both units checked `active` before `DD.Act.heal`; desc == execute at I-III; no heal at combat
+  start (Block is cleared at fight start), no HP threshold, no self-feeding loop (the heal makes no Block soak). Svammiel's
+  floor halves it (an ordinary `modifyHeal`); the Radio Edit never picks Forge Armor (no `dmg`). Adding an `aiScore` sets
+  AutoPlay's `ctx.ownValue`, which only touches `modifyOutgoingDamage` statuses: Forge Armor puts none, so nothing else
+  changes. The Rules Lawyer's OVERRULED! counts Dented as a buff (+4 in its target pick) and strips it: intended (a buff).
+- **Mutations** (reasoned against the suite): DENTS changed, the Dented gate dropped, the `hp > 0` or hostile-source check
+  dropped, the `active` check dropped: each fails an assertion.
+- **Sim** (`tools/sim.sh "debug=1&raw=1&seeds=30&from=55000&stop=2&party=valdris,slate,syllamin,pebbles"`, normal,
+  acts 1-2): 223 fights, **0.56 fires / 2.3 HP a fight** (self 1.0, others 1.3 = 57%; regular 0.53 / 2.1, elite 0.64 / 2.3,
+  boss 0.64 / 2.8); 0 errors, 0 DD.warn lines, 0 stalls. Confirms the builder's T8 shortfall (min 0.8, band 2.5-10, others
+  ≥ 60%): the exact pass prices a 4-HP heal on a less-than-half-hurt ally at 3.2 (0.8 a HP) against a 5-damage hit, and
+  Dented never decays, so deferring is not a loss to it. The quick-pass term does change which ally gets forged. Left to the
+  plan's lever (`dents` inside [4, 7], balance pass); no AutoPlay change (an exact-pass top-up would count the heal twice).
+- **Fixes:** none needed in valdris.js / hero_valdris.js.
+
+### Balance pass (Nov 18) — heal:balance: `DENTS` 4/5/6 → 7/8/9 (T6 first, T8)
+The conditional-healing balance pass (`docs/notes/balance.md` "Conditional healing pass (Nov 18)") measured him at the
+plan's numbers on 600 fresh campaign runs (seeds 30000-30599, normal): `lift:valdris` **0.72 fires, 3.0 HP a fight, 53% of
+it to others** (T8: min 0.8 fires, band 2.5-10, others ≥ 60%), and healing done to other heroes **1.9 HP a fight against
+Sparrow's 3.2** (T6: Valdris ≥ 1.25× every non-healer). The plan's rule (§7 T6): "If Valdris misses, raise `dents` inside
+its range before anything else": one step a iteration, `dents` I 4 → 5 (iteration 1: 2.4 to others against Sparrow's
+2.5) → 6 (iteration 2: 2.5 against 2.8) → 7 (iteration 3, the top of [4, 7]; II / III = I + 1 / + 2). Only the constant
+moved (`DENTS = [7, 8, 9]`; the levels, the desc and the aiScore read it); the suite's pin and its literal checks read
+the constant now; DESIGN §6, v2-digest §2 and the brief above say 7–9 / 7/8/9. Forge Armor's Block (6/8/10) is
+unchanged. What the top step measured, and whether T6 holds there, is in the balance notes.
+At the top step (iterations 3-6, 2,400 campaign runs, his numbers unchanged across them) `lift:valdris` read **0.75-0.84
+fires and 5.2-5.8 HP a fight** (pooled 0.81 and 5.55; the fires minimum met in three of the four 600-run iterations;
+53-59% of it to others, pooled 55%, against T8's 60%), and healing done to other heroes **3.45 HP a fight against
+Sparrow's 2.85 = 1.21×** (pooled iterations 3-6; T6 asks 1.25×; iteration 4 alone 1.36×, iteration 5 alone 1.13×).
+T6 is short by a hair with `dents` at its limit: reported to the lead (the remaining lever would be a number outside
+the plan's range; Sparrow's share is never cut).
+
+### QA fixes (Nov 18, qa-fix:heal)
+- **[heal QA-1] the log says why it healed.** Forge Armor on a Dented target that heals (> 0) now logs, right after the
+  engine's heal line ("Sir Testsalot heals 7 HP (Valdris)."): "Valdris hammers the dents out of <target>. Good as new.
+  Better, even." ("himself" on himself). Test: "hero_valdris: conditional heal (Nov 18)" (ally and self; none at full HP).
+  No number changed.

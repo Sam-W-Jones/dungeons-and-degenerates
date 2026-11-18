@@ -377,6 +377,7 @@
     const HEAL = DD.Marwyn.SURGE_HEAL;
     t.eq(HEAL, 8, 'DD.Marwyn.SURGE_HEAL = 8');
     const h = DD.getHero('marwyn');
+    // [Nov 18] "heals 8 HP, +2 for each foe he has Taunted, max +6" (the Standing Ovation suite pins the whole clause)
     t.ok(/heals 8 HP/.test(h.passive.desc) && words(h.passive.desc) <= 45, 'passive desc names the heal, ≤ 45 words (' + words(h.passive.desc) + '): ' + h.passive.desc);
     const maxed = DD.getStatus('mrw_magnificence').desc({ id: 'mrw_magnificence', stacks: 5, turns: -1, data: {} });
     t.ok(/MAXED/.test(maxed) && /he heals 8 HP/.test(maxed), 'the maxed meter names the heal: ' + maxed);
@@ -1523,5 +1524,158 @@
       t.ok(new RegExp('Leap up to ' + n + ' tiles').test(DD.skillDesc(DD.getSkill('mrw_hero_landing'), lv, m)), 'Hero Landing L' + lv + ' with +1 range: up to ' + n);
     });
     m.rangeBonus = 0;
+  });
+
+  // ---- Nov 18 conditional heal: "Standing Ovation" (.tmp/heal/plan.md §4.12) ------------------------------------------
+  T.suite('hero_marwyn: conditional heal (Nov 18)', function (t) {
+    const p0 = DD.problems.length;
+    const MW = DD.Marwyn;
+    t.ok(MW.SURGE_HEAL === 8 && MW.OVATION_PER === 2 && MW.OVATION_CAP === 6, 'DD.Marwyn: SURGE_HEAL 8, OVATION_PER 2, OVATION_CAP 6');
+    t.eq([0, 1, 2, 3, 4, 9].map(MW.ovationHeal).join(','), '8,10,12,14,14,14', 'ovationHeal: 8, +2 per Taunted foe, max +6');
+    /** The labelled surge heals while fn runs (real ones; previews' dry runs left out). */
+    function lifts(fn) {
+      const out = [], orig = DD.Act.heal;
+      DD.Act.heal = function (src, target, n, opts) {
+        const r = orig.apply(this, arguments);
+        if (!A().simulating && opts && opts.via === 'lift:marwyn') out.push({ src: src, target: target, n: n, healed: r });
+        return r;
+      };
+      try { fn(); } finally { DD.Act.heal = orig; }
+      return out;
+    }
+    /** Wild magic that goes off without doing anything, so only the surge's own heal moves his HP. */
+    function tame(fn) {
+      const WM = DD.WildMagic, ap = WM.apply;
+      WM.apply = function (id) { return { id: id, good: true }; };
+      try { return fn(); } finally { WM.apply = ap; }
+    }
+    function healStat(u) { const b = DD.Combat.state.stats.units[u.id]; return b ? b.heals : 0; }
+    const FAR = [{ id: 'test_grunt', x: 6, y: 4 }, { id: 'test_grunt', x: 6, y: 6 }, { id: 'test_grunt', x: 7, y: 2 }, { id: 'test_grunt', x: 5, y: 7 }];
+    /** Marwyn at (2, 4) hurt by 20 with a full meter, a brute to Ginger Snap at (3, 4) and the far grunts; n of them Taunted by `by`. */
+    function surgeFight(n, cfg) {
+      const c = Object.assign({ enemies: [{ id: 'test_brute', x: 3, y: 4 }].concat(FAR) }, cfg || {});
+      const by = c.by;
+      delete c.by;
+      fight(c);
+      const m = M();
+      m.hp = m.maxHp - 20;
+      setStacks(m, 5);
+      const grunts = foes().filter(function (f) { return f.defId === 'test_grunt'; });
+      for (let i = 0; i < n; i++) A().addStatus(grunts[i], 'taunt', { turns: 2 }, (by && by()) || m);
+      return { m: m, grunts: grunts };
+    }
+
+    // 1. fires: 0 / 2 / 4 foes Taunted by him → 8 / 12 / 14 (once per surge, src Marwyn, via lift:marwyn)
+    [[0, 8], [1, 10], [2, 12], [3, 14], [4, 14]].forEach(function (c) {
+      const f = surgeFight(c[0]);
+      t.eq(MW.tauntedBy(f.m), c[0], c[0] + ' Taunted: tauntedBy counts them');
+      const hp = f.m.hp, h0 = healStat(f.m);
+      const calls = tame(function () { return lifts(function () { use(t, f.m, f.m.basic, 3, 4, 'surge with ' + c[0] + ' Taunted'); }); });
+      t.eq(f.m.hp - hp, c[1], c[0] + ' foes Taunted by him: the surge heals ' + c[1]);
+      t.ok(calls.length === 1 && calls[0].src === f.m && calls[0].target === f.m && calls[0].n === c[1], c[0] + ': one labelled heal of ' + c[1] + ', src Marwyn');
+      t.eq(healStat(f.m) - h0, c[1], c[0] + ': his heals stat grows by it');
+    });
+    // 2. doesn't count: a foe Taunted by someone else; a dead one; an ally
+    let f = surgeFight(2, { heroes: [{ x: 2, y: 4 }, { id: 'test_knight', x: 1, y: 1 }], by: function () { return hero('test_knight'); } });
+    let hp = f.m.hp;
+    tame(function () { use(t, f.m, f.m.basic, 3, 4, 'surge, foes Taunted by the knight'); });
+    t.eq(f.m.hp - hp, 8, 'foes Taunted by someone else: no bonus (8)');
+    f = surgeFight(3);
+    A().kill(f.grunts[0], f.m);
+    hp = f.m.hp;
+    tame(function () { use(t, f.m, f.m.basic, 3, 4, 'surge, one Taunted foe dead'); });
+    t.eq(f.m.hp - hp, 12, 'a dead Taunted foe is no audience: 3 Taunted, 1 dead → 12');
+    // War Cry's fresh taunts count (the surge runs after the skill resolved)
+    fight({ enemies: [{ id: 'test_grunt', x: 3, y: 4, hpMult: 3 }, { id: 'test_grunt', x: 2, y: 6, hpMult: 3 }, { id: 'test_grunt', x: 8, y: 8 }] });
+    let m = M();
+    m.hp = m.maxHp - 20;
+    setStacks(m, 5);
+    const wc = give(m, 'mrw_war_cry', 1);
+    hp = m.hp;
+    tame(function () { use(t, m, wc, m.x, m.y, 'surging War Cry'); });
+    t.eq(MW.tauntedBy(m), 2, 'War Cry taunted the two foes within 2');
+    t.eq(m.hp - hp, 12, 'the surge on War Cry sees its fresh taunts: 8 + 2 × 2 = 12');
+    // full HP: still one labelled call (a fire for the sim), heals 0
+    f = surgeFight(2);
+    f.m.hp = f.m.maxHp;
+    let calls = tame(function () { return lifts(function () { use(t, f.m, f.m.basic, 3, 4, 'surge at full HP'); }); });
+    t.ok(calls.length === 1 && calls[0].healed === 0 && calls[0].n === 12, 'full HP: one labelled call of 12 that heals 0');
+    // 3. caps: the Hand Mirror's two effects still heal once
+    f = surgeFight(2, { heroes: [{ x: 2, y: 4, items: ['mrw_hand_mirror'] }] });
+    hp = f.m.hp;
+    let fx = 0;
+    calls = lifts(function () {
+      const WM = DD.WildMagic, ap = WM.apply;
+      WM.apply = function (id) { fx++; return { id: id, good: true }; };
+      try { use(t, f.m, f.m.basic, 3, 4, 'mirror surge, 2 Taunted'); } finally { WM.apply = ap; }
+    });
+    t.ok(fx === 2 && calls.length === 1 && f.m.hp - hp === 12, 'Hand Mirror: two effects, one heal of 12 (' + fx + ', ' + calls.length + ', +' + (f.m.hp - hp) + ')');
+    // 4. never revives: a downed Marwyn's surge heals nobody
+    f = surgeFight(2, { heroes: [{ x: 2, y: 4 }, { id: 'test_knight', x: 1, y: 1 }] });
+    A().damage(null, f.m, 999, { cause: 'other' });
+    calls = lifts(function () { tame(function () { MW.surge(f.m, DD.Combat.state.rng); }); });
+    t.ok(f.m.downed && calls.length === 0, 'downed: the surge heals nobody, he stays down');
+
+    // 5. desc == execute: passive, the MAXED meter and the tip carry the constants
+    const h = DD.getHero('marwyn');
+    t.eq(h.passive.desc, 'Each of his skills that reaches a foe adds 1 MAGNIFICENCE. At 5, his next skill also unleashes a MAGNIFICENT SURGE ' +
+      '(random good wild magic, +10 party Hype, and he heals 8 HP, +2 for each foe he has Taunted, max +6) and resets the meter.', 'the plan\'s exact passive');
+    const clause = 'he heals ' + MW.SURGE_HEAL + ' HP, +' + MW.OVATION_PER + ' for each foe he has Taunted, max +' + MW.OVATION_CAP + ')';
+    t.ok(h.passive.desc.indexOf(clause) >= 0, 'passive: built from the constants');
+    const maxed = DD.getStatus('mrw_magnificence').desc({ id: 'mrw_magnificence', stacks: 5, turns: -1, data: {} });
+    t.ok(maxed.slice(-clause.length - 1) === clause + '.', 'MAXED line ends "... ' + clause + '.": ' + maxed);
+    const tips = (DD.defs.narration.tips || []).filter(function (l) { return /MAGNIFICENT SURGE heals Marwyn/.test(l); });
+    // [heal QA-6] the tip carries the cap, as the passive and the MAXED line do
+    t.ok(tips.length === 1 && tips[0] === 'Every MAGNIFICENT SURGE heals Marwyn 8 HP, +2 for each foe he has Taunted (max +6). Applause is a medical treatment. Ask him.', 'the tip: ' + tips[0]);
+    t.ok(tips[0].indexOf('(max +' + MW.OVATION_CAP + ')') >= 0, 'the tip\'s cap is built from OVATION_CAP');
+    t.ok(tips[0].length <= 140, 'the tip fits (' + tips[0].length + ')');
+
+    // 6. preview honesty: the surging skill's preview shows the ovation heal on him (uncertain: the surge rolls dice)
+    f = surgeFight(2);
+    const pv = tame(function () { return DD.Combat.preview(f.m, f.m.basic, 3, 4); });
+    const pe = pv.perUnit[f.m.id] || {};
+    const lo = pe.healMin === undefined ? pe.heal : pe.healMin, hi = pe.healMax === undefined ? pe.heal : pe.healMax;
+    t.ok(lo === 12 && hi === 12, 'the surging Ginger Snap\'s preview shows +12 on him (' + pe.text + ')');
+    // 7. barks
+    // [heal QA-4] the two ovation lines claim a heal: their own key, never in the surge pool (which keeps its old four)
+    const sb = h.barks.surge || [], ob = h.barks.ovation || [];
+    t.eq(ob.join(' | '), 'LOOK AT THEM LOOKING AT MARWYN! | THEIR HATRED IS APPLAUSE!', 'barks.ovation: the plan\'s two ovation lines');
+    t.ok(sb.length === 4 && sb.indexOf('LOOK AT THEM LOOKING AT MARWYN!') < 0 && sb.indexOf('THEIR HATRED IS APPLAUSE!') < 0, 'the surge pool is back to its four old lines (' + sb.length + ')');
+
+    // 8. [heal QA-2 / QA-4 / QA-1] what the surge shows: one label (the ovation folded in), the ovation bark only when the
+    // audience really healed him, and a log line for the bonus
+    function watch(fn, roll) {
+      const texts = [], barks = [], FXt = DD.FX.text, bk = A().bark, rn = DD.rng.next;
+      DD.FX.text = function (at, text) { const e = FXt.apply(this, arguments); if (at === M()) texts.push(e && typeof e === 'object' ? e : { text: text }); return e; };
+      A().bark = function (u, key) { if (u === M()) barks.push(key); return bk.apply(this, arguments); };
+      DD.rng.next = function () { return roll; };
+      const n0 = DD.Combat.state.log.length;
+      try { tame(fn); } finally { DD.FX.text = FXt; A().bark = bk; DD.rng.next = rn; }
+      return { texts: texts.map(function (e) { return e.text; }), barks: barks, log: DD.Combat.state.log.slice(n0).map(function (l) { return l.text; }) };
+    }
+    f = surgeFight(2);
+    let w = watch(function () { use(t, f.m, f.m.basic, 3, 4, 'surge, 2 Taunted (label)'); }, 0);
+    const crowd = w.texts.filter(function (x) { return /CROWD|OVATION/.test(x); });
+    t.ok(crowd.length === 1 && crowd[0] === 'THE CROWD LOVES ME! (+2 ×2)', 'one label for the surge heal, the ovation folded in: ' + JSON.stringify(crowd));
+    t.ok(w.barks.indexOf('ovation') >= 0 && w.barks.indexOf('surge') < 0, 'an ovation that healed him may bark the ovation lines: ' + w.barks.join(','));
+    t.ok(w.log.indexOf('Standing ovation! 2 Taunted foes can\'t take their eyes off Marwyn, and he heals all the more for it.') >= 0, 'the log says why the surge healed more: ' + w.log.join(' | '));
+    f = surgeFight(4);
+    w = watch(function () { use(t, f.m, f.m.basic, 3, 4, 'surge, 4 Taunted (label at the cap)'); }, 0);
+    t.eq(w.texts.filter(function (x) { return /CROWD|OVATION/.test(x); }).join(), 'THE CROWD LOVES ME! (+2 ×4, max +6)', '4 Taunted: the label says the cap (+6, not +8)');
+    f = surgeFight(2);
+    w = watch(function () { use(t, f.m, f.m.basic, 3, 4, 'surge, 2 Taunted (other half)'); }, 0.9);
+    t.ok(w.barks.indexOf('surge') >= 0 && w.barks.indexOf('ovation') < 0, 'the other half of those surges bark the surge pool: ' + w.barks.join(','));
+    f = surgeFight(0);
+    w = watch(function () { use(t, f.m, f.m.basic, 3, 4, 'surge, nobody Taunted'); }, 0);
+    t.ok(w.texts.filter(function (x) { return /CROWD|OVATION/.test(x); }).join() === 'THE CROWD LOVES ME!', 'no audience: the plain label');
+    t.ok(w.barks.indexOf('ovation') < 0 && w.barks.indexOf('surge') >= 0, 'no audience: never the ovation lines: ' + w.barks.join(','));
+    t.ok(!w.log.some(function (l) { return /Standing ovation/.test(l); }), 'no audience: no ovation line in the log');
+    f = surgeFight(2);
+    f.m.hp = f.m.maxHp;
+    w = watch(function () { use(t, f.m, f.m.basic, 3, 4, 'surge at full HP, 2 Taunted'); }, 0);
+    t.ok(w.texts.filter(function (x) { return /CROWD|OVATION/.test(x); }).join() === 'THE CROWD LOVES ME!', 'full HP: the plain label (the ovation healed nothing)');
+    t.ok(w.barks.indexOf('ovation') < 0 && !w.log.some(function (l) { return /Standing ovation/.test(l); }), 'full HP: no ovation bark, no ovation line');
+    const errs = DD.problems.slice(p0).filter(function (w) { return /^Error in /.test(w); });
+    t.eq(errs.length, 0, 'no swallowed errors' + (errs.length ? ' — ' + errs[0].slice(0, 160) : ''));
   });
 })();

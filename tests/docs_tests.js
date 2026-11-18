@@ -503,6 +503,39 @@
       t.eq(G.groups.ellaria.runs + ',' + G.groups.ellaria.clear[1] + ',' + G.groups.ellaria.lossTo.boss_x, '1,1,1', 'the Ellaria group: a run, act 1 cleared, lost to boss_x');
       t.eq(G.heroes.slate.lossTo.boss_x, 1, 'per hero: where his runs end');
       t.ok(/== healer groups/.test(S.reportText([])) && /== healing per hero/.test(S.reportText([])), 'the report prints the heal-pass sections');
+      // conditional-healing lift (Nov 18, E3): a heal with opts.via also counts under its label, per fight its hero started
+      t.ok(typeof S.started === 'function' && !!S.WORN, 'DD_SIM.started and the WORN table are exposed');
+      if (typeof S.started !== 'function') return;
+      t.eq(S.WORN['lift:zarathor'] + ',' + S.WORN['lift:syllamin'] + ',' + S.WORN['lift:hjalmar'] + ',' + S.WORN['lift:benedick'] + ',' + S.WORN['lift:pebbles'],
+        'zar_loyalty_card,syl_tear_jar,hja_canned_laughter,ben_mucin_serum,peb_dog_bed', 'the item-gated labels and their items (plan §5 E3)');
+      const zar = { kind: 'hero', side: 'hero', defId: 'zarathor', items: ['zar_loyalty_card'] }, zar2 = { kind: 'hero', side: 'hero', defId: 'zarathor', items: [] };
+      const pass = { k: 'passive', id: 'slate' }, sk = { k: 'skill', id: 'zar_bling_throw' };
+      S.started([slate, zar, { kind: 'summon', defId: 'x' }], 'normal');
+      S.started([slate, zar2], 'boss');
+      S.ledgerHeal(slate, slate, 3, 4, false, pass, 'lift:slate', 'normal');   // 3 HP, 1 over
+      S.ledgerHeal(slate, slate, 0, 3, false, pass, 'lift:slate', 'normal');   // at full HP: still a fire (0 HP, 3 over)
+      S.ledgerHeal(zar, zar, 3, 3, false, sk, 'lift:zarathor', 'normal');       // wearing the card
+      S.ledgerHeal(zar2, ell, 2, 2, false, sk, 'lift:zarathor', 'boss');        // not wearing it, on another hero
+      const ls = G.lifts['lift:slate'], lz = G.lifts['lift:zarathor'];
+      t.ok(!!ls && !!lz, 'one tally per label');
+      if (!ls || !lz) return;
+      t.eq([ls.hero, ls.calls, ls.hp, ls.self, ls.others, ls.over].join(','), 'slate,2,3,3,0,4', 'lift:slate: his, 2 fires (the 0-HP one too), 3 HP on himself, 4 overheal');
+      t.eq([ls.k.normal.calls, ls.k.normal.hp, ls.k.boss ? 1 : 0].join(','), '2,3,0', '… both in regular fights');
+      t.eq([lz.hero, lz.calls, lz.hp, lz.self, lz.others, lz.k.normal.calls, lz.k.boss.others].join(','), 'zarathor,2,5,3,2,1,2', 'lift:zarathor: 3 on himself (regular), 2 on her (boss)');
+      t.eq(lz.worn.calls + ',' + lz.worn.hp, '1,3', 'worn: the fire made wearing the Loyalty Card');
+      const hz = G.heroes.zarathor;
+      t.eq([hz.fights, hz.fk.normal, hz.fk.boss, hz.worn.zar_loyalty_card, G.heroes.slate.fights].join(','), '2,1,1,1,2', 'fights started: all, by kind, wearing the card (summons not counted)');
+      const rep = S.reportText([]);
+      const i0 = rep.indexOf('== healing per hero'), i1 = rep.indexOf('== conditional heals'), i2 = rep.indexOf('== hero shares');
+      t.ok(i0 >= 0 && i1 > i0 && i2 > i1, 'the report prints "== conditional heals" right after "== healing per hero"');
+      const sec = rep.slice(i1, i2);
+      t.ok(/lift:slate\s+slate\s+fights\s+2 · calls 2 · per fight: 1 fires · HP 1\.5 \(self 1\.5, others 0, summons 0\) · overheal 2 \(57%\)/.test(sec), 'lift:slate line: fights, fires and HP per fight, overheal (' + (sec.split('\n').filter(function (l) { return /lift:slate/.test(l); })[0] || 'missing') + ')');
+      t.ok(/regular \(n 1\) 1 fires, 3 HP · boss \(n 1\) 1 fires, 2 HP \(others 2, summons 0\)/.test(sec), 'lift:zarathor by kind: regular / boss per fight of that kind');
+      t.ok(/worn zar_loyalty_card: 1 fights \(50% of zarathor's\) · per worn fight 1 fires, 3 HP · not worn 1 fires, 2 HP/.test(sec), 'lift:zarathor worn: fights, share, fires and HP per worn fight');
+      const raw = S.rawText();
+      t.ok(/R\theal\.lift:slate\.calls\t2\n/.test(raw) && /R\theal\.lift:zarathor\.worn\.hp\t3\n/.test(raw) && /R\theal\.lift:zarathor\.k\.boss\.others\t2\n/.test(raw),
+        'raw=1: additive R lines per label (calls, by kind, worn)');
+      t.ok(/R\thero\.zarathor\.fk\.boss\t1\n/.test(raw) && /R\thero\.zarathor\.worn\.zar_loyalty_card\t1\n/.test(raw), 'raw=1: the denominators (fights by kind, worn fights)');
     } finally { S.reset(); }
   });
 })();

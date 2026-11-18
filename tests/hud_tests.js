@@ -1483,6 +1483,49 @@
     } finally { DD.Act.explode = explode0; leave(); dropShyZap(); }
   });
 
+  // [heal QA-3, Nov 18] the hint bar names the actor's own heal inside an action (the conditional heals: a slam, a
+  // ghosting, a crowded Transform), not only the small badge over the hero's head; an ally's heal reads as before
+  T.suite('hud: heal QA-3 — the aim hint says "💚 you heal N" when the action heals its user', function (t) {
+    if (!ready(t)) return;
+    try {
+      fight({ heroes: [{ id: 'test_cleric', x: 1, y: 3, skills: ['test_heal'] }, { id: 'test_knight', x: 3, y: 3 }],
+        enemies: [{ id: 'test_grunt', x: 7, y: 7 }], enemyAi: false });
+      const c = byDef('test_cleric'), k = byDef('test_knight');
+      c.hp = c.maxHp - 10;
+      k.hp = k.maxHp - 10;
+      DD.HUD.select(c.id);
+      DD.HUD.key('2');
+      DD.HUD.hover(c.x, c.y);
+      const pv = DD.Combat.preview(c, c.skills[0], c.x, c.y).perUnit[c.id];
+      t.ok(pv && pv.heal > 0, 'premise: the preview heals the cleric (' + (pv && pv.heal) + ')');
+      t.ok(new RegExp('💚 you heal ' + (pv && pv.heal) + '(?!\\d)').test(DD.HUD.hint()), 'aimed at himself: the hint names his own heal: ' + DD.HUD.hint());
+      DD.HUD.hover(k.x, k.y);
+      t.ok(/💚 heals 1 ally/.test(DD.HUD.hint()) && !/you heal/.test(DD.HUD.hint()), 'aimed at the knight: "heals 1 ally", no "you heal": ' + DD.HUD.hint());
+      c.hp = c.maxHp;
+      if (DD.Act.touch) DD.Act.touch();
+      DD.HUD.refresh();
+      DD.HUD.hover(k.x + 1, k.y);
+      DD.HUD.hover(c.x, c.y);
+      t.ok(!/you heal/.test(DD.HUD.hint()), 'at full HP (heals 0): no "you heal": ' + DD.HUD.hint());
+      DD.HUD.rightClick();
+      // a real conditional heal: Walking Stick Whack slamming a grunt into a wall heals Professor Marbles
+      if (DD.getHero('marbles') && DD.getSkill('mar_whack')) {
+        fight({ heroes: [{ id: 'marbles', x: 1, y: 3, level: 3, skills: [{ id: 'mar_whack', level: 1 }] }],
+          enemies: [{ id: 'test_grunt', x: 2, y: 3 }, { id: 'test_grunt', x: 7, y: 7 }], enemyAi: false,
+          terrain: function (tl) { if (tl.x === 3 && tl.y === 3) tl.t = 'wall'; } });
+        const m = byDef('marbles');
+        m.hp = m.maxHp - 15;
+        DD.HUD.select(m.id);
+        DD.HUD.key('2');
+        DD.HUD.hover(2, 3);
+        const mp = DD.Combat.preview(m, DD.Combat.slotsOf(m).filter(function (sl) { return sl.id === 'mar_whack'; })[0], 2, 3).perUnit[m.id];
+        t.ok(mp && mp.heal === DD.skillLevel(DD.getSkill('mar_whack'), 1).slam, 'premise: the Whack into the wall heals him ' + (mp && mp.heal));
+        t.ok(/Hits 1 foe for \d+ · 💚 you heal 5(?!\d)/.test(DD.HUD.hint()), 'Whack into a wall: "Hits 1 foe for N · 💚 you heal 5": ' + DD.HUD.hint());
+        DD.HUD.rightClick();
+      } else t.log('marbles not loaded: the Whack case is skipped');
+    } finally { leave(); }
+  });
+
   T.suite('hud: v2 requests — a heal aimed at a downed ally: target, "UP! N HP", cards, inspect, the revive', function (t) {
     if (!ready(t)) return;
     if (!DD.Targeting.revivesWith) { t.skip('no heal revives'); return; }

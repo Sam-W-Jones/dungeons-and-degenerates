@@ -362,16 +362,20 @@ enemies never telegraph.
     the Lich's row scales his notices, his Late Fees stay flat; finish run, Nov 14: his fees stop at 12 and his row
     went from ×1.25 to ×1.3 HP to keep him where he was; Dr. Iris went from ×1.2 to ×1.1 HP with her closing time
     moved from round 14 to round 10, so her fights stop being 13-round dodge-slogs at the same win rate).
-  - Act 4 (V3, as landed after the balance audit, Nov 17): `act[4]` ×1.3 damage, HP ×1, for every act-4 fight; on
-    top of it each door's own row (`encounters`): the Gardener ×0.75 HP / ×1.45 damage, the League ×1.05 damage,
-    Galbraith ×0.95 damage, the Coven ×0.9 damage, the Rapping Goats ×0.8 HP with no damage row (×1: the Radio Edit
-    is paid back on their own row; their 285 HP read 228 in a campaign, the bear's 110 read 88), and Svammiel ×1.1 HP /
-    ×1.3 damage (×1.69 damage in all with `act[4]`; his 360 HP read 396 in a campaign). No order scaling
+  - Act 4 (V3, as landed after the balance audit, Nov 17; Svammiel re-fit by the conditional-healing pass, Nov 18):
+    `act[4]` ×1.3 damage, HP ×1, for every act-4 fight; on top of it each door's own row (`encounters`): the Gardener
+    ×0.75 HP / ×1.45 damage, the League ×1.05 damage, Galbraith ×0.95 damage, the Coven ×0.9 damage, the Rapping Goats
+    ×0.8 HP with no damage row (×1: the Radio Edit is paid back on their own row; their 285 HP read 228 in a campaign,
+    the bear's 110 read 88), and Svammiel ×1.15 HP / ×1.5 damage (×1.95 damage in all with `act[4]`; his 360 HP read
+    414 in a campaign; Nov 18: the 16 heroes' conditional heals had put him at ~91% and the campaign at ~33%, and his
+    damage barely moved him: ×1.3 → ×1.5 damage read 91 → 90%, ×1.15 HP 80%). No order scaling
     (`gauntlet.hpPerBeaten` / `dmgPerBeaten` 0: the door order stays a free choice).
   - Difficulty (`difficulty`, `extraEnemies`): Casual ×0.8 HP / ×0.8 damage · Normal ×1 · Brutal ×1.15 HP / ×1.05
     damage, plus one extra enemy in every regular fight.
   - Where that lands (the balance audit, normal unless stated): the act 1 bosses are won ~70%, the campaign ~33%
-    (casual ~77-80%, brutal ~10%).
+    (casual ~77-80%, brutal ~10%). With act 4, the 16 heroes' conditional heals and Svammiel's re-fit row (Nov 18,
+    `docs/notes/balance.md` "Conditional healing pass"): the four-act campaign ~25%, Svammiel ~80%, the doors 96-100%
+    (casual ~74%, brutal ~9%).
 - Heroes L1: HP 20–36, AP 3, move 3–5 (V3's Benedick: move 2 on purpose, the slowest hero, with armor 2; his
   Dragonsnail flies with +3 move), initiative modifier −2..+4. Growth +3–5 HP/level. With one level-up per won
   fight (v2) a party is about level 2 at the Act 1 boss, 3–4 at the Act 2 boss and 5 at the DM.
@@ -406,18 +410,21 @@ SpriteSpec, and 3–6 barks per key. Requirements for every kit:
     Benedick's names from the day he is planned (act-4 enemies never use them): Fourteen Thousand Teeth, Slow Burn,
     Coming Out of My Shell, Slime Line, I'll Wait, Lettuce Pray, Shellacking, Spit Shine, Snail Mail, Morning Breath,
     Wing It, Riddle Me This, The Inevitable, A Sticky Situation, Snail Slime, In His Shell, Dragonsnail.
-- **Sustain (D9, the user: "linked to the characters themselves ... without overloading each character with a
-  self-heal").** No party gets a generic heal (§3). Healing others belongs to the healers (Ellaria, Josiah; part-time:
-  Marbles' Carrot Toss, Pebbles' Emotional Support Dog, Sparrow's Blood Drive). Self-sustain grows out of each hero's
-  own verbs and is spread across delivery types: skills (Slate's Stress Ball, Basanos' Transform, Sparrow's Juice Box,
-  Betty's Five-Second Rule, Marwyn's Keg Stand, Basanos' Savage Bite, Josiah's Leeches), passives (Betty's Eats
-  Anything, Pebbles' Hot Dog, Marwyn's MAGNIFICENT SURGE) and hero items (Sparrow's Bloodsucker's Bib, Pebbles'
-  Fireproof Dog Bed, Hjalmar's Canned Laughter; V3: Benedick's Snail Mucin Serum, heal 3 whenever a foe gets stuck in
-  his slime: his only heal, and his transform never heals, that is Basanos's verb). Kiri, Corelos, Syllamin, Zarathor,
-  Buga and Valdris get no self-heal (Valdris' Temper adds 5 HP only at III): range, stealth, Debt, Block and
-  death-saves instead. Death-saves aside, no hero heals on an HP threshold (Hair Trigger only changes Basanos' form),
-  and the D9 heals (Stress Ball, Transform, Juice Box, the surge, Canned Laughter, the Serum) only heal the hero who
-  earned them: they never revive or cleanse.
+- **Sustain (D9 and Nov 18, the user: "linked to the characters themselves ... without overloading each character with
+  a self-heal"; "I want everyone else brought up but by conditional healing").** No party gets a generic heal (§3).
+  Healing others belongs to the healers: Ellaria, Josiah and Valdris, whose Forge Armor hammers the dents out of armor
+  that soaked a hit (part-time: Marbles' Carrot Toss, Pebbles' Emotional Support Dog, Sparrow's Blood Drive and her
+  Juice Box shared with a hurt friend when the foe was Bleeding). Every other hero heals on a condition that grows out
+  of his or her own verbs, one source each, spread across delivery types: starting skills (Basanos' Transform, +2 per
+  adjacent foe; Slate's Hold Still, at each turn end while he holds a foe; Marbles' Walking Stick Whack, when the push
+  slams into something; Kiri's Ethereal Step, out of melee; Corelos' Glyph of Warding, when a burst hits two foes),
+  passives (Buga's applause when an ally kills; Betty's leftovers; Pebbles' Hot Dog, also next to a Burning foe;
+  Hjalmar's pratfall laughs, with Canned Laughter adding 4; Benedick's stuck foes, with the Snail Mucin Serum adding 3;
+  Marwyn's surge, +2 per foe he Taunted; Josiah's samples from Poisoned deaths) and hero items (Zarathor's Loyalty
+  Card, Syllamin's Jar of Tears). Pool skills and items add more of the same verbs (Stress Ball, Savage Bite,
+  Five-Second Rule, Keg Stand, Leeches, the Bib, the Dog Bed). Death-saves aside, no heal reads an HP threshold (Hair
+  Trigger only changes Basanos' form), none is a combat-start shield, and none of these is an aimed heal: they never
+  revive or cleanse. Ellaria is unchanged (D11).
 - Mix of AP costs (1–3), cooldowns and one or two "big" skills with charges/long cooldowns.
 - Three meaningful levels per skill (numbers and/or a new rider at III). `desc` always exact for the level.
 - The passive is the character's comedic core and must change how you play them.
@@ -439,6 +446,8 @@ Thinks fire looks better with sequins. Role: ranged fire, bling and wild magic. 
 - Signature *Bling Supernova*: 18 fire to every foe within 2 of the target; the survivors are Dazzled.
 - Combos: Hex and Bedazzle before an ally's big hit; Lasso foes into the Fireball; Burning foes feed Valdris and
   Pebbles. Every coin he throws (Throw Money At It, Gold Plating) is a coin his Drip Check no longer counts.
+- Hero item *Loyalty Card (Platinum Pending)* (common trinket): whenever he pays for one of his skills with gold, he
+  heals 3 HP (once per turn).
 
 ### Syllamin the Roastmaster General — Faerie Bard (he/him)
 Tiny, flying, foul-mouthed faerie (Syllamin is male) who **trash-talks** everything, lute in hand. Role: support,
@@ -451,6 +460,8 @@ debuffs, crowd control. 20 HP (+3/level), move 5, init +4, flying.
   slippery glitter), Lullaby of Mediocrity (Sleep), Encore! (reset an ally's cooldowns), Fae Blink (teleport an ally
   next to him, with Block), Mosh Pit (pull foes together), Mic Drop (a big hit and Stun, once per fight).
 - Signature *Diss Track*: three verses of 4 psychic damage to every foe, each verse Roasting.
+- Sustain (Nov 18): his common hero trinket *Jar of Tears (Theirs)*: whenever a foe suffers Emotional Damage from his
+  roasts, he drinks its tears and heals 3 HP (once per turn).
 - Combos: any of his hits Roasts, so area skills (Mosh Pit, Shriek, Diss Track) stack Emotional Damage fast; Hype Man
   and Encore! on the party's big hitter; Mosh Pit bunches foes for fireballs and cleaves.
 
@@ -460,8 +471,9 @@ Spectacles, walking cane, one floppy ear. Role: mobile melee skirmisher / contro
 `hop` (climbs 2 levels a step).
 - Passive *Absent-Minded Mastery*: at the start of each of his turns he suddenly remembers one random ready socketed
   skill: its first use that turn costs 0 AP.
-- Basic *Doddering Jab* (5, adjacent). Starters: *Walking Stick Whack* (hit and push 2) and *Marble Scatter* (loose
-  marbles: grounded foes on them slip and are Vulnerable).
+- Basic *Doddering Jab* (5, adjacent). Starters: *Walking Stick Whack* (hit and push 2; if the push slams the foe into
+  something, he heals 5–7 HP, by level) and *Marble Scatter* (loose marbles: grounded foes on them slip and are
+  Vulnerable).
 - Pool: Rabbit Punch (hit and Stun), Flurry of Paws (three quick hits), Back In My Day... (Block and Taunt adjacent
   foes), Lecture (adjacent foes fall Asleep), Carrot Toss (heal, 3 carrots a fight), Hare-Brained Leap (leap over
   anything), Vaudeville Hook (yank a foe next to him), Wax On, Wax Off (an ally is Empowered).
@@ -473,7 +485,8 @@ Spectacles, walking cane, one floppy ear. Role: mobile melee skirmisher / contro
 Huge ginger barbarian with wild-magic outbursts who refers to himself as **MAGNIFICENT** — often in the third person,
 often in capitals. Enormous beard, furs, greataxe. Role: tank / bruiser / taunts. 35 HP (+5/level), move 3, init 0.
 - Passive *MAGNIFICENCE*: each of his skills that reaches a foe adds 1 MAGNIFICENCE. At 5, his next skill also unleashes
-  a **MAGNIFICENT SURGE** (random good wild magic, +10 party Hype, and he heals 8 HP) and the meter resets.
+  a **MAGNIFICENT SURGE** (random good wild magic, +10 party Hype, and he heals 8 HP, +2 for each foe he has Taunted,
+  max +6) and the meter resets.
 - Basic *Ginger Snap* (5, adjacent). Starters: *LOOK AT MARWYN!* (Taunt every foe within 2 and gain Block) and *YEET*
   (throw an adjacent friend or foe 3 tiles; on a crash it and what it hits take damage).
 - Pool: Glorious Cleave (the 3 tiles in front), Use Your Head (hit and Stun; costs him 2 HP), Hero Landing (leap,
@@ -506,7 +519,8 @@ Beaked plague doctor who brews questionable potions and commands a raven named *
 re-summoned or not). Long coat, wide hat, smoke from the beak. Role: poison healer and raven wrangler. 26 HP
 (+4/level), move 4, init 0. His cane reaches 2 tiles, so he makes no attacks of opportunity.
 - Passive *Unlicensed Apothecary*: he starts each fight with Onyx. Poison is contagious: when a Poisoned foe dies,
-  adjacent foes catch all of its Poison. +1 consumable slot. (His old post-fight brewing lives on the Portable Alembic.)
+  adjacent foes catch all of its Poison, and he takes a sample: he heals 2 HP (once per round). +1 consumable slot. (His
+  old post-fight brewing lives on the Portable Alembic.)
 - Basic *House Call* (a cane poke up to 2 tiles away: 4, or 6 against a Poisoned foe). Starters: *Plague Flask*
   (poison in radius 1) and *Mostly Medicine* (heal an ally within 3, or himself).
 - Pool: Raven Dive (Onyx swoops in and pecks), Prescribe Leeches (drain), Plague Miasma (a flammable poison cloud),
@@ -522,7 +536,8 @@ Small, scrappy, edgy goblin who pays for her spells **in blood** — hers, ideal
 her skin. Role: high-risk bleed assassin. 22 HP (+3/level), move 5, init +3.
 - Passive *Blood Price*: her skills' HP costs are paid by an adjacent Bleeding foe instead of her, when there is one.
 - Basic *Shiv Happens* (4 and Bleed 1, adjacent). Starters: *Hemo-Glob* (2 HP: a ranged hit and Bleed) and *Juice
-  Box* (drain a foe within 3: more damage per Bleed on it, and she heals the damage dealt).
+  Box* (drain a foe within 3: more damage per Bleed on it, and she heals the damage dealt; if it was Bleeding, the most
+  hurt ally within 2 of her, heroes first, also heals half of that, rounded up).
 - Pool: Thousand Paper Cuts (area Bleed), Say It, Don't Spray It (cone and Dazzle), Scab Armor (HP for Block), Goblin
   Mode (teleport and Stealth), Blood Puppet Show (drag every Bleeding foe), Evil Twin (a taunting Blood Clone), Blood
   Drive (heal an ally and Empower it), Vein Glory (dart in and gut a foe).
@@ -536,7 +551,8 @@ Role: rune traps and dark bargains. 24 HP (+4/level), move 4, init +1.
 - Passive *Collateral Damage*: his bargains cost Debt, paid in HP at the start of his next turn. Every foe that dies
   before then pays off 4 of it.
 - Basic *Rune Bolt* (4; his runes on or next to the target burst). Starters: *Glyph of Warding* (a rune, max 3: when
-  a foe steps on it, foes on and next to it take damage) and *Dark Bargain* (0 AP: gain 2 AP, take Debt).
+  a foe steps on it, foes on and next to it take damage; a burst that hits 2 or more foes is a class action that heals
+  him 3–4 HP by level, once per round) and *Dark Bargain* (0 AP: gain 2 AP, take Debt).
 - Pool: Runic Detonation (all his runes burst at once), You've Been Served (line pull), Restraining Order (push
   adjacent foes away), Cease & Desist (Stun), Sign Here, Please (Charm a non-boss; Debt), Soul Contract (Block for
   Debt), Infernal Lawyer (a flying imp lawyer: Billable Poke, and Objection! taunts; once per fight), Collect Debt
@@ -554,7 +570,8 @@ init −2, `immovable` (pushes and pulls don't budge him).
 - Passive *Short Fuse*: he gains 1 Rage (max 5) whenever someone else hits him, heals him or gives him a buff status
   (Block doesn't count). At 3+ Rage his runes flare: his skills deal +2 damage.
 - Basic *Love Tap* (5, adjacent). Starters: *Hold Still* (grab an adjacent foe: it is Grappled until the end of his next
-  turn — it can't move and is dragged along when he walks) and *Personal Space* (throw an adjacent foe or object; it and
+  turn — it can't move and is dragged along when he walks — and he heals 4–5 HP at the end of each of his turns while he
+  holds it, except a turn he squeezes it with Stress Ball) and *Personal Space* (throw an adjacent foe or object; it and
   what it hits take damage).
 - Pool: Hard Pass (lob a boulder over walls), Air Mail (throw an ally onto a safe tile; foes next to the landing take
   damage), Putting My Foot Down (cone stomp and push), Get Off My Lawn (Taunt foes within 2 and gain Block), Rock
@@ -572,7 +589,7 @@ buttered toast with tiny arms and legs, a mayor's sash, chain of office, top hat
 politician: shameless, greedy, smiling for the cameras, taking credit for everything. Role: support, manipulator,
 loot. 24 HP (+4/level), move 4, init 0.
 - Passive *Skimming Off the Top*: whenever an ally (or a foe he bribed) defeats an enemy while Buga stands, he takes
-  the credit: +2 gold.
+  the credit: +2 gold, and the applause heals him 2 HP.
 - Basic *Campaign Pamphlet* (4, range 4). Starters: *Delegate* (point at a foe: the best-placed ally makes a free basic
   attack on it) and *Loitering Fine* (a hit that pockets gold).
 - Pool: Campaign Promise (an ally gains AP on its next turn), Human Shield (swap places with an ally; it gains Block),
@@ -592,7 +609,8 @@ of being asked whether she's "the elf or the human one". Role: ranged precision 
 (+4/level), move 4, init +3.
 - Passive *Between Worlds*: her own skills ignore line of sight — walls, pillars, trees and smoke don't stop her.
 - Basic *Ghost Arrow* (5, range 5). Starters: *Phase Shot* (every foe in a straight 5-tile line, through walls and
-  units) and *Ethereal Step* (teleport up to 3 tiles in a straight line, through walls and units).
+  units) and *Ethereal Step* (teleport up to 3 tiles in a straight line, through walls and units; if a foe was next
+  to her when her turn started, she ghosts it and heals 5–7 HP, by level).
 - Pool: Spirit Mark (the foe's next damage taken is bigger), Pinning Shot (hit and Root), Banishing Shot (hit and push
   2), Haunted Volley (radius 1), Arrow from Beyond (lands at the start of her next turn, wherever the foe went), Fade
   Out (Stealthed until the end of her next turn), Mist Opportunity (ghost mist that blocks everyone's sight but hers).
@@ -608,7 +626,7 @@ hooves, a breastplate stamped "BETTY", the family hammer. Bleats mid-sentence ("
 eats anything (the loot, the map, the DM's notes). Role: frontline charger, knockback, holds the line. 32 HP
 (+4/level), move 4, init +1, `hop` (goats climb).
 - Passive *Eats Anything*: whenever Betty kills a foe or one of his skills breaks an object, he eats it and heals 4 HP.
-  Don't ask.
+  A foe that dies next to him at someone else's hands is leftovers: he heals 3 HP. Don't ask.
 - Basic *The Family Hammer* (5 to an adjacent foe or breakable object). Starters: *Ramming Speed!* (charge up to 3
   tiles in a straight line: the first foe in the way takes damage and is pushed 2) and *Butt Out* (hit and Stun).
 - Pool: Head Over Heels (flip a foe over him: Vulnerable), Bleat of Defiance (Taunt foes within 2), Stomping Grounds
@@ -628,8 +646,8 @@ skills are tagged human or wolf; the other form's skills are greyed out. 28 HP (
 - Passive *Hair Trigger*: when damage leaves him below half HP, he turns into the werewolf for free (+2 move, the Claw
   basic attack, wolf skills). Sorry in advance.
 - Basic *Silvered Sword* (5, adjacent) as a man, *Claw* (4–5 and Bleed 1–2, by his Transform level) as the wolf.
-  Starters: *Transform* (1 AP: switch forms; his first Transform each turn heals him 2–4 HP, by level — Hair Trigger and
-  Blood Moon never heal) and *Shoulder Check* (human: hit and push).
+  Starters: *Transform* (1 AP: switch forms; his first Transform each turn heals him 2–4 HP, by level, +2 per adjacent
+  foe, max +4 — Hair Trigger and Blood Moon never heal) and *Shoulder Check* (human: hit and push).
 - Human pool: Silver Slash (a big hit and Vulnerable), Hold the Line (Taunt foes within 2 and gain Block), Step In
   (swap places with an ally and gain Block). Wolf pool: Rend (Bleed), Pounce (leap next to a foe and Stun it), Howl (he
   and allies within 2 are Inspired), Savage Bite (heals him on a kill), Frenzy (every adjacent foe, and Bleed).
@@ -647,7 +665,8 @@ somehow soot-free hair ("Mind the hair."). Role: forge support / frontline buffe
 init 0.
 - Passive *Strike While the Iron's Hot*: Valdris deals +3 damage to Burning foes, attacks of opportunity included.
 - Basic *Percussive Maintenance* (5, adjacent). Starters: *Flame-Forged Edge* (an ally's, or his own, next damaging
-  skill sets each foe it hits Burning) and *Forge Armor* (Block for him or an ally).
+  skill sets each foe it hits Burning) and *Forge Armor* (Block for him or an ally; if its Block soaked a foe's hit,
+  it is Dented, and he hammers the dents out: it heals 7–9 HP, by level).
 - Pool: Forge Weapon (an ally deals +2 damage with every hit until the end of its next turn), Spiked Pauldrons
   (Thorns), Temper (shed every debuff), Hammer of Faith (hit and push 2), Molten Spray (fire cone and Burn), Anvil Drop
   (a heavy hit and Stun), Hair Flip (Dazzle the foes around him).
@@ -662,8 +681,8 @@ init 0.
 User's brief: *Hjalmar (male), a monkey. Very mischievous, focuses on comedic traps.* A small, gleeful menace of a monkey
 who steals hats, rigs everything and laughs at his own pranks. Role: trapper and trickster. 22 HP (+3/level), move 5,
 init +4, `hop` (climbs everything).
-- Passive *Monkey Business*: every time a foe springs one of his traps, the party gains 5 Hype. The crowd loves a
-  pratfall.
+- Passive *Monkey Business*: every time a foe springs one of his traps, the party gains 5 Hype and he laughs so hard
+  he heals 5 HP. The crowd loves a pratfall.
 - Basic *Coconut Toss* (4, range 4). Starters: *Banana Peel* (the first foe to step on it slips: it can't act until the
   end of its turn) and *Bear Trap* (damage and Root).
 - Traps, one verb each, set within 3 (the first foe to step on one springs it): Whoopee Cushion (Taunted by Hjalmar),
@@ -673,7 +692,7 @@ init +4, `hop` (climbs everything).
 - Signature *Prank War*: every foe within 2 of a tile within 5 takes 8 damage and slips.
 - Combos: allies' pushes and pulls (and his own Bait and Switch) put foes on his traps; trapped, Rooted foes feed
   Betty's Kick 'Em. Traps lie on the floor, so flyers float over them.
-- Hero item *Canned Laughter* (rare trinket): he heals 4 HP whenever a foe springs one of his traps.
+- Hero item *Canned Laughter* (rare trinket): whenever a foe springs one of his traps, he heals 4 HP more (9 in all).
 - Sprite: small monkey (brown fur, pale face and belly, long curly tail), a tiny fez or vest, a huge grin, a sack of
   props.
 
@@ -681,8 +700,8 @@ init +4, `hop` (climbs everything).
 User's brief: *Pebbles (male), a dog made of fire. A good boy.* A living bonfire in the shape of a happy dog: wags his
 tail and sets the carpet on fire, brings back sticks that are now torches, loves everyone. Role: melee skirmisher and
 fire control. 26 HP (+4/level), move 5, init +3; fire can't hurt him (fire resist 0, immune to Burn).
-- Passive *Hot Dog*: Pebbles is made of fire: fire damage and Burn can't hurt him, and ending his turn on fire or lava
-  heals him 3 HP.
+- Passive *Hot Dog*: Pebbles is made of fire: fire damage and Burn can't hurt him, and ending his turn on fire, on lava
+  or next to a Burning foe heals him 3 HP.
 - Basic *Spicy Nibble* (4 and Burn 1, adjacent). Starters: *Hot Zoomies* (dash up to 4 tiles, leaving fire on every
   tile he leaves, except under allies) and *Fetch Quest* (a fire hit that pulls the foe toward him).
 - Pool: Chew Toy (hit and Root), Big Wag (adjacent foes take fire damage and are pushed), Bork! (Taunt foes within 2),
@@ -704,7 +723,7 @@ lance strapped to his shell. He always gets there. He fears salt and anyone who 
 in his shell and he comes out of it (way out) as a fire-breathing, flying, very pompous DRAGONSNAIL who still wants
 lettuce. Role: slow shell tank; a flying fire-breather in bursts. 28 HP (+4/level), move 2, armor 2, init −2.
 - Passive *A Sticky Situation*: at the end of his turn the tiles he crawled off become Snail Slime (3 rounds); grounded
-  foes, bosses aside, that walk onto it stop there.
+  foes, bosses aside, that walk onto it stop there, and each one that does heals him 5 HP.
 - Basic *Fourteen Thousand Teeth* (5, adjacent; 10 against a plant) as a snail, *Slow Burn* (4-6 fire + Burn 1, range 3,
   by his shell's level) as the Dragonsnail. Starters: *Coming Out of My Shell* (spend all AP: half damage until his next
   turn, then the Dragonsnail for 2 turns: flying, +3 move, Slow Burn; III bursts out for 6 fire) and *Slime Line* (hit
@@ -714,8 +733,8 @@ lettuce. Role: slow shell tank; a flying fire-breather in bursts. 28 HP (+4/leve
   next turn). Dragonsnail only: Morning Breath (fire cone and Weak), Wing It (push every adjacent foe), Riddle Me This
   (ranged Stun).
 - Signature *The Inevitable*: he appears next to any foe on the battlefield: 18 damage and Stunned.
-- Sustain (D9): his hero item *Snail Mucin Serum* heals him 3 whenever a foe gets stuck in his slime; the transform never
-  heals.
+- Sustain (D9 and Nov 18): each foe stuck in his slime heals him 5 (his passive); his hero item *Snail Mucin Serum*
+  adds 3 more (8 in all); the transform never heals.
 - Combos: I'll Wait drags a foe across his slime (it stops short and loses the attack); Slime Line pulls into cleaves and
   traps; Snail Mail on Rooted, Stunned, Grappled or stuck foes; Slow Burn feeds Valdris and Bark-B-Q; Wing It shoves
   into pits, lava and traps; Riddle Me This sets up Betty's Kick 'Em.
@@ -944,8 +963,8 @@ swap move is part of several answers. Normative specs: `.tmp/v3/design.md` §3 a
     22). When Betty is in the party, the first verse is about him. Every bar is original; the comedy is goat puns and
     battle-rap form, never the fur colour.
 11. **Svammiel, the Floor Boss** (he; *The Last Floor*, the linoleum under the DM's table, 17 × 14 over the void; 360
-    HP in three phases, flying until caught, init +4; campaign row ×1.1 HP / ×1.3 damage, ×1.69 damage with `act[4]`:
-    396 HP in a campaign, §5). The DM's DM, an original character: a winged demon who owns every floor tile down there
+    HP in three phases, flying until caught, init +4; campaign row ×1.15 HP / ×1.5 damage, ×1.95 damage with `act[4]`:
+    414 HP in a campaign, §5). The DM's DM, an original character: a winged demon who owns every floor tile down there
     and cheats blatantly, for no reason, out loud. One **Round Cheat** a round, announced a round ahead (the floor is
     lava, the Tilt, a Skill Ban, New Seating Chart, Moving Costs Extra — the swap move included —, Bring a Friend…),
     **Snap Cheats** while he holds Fudge tokens, phase cheats at phase changes (I Go Twice; You Can't Skip My

@@ -9,6 +9,8 @@
  * kits). Scenes are quiet sandboxes: nobody else acts unless asked. Turn-order suites run each scene in both orders.
  * Pass 3 ('autoplay: pass 3 — …'): closing in (two moves + a skill), the two-step disengage, the Help-Up loop breaker,
  * summons before their hero, signatures at 100 Hype, the next-turn buff term and deterrents (the Polearm pins a foe).
+ * Conditional-healing lift (Nov 18, last block): a hero passive's autoplayEnd end-tile value (E1: plain moves, the dry
+ * run's state, a throwing hook) and AutoPlay.healWorth (E2).
  */
 (function () {
   'use strict';
@@ -1378,5 +1380,133 @@
     arena({ heroes: [H('test_knight', 1, 1)], enemies: [{ id: 'test_grunt', x: 8, y: 8 }], objects: [{ x: 3, y: 5, id: 'crate' }] });
     DD.AutoPlay.takeTurn();
     t.eq(DD.Grid.tile(3, 5).obj && DD.Grid.tile(3, 5).obj.hp, 6, 'with a way out, a crate is left alone');
+  });
+})();
+
+// ---- conditional-healing lift (Nov 18, plan §5): E1 a passive's end-of-turn tile value, E2 the shared heal price ------
+(function () {
+  'use strict';
+  const T = window.DD_TEST;
+  const DD = window.DD;
+  if (!T) return;
+  function S() { return DD.Combat.state; }
+  function A() { return DD.Act; }
+  function unitOf(defId) { return S().units.filter(function (u) { return u.defId === defId && !u.dead; })[0] || null; }
+  function arena(cfg) {
+    DD.Combat.sandbox(Object.assign({
+      w: 10, h: 10, seed: 'autoplay-lift', noPlan: true, enemyAi: false, theme: 'cellar',
+      objective: { type: 'custom', text: 'AutoPlay test' }, encounter: { id: 'ap_lift', checkObjective: function () { return null; } },
+    }, cfg));
+    return S();
+  }
+  function H(id, x, y, skills) { return { id: id, x: x, y: y, level: 1, skills: skills || [] }; }
+  function at(u) { return u.x + ',' + u.y; }
+
+  T.suite('autoplay: a passive\'s autoplayEnd pulls the turn\'s end tile (E1: plain moves, dry runs, a throwing hook)', function (t) {
+    const base = DD.getHero('test_mage');
+    if (!base || !DD.getEnemy('test_grunt')) { t.skip('needs test_mage, test_grunt'); return; }
+    // a temp fixture hero: a basic that does nothing from afar, one 3-AP skill that tucks a foe in, and a passive whose
+    // autoplayEnd is whatever the scene says (rest)
+    let rest = null;
+    DD.registerStatus({ id: 'test_ap_rest_marked', name: 'Tucked In', icon: '🛏️', type: 'debuff', stacking: 'refresh', maxStacks: 1, decay: 'never', defaultTurns: -1,
+      desc: function () { return 'Tucked in for a nap.'; } });
+    DD.registerSkill({ id: 'test_ap_rest_nap', name: 'Test Yawn', owner: 'test_ap_rester', icon: '🥱', kind: 'buff', tags: [], ap: 1,
+      levels: [{}], target: { type: 'unit', range: [1, 1], filter: 'enemy' },
+      desc: function () { return 'Yawn at an adjacent foe. Nothing happens.'; }, execute: function () {} });
+    DD.registerSkill({ id: 'test_ap_rest_tuck', name: 'Test Tuck-In', owner: 'test_ap_rester', icon: '🛏️', kind: 'attack', tags: ['melee'], ap: 3,
+      levels: [{ dmg: 2 }], target: { type: 'unit', range: [1, 1], filter: 'enemy' },
+      desc: function (L) { return 'Deal ' + L.dmg + ' damage to an adjacent foe and tuck it in.'; },
+      execute: function (ctx) {
+        const v = ctx.targetUnit;
+        if (!v) return;
+        A().damage(ctx.user, v, ctx.L.dmg);
+        if (!v.dead) A().addStatus(v, 'test_ap_rest_marked', {}, ctx.user);
+      } });
+    DD.registerHero(Object.assign({}, base, { id: 'test_ap_rester', name: 'Snoozy McTest', basic: 'test_ap_rest_nap', startingSkills: [], skillPool: ['test_ap_rest_tuck'],
+      passive: { name: 'Power Nap', desc: 'Test only: AutoPlay values where its turn ends.', hooks: {},
+        autoplayEnd: function (u, x, y) { return rest ? rest(u, x, y) : 0; } } }));
+    const SPOT = { x: 3, y: 2 };
+    const p0 = DD.problems.length;
+    try {
+      // 1. a plain move: nothing to do anywhere (no damage, the grunt far away), one tile valued 6
+      const scene1 = function () {
+        arena({ heroes: [H('test_ap_rester', 1, 1)], enemies: [{ id: 'test_grunt', x: 9, y: 9 }] });
+        return unitOf('test_ap_rester');
+      };
+      rest = null;
+      let u = scene1();
+      DD.AutoPlay.takeTurn();
+      const plain = at(u);   // nothing worth anything: it walks toward the fight once (the fallback approach)
+      t.ok(plain !== SPOT.x + ',' + SPOT.y, 'premise: without the value it does not end on ' + SPOT.x + ',' + SPOT.y + ' (' + plain + ')');
+      rest = function (who, x, y) { return x === SPOT.x && y === SPOT.y ? 6 : 0; };
+      u = scene1();
+      t.eq(DD.AutoPlay.restAt(u, SPOT.x, SPOT.y) + ',' + DD.AutoPlay.restAt(u, 1, 1), '6,0', 'AutoPlay.restAt reads the passive\'s autoplayEnd');
+      DD.AutoPlay.takeTurn();
+      t.eq(at(u), SPOT.x + ',' + SPOT.y, 'a tile its passive values 6: it walks there and ends its turn on it (a plain move)');
+      // 2. the dry run's state: the value reads a status its own skill applies (the foe is not tucked in before)
+      const tuck = function (who, x, y) {
+        return S().units.some(function (o) {
+          return !o.dead && !o.downed && DD.Grid.hostile(who, o) && DD.Grid.dist(o, { x: x, y: y }) === 1 && DD.Act.hasStatus(o, 'test_ap_rest_marked');
+        }) ? 4 : 0;
+      };
+      const scene2 = function (fn) {
+        rest = fn;
+        arena({ heroes: [H('test_ap_rester', 4, 5, ['test_ap_rest_tuck'])], enemies: [{ id: 'test_grunt', x: 5, y: 5 }] });
+        return unitOf('test_ap_rester');
+      };
+      const tuckTotal = function () {
+        DD.AutoPlay.trace = 'all'; DD.AutoPlay.log = [];
+        try { DD.AutoPlay.takeTurn(); } finally { DD.AutoPlay.trace = false; }
+        const c = DD.AutoPlay.log.filter(function (l) { return l.cand && l.cand.indexOf('test_ap_rest_tuck > 5,5') === 0 && typeof l.total === 'number'; })[0];
+        return c ? c.total : null;
+      };
+      u = scene2(tuck);
+      t.eq(DD.AutoPlay.restAt(u, 4, 5), 0, 'premise: in the real state the grunt is not tucked in (0 where it stands)');
+      const withIt = tuckTotal();
+      const g = unitOf('test_grunt');
+      t.ok(!!g && DD.Act.hasStatus(g, 'test_ap_rest_marked'), 'it tucks the grunt in');
+      scene2(function () { return 0; });
+      const without = tuckTotal();
+      t.ok(withIt !== null && without !== null, 'the exact pass priced Tuck-In both times (' + withIt + ' / ' + without + ')');
+      if (withIt !== null && without !== null) t.near(withIt - without, 4, 0.15, 'the skill\'s exact total includes the 4 its autoplayEnd reads in the dry run\'s copy');
+      // 3. a throwing autoplayEnd: swallowed by DD.safe (a DD.warn), worth 0, no crash
+      rest = function () { throw new Error('intentional rest error (autoplay lift test)'); };
+      u = scene1();
+      t.eq(DD.AutoPlay.restAt(u, SPOT.x, SPOT.y), 0, 'a throwing autoplayEnd is worth 0');
+      DD.AutoPlay.takeTurn();
+      t.eq(at(u), plain, 'and the turn plays as without one');
+      t.ok(S().units.every(function (o) { return isFinite(o.hp) && isFinite(o.x) && isFinite(o.y); }), 'state sane');
+      const warned = DD.problems.slice(p0).filter(function (w) { return /intentional rest error/.test(w); }).length;
+      t.ok(warned > 0, 'the error was reported through DD.safe (' + warned + ' DD.warn lines, expected in this test only)');
+    } finally {
+      rest = null;
+      for (let i = DD.problems.length - 1; i >= p0; i--) if (/intentional rest error/.test(DD.problems[i])) DD.problems.splice(i, 1);
+      delete DD.defs.heroes.test_ap_rester;
+      delete DD.defs.skills.test_ap_rest_nap;
+      delete DD.defs.skills.test_ap_rest_tuck;
+      delete DD.defs.statuses.test_ap_rest_marked;
+    }
+  });
+
+  T.suite('autoplay: AutoPlay.healWorth prices a heal like the quick pass (E2)', function (t) {
+    if (!DD.getHero('test_knight') || !DD.getEnemy('test_grunt')) { t.skip('needs test_knight, test_grunt'); return; }
+    arena({ heroes: [H('test_knight', 2, 2)], enemies: [{ id: 'test_grunt', x: 8, y: 8 }] });
+    const k = unitOf('test_knight'), W = DD.AutoPlay.healWorth;
+    t.ok(typeof W === 'function', 'DD.AutoPlay.healWorth is exported');
+    if (typeof W !== 'function') return;
+    k.maxHp = 32; k.hp = 32;
+    t.eq(W(k, 5), 0, 'full HP: 0');
+    k.hp = 29;
+    t.near(W(k, 5), 2.4, 1e-9, '3 missing, heal 5: the 3 it can take × 0.8');
+    k.hp = 16;
+    t.near(W(k, 5), 4, 1e-9, 'exactly half missing (16 of 32): × 0.8');
+    k.hp = 10;
+    t.near(W(k, 5), 7.5, 1e-9, 'more than half missing: × 1.5');
+    t.near(W(k, 40), 33, 1e-9, 'never more than the missing HP (22 × 1.5)');
+    t.eq(W(k, 0) + W(k, -3) + W(k, NaN) + W(k, undefined), 0, 'n ≤ 0 or not a number: 0');
+    A().damage(null, k, 999, { cause: 'other', ignoreArmor: true, ignoreBlock: true });
+    t.ok(k.downed || k.dead, 'premise: downed');
+    t.eq(W(k, 5), 0, 'a downed unit: 0 (these heals never revive)');
+    t.eq(W(null, 5), 0, 'no unit: 0');
   });
 })();

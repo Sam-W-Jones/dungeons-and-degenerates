@@ -132,6 +132,15 @@ the way the engine charges it — the old one read `levels[i].ap` (the AP Campai
 (2/3/4), Forge Armor, Healing Spring, Ramming Speed! (through allies), Pickpocket (Weakened) and Slate's Short Fuse were
 stale and now read as the game does; the hand-merged / annotated lines (Raven Dive, Murder of Crows, Statue of Me, Hold
 Still, Stress Ball, Transform's D9 note) say the same as the generator. Content changed after Nov 14 13:00 is not in.
+Nov 18 (conditional-healing lift, `.tmp/heal/plan.md`; heal:docs): every line the lift changed was replaced by the
+generator's line (run on the landed tree): the passives of Marwyn, Josiah, Buga, Betty, Hjalmar and Pebbles; Walking
+Stick Whack, Juice Box, Glyph of Warding, Hold Still, Ethereal Step, Transform and Forge Armor; the item lines of
+Zarathor (Loyalty Card, new), Syllamin (Jar of Tears, new) and Hjalmar (Canned Laughter, now "4 HP more"). Slate's
+header now reads move 4 (the Nov 14 finish run's number; this line had been missed). Notes kept or updated: Glyph and
+Hold Still say what level II does (the generator prints I and III), Hold Still / Stress Ball say the squeeze replaces
+that turn's hold heal, Transform's live marker is now "; used this turn". Ellaria's block is byte for byte unchanged.
+Benedick (V3, the 17th hero) has no block here: this section is v2's 16 kits and the generator lists only them; his
+texts are in DESIGN §6 and `docs/notes/hero-benedick.md`.
 
 ### Zarathor the Bedazzled (`zarathor`, he/him)
 *Ranged fire, bling and wild magic* · 24 HP (+4/lvl) · move 4 · armor 0 · init +1
@@ -148,7 +157,7 @@ Still, Stress Ball, Transform's D9 note) say the same as the generator. Content 
 - **Gold Plating** `zar_gold_plating` (1 AP, cd 2): Spend 6 gold: gold-plate himself or an ally within 4 for 8/10/12 Block.
 - **Statue of Me** `zar_statue` (2 AP, 1 charge): Unveil a 12/18/24-HP gold statue of himself within 3. It Taunts foes within 2/2/3 now and whenever his turn starts. Once per combat.
 - **Wild Card** `zar_wild_card` (1 AP, cd 1, 2 charges): Set off a Wild Surge (mostly good, sometimes not). 2 uses per combat. **III:** Set off two good Wild Surges. 2 uses per combat.
-- *Items*: **Ring of Excessive Bling** (rare trinket): +5% damage. Drip Check counts every 30 gold instead of every 50 (still max +30%). · **Platinum Hellcard** (rare weapon): +10% damage. When the party can't afford one of his gold skills, he pays the missing gold in HP instead (1 HP per gold). · **Shades of Indoor Brilliance** (legendary armor): +6 max HP, +1 armor. Enemies whose attacks hit him are Dazzled.
+- *Items*: **Ring of Excessive Bling** (rare trinket): +5% damage. Drip Check counts every 30 gold instead of every 50 (still max +30%). · **Platinum Hellcard** (rare weapon): +10% damage. When the party can't afford one of his gold skills, he pays the missing gold in HP instead (1 HP per gold). · **Loyalty Card (Platinum Pending)** (common trinket): Whenever Zarathor pays for one of his skills with gold, he heals 3 HP (once per turn). · **Shades of Indoor Brilliance** (legendary armor): +6 max HP, +1 armor. Enemies whose attacks hit him are Dazzled.
 
 ### Syllamin the Roastmaster General (`syllamin`, he/him)
 *Support · debuffs · crowd control* · 20 HP (+3/lvl) · move 5 · armor 0 · init +4 · flags flying
@@ -165,14 +174,14 @@ Still, Stress Ball, Transform's D9 note) say the same as the generator. Content 
 - **Fae Blink** `syl_fae_blink` (1 AP, cd 2): Teleport an ally 2-6/7/8 tiles away to a free tile next to you. It gains 3/4/6 Block.
 - **Mosh Pit** `syl_mosh_pit` (1 AP, cd 2): Foes within 2 tiles of the target tile take 2 damage and are pulled up to 1 tile toward it. **III:** Foes within 3 tiles of the target tile take 3 damage and are pulled up to 2 tiles toward it.
 - **Mic Drop** `syl_mic_drop` (3 AP, 1 charge): Once per combat: deal 15/18/22 damage to a foe up to 4 tiles away (no line of sight needed) and Stun it.
-- *Items*: **The Electric Lute** (rare weapon): +10% damage. Your Mom Joke deals lightning damage and electrifies the water its target stands in (it shocks everyone in that water, allies too). · **Tiny Studded Jacket** (common armor): +4 max HP. A foe that damages him from an adjacent tile is Roasted (a comeback). · **Platinum Diss Mixtape** (legendary trinket): +15 Hype at combat start. Each Emotional Damage gives the party 4 more Hype.
+- *Items*: **The Electric Lute** (rare weapon): +10% damage. Your Mom Joke deals lightning damage and electrifies the water its target stands in (it shocks everyone in that water, allies too). · **Tiny Studded Jacket** (common armor): +4 max HP. A foe that damages him from an adjacent tile is Roasted (a comeback). · **Platinum Diss Mixtape** (legendary trinket): +15 Hype at combat start. Each Emotional Damage gives the party 4 more Hype. · **Jar of Tears (Theirs)** (common trinket): Whenever a foe suffers Emotional Damage from his roasts, Syllamin drinks its tears and heals 3 HP (once per turn).
 
 ### Professor Marbles the Forgetful Fist (`marbles`, he/him)
 *Mobile melee skirmisher / control* · 28 HP (+4/lvl) · move 4 · armor 0 · init +2 · flags hop
 - *Passive* **Absent-Minded Mastery**: At the start of each of his turns he suddenly remembers one random ready socketed skill: its first use that turn costs 0 AP.
 - **Doddering Jab** `mar_jab` *(basic)* (1 AP): Deal 5 damage to an adjacent foe.
 - **Forgot I Was Retired** `mar_signature` *(signature)* (2 AP, 100 Hype): Every foe within 3 tiles takes 8 damage and is Stunned (it loses its next turn).
-- **Walking Stick Whack** `mar_whack` *(starter)* (1 AP, cd 1): Deal 5/6/7 damage to an adjacent foe and push it 2/2/3 tiles.
+- **Walking Stick Whack** `mar_whack` *(starter)* (1 AP, cd 1): Deal 5/6/7 damage to an adjacent foe and push it 2/2/3 tiles. If it slams into something, heal 5/6/7 HP.
 - **Marble Scatter** `mar_scatter` *(starter)* (1 AP, cd 2): Scatter marbles on a 5-tile plus for 3 rounds (other surfaces stay). Grounded foes there or moving in slip: Vulnerable for their next turn. **III:** Scatter marbles on a 3x3 square for 4 rounds (other surfaces stay). Grounded foes there or moving in slip: Vulnerable for their next turn.
 - **Rabbit Punch** `mar_punch` (2 AP, cd 3→2): Deal 6/8/10 damage to an adjacent foe and Stun it (it loses its next turn).
 - **Flurry of Paws** `mar_flurry` (2 AP, cd 1): Strike an adjacent foe 3 times for 3/4/5 damage each (9/12/15 total).
@@ -186,7 +195,7 @@ Still, Stress Ball, Transform's D9 note) say the same as the generator. Content 
 
 ### Marwyn the Magnificent (`marwyn`, he/him)
 *Tank / bruiser / taunts* · 35 HP (+5/lvl) · move 3 · armor 0 · init +0
-- *Passive* **MAGNIFICENCE**: Each of his skills that reaches a foe adds 1 MAGNIFICENCE. At 5, his next skill also unleashes a MAGNIFICENT SURGE (random good wild magic, +10 party Hype, and he heals 8 HP) and resets the meter.
+- *Passive* **MAGNIFICENCE**: Each of his skills that reaches a foe adds 1 MAGNIFICENCE. At 5, his next skill also unleashes a MAGNIFICENT SURGE (random good wild magic, +10 party Hype, and he heals 8 HP, +2 for each foe he has Taunted, max +6) and resets the meter.
 - **Ginger Snap** `mrw_ginger_snap` *(basic)* (1 AP): Deal 5 damage to an adjacent foe.
 - **BEHOLD, MARWYN!** `mrw_behold` *(signature)* (2 AP, 100 Hype): EVERY enemy is Taunted and Marwyn gains 15 Block.
 - **LOOK AT MARWYN!** `mrw_war_cry` *(starter)* (1 AP, cd 2): Taunt every foe within 2/2/3 tiles and gain 4/6/8 Block.
@@ -218,7 +227,7 @@ Still, Stress Ball, Transform's D9 note) say the same as the generator. Content 
 
 ### Josiah the Medically Dubious (`josiah`, he/him)
 *Poison healer & raven wrangler* · 26 HP (+4/lvl) · move 4 · armor 0 · init +0 · flags noOpportunity
-- *Passive* **Unlicensed Apothecary**: Starts each fight with Onyx, his raven. Poison is contagious: when a Poisoned foe dies, adjacent foes catch all of its Poison. +1 consumable slot.
+- *Passive* **Unlicensed Apothecary**: Starts each fight with Onyx, his raven. Poison is contagious: when a Poisoned foe dies, adjacent foes catch all of its Poison, and Josiah takes a sample: he heals 2 HP (once per round). +1 consumable slot.
 - **House Call** `jos_cane` *(basic)* (1 AP): Poke a foe up to 2 tiles away with your cane: 4 damage, 6 if it is Poisoned.
 - **Pandemic** `jos_pandemic` *(signature)* (2 AP, 100 Hype): Uncork Jar #7: every foe takes 8 poison damage and is Poisoned 4.
 - **Plague Flask** `jos_plague_flask` *(starter)* (2 AP, cd 2): Lob a flask: foes in radius 1 take 2/3/4 poison damage and are Poisoned 3/4/5.
@@ -239,7 +248,7 @@ Still, Stress Ball, Transform's D9 note) say the same as the generator. Content 
 - **Shiv Happens** `spa_basic` *(basic)* (1 AP): Deal 4 damage and Bleed 1.
 - **Crimson Tide** `spa_signature` *(signature)* (2 AP, 100 Hype): Costs half your current HP. Every foe within 3 tiles takes 16 damage and gains Bleed 3.
 - **Hemo-Glob** `spa_hemoglob` *(starter)* (1 AP, 2 HP, cd 1): Lob blood at a foe within 5: deal 6/8/9 damage and Bleed 1/1/2.
-- **Juice Box** `spa_juicebox` *(starter)* (2 AP, cd 2): Drain a foe within 3: deal 5/7/8 damage +3/3/4 per Bleed on it, and heal the damage dealt.
+- **Juice Box** `spa_juicebox` *(starter)* (2 AP, cd 2): Drain a foe within 3: deal 5/7/8 damage +3/3/4 per Bleed on it, and heal the damage dealt. If it was Bleeding, the most hurt ally within 2 of you (heroes first) also heals half of that (rounded up).
 - **Thousand Paper Cuts** `spa_papercuts` (2 AP, 2 HP, cd 2): Blood confetti on a tile within 4: every foe in radius 1 takes 4/5/6 damage and gains Bleed 2/2/3.
 - **Say It, Don't Spray It** `spa_spray` (2 AP, 2 HP, cd 2): Spray a cone of length 2/2/3: foes take 4/5/6 damage and are Dazzled (their next attacks land 1 tile off).
 - **Scab Armor** `spa_scab` (1 AP, 3 HP, cd 2): Gain 8 Block. **III:** Gain 10 Block, plus Thorns 3 until the end of your next turn.
@@ -255,7 +264,7 @@ Still, Stress Ball, Transform's D9 note) say the same as the generator. Content 
 - *Passive* **Collateral Damage**: Bargains cost Debt, paid in HP at the start of his next turn. Every foe that dies before then pays off 4 of it.
 - **Rune Bolt** `cor_rune_bolt` *(basic)* (1 AP): Deal 4 damage. Your runes on or next to the target burst.
 - **Read the Fine Print** `cor_fine_print` *(signature)* (2 AP, 100 Hype): Every foe is Stunned: it skips its next turn.
-- **Glyph of Warding** `cor_glyph` *(starter)* (1 AP): Inscribe a rune (max 3): when a foe steps on it, foes on and next to it take 5 damage. **III:** Inscribe a rune (max 3): when a foe steps on it, that foe is Rooted and foes on and next to it take 6 damage.
+- **Glyph of Warding** `cor_glyph` *(starter)* (1 AP): Inscribe a rune (max 3): when a foe steps on it, foes on and next to it take 5 damage. A burst that hits 2 or more foes is a class action: you heal 3 HP (once per round). **III:** Inscribe a rune (max 3): when a foe steps on it, that foe is Rooted and foes on and next to it take 6 damage. A burst that hits 2 or more foes is a class action: you heal 4 HP (once per round). (II: 6 damage, heal 4. Nov 18: the heal is the rune's, at the level it was inscribed.)
 - **Dark Bargain** `cor_bargain` *(starter)* (0 AP, cd 2): Gain 2/2/3 AP. Take 6/4/6 Debt.
 - **Runic Detonation** `cor_detonate` (1 AP, cd 1): All your runes burst at once, each dealing +2/3/4 damage.
 - **You've Been Served** `cor_served` (1 AP, cd 2): Deal 3/4/6 damage to a foe in a straight line and pull it up to 3/4/4 tiles toward you.
@@ -268,11 +277,11 @@ Still, Stress Ball, Transform's D9 note) say the same as the generator. Content 
 - *Items*: **Quill of Questionable Provenance** (rare weapon): Corelos' runes deal +2 damage. · **Platinum Soul Card** (rare trinket): Every foe that dies pays off 7 of Corelos' Debt (instead of 4). · **Notarized Soul (Photocopy)** (legendary armor): +6 max HP. Once per combat, instead of going down Corelos stays up at half his max HP and takes 10 Debt.
 
 ### Slate the Unamused (`slate`, he/him)
-*Grappler / thrower / bruiser* · 32 HP (+4/lvl) · move 3 · armor 1 · init -2 · flags immovable
+*Grappler / thrower / bruiser* · 32 HP (+4/lvl) · move 4 · armor 1 · init -2 · flags immovable
 - *Passive* **Short Fuse**: Gains 1 Rage (max 5) whenever someone else hits him, heals him or gives him a buff status (Block doesn't count). At 3+ Rage his runes flare: his skills deal +2 damage.
 - **Love Tap** `sla_love_tap` *(basic)* (1 AP): Deal 5 damage to an adjacent foe.
 - **Tectonic Tantrum** `sla_tantrum` *(signature)* (2 AP, 100 Hype): The ground heaves: every foe within 2 tiles takes 15 damage and is knocked 2 tiles away from you. Then your Rage maxes out.
-- **Hold Still** `sla_hold_still` *(starter)* (1 AP, cd 2): Grab an adjacent foe: 4 damage, and it is Grappled until the end of your next turn (can't move; dragged along when you walk). **III:** Grab an adjacent foe: 6 damage, and it is Grappled until the end of your next 2 turns (can't move; dragged along when you walk). (II: 5 damage. D9: the hold counts Slate's turns; the foe is still held for 1/1/2 of its own turns.)
+- **Hold Still** `sla_hold_still` *(starter)* (1 AP, cd 2): Grab an adjacent foe: 4 damage, and it is Grappled until the end of your next turn (can't move; dragged along when you walk). You heal 4 HP at the end of each of your turns while you hold it. **III:** Grab an adjacent foe: 6 damage, and it is Grappled until the end of your next 2 turns (can't move; dragged along when you walk). You heal 5 HP at the end of each of your turns while you hold it. (II: 5 damage, heal 5. D9: the hold counts Slate's turns; the foe is still held for 1/1/2 of its own turns. Nov 18: the heal rides on the Grappled status, his grab turn's end counts, and with Stress Ball socketed the heal sentence ends "(not on a turn you squeeze it with Stress Ball)".)
 - **Personal Space** `sla_personal_space` *(starter)* (2 AP, cd 1): Throw an adjacent foe or object up to 3/3/4 tiles: it and the foe it hits take 7/9/11 damage. Objects shatter.
 - **Hard Pass** `sla_rocks_fall` (2 AP, cd 2): Lob a boulder up to 5/5/6 tiles, over walls: 7/9/10 damage to the foe or object there. On empty floor, the Boulder stays.
 - **Air Mail** `sla_air_mail` (1 AP, cd 2→1): Throw an adjacent ally up to 3/4/4 tiles onto a safe empty tile. Foes next to the landing take 3/4/5 damage.
@@ -281,12 +290,12 @@ Still, Stress Ball, Transform's D9 note) say the same as the generator. Content 
 - **Rock Bottom** `sla_rock_bottom` (2 AP, cd 2): Slam an adjacent foe onto the tile behind you (if there's room): 10 damage. **III:** Slam an adjacent foe onto the tile behind you (if there's room): 12 damage, and it is Stunned for its next turn.
 - **Blow a Gasket** `sla_gasket` (2 AP, cd 3): Vent all your Rage: every foe in the 8 tiles around you takes 3/5/5 damage + 2/2/3 per Rage spent.
 - **Get Over Here** `sla_get_over_here` (1 AP, cd 2): Rune-chain a foe up to 4/5/6 tiles away in a line: 2/3/4 damage, and pull it next to you.
-- **Stress Ball** `sla_stress_ball` (1 AP, cd 1): Squeeze the foe you're holding: 3/4/5 damage, and you heal 4/5/6 HP. (D9; only the foe he holds is a target; his own heal gives no Rage.)
+- **Stress Ball** `sla_stress_ball` (1 AP, cd 1): Squeeze the foe you're holding: 3/4/5 damage, and you heal 4/5/6 HP. (D9; only the foe he holds is a target; his own heal gives no Rage. Nov 18: a squeeze replaces that turn's Hold Still heal, so the two never stack.)
 - *Items*: **Mitts of Unreasonable Velocity** (rare weapon): +10% damage. Personal Space and Air Mail throw 1 tile further. · **Cardigan of Disapproval** (rare armor): +6 max HP. Slate gains 2 Block for every Rage he gains. · **The Grudge Ledger** (legendary trinket): +10% damage. Short Fuse gives Slate 2 Rage instead of 1 (every grudge is recorded twice).
 
 ### Mayor Buga the Toast of the Town (`buga`, he/him)
 *Support · manipulator · loot* · 24 HP (+4/lvl) · move 4 · armor 0 · init +0
-- *Passive* **Skimming Off the Top**: Whenever an ally (or a foe he bribed) defeats an enemy while Buga stands, he takes the credit: +2 gold.
+- *Passive* **Skimming Off the Top**: Whenever an ally (or a foe he bribed) defeats an enemy while Buga stands, he takes the credit: +2 gold, and the applause heals him 2 HP.
 - **Campaign Pamphlet** `buga_pamphlet` *(basic)* (1 AP): Deal 4 damage to a foe within 4 tiles.
 - **Toast of the Town** `buga_toast_of_the_town` *(signature)* (2 AP, 100 Hype): Point at a foe within 6 tiles: every ally who can hit it makes 2 free basic attacks on it.
 - **Delegate** `buga_delegate` *(starter)* (1 AP, cd 2→1): Point at a foe within 6 tiles: the best-placed ally makes a free basic attack on it. **III:** Point at a foe within 6 tiles: the 2 best-placed allies make free basic attacks on it.
@@ -307,7 +316,7 @@ Still, Stress Ball, Transform's D9 note) say the same as the generator. Content 
 - **Ghost Arrow** `kir_basic` *(basic)* (1 AP): Deal 5 damage to a foe within 5, through walls and cover.
 - **Rain from the Other Side** `kir_signature` *(signature)* (2 AP, 100 Hype): Deal 16 damage to every foe within 2 of a tile within 6, ignoring Block and armor.
 - **Phase Shot** `kir_phase` *(starter)* (1 AP, cd 1): Deal 4/5/6 damage to every foe in a straight line of 5 tiles, through walls and units.
-- **Ethereal Step** `kir_step` *(starter)* (1 AP, cd 1): Teleport to an empty tile up to 3/4/5 tiles away in a straight line, through walls and units.
+- **Ethereal Step** `kir_step` *(starter)* (1 AP, cd 1): Teleport to an empty tile up to 3/4/5 tiles away in a straight line, through walls and units. If a foe was next to you when your turn started, you ghost it: heal 5/6/7 HP.
 - **Spirit Mark** `kir_mark` (1 AP, cd 1): Mark a foe within 6: the next damage it takes is +5/7/9.
 - **Pinning Shot** `kir_pin` (2 AP, cd 2): Deal 7 damage to a foe within 5 and Root it for its next turn. **III:** Deal 10 damage to a foe within 5 and Root it for its next 2 turns.
 - **Banishing Shot** `kir_banish` (1 AP, cd 2): Deal 3/4/5 damage to a foe within 4 and push it 2/2/3 tiles away from Kiri.
@@ -319,7 +328,7 @@ Still, Stress Ball, Transform's D9 note) say the same as the generator. Content 
 
 ### Betty the G.O.A.T. (`betty`, he/him)
 *Frontline charger / knockback / holds the line* · 32 HP (+4/lvl) · move 4 · armor 0 · init +1 · flags hop
-- *Passive* **Eats Anything**: Whenever Betty kills a foe or one of his skills breaks an object, he eats it and heals 4 HP. Don't ask.
+- *Passive* **Eats Anything**: Whenever Betty kills a foe or one of his skills breaks an object, he eats it and heals 4 HP. A foe that dies next to him at someone else's hands is leftovers: he heals 3 HP. Don't ask.
 - **The Family Hammer** `bet_family_hammer` *(basic)* (1 AP): Deal 5 damage to an adjacent foe or breakable object.
 - **G.O.A.T.** `bet_goat` *(signature)* (2 AP, 100 Hype): Charge up to 6 tiles in a straight line, right through every foe in the way: each takes 15 damage and is Stunned.
 - **Ramming Speed!** `bet_ram` *(starter)* (2 AP, cd 2): Charge up to 3/3/4 tiles in a straight line, through allies. The first foe in the way takes 6/8/9 damage and is pushed 2/2/3 tiles.
@@ -339,7 +348,7 @@ Still, Stress Ball, Transform's D9 note) say the same as the generator. Content 
 - *Passive* **Hair Trigger**: When damage leaves him below half HP, he turns into the werewolf for free (+2 move, Claw basic attack, wolf skills). Sorry in advance.
 - **Silvered Sword** `bas_sword` *(basic)* (1 AP): Human form: deal 5 damage to an adjacent foe.
 - **Blood Moon** `bas_blood_moon` *(signature)* (2 AP, 100 Hype): Become the werewolf and maul every foe within 2 tiles: 14 damage and 3 Bleed each.
-- **Transform** `bas_transform` *(starter)* (1 AP): Switch between human and werewolf. Your first Transform each turn heals you 2/3/4 HP. Werewolf: +2 move; basic attack Claw (4/5/5 damage, 1/1/2 Bleed). (D9; in a fight the desc adds "(used this turn)" once the heal is spent; Hair Trigger and Blood Moon never heal.)
+- **Transform** `bas_transform` *(starter)* (1 AP): Switch between human and werewolf. Your first Transform each turn heals you 2/3/4 HP, +2 for each adjacent foe (max +4). Werewolf: +2 move; basic attack Claw (4/5/5 damage, 1/1/2 Bleed). (D9; in a fight the desc adds "; used this turn" once the heal is spent; Hair Trigger and Blood Moon never heal.)
 - **Shoulder Check** `bas_shoulder_check` *(starter)* (1 AP, cd 1): Human form: deal 5 damage to an adjacent foe and push it 1 tile. **III:** Human form: deal 7 damage to an adjacent foe and push it 2 tiles.
 - **Silver Slash** `bas_silver_slash` (2 AP, cd 1): Human form: deal 8 damage to an adjacent foe; it is Vulnerable for 1 turn. **III:** Human form: deal 12 damage to an adjacent foe; it is Vulnerable for 2 turns.
 - **Hold the Line** `bas_hold_the_line` (1 AP, cd 2): Human form: Taunt every foe within 2/2/3 tiles for 1 turn and gain 4/5/6 Block.
@@ -357,7 +366,7 @@ Still, Stress Ball, Transform's D9 note) say the same as the generator. Content 
 - **Percussive Maintenance** `val_basic` *(basic)* (1 AP): Deal 5 damage to an adjacent foe.
 - **Divine Forge** `val_signature` *(signature)* (2 AP, 100 Hype): Valdris and every ally deal +3 damage with every hit until the end of their next turn, and gain 8 Block.
 - **Flame-Forged Edge** `val_flame_edge` *(starter)* (1 AP, cd 1): Valdris or an ally within 3: its next damaging skill sets each foe it hits Burning 3/4/5.
-- **Forge Armor** `val_forge_armour` *(starter)* (1 AP, cd 1): Valdris or an ally within 3 gains 6/8/10 Block (until the start of its next turn).
+- **Forge Armor** `val_forge_armour` *(starter)* (1 AP, cd 1): Valdris or an ally within 3 gains 6/8/10 Block (until the start of its next turn). If it is Dented (its Block soaked a hit), he hammers the dents out: it heals 7/8/9 HP.
 - **Forge Weapon** `val_forge_weapon` (1 AP, cd 1): An ally within 3 deals +2/3/4 damage with every hit until the end of its next turn.
 - **Spiked Pauldrons** `val_spiked` (1 AP, cd 1): Valdris or an ally within 3 gains Thorns 3/4/5 through its next turn: adjacent attackers that hurt it take 3/4/5.
 - **Temper** `val_temper` (1 AP, cd 2→1): Valdris or an ally within 3 sheds all its debuffs. **III:** Valdris or an ally within 3 sheds all its debuffs and heals 5 HP.
@@ -369,7 +378,7 @@ Still, Stress Ball, Transform's D9 note) say the same as the generator. Content 
 
 ### Hjalmar the Menace (`hjalmar`, he/him)
 *Trapper & trickster* · 22 HP (+3/lvl) · move 5 · armor 0 · init +4 · flags hop
-- *Passive* **Monkey Business**: Every time a foe springs one of Hjalmar's traps, the party gains 5 Hype. The crowd loves a pratfall.
+- *Passive* **Monkey Business**: Every time a foe springs one of Hjalmar's traps, the party gains 5 Hype and he laughs so hard he heals 5 HP. The crowd loves a pratfall.
 - **Coconut Toss** `hja_basic` *(basic)* (1 AP): Deal 4 damage to a foe within 4.
 - **Prank War** `hja_signature` *(signature)* (2 AP, 100 Hype): Every foe within 2 of a tile within 5 takes 8 damage and slips: it can't act until the end of its turn.
 - **Banana Peel** `hja_peel` *(starter)* (1 AP, cd 3→2): Set a banana peel within 3/4/4: the first foe to step on it slips and can't act until the end of its turn.
@@ -381,11 +390,11 @@ Still, Stress Ball, Transform's D9 note) say the same as the generator. Content 
 - **Pickpocket** `hja_pickpocket` (1 AP, cd 2): Steal 3 gold from an adjacent foe; it is Weakened through its next turn. **III:** Steal 5 gold from an adjacent foe; it is Weakened through its next 2 turns.
 - **Swing Away** `hja_swing` (1 AP, cd 2→1): Leap to an empty tile within 3/4/5 that Hjalmar can see.
 - **Bait and Switch** `hja_switch` (1 AP, cd 3→2): Swap places with a foe within 2/3/4.
-- *Items*: **Coconut of Unusual Size** (rare weapon): +10% damage. Coconut Toss knocks its target 1 tile away from Hjalmar. · **Greased Fur Pomade** (rare trinket): +1 move. Hjalmar can't be opportunity-attacked. · **Bottomless Sack of Props** (legendary armor): +6 max HP. The first trap Hjalmar sets each turn costs 0 AP. · **Canned Laughter** (rare trinket): Whenever a foe springs one of Hjalmar's traps, he heals 4 HP.
+- *Items*: **Coconut of Unusual Size** (rare weapon): +10% damage. Coconut Toss knocks its target 1 tile away from Hjalmar. · **Greased Fur Pomade** (rare trinket): +1 move. Hjalmar can't be opportunity-attacked. · **Bottomless Sack of Props** (legendary armor): +6 max HP. The first trap Hjalmar sets each turn costs 0 AP. · **Canned Laughter** (rare trinket): Whenever a foe springs one of Hjalmar's traps, he heals 4 HP more (9 in all).
 
 ### Pebbles the Goodest Boy (`pebbles`, he/him)
 *Melee skirmisher & fire control* · 26 HP (+4/lvl) · move 5 · armor 0 · init +3 · flags immune
-- *Passive* **Hot Dog**: Pebbles is made of fire: fire damage and Burn can't hurt him, and ending his turn on fire or lava heals him 3 HP.
+- *Passive* **Hot Dog**: Pebbles is made of fire: fire damage and Burn can't hurt him, and ending his turn on fire, on lava or next to a Burning foe heals him 3 HP.
 - **Spicy Nibble** `peb_basic` *(basic)* (1 AP): Deal 4 damage to an adjacent foe and Burn 1.
 - **Hot Diggity Dog!** `peb_signature` *(signature)* (2 AP, 100 Hype): Deal 16 damage to every foe within 2 tiles. Pebbles and every ally are Inspired until the end of their next turn.
 - **Hot Zoomies** `peb_zoomies` *(starter)* (1 AP, cd 2): Dash up to 4/5/6 tiles, leaving fire (2/2/3 rounds) on every tile Pebbles leaves, except under allies.

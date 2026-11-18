@@ -449,3 +449,87 @@ Suite: `hero_syllamin: v2 requests — …`. Rules: `docs/notes/rules.md` "v2 re
 - D1 / D4 with his real kit: Heckle now breaks a crate for its 🔨 number ("Syllamin turns Heckle on the Crate…"); with The
   Electric Lute a Your Mom Joke at a crate standing in a puddle shocks nobody (the rider has no target), and the crate
   takes exactly the listed damage. A flying Syllamin now shoots Bone Piles under AutoPlay (D5, act2.js's hint).
+
+## Conditional heal (Nov 18) — "Jar of Tears (Theirs)" (build:g3; plan `.tmp/heal/plan.md` §4.14, the user's Nov 18 request)
+
+The user (Nov 18): "I want everyone else brought up but by conditional healing". Syllamin (the top non-healer share) gets
+the lightest delivery: a common hero trinket that grows out of his roasts.
+
+- **Item:** `syl_tear_jar`, **Jar of Tears (Theirs)**, trinket, common, 🫙, `hero: 'syllamin'`, `stats: {}`, `hooks: {}`
+  (the rule lives in `emotionalDamage`, the Canned / Serum pattern). Desc `Whenever a foe suffers Emotional Damage from his
+  roasts, Syllamin drinks its tears and heals 3 HP (once per turn).` (113 chars, built from `JAR_HEAL`); flavor
+  `Faerie cuisine. Sustainably harvested from people who deserved it.` His fourth hero item.
+- **What:** `emotionalDamage(unit, src)` on an enemy (`unit.side === 'enemy'`; elites and bosses, Weakened instead of
+  Stunned, count too) whose `src` is a standing Syllamin wearing the Jar (`jarReady`) → `drinkTears(src)`: he heals
+  `JAR_HEAL` **3**, once per turn (`syllamin.data.syl.jar = state.turn`, spent even at full HP: always called while the
+  condition holds). A meltdown roasted by an ally, by nobody, or an ally's own Emotional Damage → nothing. Self only.
+- **The call:** `A().heal(src, src, JAR_HEAL, { via: 'lift:syllamin' })`; "🫙 Delicious tears" and the `tears` bark (0.4)
+  only when it healed. Exported on `DD.Syllamin`: `JAR`, `JAR_HEAL`, `jarReady`. Tuning range: JAR_HEAL 3 [3, 4].
+- **Barks** (new key `tears`): "Mm. Salty. Like your mom." / "Your tears: delicious. Your face: still not." / "Bottled.
+  Labelled. Savoured."
+- **AutoPlay:** none needed (the roast → Emotional Damage → heal chain happens inside his skill's dry run: the exact pass
+  and the HUD preview show the +3).
+- **Existing assertion updated** (none deleted): the registry suite's "three hero items" is now four, with the Jar checked
+  as a common trinket (the rare + legendary check stays).
+- **Tests:** new suite `hero_syllamin: conditional heal (Nov 18)` (36 assertions): constants; the item (name, slot,
+  rarity, icon, hero, no stats / hooks, desc and flavor word for word, ≤ 150 / ≤ 120, ends with '.'); the bark lines and
+  he/him; his third Your Mom Joke on a Roasted 2 foe with the Jar → the preview shows +3 and he heals 3 (src Syllamin, one
+  labelled call); a second meltdown the same turn → no call, his next turn → +3 again; Diss Track melting three foes at
+  once → one heal; a boss's meltdown (Weakened) → +3; no Jar → no call; a meltdown roasted by the cleric or by nobody → no
+  call; an ally's Emotional Damage → no call (the drink unspent); full HP → one 0-HP call; a downed Syllamin → no call;
+  the meltdown joke's preview without the Jar shows no heal.
+- **AutoPlay battles wearing it** (new suite `hero_syllamin: Jar of Tears (Nov 18) — AutoPlay battles wearing it…`, the
+  12 fixture encounters of the v2 battle suite with the Jar on him, a test cleric in the party): **0.67 fires and 0.5 HP a
+  worn fight** (the cleric keeps him topped up: most drinks land at full HP).
+- **Sanity sim** (`bash tools/sim.sh "debug=1&raw=1&seeds=30&from=51100&stop=2&party=syllamin,slate,sparrow,valdris"`,
+  `.tmp/heal/g3/syllamin.txt`, 30 runs, 206 Syllamin fights): **the Jar was never worn** (0 worn fights, no
+  `lift:syllamin` row). The sim's loot rolls a common among every generic common plus the party's hero commons, and 30
+  two-act runs take ~70 items in all: a 0% worn share in this sample, below the plan's "expect ~10-30%". T8 (0.8 fires,
+  1.2-5 HP per WORN fight) could not be read here; the fixture battles above (0.67 / 0.5 per worn fight, with a healer in
+  the party) sit just under it. No AutoPlay lever exists (the heal is inside his skill's dry run); the worn share is the
+  balance pass's to measure on the final gate (E3's worn fights), and `JAR_HEAL` [3, 4] its number. 0 errors, 0 DD.warn.
+- **Deviations:** none.
+
+### DESIGN §6 brief (Nov 18)
+Anchor (unique in `docs/DESIGN.md`, `### Syllamin the Roastmaster General`, line 456 today):
+
+```
+- Signature *Diss Track*: three verses of 4 psychic damage to every foe, each verse Roasting.
+```
+
+Replacement (the line kept, one bullet added after it):
+
+```
+- Signature *Diss Track*: three verses of 4 psychic damage to every foe, each verse Roasting.
+- Sustain (Nov 18): his common hero trinket *Jar of Tears (Theirs)*: whenever a foe suffers Emotional Damage from his
+  roasts, he drinks its tears and heals 3 HP (once per turn).
+```
+
+### Conditional heal: test runs (Nov 18, build:g3)
+`tools/test.sh "suite=hero_syllamin&isolate=heroes/syllamin,hero_syllamin"` while iterating (all pass); then ONE full `bash tools/test.sh`: **1317 suites, 150,775 assertions ok, 0 failures**, 0 swallowed "Error in" lines.
+
+### Conditional heal: requests (Nov 18, non-blocking)
+- **Engine builder, phase 2:** apply the DESIGN §6 brief above; regenerate his v2-digest §2 lines (the Jar joins his items).
+- **Balance pass (T8):** the Jar was worn in 0 of 206 Syllamin fights in the sanity sim (30 two-act runs); its T8 row is
+  per WORN fight, so the final gate's E3 worn table is the first real reading (fixture battles: 0.67 fires / 0.5 HP a worn
+  fight with a healer in the party).
+
+### Conditional heal: adversarial review (Nov 18, review:g3)
+Code path read end to end (`emotionalDamage` → `drinkTears` → `jarReady`: enemy only, src a standing Syllamin hero
+wearing the Jar, once per turn, `active` before `DD.Act.heal`); desc == execute; the four suites pass. HUD preview shot
+(scratch harness `.tmp/heal/review_g3/shot/`, debug=1, fixtures): his meltdown joke on a Roasted 2 grunt shows **+3** on
+him. **The first worn-fight reading:** a scratch sim that equips the Jar on Syllamin at every run start
+(`.tmp/heal/review_g3/jar/`, stock `tests/sim/sim.js`, chrome slot; `seeds=30&from=55300&stop=2&party=syllamin,buga,kiri,betty`,
+`.tmp/heal/review_g3/syllamin_jar.txt`): worn in 248 of 264 fights (the sim's gear swap took it off for a better trinket
+in 6%) · **0.94 fires and 2.4 HP per worn fight** (regular 0.47 / 1.1, elite 1.5 / 3.7, boss 1.94 / 5.2), overheal 17%:
+inside T8's row (≥ 0.8 fires, 1.2-5 HP per worn fight) and the plan's ~2.5 when worn. 0 errors, 0 DD.warn, 0 stalls.
+The open question for the balance pass stays the worn SHARE (a common hero trinket in the loot roll).
+
+### QA fixes (Nov 18, qa-fix:heal)
+- **[heal QA-1] the log says why he healed.** A drink that heals (> 0) now logs, right after "Syllamin heals 3 HP.":
+  "Syllamin bottles the tears of <foe> and drinks them. Salty. Restorative." (`drinkTears(src, victim)`: the victim is
+  passed from `emotionalDamage`).
+- **[heal QA-2] one cue over his head.** The "🫙 Delicious tears" label rose under the bubble of the tears bark the same
+  heal triggers. Now the tears bark (0.4, unchanged) is tried first and the label shows only when no bark played.
+- Tests: the end of "hero_syllamin: conditional heal (Nov 18)" (the line after the heal line; bark or label, never both,
+  with the cosmetic roll forced both ways; nothing at full HP). No number changed.

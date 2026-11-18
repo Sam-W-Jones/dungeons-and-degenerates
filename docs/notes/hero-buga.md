@@ -235,6 +235,8 @@ Shield swaps, Red Tape pulls) and party tempo (Campaign Promise +AP, Photo Op In
   to the tiles — oil / crumbs ignite — but no lingering fire surface) crediting the hero who popped it, else its owner;
   `data.fuse` = rounds until it blows by itself at a round end (Pork Barrel sets 1; omitted = waits to be popped);
   `data.gold` = gold when it pops.
+- Nov 18: `DD.Buga = { CREDIT_GOLD, CHAIN_GOLD, APPLAUSE_HEAL, CREDIT_LINES, creditable(buga, dead, d) }` (read-only; created
+  for the conditional heal, the basanos.js pattern: tests and the balance pass read `APPLAUSE_HEAL`).
 
 ## Deviations
 
@@ -380,3 +382,90 @@ Shield swaps, Red Tape pulls) and party tempo (Campaign Promise +AP, Photo Op In
 - **text-tone-8 (polish, fixed)**: his downed bark "Tell the voters... I loved them... mostly their gold..." (a twin of
   Zarathor's "Tell my rings... I loved them...") → "This... does not... count as... a term limit...". Asserted in the
   playtest suite.
+
+## Conditional healing (Nov 18) — "Approval Rating" (build:g2, plan §4.6)
+
+The user (Nov 18): "I want everyoe else brought up but by conditional healing". Buga had ~zero own sustain (0.2 HP a fight,
+2.1× Ellaria's downs): his lift broadens his passive, *Skimming Off the Top*. Ellaria untouched.
+
+**What.** Exactly today's credit (an enemy, not a summon, dies credited to a hero-side ally, summons included, or to a foe
+Charmed by Buga, while Buga is active; never his own kills): +2 gold as before, and the applause heals him **2 HP**
+(`APPLAUSE_HEAL`, per credit, no cap: each kill is one credit). Self only; the Chain of Office still changes only the gold.
+- **Code:** `js/data/heroes/buga.js`: `APPLAUSE_HEAL = 2`; `takeCredit()` (his passive's `onAnyDeath`) after the gold:
+  `active(buga) ? A().heal(buga, buga, APPLAUSE_HEAL, { via: 'lift:buga' }) : 0` (`creditable()` already requires him
+  active: never a revive), always called on a credit (0 at full HP), an "👏 Applause!" text only when it healed; the passive
+  desc from the constants; `CREDIT_LINES` + the plan's three lines (same event, same 50%, the existing `say()`); the new
+  `DD.Buga` export at the end of the file.
+- **Desc (passive):** "Whenever an ally (or a foe he bribed) defeats an enemy while Buga stands, he takes the credit: +2 gold,
+  and the applause heals him 2 HP."
+- **Barks** (added to `CREDIT_LINES`): "Four more years! Of HP!" / "Approval ratings: UP. Hit points: ALSO UP." / "I felt that
+  kill in my crust."
+- **AutoPlay:** none (plan): the heal fires inside the killer's action, so its dry run shows `+2` on Buga (a small nudge toward
+  kills, already +15).
+
+**Tests** (`tests/content/hero_buga.js`, new suite "hero_buga: conditional heal (Nov 18)"): `DD.Buga` constants; the desc word
+for word from the constants; the three new credit lines (9 in all, ≤ 70 chars, no she/her); an ally's kill → +2 gold and +2 HP,
+his heals stat +2, the knight's killing-blow preview shows `+2` on a hurt Buga, the call is
+`heal(Buga, Buga, 2, { via: 'lift:buga' })`; a foe he bribed kills its friend on its turn → +2; his own kill → nothing; an
+enemy-side summon dies → nothing; Buga downed → nothing, stays down; three kills in one cleave → +6 HP (three calls) and 3 × 3
+gold with the Chain; at full HP the call is made and heals 0. No old assertion needed a change (his other suites check gold,
+not his HP; the previews include the heal).
+
+**Sanity sim** (`bash tools/sim.sh "debug=1&raw=1&seeds=30&from=50400&stop=2&party=buga,hjalmar,basanos,marbles"`, normal,
+acts 1-2): `lift:buga` 174 fights · 844 calls · **4.85 fires and 4.3 HP a fight** (self; overheal 56%: he is often full when
+the credits roll in) · regular 5.31 fires / 4.6 HP · elite 4.15 / 3.3 · boss 3.13 / 3.6. T8: min 2.0 fires, band 2-8 HP, guard
+rail ≤ 10 a regular fight: **all met**. 0 errors, 0 DD.warn lines.
+
+**Full run** (`bash tools/test.sh`, Nov 18, after the G2 build): 1310 suites PASS, 0 failures, 0 swallowed "Error in" lines.
+
+### DESIGN §6 brief (Nov 18)
+
+For the engine builder (phase 2). Anchor in `### Mayor Buga the Toast of the Town — Toast (Sourdough) Mayor (he/him)` (unique,
+DESIGN.md lines ~577-578, the passive bullet), these two lines:
+
+```
+- Passive *Skimming Off the Top*: whenever an ally (or a foe he bribed) defeats an enemy while Buga stands, he takes
+  the credit: +2 gold.
+```
+
+Replace them with:
+
+```
+- Passive *Skimming Off the Top*: whenever an ally (or a foe he bribed) defeats an enemy while Buga stands, he takes
+  the credit: +2 gold, and the applause heals him 2 HP.
+```
+
+### Deviations (Nov 18)
+
+- None.
+
+### Requests (Nov 18)
+
+- None.
+
+### Review (Nov 18) — review:g2
+
+Adversarial review of "Approval Rating" against plan §4.6 (code path read end to end, suites run, a sim).
+- **Holds:** `creditable()` is unchanged (enemy, not a summon, killed by a hero-side unit or a foe he Charmed, never his own
+  kill, Buga active); each credit calls `DD.Act.heal(Buga, Buga, 2, { via: 'lift:buga' })` after the gold, guarded by
+  `active`; the Chain of Office changes the gold only; desc == execute; the three lines joined `CREDIT_LINES` (same 50%).
+- **Sim** (`tools/sim.sh "debug=1&raw=1&seeds=30&from=55100&stop=2&party=kiri,buga,marwyn,benedick"`, normal, acts 1-2):
+  247 fights, **5.53 fires / 5.7 HP a fight** (regular 5.92 / 5.7, elite 4.7 / 4.0, boss 4.52 / 6.8; overheal 48%): T8 (min
+  2.0, band 2-8, regular ≤ 10) **met**; 0 errors, 0 DD.warn lines, 0 stalls.
+- **Fix:** re-wrapped the over-long line 8 of buga.js' header comment (cosmetic).
+
+### QA fixes (Nov 18, qa-fix:heal)
+- **[heal QA-2] one label per credit.** The parallel "👏 Applause!" label overlapped his "+2". The applause now joins
+  the credit label once the heal is known: "🎖️ Credit taken! +2 gold 👏" (the label event is queued first and its text
+  extended after the heal); the plain credit label at full HP.
+- **[heal QA-4] the applause lines only when the applause healed him.** "Four more years! Of HP!" / "Approval ratings:
+  UP. Hit points: ALSO UP." / "I felt that kill in my crust." moved out of `CREDIT_LINES` (back to its six old lines)
+  into `APPLAUSE_LINES` (exported on `DD.Buga`); a credit that healed him (> 0) says a line from both pools (same 50%),
+  any other credit from `CREDIT_LINES` only.
+- Tests: "hero_buga: conditional heal (Nov 18)" (the pools; one merged label; at full HP 12 forced rolls never pick an
+  applause line, and the label stays plain). No number changed.
+
+### Deviations (Nov 18, qa-fix:heal)
+- Plan §4.6 added the three lines to `CREDIT_LINES` ("same event, same 50%"). QA-4 (the lead decides): they are a pool of
+  their own, joined to the credit lines only on a credit that healed him, so a full-HP Buga never claims "Hit points:
+  ALSO UP".

@@ -4,8 +4,9 @@
  * carry the power): he points (Delegate), promises (Campaign Promise), flatters (Butter Up), hides behind people (Human
  * Shield), poses (Photo Op), pays (Bribe), ties things up in red tape (pull + Root), sheds flammable crumbs (Slow) and
  * plants pork-barrel spending (a lit explosive object). Passive: he takes the credit, and 2 gold, for every enemy an
- * ally defeats. His basic attack is ranged, so he never makes attacks of opportunity; Human Shield (a swap) and Red Tape
- * (a pull) move units without provoking any, and Delegate's free swings are not reactions.
+ * ally defeats, and (Nov 18, conditional healing, "Approval Rating") the applause heals him 2 HP per credit (via
+ * 'lift:buga'; DD.Buga.APPLAUSE_HEAL). His basic attack is ranged, so he never makes attacks of opportunity; Human
+ * Shield (a swap) and Red Tape (a pull) move units without provoking any, and Delegate's free swings are not reactions.
  * Registers the hero, 12 skills (basic, signature, a pool of 10), the buga_crumbs surface, the buga_pork_barrel object
  * and 3 hero items.
  */
@@ -16,6 +17,7 @@
   const HERO = 'buga';
   const CREDIT_GOLD = 2;      // Skimming Off the Top
   const CHAIN_GOLD = 3;       // ... wearing the Chain of Office
+  const APPLAUSE_HEAL = 2;    // ... and the applause heals him, per credit (Nov 18: Approval Rating)
   const PEN_MARK = 2;         // Mightier-Than-the-Sword Pen: Campaign Pamphlet's Mark
   const TOASTER_HP = 0.5;     // The Re-Election Toaster
   const GOLD = '#ffd76a';
@@ -56,6 +58,9 @@
 
   const CREDIT_LINES = ['You\'re welcome, everyone!', 'I\'ll be taking credit for that.', 'My administration did that!',
     'Put that in the newsletter!', 'Another campaign promise kept!', 'I made that happen. Me. Personally.'];
+  // Nov 18: the applause heals him (Approval Rating). [heal QA-4] these claim the heal, so they join the credit lines
+  // only on a credit whose applause really healed him (never at full HP)
+  const APPLAUSE_LINES = ['Four more years! Of HP!', 'Approval ratings: UP. Hit points: ALSO UP.', 'I felt that kill in my crust.'];
   const DELEGATE_LINES = ['Handle that, would you?', 'You! Hit that. I\'m management.', 'Delegation IS leadership!',
     'I\'d do it myself, but I\'m toast.', 'Somebody fix that. Not me. Somebody.'];
   const PROMISE_LINES = ['Read my crust: more AP!', 'I promise! Probably!', 'An extra action? For YOU? Done.', 'Trust me. I\'m a mayor.'];
@@ -78,15 +83,24 @@
     const charm = A().getStatus(killer, 'charmed');
     return !!charm && charm.source === buga.id;
   }
-  /** onAnyDeath on Buga's passive: an enemy fell to somebody else's work, so Buga takes the credit (and the gold). */
+  /**
+   * onAnyDeath on Buga's passive: an enemy fell to somebody else's work, so Buga takes the credit (and the gold), and
+   * the applause heals him (Nov 18; creditable() already requires him active: never a revive). Returns HP healed.
+   */
   function takeCredit(buga, dead, d) {
-    if (!creditable(buga, dead, d)) return;
+    if (!creditable(buga, dead, d)) return 0;
     const gold = hasItem(buga, 'buga_chain_of_office') ? CHAIN_GOLD : CREDIT_GOLD;
     A().gainGold(gold);
-    DD.FX.text(buga, '🎖️ Credit taken! +' + gold + ' gold', { color: GOLD, size: 13 });
+    const label = DD.FX.text(buga, '🎖️ Credit taken! +' + gold + ' gold', { color: GOLD, size: 13 });
     DD.FX.particles(dead, { kind: 'coins', count: 8 });
     A().log(buga.name + ' takes full credit for ' + d.credit.name + '\'s kill (+' + gold + ' gold).', 'hero');
-    say(buga, CREDIT_LINES, 0.5);
+    // always called on a credit (0 at full HP): the sim counts the fire
+    const healed = active(buga) ? A().heal(buga, buga, APPLAUSE_HEAL, { via: 'lift:buga' }) : 0;
+    // [heal QA-2] one label per credit: the applause joins the credit text (queued now, played later), no second label
+    // over the heal number
+    if (healed > 0 && label && typeof label === 'object') label.text += ' 👏';
+    say(buga, healed > 0 ? CREDIT_LINES.concat(APPLAUSE_LINES) : CREDIT_LINES, 0.5);
+    return healed;
   }
 
   // ---- Delegate / Toast of the Town: who swings for free -----------------------------------------------
@@ -835,7 +849,8 @@
     signature: 'buga_toast_of_the_town',
     passive: {
       name: 'Skimming Off the Top',
-      desc: 'Whenever an ally (or a foe he bribed) defeats an enemy while Buga stands, he takes the credit: +' + CREDIT_GOLD + ' gold.',
+      desc: 'Whenever an ally (or a foe he bribed) defeats an enemy while Buga stands, he takes the credit: +' + CREDIT_GOLD +
+        ' gold, and the applause heals him ' + APPLAUSE_HEAL + ' HP.',
       hooks: { onAnyDeath: function (unit, dead, d) { takeCredit(unit, dead, d); } },
     },
     startingSkills: ['buga_delegate', 'buga_fine'],
@@ -878,4 +893,11 @@
         'A toast! To my brave volunteers! Charge!'],
     },
   });
+
+  /** Small public surface for tests and the balance pass (Nov 18: conditional healing; read-only). */
+  DD.Buga = {
+    CREDIT_GOLD: CREDIT_GOLD, CHAIN_GOLD: CHAIN_GOLD, APPLAUSE_HEAL: APPLAUSE_HEAL, CREDIT_LINES: CREDIT_LINES.slice(),
+    APPLAUSE_LINES: APPLAUSE_LINES.slice(),
+    creditable: creditable,
+  };
 })();

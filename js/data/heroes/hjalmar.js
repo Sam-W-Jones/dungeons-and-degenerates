@@ -5,8 +5,9 @@
  * hja_glove; data.owner = Hjalmar's unit id). The first foe of his to enter one (walking, pushed, pulled, swapped,
  * teleported; flyers float over) springs it: one verb per trap. Foes never see them (no AI hazard), so traps punish the
  * paths enemies walk on their own turns and every push, pull and swap the party makes.
- * Passive "Monkey Business": every trap a foe springs gives the party 5 Hype (the crowd loves a pratfall). Hero item
- * Canned Laughter (D9 sustain): while he wears it, he heals 4 HP per trap a foe springs (also in spring()).
+ * Passive "Monkey Business": every trap a foe springs gives the party 5 Hype (the crowd loves a pratfall) and (Nov 18,
+ * conditional healing, "The Laugh Track") he laughs so hard he heals 5 HP (via 'lift:hjalmar'); his hero item Canned
+ * Laughter (D9's item heal, now the amplifier) adds 4 more, 9 in all. Both live in spring(); trapValue prices the laugh.
  * Registers: hero hjalmar, 11 skills (hja_*), status hja_slipped, 6 trap objects, 4 hero items, a loading tip.
  * Public helpers for tests / other content: DD.Hjalmar (setTrap, spring, traps, canTrapAt, gloveTiles, KINDS...).
  */
@@ -18,7 +19,8 @@
   const HERO = 'hjalmar';
   const SLIPPED = 'hja_slipped';
   const TRAP_HYPE = 5;                      // Monkey Business: party Hype per trap a foe springs
-  const CANNED_HEAL = 4;                    // Canned Laughter: HP he heals per trap a foe springs (D9)
+  const LAUGH_HEAL = 5;                     // Monkey Business (Nov 18, The Laugh Track): HP he heals per trap a foe springs
+  const CANNED_HEAL = 4;                    // Canned Laughter: that many HP more per trap (D9's item heal, now its bonus)
   const COCONUT = 'hja_coconut', POMADE = 'hja_pomade', SACK = 'hja_prop_sack', CANNED = 'hja_canned_laughter';
   const BANANA = '#ffd84a', BANANA_DARK = '#c99a1c', FUR = '#8b5a2b', FUR_DARK = '#5e3a1e', FACE = '#ecc9a0';
   const FEZ = '#c62f2f', PINK = '#ff7aa8', PAINTS = ['#ff4d6d', '#3fa7ff', '#7be05a', '#ffd84a'];
@@ -51,6 +53,16 @@
     if (Array.isArray(u.items)) return u.items.indexOf(id) >= 0;
     for (const k in u.items) if (u.items[k] === id) return true;
     return false;
+  }
+  /** The laugh's heal for him: Monkey Business' 5, plus Canned Laughter's 4 while he wears it. */
+  function laughHeal(u) { return LAUGH_HEAL + (hasItem(u, CANNED) ? CANNED_HEAL : 0); }
+  /** AutoPlay's shared heal price (DD.AutoPlay.healWorth, E2), with the same formula as a fallback. */
+  function healWorth(u, n) {
+    if (DD.AutoPlay && typeof DD.AutoPlay.healWorth === 'function') return DD.AutoPlay.healWorth(u, n);
+    n = Number(n);
+    if (!active(u) || !(n > 0)) return 0;
+    const miss = (u.maxHp || 0) - (u.hp || 0);
+    return miss > 0 ? Math.min(n, miss) * (miss > u.maxHp / 2 ? 1.5 : 0.8) : 0;
   }
   /** "through its next turn" / "through its next 2 turns". */
   function nextTurns(n) { return n > 1 ? 'through its next ' + n + ' turns' : 'through its next turn'; }
@@ -135,8 +147,9 @@
   }
 
   /**
-   * The trap on (x, y) springs on `foe`: it is used up, its one effect happens, and (Monkey Business) the party gains 5
-   * Hype when it is Hjalmar's. Returns true if a trap sprang.
+   * The trap on (x, y) springs on `foe`: it is used up, its one effect happens, and (Monkey Business) when it is
+   * Hjalmar's the party gains 5 Hype and he laughs so hard he heals 5 HP (+4 with Canned Laughter): once per trap, a
+   * firecracker that hits three foes is one laugh. Returns true if a trap sprang.
    */
   function spring(x, y, foe) {
     const t = G().tile(x, y);
@@ -188,13 +201,15 @@
     }
     if (owner && owner.defId === HERO) {
       A().gainHype(TRAP_HYPE, 'Monkey Business');
-      // a downed Hjalmar is not active: his traps still bite and cheer, but the laughter never revives him
+      // a downed Hjalmar is not active: his traps still bite and cheer, but the laughter never revives him (checked
+      // before the heal). Nov 18: the laugh is always called on a spring (0 at full HP: the sim counts it)
       if (active(owner)) {
-        A().maybeBark(owner, 'trap', 0.35);
-        if (hasItem(owner, CANNED)) {
-          FX().text(owner, '🥫 HA-HA-HA!', { color: BANANA, size: 16 });
-          if (A().heal(owner, owner, CANNED_HEAL) > 0) A().log(owner.name + ' laughs so hard at the pratfall that it heals him.', 'hero');
-        }
+        const healed = A().heal(owner, owner, laughHeal(owner), { via: 'lift:hjalmar' });
+        if (healed > 0) {
+          FX().text(owner, hasItem(owner, CANNED) ? '🥫 HA-HA-HA!' : '🤣 HA-HA!', { color: BANANA, size: 16 });
+          A().log(owner.name + ' laughs so hard at the pratfall that it heals him.', 'hero');
+          A().maybeBark(owner, 'laugh', 0.35);
+        } else A().maybeBark(owner, 'trap', 0.35);
       }
     }
     return true;
@@ -474,8 +489,8 @@
   }
   /**
    * AutoPlay's worth of setting a trap on ctx.target now: the best foe likely to walk into it (+ a little for the next
-   * best), plus Canned Laughter's heal when he wears it and is hurt, less when another trap of his is already right
-   * there. 0 when no foe is coming its way.
+   * best), plus the laugh's heal when he is hurt (Monkey Business' 5, Canned Laughter's 4 more), less when another trap
+   * of his is already right there. 0 when no foe is coming its way.
    */
   function trapValue(ctx, kind) {
     const me = ctx && ctx.user, p = ctx && ctx.target, s = S();
@@ -496,12 +511,10 @@
     vals.sort(function (a, b) { return b - a; });
     // the firecracker hurts whoever is around when anybody sets it off: worth the chance that someone does
     let v = kind === 'boom' ? (1 - miss) * effectValue(kind, me, null, p, L, dir) : vals[0] + 0.3 * (vals[1] || 0);
-    // [review sustain] Canned Laughter: the trap mostly springs on a foe's turn, where no dry run sees his heal, so the
-    // chance that anyone springs it is worth the heal, priced the way AutoPlay prices heals (more below half HP)
-    if (hasItem(me, CANNED) && active(me)) {
-      const hurt = me.maxHp - me.hp;
-      if (hurt > 0) v += (1 - miss) * Math.min(CANNED_HEAL, hurt) * (hurt > me.maxHp / 2 ? 1.5 : 0.8);
-    }
+    // [review sustain; Nov 18 the laugh needs no item] the trap mostly springs on a foe's turn, where no dry run sees his
+    // heal, so the chance that anyone springs it is worth the heal, priced the way AutoPlay prices heals (healWorth:
+    // min(heal, missing HP), × 1.5 below half HP, else × 0.8; 0 at full HP)
+    if (active(me)) v += (1 - miss) * healWorth(me, laughHeal(me));
     traps(me).forEach(function (t) { if (dist(t, p) <= 1) v *= 0.6; });
     return Math.min(v, 14);
   }
@@ -900,11 +913,12 @@
       },
     },
   });
-  // D9 (Nov 12): sustain from his own verb. The rule lives in spring(), like Monkey Business: one heal per trap sprung.
+  // D9 (Nov 12): sustain from his own verb. Nov 18: Monkey Business heals him on every spring; the can adds its old 4 on
+  // top. The rule lives in spring(): one laugh per trap sprung.
   DD.registerItem({
     id: CANNED, name: 'Canned Laughter', slot: 'trinket', rarity: 'rare', icon: '🥫', hero: HERO,
     stats: {},
-    desc: 'Whenever a foe springs one of Hjalmar\'s traps, he heals ' + CANNED_HEAL + ' HP.',
+    desc: 'Whenever a foe springs one of Hjalmar\'s traps, he heals ' + CANNED_HEAL + ' HP more (' + (LAUGH_HEAL + CANNED_HEAL) + ' in all).',
     flavor: 'A tin can of recorded laughter. Laughter is the best medicine, says Hjalmar. Josiah declined to comment.',
     hooks: {},
   });
@@ -925,8 +939,9 @@
     signature: 'hja_signature',
     passive: {
       name: 'Monkey Business',
-      desc: 'Every time a foe springs one of Hjalmar\'s traps, the party gains ' + TRAP_HYPE + ' Hype. The crowd loves a pratfall.',
-      // the rule lives in spring() (every trap is his); nothing to hook
+      desc: 'Every time a foe springs one of Hjalmar\'s traps, the party gains ' + TRAP_HYPE + ' Hype and he laughs so hard he heals ' +
+        LAUGH_HEAL + ' HP. The crowd loves a pratfall.',
+      // the rule lives in spring() (every trap is his; the laugh too, Nov 18); nothing to hook
       hooks: {},
     },
     startingSkills: ['hja_peel', 'hja_bear_trap'],
@@ -958,17 +973,22 @@
       signature: ['PRANK WAR! Everybody slips!', 'Bananas! Bananas everywhere!', 'It\'s raining peels! Hallelujah!',
         'My masterpiece! Hee hee hee!', 'Hope you all wore grippy socks!'],
       trap: ['Hee hee! Gotcha!', 'Watch your step! Too late!', 'Ooh ooh! It worked!', 'Classic! Never gets old!', 'That one was for you!'],
+      // Nov 18 (The Laugh Track): a foe sprang his trap and the laugh healed him (the trap bark plays when it healed 0)
+      laugh: ['HA! HAHA! Ow, my ribs. No wait, that\'s better.', 'Comedy heals!', 'Laughter is the best medicine. Bananas are second.'],
     },
   });
 
   // ---- loading-screen tips -------------------------------------------------------------------------------
+  // (critic, Nov 18) the old tip promised the heal only with Canned Laughter: the passive heals now, the can adds more
   DD.registerNarration('tips', [
-    'Wearing Canned Laughter, Hjalmar heals every time a foe springs one of his traps. Laughter is the best medicine.',
+    'Every trap a foe springs makes Hjalmar laugh so hard he heals ' + LAUGH_HEAL + ' HP. Canned Laughter adds ' + CANNED_HEAL +
+      ' more. Josiah has filed a complaint.',
   ]);
 
   /** Small public surface for tests and other content. */
   DD.Hjalmar = {
-    KINDS: KINDS, TRAP_HYPE: TRAP_HYPE, SLIPPED: SLIPPED, CANNED: CANNED, CANNED_HEAL: CANNED_HEAL,
+    KINDS: KINDS, TRAP_HYPE: TRAP_HYPE, SLIPPED: SLIPPED, CANNED: CANNED, CANNED_HEAL: CANNED_HEAL, LAUGH_HEAL: LAUGH_HEAL,
+    laughHeal: laughHeal,
     isTrap: isTrap, traps: traps, canTrapAt: canTrapAt, setTrap: setTrap, spring: spring, springOn: springOn,
     gloveTiles: gloveTiles, trapValue: trapValue, crossChance: crossChance,
   };

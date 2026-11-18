@@ -234,6 +234,9 @@ mar_robes mar_pills`. Removed in v2: `mar_thumper`, `mar_forgot`.
   enemies already standing there slip at once).
 - `DD.Marbles.slip(unit, tile)` → bool: the slip rule for a unit on a marbles tile (false for heroes, summons, flyers,
   the dead, or no marbles).
+- (Nov 18) `DD.Marbles.SLAM` = [5, 6, 7] (Walking Stick Whack I-III's `slam` heal) and `DD.Marbles.slamAhead(user, target,
+  n)` → bool: would a push of n tiles straight away from user be cut short by a bump (pure geometry, the quick-pass
+  `aiScore` reads it).
 - Surface `mar_marbles`: other content may `DD.Act.setSurface(x, y, 'mar_marbles', rounds)`; set
   `tile.surface.data = { src: unitId }` to credit the Vulnerable to a unit.
 - Status `mar_remembered` is Marbles-specific (its `data.ids` drives the free cost).
@@ -375,3 +378,105 @@ only unit target and the crate a breakable one for the whack's listed damage. No
 - **text-tone-2**: his ally_down helper lines name standing helpers (Ellaria, Basanos, Valdris); the engine-side filter
   (no line naming the downed hero) fixes the rare misfire.
 - **heroes-v1 (fixed)**: the target-range numbers in his descs follow his real reach (range items, Dazzle) through `reach()` → `DD.Targeting.reach`; details and the cross-hero suite in hero-kiri.md.
+
+## Conditional healing (Nov 18) — "Respect Your Elders" (build:g4, plan §4.5)
+
+The user (Nov 18): "I want everyoe else brought up but by conditional healing". Professor Marbles' lift is a
+skill-rider on his starting **Walking Stick Whack**: when its push slams the foe into something, the crunch puts his hip
+back in. Ellaria untouched.
+
+**What.** Inside Whack's execute, after the damage, `A().knockback(user, u, L.push)`; when its result has `blockedBy` set
+(`'wall' | 'unit' | 'object' | 'edge' | 'height'`: actions.js sets it only on a real bump that cut the push short) and he
+is active, he heals **`slam` = 5 / 6 / 7** (`DD.Marbles.SLAM`). A push into a pit or deep water (`fell`), an immovable
+foe, a cancelled push or a foe the damage killed (no push) → no slam. A slam into an ally counts (the bump hurts the ally
+too: the exact pass weighs it). Once per Whack (cooldown 1).
+- **Code** (`js/data/heroes/marbles.js`): `SLAM`, the local `healWorth` (E2 with a fallback), `slamAhead(user, target, n)`
+  (pure: walks the tiles the way `DD.Act.push` does — map edge, a blocking object, a unit, a wall, a ledge it can't climb
+  → slam; a pit / deep water first → it falls, no slam; an immovable target or n ≤ 0 → none), `mar_whack` levels
+  `{ dmg: 5, push: 2, slam: 5 }`, `{ 6, 2, 6 }`, `{ 7, 3, 7 }`, `heals: true` (the goats' Radio Edit never bleeps it),
+  the new `aiScore`, execute calling `DD.Act.heal(Marbles, Marbles, L.slam, { via: 'lift:marbles' })` on every slam (0 at
+  full HP: the sim counts it), the "🦴 *pop* Ahh." pop-up and the new `slam` bark (0.4) only when it healed.
+- **Desc** (I): "Deal 5 damage to an adjacent foe and push it 2 tiles. If it slams into something, heal 5 HP." (II 6 / 2 /
+  6; III 7 / 3 / 7; the Cane's +1 push still printed.) Barks `slam`: "Back in my day, walls hit BACK." / "Ohoho! My hip just
+  popped back in." / "Forty years of kata for THAT sound."
+- **AutoPlay.** The exact pass dry-runs the knockback and the heal (it already liked the bump damage). The quick pass (which
+  picks what gets a dry run) gets `aiScore` (0 when `ctx.autoplay`) = `healWorth(Marbles, L.slam)` when `slamAhead` finds
+  the push (+1 with the Cane) cut short and the whack's `DD.AI.estimate` does not kill the foe; else 0.
+- No level key is named `heal`; still an attack on a foe (no `'heal'` tag, never an aimed revive).
+
+**Tests** (`tests/content/hero_marbles.js`, new suite "hero_marbles: conditional heal (Nov 18)", 64 ok with svammiel.js loaded; 67 after review:g4): `SLAM`; the desc
+word for word at I-III (numbers from `L`, ≤ 22 words) and with the Cane; still an attack, `heals: true`, `healsWith` true at
+I-III when svammiel.js is loaded; the three barks; fires: a grunt with a wall behind it → +5 / +6 / +7, his heals stat
+grows by it, one call `heal(Marbles, Marbles, N, { via: 'lift:marbles' })`; into another foe (both bumped), the map edge
+after one step, a crate → +5; full HP → the call is made, 0; near misses: open floor, a pit (yeeted), an immovable brute,
+a whack that kills → 0; a downed Marbles (execute run directly) → no call, stays down; the preview shows +5 on him and the
+use heals exactly that, the open-floor preview shows no heal; `aiScore`: wall / unit / edge → `healWorth(Marbles, 5)`, 0 in
+the exact pass, at full HP, on open floor, a pit before the wall, an immovable brute, a killing whack; a wall 3 tiles
+behind: no slam at push 2, a slam with the Cane; the exact pass: the Whack-into-a-wall total with `slam` 5 minus the
+same scene with `slam` 0 ≥ `healWorth` (+9.5 for 7.5: 5 HP more also lowers the danger of where he ends).
+**Updated assertions (never deleted):** the registration suite's "no if/else clauses" reads Whack's hit-and-push sentence
+and asserts the one slam clause exactly (`/^(.*\.) (If it slams into something, heal \d+ HP\.)$/`); the playtest-fixes
+suite's Cane checks read "push it N tiles. If it slams" (the push sentence is no longer the desc's end).
+
+**Sanity sims** (`bash tools/sim.sh "debug=1&raw=1&seeds=30&from=…&stop=2&party=…"`, normal, acts 1-2, one page at a
+time; the `lift:marbles` row of "== conditional heals"):
+
+| party (from) | fights | fires / fight | HP / fight (self) | by kind (fires, HP) |
+|---|---|---|---|---|
+| hjalmar, marbles, pebbles, zarathor (51200) | 257 | 0.89 | 3.6 (overheal 21%) | regular 0.93, 3.7 · elite 0.94, 3.9 · boss 0.74, 3.1 |
+| marbles, betty, valdris, syllamin (51500) | 233 | 1.17 | 4.9 (overheal 20%) | regular 1.29, 5.3 · elite 1.19, 5.2 · boss 0.69, 3.1 |
+
+T8 for `lift:marbles` (min 0.4 fires, band 1.9-7.6 HP, guard rail ≤ 10 in regular fights): met on both pages (Whack is
+used 1.5 / 1.9 times a fight and slams ~60% of the time: AutoPlay already liked the bump). Every page: 0 errors, 0 DD.warn
+lines, 0 stalls.
+
+**Full run** (`bash tools/test.sh`, Nov 18, after the G4 build; G3 building in parallel): 1318 suites PASS, 150,819
+assertions, 0 failures, 0 swallowed "Error in" lines (the one Bark-B-Q content advisory is the known, expected one).
+
+### DESIGN §6 brief (Nov 18)
+
+For the engine builder (phase 2), in `### Professor Marbles the Forgetful Fist — Rabbitfolk Monk (he/him)` (DESIGN.md
+~460). Anchor, these two whole lines:
+```
+- Basic *Doddering Jab* (5, adjacent). Starters: *Walking Stick Whack* (hit and push 2) and *Marble Scatter* (loose
+  marbles: grounded foes on them slip and are Vulnerable).
+```
+Replace with:
+```
+- Basic *Doddering Jab* (5, adjacent). Starters: *Walking Stick Whack* (hit and push 2; if the push slams the foe into
+  something, he heals 5–7 HP, by level) and *Marble Scatter* (loose marbles: grounded foes on them slip and are
+  Vulnerable).
+```
+
+### Deviations (Nov 18)
+
+- **Walking Stick Whack carries its push plus the slam heal's clause** (plan §2.10; DESIGN §6 "one verb + at most one
+  rider"): the heal is a clause on the push ("If it slams into something, heal N HP."), so the desc has one "If". It still
+  reads in one breath (20 words at every level, with or without the Cane). The registration suite pins exactly that one
+  clause.
+
+### Requests (Nov 18)
+
+- None.
+
+### Conditional heal: adversarial review (Nov 18, review:g4)
+Code path read end to end: Whack's execute → `knockback` → `Act.push` sets `blockedBy` only from `stepBlocker` (edge,
+blocking object, unit, wall, height), never on a fall, an immovable target or a cancelled push; the heal checks
+`active(user)` first and targets Marbles only (an enemy-targeted attack never carries a `reviveTarget`). `slamAhead`
+mirrors `stepBlocker` (the flyer wall rule included); it ignores the one-tile "Wheee" slide on a slippery tile and other
+units' `modifyPush` (quick pass only: the exact pass dry-runs the real push). HUD preview shot
+(`.tmp/heal/review-g4/shot/marbles.png`, debug=1, fixtures): Whack at a grunt with a wall behind it shows **+5** on
+Marbles and −8 on the grunt (5 + the bump). **Added to the suite:** a ledge two levels up behind the foe (a slam, +5,
+and `aiScore`/`slamAhead` agree) and an ally in the way (a slam, the ally bumped too), so a `slamAhead` without its
+`canStep` line would now fail it (67 ok with svammiel.js loaded). Forced-party sim (`seeds=30&from=55100&stop=2&party=
+marbles,sparrow,corelos,benedick`, `.tmp/heal/review-g4/marbles_55100.txt`, 212 fights): `lift:marbles` **0.94 fires,
+4.2 HP a fight** (regular 0.98 / 4.3, elite 0.96 / 4.8, boss 0.79 / 3.7), overheal 14%; Whack 1.6 uses a fight: inside
+T8 (≥ 0.4, 1.9-7.6, regular ≤ 10). 0 errors, 0 DD.warn, 0 stalls.
+
+### QA fixes (Nov 18, qa-fix:heal)
+- **[heal QA-1] the log says why he healed.** A slam that heals (> 0) now logs, right after the engine's
+  "Professor Marbles heals N HP.": "Professor Marbles whacks <foe> into something solid. His hip pops back in. Respect
+  your elders." (`mar_whack` execute, next to the `*pop* Ahh.` label; nothing at full HP or without a slam). Test: the
+  end of "hero_marbles: conditional heal (Nov 18)" (the line follows the heal line; none at full HP; none on open floor).
+- **[heal QA-3]** the aim hint now says "Hits 1 foe for N · 💚 you heal 5" for a Whack into a wall (js/ui/combat_hud.js
+  `previewSummary`, tested in tests/hud_tests.js "hud: heal QA-3"). No number changed.

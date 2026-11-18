@@ -7,7 +7,9 @@
  *                 then lands by himself (gliding off a pit, deep water or lava first). The change never heals (D9).
  * Passive A Sticky Situation: at his turn end, Snail Slime on the bare floor of every tile he crawled off (recorded while
  * he walks, laid at turn end so move Undo keeps working); grounded non-boss foes that walk onto it stop (the `stops` snag).
- * Snail Mail posts a parcel that bursts at the start of his next turn. His only heal is the Snail Mucin Serum (D9).
+ * Snail Mail posts a parcel that bursts at the start of his next turn. Nov 18 "Moisturising Routine" (conditional
+ * healing; D9's Serum heal moved into the passive): each foe that gets stuck in his slime heals him MUCIN_HEAL 5, and the
+ * Snail Mucin Serum adds SERUM_HEAL 3 (8 in all), labelled 'lift:benedick'. His transform still never heals.
  * Form state: statuses ben_in_shell / ben_dragon are the source of truth; unit.data.ben holds the bookkeeping (move bonus,
  * shown look, crawl steps, the Sign's charge). Registers: hero benedick, 13 skills (ben_*), statuses ben_in_shell and
  * ben_dragon, surface ben_slime, object ben_parcel, 3 hero items, loading tips. Test / debug API: DD.Benedick.
@@ -19,7 +21,11 @@
   const HERO = 'benedick';
   const SHELL_ST = 'ben_in_shell', DRAGON = 'ben_dragon', SLIME = 'ben_slime', PARCEL = 'ben_parcel';
   const TEETH = 'ben_teeth', BURN = 'ben_slow_burn', SHELL = 'ben_shell', MAIL = 'ben_mail';
-  const DRAGON_MOV = 3, DRAGON_TURNS = 2, SLIME_TURNS = 3, SERUM_HEAL = 3;
+  const DRAGON_MOV = 3, DRAGON_TURNS = 2, SLIME_TURNS = 3;
+  // Nov 18: a foe stuck in his slime heals him MUCIN_HEAL; the Snail Mucin Serum adds SERUM_HEAL (its old value, now a bonus).
+  // The conditional-healing balance pass raised MUCIN_HEAL 3 -> 5, the top of its range (T8: enemy paths detour around
+  // slime, so stops are rare under AutoPlay; docs/notes/balance.md)
+  const MUCIN_HEAL = 5, SERUM_HEAL = 3;
   const SERUM = 'ben_mucin_serum', STRIPES = 'ben_racing_stripes', SIGN = 'ben_dnd_sign';
   const SLOW_BURN = [{ dmg: 4, burn: 1 }, { dmg: 5, burn: 1 }, { dmg: 6, burn: 1 }];   // by the shell's level
   const MINT = '#5fcf9b', GOO = '#cfeec0', EMBER = '#ff8a3d';
@@ -225,13 +231,26 @@
     if (!DD.Combat || !DD.Combat.foesOf) return [];
     return DD.Combat.foesOf(u).filter(function (f) { return active(f) && dist(f, u) === 1; }).sort(byPos);
   }
+  /** AutoPlay's shared heal price (DD.AutoPlay.healWorth, E2), with the same formula as a fallback. */
+  function healWorth(u, n) {
+    if (DD.AutoPlay && typeof DD.AutoPlay.healWorth === 'function') return DD.AutoPlay.healWorth(u, n);
+    n = Number(n);
+    if (!active(u) || !(n > 0)) return 0;
+    const miss = (u.maxHp || 0) - (u.hp || 0);
+    return miss > 0 ? Math.min(n, miss) * (miss > u.maxHp / 2 ? 1.5 : 0.8) : 0;
+  }
+  /** What one stuck foe heals him (Nov 18): MUCIN_HEAL, + SERUM_HEAL with the Snail Mucin Serum. */
+  function mucinOf(u) { return MUCIN_HEAL + (hasItem(u, SERUM) ? SERUM_HEAL : 0); }
 
   // ---- the slime -------------------------------------------------------------------------------------------
   /** Does Snail Slime stop this walker? Grounded, hostile to the heroes (charm counts), no boss, not root-proof. Pure. */
   function sticks(u) {
     return !!u && !u.dead && !u.downed && G().effectiveSide(u) === 'enemy' && !A().isBoss(u) && G().feelsFloor(u) && !A().immuneTo(u, 'root');
   }
-  /** A foe walked onto his slime: the walk ends here; the owner may bark, and heal with the Snail Mucin Serum (D9). */
+  /**
+   * A foe walked onto his slime: the walk ends here; the owner may bark. Nov 18 (Moisturising Routine): when the slime is
+   * a standing Benedick's, he heals MUCIN_HEAL (+ SERUM_HEAL with the Serum), always called (0 at full HP).
+   */
   function stuck(foe, tile) {
     if (!active(foe)) return;
     A().stopMove(foe);
@@ -241,11 +260,18 @@
     DD.FX.sound('splash');
     A().log(foe.name + ' gets stuck in ' + (owner ? owner.name + '\'s' : 'snail') + ' slime.', 'hero');
     if (!active(owner)) return;
-    A().maybeBark(owner, 'stuck', 0.35);
-    if (hasItem(owner, SERUM) && A().heal(owner, owner, SERUM_HEAL) > 0) {
-      DD.FX.text(owner, 'Moisturised!', { color: GOO, size: 14 });
-      A().log(owner.name + ' moisturises.', 'hero');
+    let healed = 0;
+    if (owner.defId === HERO && owner.kind === 'hero') {
+      healed = A().heal(owner, owner, mucinOf(owner), { via: 'lift:benedick' });
+      if (healed > 0) {
+        DD.FX.text(owner, 'Moisturised!', { color: GOO, size: 14 });
+        A().log(owner.name + ' moisturises.', 'hero');
+      }
     }
+    // [heal QA-4] the 'moisturised' lines claim the heal: half the stops that really healed him use them; the 'stuck'
+    // pool keeps its old lines for every stop
+    const glow = healed > 0 && !A().simulating && DD.rng.next() < 0.5;
+    A().maybeBark(owner, glow ? 'moisturised' : 'stuck', 0.35);
   }
   /**
    * Bare floor for slime: no other surface (his own slime is refreshed), walkable for walkers, no pit, no liquid. A unit
@@ -488,7 +514,87 @@
       const t = G().tile(q.x, q.y);
       return slimeable(q.x, q.y) && !(t.surface && t.surface.id === SLIME);
     }).length;
-    return Math.min(7, 1.5 * n + 0.3 * fresh);
+    // Nov 18: each likely stop also heals him (on the foe's turn: no dry run sees it), half-priced for the odds
+    return Math.min(7, 1.5 * n + 0.3 * fresh) + n * healWorth(u, mucinOf(u)) * 0.5;
+  }
+  /** One of his Snail Slime tiles inside the box between the foe and him (neither end tile): its walk crosses it. Pure. */
+  function slimeBetween(u, f) {
+    const s = DD.Combat && DD.Combat.state;
+    if (!s || !u || !f) return false;
+    const x0 = Math.min(u.x, f.x), x1 = Math.max(u.x, f.x), y0 = Math.min(u.y, f.y), y1 = Math.max(u.y, f.y);
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        if ((x === f.x && y === f.y) || (x === u.x && y === u.y)) continue;
+        const t = G().tile(x, y), sf = t && t.surface;
+        if (sf && sf.id === SLIME && sf.data && sf.data.src === u.id) return true;
+      }
+    }
+    return false;
+  }
+  /**
+   * The tiles he will slime at this turn's end if he ends it on (x, y): the crawl recorded so far (inside a dry run, the
+   * copy's own walk too) plus, for a plain move AutoPlay weighs (he stands on (x, y) only virtually), the walk from where
+   * he really stands. Pure: the unit is put back on its recorded tile for the path query and restored at once.
+   */
+  function trailFor(u, x, y) {
+    const d = peek(u);
+    if (!d || !d.pos) return [];
+    const real = d.pos;
+    const ox = u.x, oy = u.y;
+    let base = [], path = null;
+    try {
+      u.x = real.x; u.y = real.y;
+      base = trailTiles(u);
+      path = real.x === x && real.y === y ? [] : G().path(u, x, y);
+    } finally { u.x = ox; u.y = oy; }
+    const walk = path && path.length ? [{ x: real.x, y: real.y }].concat(path.slice(0, -1)) : [];
+    return base.concat(walk).filter(function (p) { return !(p.x === x && p.y === y); });
+  }
+  /**
+   * AutoPlay's worth of ending his turn on (x, y) (passive.autoplayEnd, engine hook E1; Nov 18 deviation: the plan's own
+   * terms alone left the heal at ~0.2 fires a fight in the sanity sim). The slime he lays at turn end there heals him when
+   * a foe walks onto it on its turn, which no dry run sees. A fresh trail tile is a likely stop when a foe that sticks can
+   * reach it next turn and it lies on its way to a hero-side unit: the tile it comes to stand on to hit that unit (0.5),
+   * or one its straight-line walk there crosses (0.4). Worth healWorth(him, mucin) per likely stop (at most 1.5 stops):
+   * only the heal is priced (0 at full HP; a stop's own worth stays Spit Shine's and I'll Wait's).
+   */
+  function slimeEnd(unit, x, y) {
+    const s = S();
+    if (!s || !active(unit) || unit.defId !== HERO || unit.kind !== 'hero' || isDragon(unit) || inShell(unit) || !G().feelsFloor(unit)) return 0;
+    const worth = healWorth(unit, mucinOf(unit));
+    if (!(worth > 0)) return 0;
+    const fresh = trailFor(unit, x, y).filter(function (p) {
+      const t = G().tile(p.x, p.y), sf = t && t.surface;
+      return slimeable(p.x, p.y) && !(sf && sf.id === SLIME && sf.data && sf.data.src === unit.id);
+    });
+    if (!fresh.length) return 0;
+    const foes = s.units.filter(function (f) { return f !== unit && sticks(f) && G().hostile(unit, f) && !A().isStunned(f); });
+    const side = s.units.filter(function (h) { return active(h) && !G().hostile(unit, h); });
+    let stops = 0;
+    fresh.forEach(function (p) {
+      let best = 0;
+      foes.forEach(function (f) {
+        const df = dist(f, p), mov = DD.Combat.effectiveMov ? DD.Combat.effectiveMov(f) : (f.mov || 3);
+        if (df < 1 || df > mov) return;
+        side.forEach(function (h) {
+          const spot = h === unit ? { x: x, y: y } : h, dh = dist(p, spot), dfh = dist(f, spot);
+          if (dh < 1 || df + dh !== dfh) return;
+          if (dh === 1) best = Math.max(best, 0.5);
+          else if ((f.x === spot.x && p.x === spot.x) || (f.y === spot.y && p.y === spot.y)) best = Math.max(best, 0.4);
+        });
+      });
+      stops += best;
+    });
+    return Math.min(1.5, stops) * worth;
+  }
+  /**
+   * I'll Wait's aiScore (both passes, pure; Nov 18): a taunted foe that walks at him across his slime stops there and
+   * heals him (on its turn: no dry run sees it). 1 + healWorth(him, mucin) × 0.6 when it can stick, else 0.
+   */
+  function waitScore(ctx) {
+    const u = ctx && ctx.user, f = ctx && ctx.targetUnit;
+    if (!active(u) || !foeOf(u, f) || !sticks(f) || !slimeBetween(u, f)) return 0;
+    return 1 + healWorth(u, mucinOf(u)) * 0.6;
   }
 
   // ---- sprites and painters --------------------------------------------------------------------------------
@@ -947,6 +1053,7 @@
       A().addBlock(u, ctx.L.block);
       DD.FX.text(u, 'I\'ll wait.', { color: '#e8f5e0', size: 15 });
     },
+    aiScore: waitScore,
   });
 
   DD.registerSkill({
@@ -1170,7 +1277,10 @@
   const PASSIVE = {
     name: 'A Sticky Situation',
     desc: 'At the end of his turn, Benedick leaves Snail Slime on the bare floor of every tile he crawled off (' + SLIME_TURNS +
-      ' rounds). Grounded foes, bosses and spiders aside, that walk onto it stop there.',
+      ' rounds). Grounded foes, bosses and spiders aside, that walk onto it stop there, and each one that does heals him ' +
+      MUCIN_HEAL + ' HP.',
+    // Nov 18 (engine hook E1): what ending his turn on a tile is worth for the slime he lays there (slimeEnd, pure)
+    autoplayEnd: function (unit, x, y) { return slimeEnd(unit, x, y); },
     hooks: {
       onCombatStart: function (u) {
         const d = dataOf(u);
@@ -1294,7 +1404,10 @@
       land: ['And... I\'m a snail again. Lovely. Fine.', 'The dragon\'s gone. The dignity stays.', 'Back to cruising speed. Which is none.',
         'That was fun. Same time in a few turns?'],
       glide: ['Not landing there, thank you. Over here.', 'Gliding to safety. Gracefully. Mostly.'],
+      // Nov 18: the stop now heals him too (Moisturising Routine): three more lines in the same pool
       stuck: ['Sticky, isn\'t it? Take your time.', 'Ah. You\'ve found my trail.', 'Stay a while. You haven\'t much choice.'],
+      // Nov 18 (Moisturising Routine); [heal QA-4] only on a stop that healed him
+      moisturised: ['Moisturised.', 'Mucin. Very good for the complexion. Yours less so.', 'I did say I\'d wait.'],
       mail: ['Posted! Arriving next turn. Ish.', 'Please allow one turn for delivery.', 'First class! Well. Snail class.'],
       delivery: ['Special delivery! Sign here. And here.', 'Your parcel has arrived. So has the damage.', 'Delivered! No refunds.'],
       breath: ['SMELL THAT? THAT\'S DRAGON.', 'I HAVEN\'T BRUSHED SINCE THE LAST AGE!'],
@@ -1308,9 +1421,9 @@
   DD.registerItem({
     id: SERUM, name: 'Snail Mucin Serum', slot: 'trinket', rarity: 'rare', icon: '🧴', hero: HERO,
     stats: {},
-    desc: 'Whenever a foe gets stuck in Benedick\'s Snail Slime, he heals ' + SERUM_HEAL + ' HP.',
+    desc: 'Whenever a foe gets stuck in Benedick\'s Snail Slime, he heals ' + SERUM_HEAL + ' HP more (' + (MUCIN_HEAL + SERUM_HEAL) + ' in all).',
     flavor: 'Ninety-six percent snail mucin. Dermatologists love him. Monsters do not.',
-    hooks: {},   // stuck() reads it: his only heal (D9), grown out of his slime
+    hooks: {},   // stuck() reads it: Nov 18, the bonus on A Sticky Situation's own heal (D9's heal moved into the passive)
   });
   DD.registerItem({
     id: STRIPES, name: 'Racing Stripes', slot: 'armor', rarity: 'rare', icon: '🏁', hero: HERO,
@@ -1375,7 +1488,9 @@
 
   DD.Benedick = {
     SHELL_ST: SHELL_ST, DRAGON: DRAGON, SLIME: SLIME, PARCEL: PARCEL, DRAGON_MOV: DRAGON_MOV, DRAGON_TURNS: DRAGON_TURNS,
-    SLIME_TURNS: SLIME_TURNS, SERUM_HEAL: SERUM_HEAL, SLOW_BURN: SLOW_BURN, DRAGON_GATE: DRAGON_GATE, DRAGON_GATE_NONE: DRAGON_GATE_NONE,
+    SLIME_TURNS: SLIME_TURNS, SERUM_HEAL: SERUM_HEAL, MUCIN_HEAL: MUCIN_HEAL, mucinOf: mucinOf, waitScore: waitScore, slimeBetween: slimeBetween,
+    slimeEnd: slimeEnd, trailFor: trailFor,
+    SLOW_BURN: SLOW_BURN, DRAGON_GATE: DRAGON_GATE, DRAGON_GATE_NONE: DRAGON_GATE_NONE,
     SNAIL_SPRITE: SNAIL_SPRITE, SHELL_SPRITE: SHELL_SPRITE, DRAGON_SPRITE: DRAGON_SPRITE,
     isDragon: isDragon, inShell: inShell, shellLevel: shellLevel, withdraw: withdraw, emerge: emerge, syncForm: syncForm,
     glideIfNeeded: glideIfNeeded, sticks: sticks, laySlime: laySlime, trailTiles: trailTiles, parcels: parcels, deliver: deliver,

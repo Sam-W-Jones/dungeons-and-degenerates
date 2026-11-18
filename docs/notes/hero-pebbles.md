@@ -126,7 +126,8 @@ flush drains — AutoPlay's puzzle play, not a Pebbles skill.)
 ## Public API (for tests / other content)
 
 `DD.Pebbles = { FLAME, COZY_HEAL, COZY_HEAL_BED, REKINDLE_HP, zoomPath(u, to, len) → [{x,y}] | null, inFire(u),
-cozyHeal(u), fineTiles(u, r), burningFoes(u, r) }`.
+fireAt(u, x, y), burningNear(u, x, y), cozyAt(u, x, y), cozyHeal(u), fineTiles(u, r), burningFoes(u, r) }` (Nov 18:
+`fireAt` / `burningNear` / `cozyAt` are pure tile checks for Hot Dog; the passive also carries `autoplayEnd(unit, x, y)`).
 
 ## Deviations
 
@@ -277,3 +278,102 @@ failures are other areas mid-flight: bosses_act1 (18), bosses_act2 (17), boss_dm
 ## Playtest fixes (Nov 12)
 
 - **heroes-v1 (fixed)**: the target-range numbers in his descs (Zoomies, Fetch, Puppy Eyes) follow his real reach (range items, Dazzle) through `reach()` → `DD.Targeting.reach`; details and the cross-hero suite in hero-kiri.md.
+
+## Conditional healing (Nov 18) — "Warming His Paws on a Goblin" (build:g4, plan §4.3)
+
+The user (Nov 18): "I want everyoe else brought up but by conditional healing". Pebbles' lift broadens his own pre-D9
+passive heal, **Hot Dog** (passive-or-upgrade; no second source). Ellaria untouched.
+
+**What.** At his turn end (the passive's `onTurnEnd`): he is on fire or lava (`fireAt`, unchanged, needs `feelsFloor`)
+**or** an active unit hostile to him with the `burn` status (anyone's Burn) stands at `DD.Grid.dist` 1 (no floor needed:
+a flying Pebbles still warms his paws on a goblin). One heal per turn end, the cases never add up: **`cozyHeal(u)` = 3**
+(5 with the Fireproof Dog Bed), unchanged numbers. Self, active only (checked before the heal: never a revive).
+- **Code** (`js/data/heroes/pebbles.js`): `fireAt(u, x, y)` (pure; `inFire(u)` now calls it), `burningNear(u, x, y)`,
+  `cozyAt(u, x, y)`, the local `healWorth` (E2 with a fallback); `PASSIVE.hooks.onTurnEnd` calls
+  `DD.Act.heal(Pebbles, Pebbles, cozyHeal, { via: 'lift:pebbles' })` whenever cozy (the fire / lava case is labelled too;
+  0 at full HP: the sim counts the fire), the "🔥 Cozy!" pop-up and the new `cozy` bark (0.3) only when it healed.
+- **Desc** (passive Hot Dog, from `COZY_HEAL`): "Pebbles is made of fire: fire damage and Burn can't hurt him, and ending
+  his turn on fire, on lava or next to a Burning foe heals him 3 HP." Dog Bed unchanged ("Hot Dog heals 5 instead of
+  3."). Barks `cozy`: "Warm! Warm warm warm!" / "Cozy fire! Why is the fire yelling?" / "*happy crackle*"
+- **AutoPlay (engine hook E1).** `PASSIVE.autoplayEnd(unit, x, y)` (pure) = `healWorth(unit, cozyHeal(unit))` when (x, y)
+  is cosy (fire / lava under his paws, or an active Burning foe next to it), else 0. AutoPlay's `endValue` reads it in the
+  dry run's copy (E1 a: the Burn his Nibble just put on a goblin counts), and plain moves / swaps read it too (E1 b, c): he
+  stays next to the goblin he nibbled and ends turns on his own fire. **This Is Fine's `aiScore`** (its Hot Dog term) now
+  returns 0 in the exact pass (`ctx.autoplay`): the dry run's end tile already carries the heal through `autoplayEnd`, so
+  it is never counted twice; the quick pass keeps it.
+- **Exports:** `DD.Pebbles.fireAt`, `burningNear`, `cozyAt` (+ `inFire`, `cozyHeal` as before).
+
+**Tests** (`tests/content/hero_pebbles.js`, new suite "hero_pebbles: conditional heal (Nov 18)", 44 ok): `COZY_HEAL` 3 /
+`COZY_HEAL_BED` 5; the passive desc word for word, from the constant; the Dog Bed text unchanged; the three `cozy` barks;
+`autoplayEnd` on the passive; fires: he Nibbles a grunt (Burn 1) and ends his turn next to it → +3 (Dog Bed +5), his heals
+stat grows by it, one call `heal(Pebbles, Pebbles, N, { via: 'lift:pebbles' })`; on fire AND next to a Burning foe → +3
+once; on lava → +3, labelled; full HP → the call is made, 0; near misses: a foe that is not Burning, a Burning ALLY, a
+Burning foe 2 tiles away → nothing; flying next to a Burning foe → +3, flying over fire → nothing (as before); downed
+(the hook run directly) → no call, stays down; Spicy Nibble's preview shows no heal on him (delayed: the passive's text
+carries it); `autoplayEnd` = `healWorth(3)` on a fire tile and next to the Burning foe, 0 two tiles off and where nothing
+is cosy, `AutoPlay.restAt` reads it, `healWorth(5)` with the Dog Bed, 0 at full HP; AutoPlay E1 a: next to a stunned,
+unburnt grunt, Nibble's exact total minus the same scene with `autoplayEnd` → 0 = `healWorth` (±0.15); E1 b: one AP, two
+stunned grunts mirrored around him, one Burning → he ends his turn next to the Burning one (both mirror cases).
+**Updated assertions:** none needed (the Hot Dog suite's "heals him 3 HP" still holds).
+
+**Sanity sims** (`bash tools/sim.sh "debug=1&raw=1&seeds=30&from=…&stop=2&party=…"`, normal, acts 1-2, one page at a
+time; the `lift:pebbles` row of "== conditional heals", the fire / lava case included):
+
+| party (from) | fights | fires / fight | HP / fight (self) | by kind (fires, HP) | Dog Bed worn |
+|---|---|---|---|---|---|
+| hjalmar, marbles, pebbles, zarathor (51200) | 252 | 1.25 | 3.0 (overheal 20%) | regular 1.13, 2.6 · elite 1.47, 3.7 · boss 1.53, 4.1 | 1 fight |
+| pebbles, slate, kiri, josiah (51300) | 264 | 1.57 | 3.9 (overheal 21%) | regular 1.31, 3.2 · elite 1.8, 4.4 · boss 2.29, 6.3 | 12 fights (5%): 2.5 fires, 8.3 HP |
+
+T8 for `lift:pebbles` (min 1.5 fires, band 2.3-9 HP, guard rails ≤ 8 regular / ≤ 12 boss): HP inside the band and the
+rails on both pages; fires 1.57 with a frontline (Slate) but 1.25 in the party without one, **1.41 pooled** (728 calls /
+516 fights), a little under the minimum. Not a missing term: the end-tile value is wired (E1 a, b, c; the suite proves
+both the dry-run and the plain-move case) and he ends almost every turn he bites next to the Burning foe; the fires are
+bounded by how many of his turns he spends in melee (Fetch and Zoomies turns end elsewhere), and pricing the heal above
+`healWorth` would make AutoPlay trade more HP than it heals. Left as is for the balance pass to read on its 600-run pages
+(its lever: the neighbour case 3 → 4, inside the range). Every page: 0 errors, 0 DD.warn lines, 0 stalls.
+
+**Full run** (`bash tools/test.sh`, Nov 18, after the G4 build; G3 building in parallel): 1318 suites PASS, 150,819
+assertions, 0 failures, 0 swallowed "Error in" lines (the one Bark-B-Q content advisory is the known, expected one).
+
+### DESIGN §6 brief (Nov 18)
+
+For the engine builder (phase 2), in `### Pebbles the Goodest Boy — Fire Dog (he/him)` (DESIGN.md ~683). Anchor, these
+two whole lines:
+```
+- Passive *Hot Dog*: Pebbles is made of fire: fire damage and Burn can't hurt him, and ending his turn on fire or lava
+  heals him 3 HP.
+```
+Replace with:
+```
+- Passive *Hot Dog*: Pebbles is made of fire: fire damage and Burn can't hurt him, and ending his turn on fire, on lava
+  or next to a Burning foe heals him 3 HP.
+```
+
+### Deviations (Nov 18)
+
+- **This Is Fine's `aiScore` returns 0 in the exact pass** (not in the plan's code list): with E1 the exact pass reads
+  Hot Dog's heal from the dry run's end tile (his own fire), so the old term would have counted it twice there. The quick
+  pass keeps the term (it has no end-tile value for a self-target skill). Mechanics, numbers and texts as planned.
+
+### Requests (Nov 18)
+
+- None.
+
+### Conditional heal: adversarial review (Nov 18, review:g4)
+Code path read end to end: Hot Dog's `onTurnEnd` → `cozyAt` (fire / lava under his paws, or an active foe with Burn at
+distance 1, no floor needed) → one `DD.Act.heal(Pebbles, Pebbles, cozyHeal, { via: 'lift:pebbles' })`, `active` first; a
+turn end has no current skill, so no aimed revive can ride it. No loop: Burn never sticks to a fire-immune foe (the
+engine's elemental-DoT rule), so the Burning neighbour always takes its Burn damage. `autoplayEnd` is pure (reads the
+copy inside a dry run); This Is Fine's exact-pass term now 0 (the Deviation above: no double count). Forced-party sim
+(`seeds=30&from=55200&stop=2&party=pebbles,basanos,valdris,syllamin`, `.tmp/heal/review-g4/pebbles_55200.txt`, 232
+fights): `lift:pebbles` **1.79 fires, 4.5 HP a fight** (regular 1.62 / 3.9, elite 2.4 / 6, boss 1.98 / 5.3), overheal
+19%: inside T8 (≥ 1.5, 2.3-9, regular ≤ 8, boss ≤ 12). Pooled with the build's two pages: 1,143 calls / 748 fights =
+**1.53 fires a fight**, just over the 1.5 minimum (party-dependent: 1.25 to 1.79 a page), so the balance pass should
+read it on its 600-run pages before touching the neighbour heal. 0 errors, 0 DD.warn, 0 stalls. Nothing changed.
+
+### QA fixes (Nov 18, qa-fix:heal)
+- **[heal QA-1] the log says why he healed.** A cosy turn end that heals (> 0) now logs, right after "Pebbles heals N
+  HP.": "Pebbles warms his paws on <Burning foe>. Toasty. For one of them." or, standing on fire / lava (that case
+  first: the two never add up), "Pebbles curls up in the flames. So cozy." New pure helper `burningFoeNear(u, x, y)`
+  (the first such foe; `burningNear` reads it). Test: "hero_pebbles: conditional heal (Nov 18)" (both lines after the heal
+  line; none at full HP). No number changed.

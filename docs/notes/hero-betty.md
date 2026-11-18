@@ -321,3 +321,88 @@ protect objective's object (`DD.Targeting.objectTargetable`). Suite "hero_betty:
   tile) kept it from aiming at objects without saying so. It now has `target.objects: false` with the reason (a throw:
   the damage is its landing), so the rule "any single-target damage skill can break it" has a listed exception instead of
   a silent one. No behaviour change. `kit: finish D1` pins the opt-out list (now nine).
+
+## Conditional healing (Nov 18) — "Leftovers" (build:g2, plan §4.9)
+
+The user (Nov 18): "I want everyoe else brought up but by conditional healing". Betty's lift broadens his own pre-D9 passive
+heal, *Eats Anything* (no second source). Ellaria untouched.
+
+**What.** A unit hostile to Betty dies at `DD.Grid.dist` 1 from him, credited to anyone but Betty (`d.credit !== Betty`: his
+own kills already heal 4 through `onKill`, never two heals for one foe; a death nobody is credited with counts), Betty
+active: he heals **3** (`LEFTOVER_HEAL`, `DD.Betty.LEFTOVER_HEAL`). Self. No cap (bounded by deaths). Boss adds and enemy
+summons are hostile units too, so they count.
+- **Code:** `js/data/heroes/betty.js`: `LEFTOVER_HEAL = 3`; `leftovers(u, dead, d)` next to `eat()`; the passive's new
+  `onAnyDeath` entry (the bus fires it on every active unit's own sources, so only on Betty's passive);
+  `DD.Act.heal(Betty, Betty, 3, { via: 'lift:betty' })`, always called when the condition holds (0 at full HP), the
+  "Nom! (leftovers)" text and the `leftovers` bark (0.4) only when it healed; the passive desc from the constants;
+  `barks.leftovers`; `DD.Betty.LEFTOVER_HEAL` and `DD.Betty.leftovers` exported.
+- **Desc (passive):** "Whenever Betty kills a foe or one of his skills breaks an object, he eats it and heals 4 HP. A foe that
+  dies next to him at someone else's hands is leftovers: he heals 3 HP. Don't ask."
+- **Barks** (new key `leftovers`, exactly the plan's three): "Leftovers!" / "You gonna finish that? ...BAAAH, too late." /
+  "Nom. Crunchy."
+- **AutoPlay:** none (plan): the heal fires inside the killer's action, so its dry run shows `+3` on Betty.
+
+**Tests** (`tests/content/hero_betty.js`, new suite "hero_betty: conditional heal (Nov 18)"): the constants (EAT_HEAL still
+4); the desc word for word from the constants; the three barks; the passive's `onAnyDeath`; an ally kills a foe next to him →
++3 (20 → 23), his heals stat +3, the knight's killing-blow preview shows `+3` on a hurt Betty (`previewMatches`), the call
+`heal(Betty, Betty, 3, { via: 'lift:betty' })`; his own kill → +4 only (24, never 7); near misses: a foe dying 2 tiles away;
+an ally (a hero summon) dying next to him; Betty downed while the foe next to him dies → nothing, stays down; a cleave killing
+three grunts of which one is next to him → +3 once; a death nobody is credited with, next to him → +3; two foes next to him
+die → +3 each (no cap); at full HP the call is made and heals 0.
+**Updated assertions** (definition suite): "passive: one rule, one breath, exact number" (≤ 25 words, "4 HP") now checks
+the eating rule as that one breath with the exact 4, then the leftovers sentence with the exact 3 (≤ 40 words in all); the
+bark-key list includes `leftovers` (the plan gives it three lines, so it stays out of the 4-6-line check for his skill keys;
+its exact lines are asserted in the new suite).
+
+**Sanity sims** (`bash tools/sim.sh "debug=1&raw=1&seeds=30&from=…&stop=2&party=…"`, normal, acts 1-2):
+
+| party (from) | fights | fires / fight | HP / fight | by kind |
+|---|---|---|---|---|
+| betty, syllamin, benedick, corelos (50300) | 255 | 0.99 | 2.1 (self; overheal 31%) | regular 1.11 / 2.3 HP · elite 1.23 / 2.3 · boss 0.45 / 1.1 |
+| betty with valdris, basanos, marbles (50500) | 192 | 0.67 | 1.5 | regular 0.84 / 1.8 · elite 0.43 / 1.1 · boss 0.2 / 0.5 |
+
+T8 for `lift:betty`: min 0.5 fires, band 1.2-5 HP: **met** in both. 0 errors, 0 DD.warn lines.
+
+**Full run** (`bash tools/test.sh`, Nov 18, after the G2 build): 1310 suites PASS, 0 failures, 0 swallowed "Error in" lines.
+
+### DESIGN §6 brief (Nov 18)
+
+For the engine builder (phase 2). Anchor in `### Betty the G.O.A.T. — Goatfolk Warrior (he/him)` (unique, DESIGN.md lines
+~613-614, the passive bullet), these two lines:
+
+```
+- Passive *Eats Anything*: whenever Betty kills a foe or one of his skills breaks an object, he eats it and heals 4 HP.
+  Don't ask.
+```
+
+Replace them with:
+
+```
+- Passive *Eats Anything*: whenever Betty kills a foe or one of his skills breaks an object, he eats it and heals 4 HP.
+  A foe that dies next to him at someone else's hands is leftovers: he heals 3 HP. Don't ask.
+```
+
+### Deviations (Nov 18)
+
+- None.
+
+### Requests (Nov 18)
+
+- None.
+
+### Review (Nov 18) — review:g2
+
+Adversarial review of "Leftovers" against plan §4.9 (code path read end to end, suites run, a sim).
+- **Holds:** `onAnyDeath` is fired on every active unit's own sources (actions.js `die()`), so only on Betty's passive, and
+  only for deaths (fleeing bosses' minions and objects never go through `die()`); hostile + `dist` 1 + `d.credit !== Betty`
+  (his own kills keep `onKill`'s 4, never 7) + `active` before the heal; a sourceless death counts; desc == execute; no cap,
+  bounded by deaths; nothing revives (a downed Betty never reaches the call, an aimed revive in progress included).
+- **Sim** (`tools/sim.sh "debug=1&raw=1&seeds=30&from=55200&stop=2&party=betty,josiah,zarathor,hjalmar"`, normal, acts 1-2):
+  301 fights, **0.97 fires / 2.0 HP a fight** (regular 0.98 / 1.9, elite 1.24 / 2.7, boss 0.71 / 1.5; overheal 32%): T8 (min
+  0.5, band 1.2-5) **met**; 0 errors, 0 DD.warn lines, 0 stalls.
+- **Fixes:** none needed.
+
+### QA fixes (Nov 18, qa-fix:heal)
+- **[heal QA-1] the log says why he healed.** Leftovers that heal (> 0) now log, right after "Betty heals 3 HP.":
+  "Betty eats the leftovers of <foe>. Don't ask." Test: the end of "hero_betty: conditional heal (Nov 18)" (the line
+  after the heal line; none at full HP). No number changed.

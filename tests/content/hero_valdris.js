@@ -180,14 +180,21 @@
         const txt = DD.skillDesc(d, lv, null);
         t.ok(txt && !/undefined|NaN|\[object/.test(txt), id + ' L' + lv + ' desc with a null user');
         const Lv = DD.skillLevel(d, lv);
-        ['dmg', 'block', 'bonus', 'burn', 'thorns', 'push', 'r', 'heal'].forEach(function (k) {
+        ['dmg', 'block', 'bonus', 'burn', 'thorns', 'push', 'r', 'heal', 'dents'].forEach(function (k) {
           if (typeof Lv[k] === 'number' && Lv[k] > 0) t.ok(new RegExp('(^|[^0-9])' + Lv[k] + '([^0-9]|$)').test(txt), id + ' L' + lv + ' desc shows ' + k + ' ' + Lv[k]);
         });
-        // DESIGN §6 Simplicity: one verb, read in one breath, no if/else clauses
+        // DESIGN §6 Simplicity: one verb, read in one breath, no if/else clauses. Nov 18: Forge Armor's one rider is the
+        // conditional heal (plan §2.10): its Block sentence stays one breath, and the one "If" is that rider, exactly
         const n = words(txt);
         longest = Math.max(longest, n);
-        t.ok(n <= 24, id + ' L' + lv + ' desc reads in one breath (' + n + ' words): ' + txt);
-        t.ok(!/\bif\b|\bunless\b|\botherwise\b/i.test(txt), id + ' L' + lv + ' desc has no conditions: ' + txt);
+        if (id === 'val_forge_armour') {
+          const parts = /^(.*\.) (If it is Dented \(its Block soaked a hit\), he hammers the dents out: it heals \d+ HP\.)$/.exec(txt);
+          t.ok(!!parts && words(parts[1]) <= 24 && !/\bif\b|\bunless\b|\botherwise\b/i.test(parts[1]), id + ' L' + lv + ': one breath of Block plus the one Dented rider: ' + txt);
+          t.ok(n <= 34 && (txt.match(/\bif\b/gi) || []).length === 1, id + ' L' + lv + ': the rider is its only condition (' + n + ' words)');
+        } else {
+          t.ok(n <= 24, id + ' L' + lv + ' desc reads in one breath (' + n + ' words): ' + txt);
+          t.ok(!/\bif\b|\bunless\b|\botherwise\b/i.test(txt), id + ' L' + lv + ' desc has no conditions: ' + txt);
+        }
       }
       t.ok(!d.flavor || d.flavor.length <= 120, id + ' flavor ≤ 120');
     });
@@ -223,6 +230,8 @@
     ALL.forEach(function (id) { Array.prototype.push.apply(about, textsOf(id)); });
     ITEMS.forEach(function (id) { const it = DD.getItem(id); if (it) about.push(it.desc, it.flavor); });
     ['val_forged', 'val_flame_edge'].forEach(function (id) { about.push(DD.getStatus(id).desc({ id: id, stacks: 3, turns: 1, source: null, data: {} })); });
+    about.push(DD.getStatus('val_dented').desc({ id: 'val_dented', stacks: 1, turns: -1, source: null, data: {} }));   // Nov 18: Dented
+    Array.prototype.push.apply(about, h.barks.dents || []);
     about.forEach(function (txt) { t.ok(!FEM.test(txt), 'he/him, never she/her: ' + JSON.stringify(txt)); });
     t.ok(/\bHe\b/.test(h.blurb) && /hair/.test(h.blurb) && /weapons and armour/.test(h.blurb), 'the blurb says "He", the hair, weapons and armour');
     // content he owns
@@ -1166,6 +1175,196 @@
       t.eq(prev.detonates, 'barrel_explosive', id + ': the preview detonates it');
       t.ok(!DD.Grid.tile(2, 4).obj && g.hp < g0 && g.x === 3, id + ': it went off; the grunt next to it takes the blast where it stands');
       t.eq(b.v.ap, 3 - DD.Combat.costOf(b.v, sk(id), 1).ap, id + ': its AP is paid');
+    });
+  });
+
+  // ---- Nov 18: conditional healing — "Hammer Out the Dents" (plan §4.7) ------------------------------------------------
+  /** Every DD.Act.heal call made while fn runs: [{ src, target, n, via, healed }]. */
+  function healCalls(fn) {
+    const list = [], orig = DD.Act.heal;
+    DD.Act.heal = function (src, target, n, opts) {
+      const healed = orig.apply(this, arguments);
+      list.push({ src: src, target: target, n: n, via: opts && opts.via, healed: healed, sim: !!DD.Act.simulating });
+      return healed;
+    };
+    try { fn(); } finally { DD.Act.heal = orig; }
+    return list;
+  }
+  function healsBy(u) { const st = S().stats.units[u.id]; return st ? st.heals : 0; }
+  const DENT_DESC = 'Valdris is here: when Block soaks a foe\'s hit on his side, the one it hit is Dented; his next Forge Armor on it hammers the dents out and heals it.';
+
+  T.suite('hero_valdris: conditional heal (Nov 18)', function (t) {
+    const V = DD.Valdris, def = sk('val_forge_armour');
+    t.ok(!!V && V.DENTED === 'val_dented' && V.DENT_RULE === 'val_dents' && JSON.stringify(V.DENTS) === '[7,8,9]', 'DD.Valdris exports DENTED, DENT_RULE and DENTS 7/8/9');
+    // (balance pass, Nov 18: the plan's 4/5/6 raised three steps to the top of its range, dents I 4 [4, 7]: T6 asks Valdris to
+    // heal others ≥ 1.25× every non-healer, and T8 found him under its fires minimum; docs/notes/balance.md)
+    // desc == execute: the plan's text at every level, numbers from the level (dents) and Block unchanged
+    [1, 2, 3].forEach(function (lv) {
+      const Lv = L('val_forge_armour', lv);
+      t.ok(Lv.block === [6, 8, 10][lv - 1] && Lv.dents === V.DENTS[lv - 1] && Lv.heal === undefined, 'L' + lv + ': ' + Lv.block + ' Block, dents ' + Lv.dents + ' (no level key named heal)');
+      t.eq(DD.skillDesc(def, lv, null), 'Valdris or an ally within 3 gains ' + Lv.block + ' Block (until the start of its next turn). If it is Dented (its Block soaked a hit), he hammers the dents out: it heals ' + Lv.dents + ' HP.',
+        'L' + lv + ': the desc, word for word');
+    });
+    t.ok(def.kind === 'buff' && def.tags.indexOf('heal') < 0 && def.target.revive === false, 'kind buff, no heal tag, target.revive false: never an aimed revive');
+    t.ok(!/Armour/.test(DD.skillDesc(def, 1, null)), '"Armor", never "Armour"');
+    const st = DD.getStatus('val_dented');
+    t.ok(!!st && st.name === 'Dented' && st.icon === '🔨' && st.type === 'buff' && st.stacking === 'refresh' && st.maxStacks === 1 &&
+      st.decay === 'never' && st.defaultTurns === -1, 'Dented: a buff (cleanses leave it), refresh, max 1, never decays');
+    t.eq(st && typeof st.desc === 'function' && st.desc({ id: 'val_dented', stacks: 1, turns: -1, source: null, data: {} }),
+      'Its Block soaked a hit. Valdris\'s next Forge Armor on it hammers the dents out and heals it.', 'Dented: its desc');
+    t.eq((DD.getHero('valdris').barks.dents || []).join(' | '), ['Hold still. This\'ll only sting a lot.', 'Good as new. Better, actually: I used conditioner.',
+      'Every dent tells a story. This one says \'ow\'.'].join(' | '), 'barks.dents: the plan\'s three lines');
+
+    // the rule: added once per fight by his passive, silent (no "New rule" line), a HUD chip with its name / icon / desc
+    const a = arena({ at: [3, 4], skills: [['val_forge_armour', 1]], heroes: [{ id: 'test_knight', x: 4, y: 4 }, { id: 'test_mage', x: 2, y: 4 }, { id: 'test_cleric', x: 3, y: 6 }],
+      enemies: [E(5, 4, 'test_grunt', 3), E(8, 8)] });
+    t.ok(!DD.Targeting.revivesWith(a.v, a.slot('val_forge_armour')), 'DD.Targeting.revivesWith(Valdris, Forge Armor) is false');
+    const rules = function () { return S().rules.filter(function (r) { return r.id === 'val_dents'; }); };
+    t.eq(rules().length, 1, 'the Dents rule is in');
+    const r0 = rules()[0];
+    t.ok(!!r0 && r0.name === 'Dents' && r0.icon === '🔨' && r0.silent === true && r0.turns === -1 && r0.desc === DENT_DESC, 'its chip: 🔨 Dents, the plan\'s desc, silent, the whole fight');
+    t.ok(!S().log.some(function (l) { return /New rule/.test(l.text); }), 'silent: no "New rule" log line');
+    V.ensureDents();
+    DD.Hooks.fire('onCombatStart', a.v, a.v);
+    t.eq(rules().length, 1, 'added once (a second onCombatStart / ensureDents adds nothing)');
+    const nv = DD.Combat.sandbox({ w: 6, h: 6, seed: 3, heroes: [{ id: 'test_knight', x: 1, y: 1 }], enemies: [E(4, 4)],
+      objective: { type: 'custom', text: 'no smith' }, encounter: { id: 'val_test_nosmith', checkObjective: function () { return null; } } });
+    t.ok(!nv.rules.some(function (r) { return r.id === 'val_dents'; }), 'no Valdris in the fight: no rule');
+
+    // who gets Dented: Block soaking a FOE's hit (or a sourceless one) on his side, the one hit still standing
+    const b = arena({ at: [3, 4], skills: [['val_forge_armour', 1]], heroes: [{ id: 'test_knight', x: 4, y: 4 }, { id: 'test_mage', x: 2, y: 4 }, { id: 'test_cleric', x: 3, y: 6 }],
+      enemies: [E(5, 4, 'test_grunt', 3), E(8, 8)] });
+    const kn = b.hero('test_knight'), mage = b.hero('test_mage'), cl = b.hero('test_cleric'), g = b.foes[0];
+    A().addBlock(kn, 6);
+    A().damage(g, kn, 4);
+    t.ok(has(kn, 'val_dented') && kn.hp === kn.maxHp && kn.block > 0 && kn.block < 6, 'a foe\'s hit soaked by the knight\'s Block: Dented (Block ' + kn.block + ', HP ' + kn.hp + '/' + kn.maxHp + ')');
+    A().damage(g, mage, 3);
+    t.ok(!has(mage, 'val_dented') && mage.hp === mage.maxHp - 3, 'a hit with no Block: not Dented');
+    A().addBlock(mage, 5);
+    A().damage(kn, mage, 2, { cause: 'bump' });
+    t.ok(!has(mage, 'val_dented') && mage.block === 3, 'an ally\'s bump into a Blocking ally: soaked, never a dent');
+    A().damage(null, mage, 2, { cause: 'other' });
+    t.ok(has(mage, 'val_dented'), 'a sourceless hit soaked by Block: Dented');
+    A().addBlock(g, 5);
+    A().damage(kn, g, 3);
+    t.ok(!has(g, 'val_dented') && g.block === 2, 'a foe\'s Block soaking a hero\'s hit: the foe is never Dented');
+    cl.hp = 3;
+    A().addBlock(cl, 1);
+    A().damage(g, cl, 20);
+    t.ok(cl.downed && !has(cl, 'val_dented'), 'a soaked hit that downs the target anyway: not Dented (it has 0 HP)');
+    A().addBlock(b.v, 6);
+    A().damage(g, b.v, 3);
+    t.ok(has(b.v, 'val_dented'), 'Valdris himself: Dented too');
+    DD.Act.cleanse(kn, 'debuff');
+    DD.Combat.endRound();
+    t.ok(has(kn, 'val_dented'), 'Dented lasts (a buff: a debuff cleanse and round ends leave it)');
+
+    // the heal: Forge Armor on a Dented target, at every level (start hurt: nothing capped by max HP)
+    [1, 2, 3].forEach(function (lv) {
+      const Lv = L('val_forge_armour', lv);
+      const c = arena({ at: [1, 4], skills: [['val_forge_armour', lv]], heroes: [{ id: 'test_knight', x: 4, y: 4 }], enemies: [E(5, 4, 'test_grunt', 3)] });
+      const k = c.hero('test_knight');
+      k.hp = k.maxHp - 15;
+      A().addBlock(k, 3);
+      A().damage(c.foes[0], k, 2);
+      t.ok(has(k, 'val_dented'), 'L' + lv + ': the knight is Dented');
+      const hp0 = k.hp, blk0 = k.block, heals0 = healsBy(c.v);
+      let prev = null;
+      const calls = healCalls(function () { prev = previewThenUse(t, c.v, c.slot('val_forge_armour'), 4, 4, 'L' + lv + ' Forge Armor on the Dented knight'); });
+      t.eq(k.hp - hp0, Lv.dents, 'L' + lv + ': it heals ' + Lv.dents + ' HP');
+      t.eq(k.block - blk0, Lv.block, 'L' + lv + ': and gains ' + Lv.block + ' Block, as before');
+      t.ok(!has(k, 'val_dented'), 'L' + lv + ': the dents are hammered out (status gone)');
+      t.eq(healsBy(c.v) - heals0, Lv.dents, 'L' + lv + ': the heal\'s src is Valdris (his heals stat grows by ' + Lv.dents + ')');
+      t.eq(prev && prev.perUnit[k.id] && prev.perUnit[k.id].heal, Lv.dents, 'L' + lv + ': the preview shows +' + Lv.dents + ' on the knight');
+      const real = calls.filter(function (x) { return !x.sim && x.via === 'lift:valdris'; });
+      t.ok(real.length >= 1 && real.every(function (x) { return x.src === c.v && x.n === Lv.dents; }), 'L' + lv + ': DD.Act.heal(Valdris, target, ' + Lv.dents + ', { via: \'lift:valdris\' })');
+    });
+    // not Dented: Block only; at full HP: the status still goes, the heal is called (0) and nothing shows
+    const d = arena({ at: [1, 4], skills: [['val_forge_armour', 1]], heroes: [{ id: 'test_knight', x: 4, y: 4 }, { id: 'test_mage', x: 3, y: 4 }], enemies: [E(5, 4, 'test_grunt', 3)] });
+    const dk = d.hero('test_knight'), dm = d.hero('test_mage');
+    dk.hp = dk.maxHp - 10;
+    let calls = healCalls(function () { use(t, d.v, d.slot('val_forge_armour'), 4, 4, 'not Dented'); });
+    t.ok(dk.hp === dk.maxHp - 10 && dk.block === 6 && !calls.some(function (x) { return x.via === 'lift:valdris'; }), 'not Dented: 6 Block, no heal');
+    A().addStatus(dm, 'val_dented', {}, null);
+    d.slot('val_forge_armour').cd = 0;
+    d.v.ap = 3;
+    const dn0 = S().log.length;
+    calls = healCalls(function () { use(t, d.v, d.slot('val_forge_armour'), 3, 4, 'Dented at full HP'); });
+    t.ok(dm.hp === dm.maxHp && !has(dm, 'val_dented') && calls.filter(function (x) { return x.via === 'lift:valdris'; }).length === 1 &&
+      calls.filter(function (x) { return x.via === 'lift:valdris'; })[0].healed === 0, 'Dented at full HP: the status goes, the heal is called and heals 0');
+    t.ok(!S().log.slice(dn0).some(function (l) { return /hammers the dents out/.test(l.text); }), '[heal QA-1] full HP: no reason line');
+    // on himself
+    const e = arena({ at: [3, 4], skills: [['val_forge_armour', 2]], enemies: [E(4, 4, 'test_grunt', 3)] });
+    e.v.hp = e.v.maxHp - 12;
+    A().addBlock(e.v, 4);
+    A().damage(e.foes[0], e.v, 2);
+    const ehp = e.v.hp;
+    let n0 = S().log.length;
+    use(t, e.v, e.slot('val_forge_armour'), 3, 4, 'on himself');
+    t.ok(e.v.hp - ehp === V.DENTS[1] && !has(e.v, 'val_dented') && e.v.block >= 8, 'on himself (II): +' + V.DENTS[1] + ' HP and 8 Block');
+    // [heal QA-1] the log says why it healed, right after the engine's heal line (himself, or the ally by name)
+    let lines = S().log.slice(n0).map(function (l) { return l.text; });
+    let hl = lines.indexOf('Valdris heals ' + V.DENTS[1] + ' HP.');
+    t.ok(hl >= 0 && lines[hl + 1] === 'Valdris hammers the dents out of himself. Good as new. Better, even.', 'the log on himself: the heal, then why (' + lines.join(' | ') + ')');
+    const lgv = arena({ at: [1, 4], skills: [['val_forge_armour', 1]], heroes: [{ id: 'test_knight', x: 4, y: 4 }], enemies: [E(5, 4, 'test_grunt', 3)] });
+    const lgk = lgv.hero('test_knight');
+    lgk.hp = lgk.maxHp - 15;
+    A().addBlock(lgk, 3);
+    A().damage(lgv.foes[0], lgk, 2);
+    n0 = S().log.length;
+    use(t, lgv.v, lgv.slot('val_forge_armour'), 4, 4, 'Forge Armor on the Dented knight (log)');
+    lines = S().log.slice(n0).map(function (l) { return l.text; });
+    hl = lines.indexOf('Sir Testsalot heals ' + V.DENTS[0] + ' HP (Valdris).');
+    t.ok(hl >= 0 && lines[hl + 1] === 'Valdris hammers the dents out of Sir Testsalot. Good as new. Better, even.', 'the log on an ally: the heal, then why (' + lines.join(' | ') + ')');    // never revives: a downed (Dented) ally is no target and stays down
+    const f = arena({ at: [1, 4], skills: [['val_forge_armour', 1]], heroes: [{ id: 'test_knight', x: 3, y: 4 }], enemies: [E(8, 8)] });
+    const fk = f.hero('test_knight');
+    A().addStatus(fk, 'val_dented', {}, null);
+    DD.Act.kill(fk, null);
+    t.ok(fk.downed && !valid(f.v, f.slot('val_forge_armour'), 3, 4) && !DD.Combat.useSkill(f.v, f.slot('val_forge_armour'), 3, 4) && fk.downed && fk.hp === 0,
+      'a downed ally can\'t be targeted and gains nothing (never a revive)');
+
+    // Slate (isolate=valdris,slate): Dented gives him no Rage (source null); Valdris' heal does (+1, another src: Short Fuse)
+    if (DD.getHero('slate')) {
+      const sl = arena({ at: [1, 4], skills: [['val_forge_armour', 1]], heroes: [{ id: 'slate', x: 4, y: 4 }], enemies: [E(5, 4, 'test_grunt', 3)] });
+      const sla = sl.hero('slate'), rage = function () { return stacks(sla, 'sla_rage'); };
+      sla.hp = sla.maxHp - 10;
+      A().addBlock(sla, 6);
+      const ra = rage();
+      A().damage(sl.foes[0], sla, 3);
+      t.ok(has(sla, 'val_dented') && rage() - ra === 1, 'Slate: the grunt\'s hit gives 1 Rage, Dented none (' + (rage() - ra) + ')');
+      const rb = rage(), hb = sla.hp;
+      use(t, sl.v, sl.slot('val_forge_armour'), 4, 4, 'Forge Armor on Slate');
+      t.ok(sla.hp - hb === V.DENTS[0] && rage() - rb === 1, 'Slate: +' + V.DENTS[0] + ' HP from Valdris and +1 Rage for it (Short Fuse; the Block gives none)');
+    } else t.log('slate.js not loaded (isolate): the Slate Rage case runs with isolate=valdris,slate');
+
+    // AutoPlay: the quick pass prices the heal on a Dented target (healWorth); the exact pass leaves it to the dry run
+    const q = arena({ at: [1, 4], skills: [['val_forge_armour', 3]], heroes: [{ id: 'test_knight', x: 3, y: 4 }], enemies: [E(8, 8)] });
+    const qk = q.hero('test_knight');
+    const qctx = function () { return DD.Targeting.buildCtx(q.v, q.slot('val_forge_armour'), { x: 3, y: 4 }); };
+    qk.hp = qk.maxHp - 20;
+    t.eq(def.aiScore(qctx()), 0, 'aiScore: not Dented, 0');
+    A().addStatus(qk, 'val_dented', {}, null);
+    t.eq(def.aiScore(qctx()), DD.AutoPlay.healWorth(qk, V.DENTS[2]), 'aiScore: Dented and hurt, healWorth(target, ' + V.DENTS[2] + ') = ' + DD.AutoPlay.healWorth(qk, V.DENTS[2]));
+    t.ok(DD.AutoPlay.healWorth(qk, V.DENTS[2]) > 0, '(and that is more than 0)');
+    const ex = qctx();
+    ex.autoplay = { preview: {} };
+    t.eq(def.aiScore(ex), 0, 'aiScore: 0 in the exact pass (the dry run sees the heal)');
+    qk.hp = qk.maxHp;
+    t.eq(def.aiScore(qctx()), 0, 'aiScore: Dented at full HP, 0');
+    // AutoPlay forges the Dented one of two mirror-image hurt allies (nothing else differs), whichever side it is on
+    ['left', 'right'].forEach(function (side) {
+      const m = arena({ at: [4, 4], skills: [['val_forge_armour', 1]], heroes: [{ id: 'test_knight', x: 2, y: 4 }, { id: 'test_knight', x: 6, y: 4 }],
+        enemies: [E(0, 0, 'test_grunt'), E(8, 0, 'test_grunt')] });
+      const ks = S().units.filter(function (u) { return u.defId === 'test_knight'; });
+      ks.forEach(function (k) { k.hp = k.maxHp - 14; });
+      const dented = side === 'left' ? ks.filter(function (k) { return k.x === 2; })[0] : ks.filter(function (k) { return k.x === 6; })[0];
+      A().addStatus(dented, 'val_dented', {}, null);
+      let first = null;
+      A().addRule({ id: 'val_test_watch', name: 'watch', silent: true, hooks: { onSkillUsed: function (c) {
+        if (!A().simulating && !first && c && c.skill && c.skill.id === 'val_forge_armour') first = c.targetUnit;
+      } } });
+      DD.AutoPlay.takeTurn();
+      t.ok(first === dented && dented.hp === dented.maxHp - 14 + V.DENTS[0], 'AutoPlay: Forge Armor goes to the Dented knight on the ' + side + ' (' + (first ? first.x + ',' + first.y : 'none') + ')');
     });
   });
 })();

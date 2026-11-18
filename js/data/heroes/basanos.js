@@ -3,7 +3,8 @@
  *   Human  — a disciplined swordsman: Silvered Sword basic; hits, shoves, taunts and bodyguarding.
  *   Wolf   — a savage skirmisher: +2 move, Claw basic (Bleed); rends, pounces, howls and bites.
  * Transform (a skill) swaps the forms; his first Transform each turn, either way, heals him (MEND 2 / 3 / 4: the change
- * knits him back together). Skills are tagged 'human' or 'wolf'; the other form's are locked (canUse).
+ * knits him back together; Nov 18 "Sorry, It's Crowded In Here": +2 for each foe next to him after the switch, max +4,
+ * the whole mend labelled 'lift:basanos'). Skills are tagged 'human' or 'wolf'; the other form's are locked (canUse).
  * Passive Hair Trigger: damage that leaves him below half HP turns him into the werewolf for free (it never heals).
  * The form is the status bas_wolf (the source of truth) plus bookkeeping in unit.data.bas: the move bonus, the basic
  * attack slot, the sprite override (unit.sprite logically, unit.vis.sprite in step with FX playback) and the turn his
@@ -24,6 +25,8 @@
   // Transform's heal by level: his first Transform each turn (D9: heal on transform). Sustain refit: 3/4/5 -> 2/3/4, the
   // spec's first fallback: with the Flea Collar (a free Transform each turn) he healed ~13 HP a regular fight (cap ~10)
   const MEND = [2, 3, 4];
+  // Nov 18 (conditional healing): the mend grows by CROWD_PER for each foe next to him after the switch, max +CROWD_CAP
+  const CROWD_PER = 2, CROWD_CAP = 4;
   const MOON = '#ff5a4f';
 
   // ---- helpers ------------------------------------------------------------------------------------------
@@ -253,6 +256,21 @@
     const s = S(), d = peek(u);
     return !!s && !!d && d.mend === s.turn;
   }
+  /** Active units hostile to him next to (x, y) (default: where he stands): the crowd that Transform's mend counts. */
+  function crowdAt(u, x, y) {
+    const s = S();
+    if (!s || !u) return 0;
+    const p = { x: x === undefined ? u.x : x, y: y === undefined ? u.y : y };
+    let n = 0;
+    s.units.forEach(function (f) { if (f !== u && active(f) && G().hostile(u, f) && G().dist(f, p) === 1) n++; });
+    return n;
+  }
+  /** Transform's mend with n foes next to him: mend + min(foeCap, perFoe × n). */
+  function mendWith(L, n) {
+    L = L || {};
+    const per = L.perFoe === undefined ? CROWD_PER : L.perFoe, cap = L.foeCap === undefined ? CROWD_CAP : L.foeCap;
+    return (L.mend || 0) + Math.min(cap, per * Math.max(0, n || 0));
+  }
   /**
    * Transform's aiScore: what the other form could do with the AP left, minus what this one can do now; plus, in
    * AutoPlay's quick pass only, the unspent mend (the exact pass's dry run already sees the real heal). The level key
@@ -269,8 +287,9 @@
     if (wolf && u.hp * 2 < u.maxHp) then *= 0.5;
     const base = Math.max(0, then - now - 2);
     if (ctx.autoplay || mendSpent(u)) return base;
-    // outside the max(0, …): form friction must not swallow the heal
-    const mend = (ctx.L && ctx.L.mend) || MEND[transformLevel(u) - 1] || 0, miss = u.maxHp - u.hp;
+    // outside the max(0, …): form friction must not swallow the heal. Nov 18: the crowd next to him now counts too
+    const L = ctx.L && ctx.L.mend ? ctx.L : { mend: MEND[transformLevel(u) - 1] || 0 };
+    const mend = mendWith(L, crowdAt(u)), miss = u.maxHp - u.hp;
     return base + (miss > 0 ? Math.min(mend, miss) * (miss > u.maxHp / 2 ? 1.5 : 0.8) : 0);
   }
 
@@ -396,15 +415,16 @@
   DD.registerSkill({
     id: TRANSFORM, name: 'Transform', owner: HERO, icon: '🌕', kind: 'utility', tags: ['shapeshift'],
     ap: 1, cooldown: 0,
-    // `mend`, not `heal`: AutoPlay's quick pass would credit a `heal` even once it is spent (transformScore prices it)
-    levels: CLAW_LV.map(function (c, i) { return { claw: c.dmg, bleed: c.bleed, mend: MEND[i] }; }),
+    // `mend`, not `heal`: AutoPlay's quick pass would credit a `heal` even once it is spent (transformScore prices it).
+    // Nov 18: `perFoe` / `foeCap` (never `heal`), the crowd bonus
+    levels: CLAW_LV.map(function (c, i) { return { claw: c.dmg, bleed: c.bleed, mend: MEND[i], perFoe: CROWD_PER, foeCap: CROWD_CAP }; }),
     target: { type: 'self' },
     // "first Transform", not "first switch": a Hair Trigger switch on his own turn is a switch, but it neither heals nor
     // spends the mend (review, sustain); the Flea Collar words its free Transform the same way
     desc: function (L, user) {
-      return 'Switch between human and werewolf. Your first Transform each turn heals you ' + L.mend + ' HP' +
-        (mendSpent(user) ? ' (used this turn)' : '') + '. Werewolf: +' + WOLF_MOV + ' move; basic attack Claw (' + L.claw +
-        ' damage, ' + bleedN(L.bleed, user) + ' Bleed).' +
+      return 'Switch between human and werewolf. Your first Transform each turn heals you ' + L.mend + ' HP, +' + L.perFoe +
+        ' for each adjacent foe (max +' + L.foeCap + ')' + (mendSpent(user) ? '; used this turn' : '') + '. Werewolf: +' +
+        WOLF_MOV + ' move; basic attack Claw (' + L.claw + ' damage, ' + bleedN(L.bleed, user) + ' Bleed).' +
         // [playtest desc-sweep-7] the Wolfsbane-Lined Coat changes what this skill does, so its text says so
         (hasItem(user, COAT) ? ' Turning back into a human gives you ' + COAT_BLOCK + ' Block (Wolfsbane-Lined Coat).' : '');
     },
@@ -422,9 +442,12 @@
       if (!switched || !active(u)) return;
       if (mend) {
         d.mend = s.turn;                     // the first Transform spends it, even at full HP (the desc says "first")
-        if (u.hp < u.maxHp) {
-          DD.FX.text(u, 'Good as new-ish!', { color: '#bff5c8', size: 15 });
-          if (A().heal(u, u, ctx.L.mend) > 0) A().log('The change knits ' + u.name + ' back together. His trousers are not so lucky.', 'hero');
+        // Nov 18: the foes next to him after the switch add to it; always called (0 at full HP), labelled for the sim
+        const crowd = crowdAt(u);
+        if (A().heal(u, u, mendWith(ctx.L, crowd), { via: 'lift:basanos' }) > 0) {
+          DD.FX.text(u, crowd > 0 ? 'Sorry! Crowded!' : 'Good as new-ish!', { color: '#bff5c8', size: 15 });
+          A().log('The change knits ' + u.name + ' back together. His trousers are not so lucky.', 'hero');
+          if (crowd > 0) A().maybeBark(u, 'crowd', 0.35);
         }
       }
       // Wolfsbane-Lined Coat: only a chosen switch back to the man (Block resets at his turn start, each switch costs AP)
@@ -772,6 +795,8 @@
       human: ['Phew. Two legs. Thumbs. Lovely.', 'Sorry about that. All of it.', 'I\'m back. Did I bite anyone?',
         'Human again. Who wants a hug? Nobody? Fair.'],
       trigger: ['Oh no. Oh no no no. AWOOO!', 'Not now! NOT NOW!', 'You\'ve made him angry. Not me. Him.', 'Sorry in advance! GRRRAAH!'],
+      // Nov 18: Transform's mend with foes next to him ("Sorry, It's Crowded In Here", the heal > 0)
+      crowd: ['Sorry. It\'s crowded in here.', 'Nobody look. NOBODY LOOK.', 'Bad dog. Good knees.'],
     },
   });
 
@@ -819,7 +844,8 @@
 
   // ---- test / debug API ---------------------------------------------------------------------------------------
   DD.Basanos = {
-    WOLF: WOLF, WOLF_MOV: WOLF_MOV, CLAW_LV: CLAW_LV, MEND: MEND, COAT_BLOCK: COAT_BLOCK,
+    WOLF: WOLF, WOLF_MOV: WOLF_MOV, CLAW_LV: CLAW_LV, MEND: MEND, COAT_BLOCK: COAT_BLOCK, CROWD_PER: CROWD_PER, CROWD_CAP: CROWD_CAP,
+    crowdAt: crowdAt, mendWith: mendWith,
     HUMAN_SPRITE: HUMAN_SPRITE, WOLF_SPRITE: WOLF_SPRITE, DIRE_SPRITE: DIRE_SPRITE,
     isWolf: isWolf, becomeWolf: becomeWolf, becomeHuman: becomeHuman, syncForm: syncForm, transformLevel: transformLevel,
     formOf: formOf, formValue: formValue, transformScore: transformScore, mendSpent: mendSpent, landingTile: landingTile,

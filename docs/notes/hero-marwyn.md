@@ -535,3 +535,84 @@ loadouts) can be adjusted here.
   35, gun show 13, rage 14, headbutt 14, cleave 2, landing 2, magnetism 2, YEET 2, keg stand 1), bar 7 of 9; uses ≥ 30;
   the party wins ≥ 75%. Deterministic (fixed seeds), with a margin of 2.
 - Suite `hero_marwyn: finish — his ally_down call …`. D7: two swap barks.
+
+## Conditional heal (Nov 18) — "Standing Ovation" (build:g1; plan `.tmp/heal/plan.md` §4.12, the user's Nov 18 request)
+
+The user (Nov 18): "I want everyone else brought up but by conditional healing". Marwyn's D9 heal (the MAGNIFICENT
+SURGE) is broadened: the foes he has Taunted are his audience, and their hatred is applause.
+
+- **What:** the surge (once per surge, as before: it runs in onSkillUsed after the skill resolved, so War Cry's fresh
+  taunts count) heals him `SURGE_HEAL + min(OVATION_CAP, OVATION_PER × taunted)`, where taunted = active units hostile to
+  him whose `taunt` status has `source === his id` (`tauntedBy(u)`). Foes Taunted by someone else, dead foes and allies
+  don't count. Self only; the existing `active(u)` check runs before the heal (a downed Marwyn's surge heals nobody). The
+  Hand Mirror's second effect still doesn't heal again.
+- **Numbers:** `SURGE_HEAL` 8 (unchanged) + `OVATION_PER` **2** per Taunted foe, max `OVATION_CAP` **+6**: 8 / 10 / 12 / 14
+  with 0 / 1 / 2 / 3+ Taunted. Exported on `DD.Marwyn` (`OVATION_PER`, `OVATION_CAP`, `tauntedBy`, `ovationHeal`). Tuning
+  range: OVATION_PER 2 [2, 3], OVATION_CAP 6 [6, 8].
+- **The call:** `DD.Act.heal(u, u, ovationHeal(fans), { via: 'lift:marwyn' })`: the WHOLE surge heal carries the label (the
+  sim reads the surge, base and ovation together). "THE CROWD LOVES ME!" stays as before; a "STANDING OVATION ×N" pop-up
+  only when it healed > 0 with N ≥ 1. Two lines added to the existing `surge` bark pool: "LOOK AT THEM LOOKING AT
+  MARWYN!" / "THEIR HATRED IS APPLAUSE!" (6 lines now).
+- **Texts (desc == execute), all built from the constants (`ovationText()`):** passive "Each of his skills that reaches
+  a foe adds 1 MAGNIFICENCE. At 5, his next skill also unleashes a MAGNIFICENT SURGE (random good wild magic, +10 party
+  Hype, and he heals 8 HP, +2 for each foe he has Taunted, max +6) and resets the meter." (40 words, numbers not counted:
+  the ≤ 45 budget holds); the MAXED meter line "… he heals 8 HP, +2 for each foe he has Taunted, max +6)."; the loading tip
+  "Every MAGNIFICENT SURGE heals Marwyn 8 HP, +2 for each foe he has Taunted. Applause is a medical treatment. Ask him."
+- **AutoPlay:** none needed (the surge resolves inside the skill's dry run, so the exact pass sees the ovation).
+- **Tests:** new suite `hero_marwyn: conditional heal (Nov 18)` (47 assertions): the constants and `ovationHeal`; surges
+  with 0 / 1 / 2 / 3 / 4 foes Taunted by him → 8 / 10 / 12 / 14 / 14 (tamed wild magic, one labelled call, src Marwyn,
+  the heals stat); foes Taunted by the knight → 8; a dead Taunted foe doesn't count; a surging War Cry sees its own fresh
+  taunts (12); full HP → one 0-HP call; the Hand Mirror → one heal of 12; a downed Marwyn's surge → no call; the exact
+  passive, the MAXED line and the tip (≤ 140); the surging Ginger Snap's preview shows +12 on him (uncertain: the surge
+  rolls; min = max = 12); the two new surge barks. The old "MAGNIFICENT SURGE heals him 8 HP" suite still passes as is
+  (no foes Taunted there).
+- **Sanity sim** (`bash tools/sim.sh "debug=1&raw=1&seeds=30&from=50200&stop=2&party=marwyn,syllamin,pebbles,corelos"`,
+  `.tmp/heal/g1/marwyn.txt`, 30 runs, 240 fights): `lift:marwyn` (the whole surge) **0.55 fires a fight, 4.0 HP a fight**
+  (overheal 16%); regular 0.4 / 2.8, elite 0.96 / 7.1, boss 0.86 / 6.6. T8: fires ≥ 0.3 and HP inside 2.5-10. OK.
+
+- **Test runs (Nov 18, build:g1):** `tools/test.sh "suite=hero_slate,hero_sparrow,hero_marwyn,hero_josiah&isolate=slate,sparrow,marwyn,josiah"`: 94 suites, all pass but the two that need other heroes loaded (Kiri / Basanos / Valdris; they pass in the full run). One full `bash tools/test.sh`: 1309 suites, 150,284 ok, 3 failures, all in "content: descriptions at every level" (status `val_dented` desc: `fn.apply is not a function`, valdris.js, G2's work in progress); 0 swallowed "Error in" lines from the G1 files.
+- **Review (Nov 18, review:g1, adversarial):** read end to end against plan §4.12 / §3: the audience is counted after
+  the skill resolved (War Cry's fresh taunts count), active foes hostile to him whose `taunt` names him; `active(u)`
+  before the heal; one labelled heal a surge (the Hand Mirror's second effect adds none); passive, MAXED line and tip
+  built from `ovationText()` / the constants. No code change. **T8 re-measured** on fresh seeds:
+  `bash tools/sim.sh "debug=1&raw=1&seeds=30&from=55200&stop=2&party=marwyn,basanos,benedick,zarathor"` (243 fights):
+  **0.38 fires, 3.2 HP a fight** (regular 0.2 / 1.7, elite 0.93 / 7.4, boss 0.72 / 6.1; overheal 4%); 0 errors, 0
+  DD.warn, 0 stalls. Inside T8 (≥ 0.3 fires, 2.5-10 HP).
+
+### DESIGN §6 brief (Nov 18)
+Anchor (unique in `docs/DESIGN.md`, `### Marwyn the Magnificent`, lines 478-479 today):
+
+```
+- Passive *MAGNIFICENCE*: each of his skills that reaches a foe adds 1 MAGNIFICENCE. At 5, his next skill also unleashes
+  a **MAGNIFICENT SURGE** (random good wild magic, +10 party Hype, and he heals 8 HP) and the meter resets.
+```
+
+Replacement:
+
+```
+- Passive *MAGNIFICENCE*: each of his skills that reaches a foe adds 1 MAGNIFICENCE. At 5, his next skill also unleashes
+  a **MAGNIFICENT SURGE** (random good wild magic, +10 party Hype, and he heals 8 HP, +2 for each foe he has Taunted, max
+  +6) and the meter resets.
+```
+
+### QA fixes (Nov 18, qa-fix:heal)
+- **[heal QA-2] one label per surge.** "STANDING OVATION ×N" was a second label drawn over the green heal number. The
+  ovation is now folded into the one label once the heal is known: "THE CROWD LOVES ME! (+2 ×2)", at the cap "(+2 ×4,
+  max +6)" (built from `OVATION_PER` / `OVATION_CAP`; the label event is
+  queued first and its text set after the heal, the banner's sub-line pattern); the plain "THE CROWD LOVES ME!" when no
+  Taunted foe watched or the heal was 0. Checked on `.tmp/heal/qa/fx_marwyn_fix2.png`: the +12 reads above the label.
+- **[heal QA-1]** the bonus has a log line too, after the heal line: "Standing ovation! 2 Taunted foes can't take their
+  eyes off Marwyn, and he heals all the more for it." (only when the ovation healed him).
+- **[heal QA-4] the ovation lines only when the audience healed him.** "LOOK AT THEM LOOKING AT MARWYN!" / "THEIR
+  HATRED IS APPLAUSE!" moved from `barks.surge` to a new key `barks.ovation`; the surge bark (still on every surge, now
+  queued after the heal) picks `ovation` on half of the surges whose ovation healed him (cosmetic `DD.rng`, never while
+  simulating), else `surge` (its four old lines).
+- **[heal QA-6] the tip carries the cap:** "Every MAGNIFICENT SURGE heals Marwyn 8 HP, +2 for each foe he has Taunted
+  (max +6). Applause is a medical treatment. Ask him." (built from `OVATION_CAP`, 125 chars).
+- Tests: "hero_marwyn: conditional heal (Nov 18)" §7-8 (the barks split; the one label with and without an audience and at
+  full HP; the ovation bark only after a healing ovation; the log line; the tip). No number changed.
+
+### Deviations (Nov 18, qa-fix:heal)
+- Plan §4.12 put the two ovation lines in the `surge` pool and gave the tip without "(max +6)". QA-4 (the lead decides)
+  and QA-6: the lines moved to their own key `ovation` (so a surge with nobody Taunted never claims applause), and the
+  tip says the cap the passive and the MAXED line already say.

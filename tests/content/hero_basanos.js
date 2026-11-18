@@ -144,7 +144,9 @@
       if (HUMAN.indexOf(id) >= 0) t.eq(f, 'human', id + ' is a human skill');
       else if (WOLF.indexOf(id) >= 0) t.eq(f, 'wolf', id + ' is a wolf skill');
       else t.eq(f, null, id + ' works in both forms');
-      for (let lv = 1; lv <= 3; lv++) t.ok(desc(id, lv).split(/\s+/).length <= 28, id + ' L' + lv + ' desc reads in one breath (' + desc(id, lv) + ')');
+      // Nov 18 (conditional healing): Transform's mend carries the crowd clause ("+2 for each adjacent foe (max +4)"): ≤ 32
+      const cap = id === 'bas_transform' ? 32 : 28;
+      for (let lv = 1; lv <= 3; lv++) t.ok(desc(id, lv).split(/\s+/).length <= cap, id + ' L' + lv + ' desc reads in one breath (≤ ' + cap + ' words: ' + desc(id, lv) + ')');
       if (f) t.ok(desc(id, 1).indexOf(f === 'wolf' ? 'Werewolf form:' : 'Human form:') === 0, id + ': its desc names its form');
     });
     t.eq(Bz().formOf(DD.getSkill('bas_sword')), 'human', 'the sword is the human basic');
@@ -264,25 +266,25 @@
       const M = Bz().MEND[lv - 1], L = DD.skillLevel(def, lv);
       t.eq(L.mend, M, 'L' + lv + ': level key mend = ' + M);
       t.ok(!L.heal, 'L' + lv + ': no `heal` key (AutoPlay\'s quick pass would credit a spent heal)');
-      t.ok(desc('bas_transform', lv).indexOf('Your first Transform each turn heals you ' + M + ' HP.') >= 0, 'L' + lv + ' desc names the mend: ' + desc('bas_transform', lv));
+      t.ok(desc('bas_transform', lv).indexOf('Your first Transform each turn heals you ' + M + ' HP, +' + L.perFoe + ' for each adjacent foe (max +' + L.foeCap + ').') >= 0, 'L' + lv + ' desc names the mend and the crowd (Nov 18): ' + desc('bas_transform', lv));
       fight({ heroes: [{ x: 2, y: 4, skills: [{ id: 'bas_transform', level: lv }] }], enemies: [{ id: 'test_grunt', x: 6, y: 4 }] });
       const u = B();
       u.hp = u.maxHp - 20;              // room for three mends at III (no damage, so Hair Trigger stays out of it)
-      t.ok(desc('bas_transform', lv, u).indexOf('(used this turn)') < 0, 'L' + lv + ': before his first switch the desc has no "(used this turn)"');
+      t.ok(desc('bas_transform', lv, u).indexOf('; used this turn') < 0, 'L' + lv + ': before his first switch the desc has no "; used this turn"');
       // turn 1: man → wolf heals, the switch back heals nothing
       let got = 0;
       const lines = logged(/knits/, function () { got = mendOf(t, u, 'L' + lv + ' Transform (man → wolf)'); });
       t.ok(wolf(u) && got === M, 'L' + lv + ': man → wolf, the first switch this turn heals ' + M + ' (' + got + ')');
       t.eq(lines.length, 1, 'L' + lv + ': one log line ("' + (lines[0] || '') + '")');
       const live = desc('bas_transform', lv, u);
-      t.ok(live.indexOf('heals you ' + M + ' HP (used this turn).') >= 0, 'L' + lv + ': the live desc says it is spent: ' + live);
-      t.ok(words(live) <= 28, 'L' + lv + ': the live desc still reads in one breath (' + words(live) + ' words)');
-      t.ok(desc('bas_transform', lv).indexOf('(used this turn)') < 0, 'L' + lv + ': the desc without a user never says "(used this turn)"');
+      t.ok(live.indexOf('heals you ' + M + ' HP, +' + L.perFoe + ' for each adjacent foe (max +' + L.foeCap + '); used this turn.') >= 0, 'L' + lv + ': the live desc says it is spent (Nov 18: "; used this turn" after the crowd clause): ' + live);
+      t.ok(words(live) <= 34, 'L' + lv + ': the live desc still reads in one breath (' + words(live) + ' words; ≤ 34 with the Nov 18 crowd clause, was ≤ 28)');
+      t.ok(desc('bas_transform', lv).indexOf('used this turn') < 0, 'L' + lv + ': the desc without a user never says "used this turn"');
       t.eq(mendOf(t, u, 'L' + lv + ' Transform back (wolf → man)'), 0, 'L' + lv + ': the second switch this turn heals 0');
       t.ok(!wolf(u) && u.ap === 1, 'L' + lv + ': a man again, 1 AP left');
       // turn 2: the next turn's first switch heals again (man → wolf)
       DD.Combat.endTurn();
-      t.ok(DD.Combat.current() === u && desc('bas_transform', lv, u).indexOf('(used this turn)') < 0, 'L' + lv + ': next turn: the desc is fresh');
+      t.ok(DD.Combat.current() === u && desc('bas_transform', lv, u).indexOf('used this turn') < 0, 'L' + lv + ': next turn: the desc is fresh');
       t.eq(mendOf(t, u, 'L' + lv + ' Transform, next turn'), M, 'L' + lv + ': next turn, the first switch heals ' + M + ' again');
       // turn 3: wolf → man as the first switch heals too
       DD.Combat.endTurn();
@@ -295,7 +297,7 @@
     let u = B();
     const lines = logged(/knits/, function () { t.eq(mendOf(t, u, 'Transform at full HP'), 0, 'full HP: nothing to heal'); });
     t.eq(lines.length, 0, 'full HP: no log line');
-    t.ok(desc('bas_transform', 1, u).indexOf('(used this turn)') >= 0, 'full HP: the mend is spent all the same (the desc says "first")');
+    t.ok(desc('bas_transform', 1, u).indexOf('; used this turn') >= 0, 'full HP: the mend is spent all the same (the desc says "first")');
     u.hp -= 10;
     t.eq(mendOf(t, u, 'Transform back, hurt'), 0, 'hurt after a full-HP switch: the second switch heals 0');
     // the Flea Collar: the free first switch still heals, once
@@ -314,7 +316,8 @@
     u = B();
     A().damage(foes()[0], u, 16, { cause: 'other' });
     t.ok(wolf(u) && u.hp === 12, 'Hair Trigger on his turn: a wolf at exactly 12 HP (no heal)');
-    t.eq(mendOf(t, u, 'Transform back after Hair Trigger'), Bz().MEND[0], 'his first chosen switch that turn still heals ' + Bz().MEND[0]);
+    // Nov 18: the grunt next to him is a crowd of one (+2)
+    t.eq(mendOf(t, u, 'Transform back after Hair Trigger'), Bz().MEND[0] + Bz().CROWD_PER, 'his first chosen switch that turn still heals ' + Bz().MEND[0] + ' (+' + Bz().CROWD_PER + ' for the grunt next to him)');
     // [review sustain] so the desc says "first Transform", not "first switch": the Hair Trigger switch above was his
     // first switch this turn, yet it healed nothing and the Transform after it healed (desc == execute)
     [1, 2, 3].forEach(function (lv) {
@@ -944,7 +947,8 @@
       const u = B();
       u.hp = u.maxHp - c.miss;
       const s = scores(u);
-      c.want = Math.min(Bz().MEND[c.lv - 1], c.miss) * (c.miss > u.maxHp / 2 ? 1.5 : 0.8);
+      // Nov 18: the grunt next to him adds the crowd bonus (+2) to the mend the quick pass prices
+      c.want = Math.min(Bz().MEND[c.lv - 1] + Bz().CROWD_PER, c.miss) * (c.miss > u.maxHp / 2 ? 1.5 : 0.8);
       t.eq(s[1], 0, 'L' + c.lv + ', missing ' + c.miss + ': exact pass (ctx.autoplay): the old form value (0)');
       t.ok(Math.abs(s[0] - s[1] - c.want) < 1e-9, 'L' + c.lv + ', missing ' + c.miss + ': quick pass adds min(mend, missing) × ' + (c.miss > u.maxHp / 2 ? 1.5 : 0.8) + ' = ' + c.want.toFixed(1) + ' (' + s[0].toFixed(2) + ')');
     });
@@ -1402,5 +1406,122 @@
     t.ok(!/Block/.test(desc('bas_transform', 1, u)), 'Transform without the Coat: no Block');
     u.items = ['bas_wolfsbane_coat'];
     t.ok(new RegExp('back into a human gives you ' + Bz().COAT_BLOCK + ' Block').test(desc('bas_transform', 1, u)), 'with the Coat: ' + desc('bas_transform', 1, u));
+  });
+
+  // ---- Nov 18: conditional healing — "Sorry, It's Crowded In Here" (plan §4.4) -------------------------------------------
+  /** Every DD.Act.heal call made while fn runs: [{ src, target, n, via, healed, sim }]. */
+  function healCalls(fn) {
+    const list = [], orig = DD.Act.heal;
+    DD.Act.heal = function (src, target, n, opts) {
+      const healed = orig.apply(this, arguments);
+      list.push({ src: src, target: target, n: n, via: opts && opts.via, healed: healed, sim: !!DD.Act.simulating });
+      return healed;
+    };
+    try { fn(); } finally { DD.Act.heal = orig; }
+    return list;
+  }
+  function lifts(calls) { return calls.filter(function (x) { return !x.sim && x.via === 'lift:basanos'; }); }
+  function healsBy(u) { const s = DD.Combat.state.stats.units[u.id]; return s ? s.heals : 0; }
+  /** Basanos (human, Transform at lv) at (2, 4) with `foes` grunts placed at the given tiles, hurt by `miss`. */
+  function crowd(lv, tiles, miss, extra) {
+    fight(Object.assign({ heroes: [{ x: 2, y: 4, skills: [{ id: 'bas_transform', level: lv }] }],
+      enemies: tiles.map(function (p) { return { id: 'test_grunt', x: p[0], y: p[1] }; }).concat([{ id: 'test_grunt', x: 8, y: 8 }]) }, extra || {}));
+    const u = B();
+    u.hp = u.maxHp - (miss === undefined ? 20 : miss);
+    return u;
+  }
+  const RING = [[3, 4], [1, 4], [2, 3], [2, 5]];
+
+  T.suite('hero_basanos: conditional heal (Nov 18)', function (t) {
+    const def = DD.getSkill('bas_transform');
+    t.ok(Bz().CROWD_PER === 2 && Bz().CROWD_CAP === 4, 'DD.Basanos.CROWD_PER = 2, CROWD_CAP = 4');
+    [1, 2, 3].forEach(function (lv) {
+      const Lv = DD.skillLevel(def, lv), C = Bz().CLAW_LV[lv - 1];
+      t.ok(Lv.perFoe === 2 && Lv.foeCap === 4 && Lv.mend === Bz().MEND[lv - 1] && Lv.heal === undefined, 'L' + lv + ': mend ' + Lv.mend + ', perFoe 2, foeCap 4 (no level key named heal)');
+      t.eq(desc('bas_transform', lv), 'Switch between human and werewolf. Your first Transform each turn heals you ' + Lv.mend + ' HP, +' + Lv.perFoe +
+        ' for each adjacent foe (max +' + Lv.foeCap + '). Werewolf: +2 move; basic attack Claw (' + C.dmg + ' damage, ' + C.bleed + ' Bleed).', 'L' + lv + ': the desc, word for word');
+      t.ok(desc('bas_transform', lv).indexOf('heals you ' + Lv.mend + ' HP') >= 0, 'L' + lv + ': still "heals you ' + Lv.mend + ' HP" (the v2-digest docs test pins it)');
+    });
+    t.ok(def.kind === 'utility' && def.tags.indexOf('heal') < 0 && def.target.type === 'self', 'still a self-target utility (no heal tag: never an aimed revive)');
+    t.eq((DD.getHero('basanos').barks.crowd || []).join(' | '), ['Sorry. It\'s crowded in here.', 'Nobody look. NOBODY LOOK.', 'Bad dog. Good knees.'].join(' | '), 'barks.crowd: the plan\'s three lines');
+
+    // fires: 0 / 1 / 2 / 3 / 4 foes next to him at I → 2 / 4 / 6 / 6 / 6 (cap +4); III with 2 → 8; II with 1 → 5
+    [[1, 0, 2], [1, 1, 4], [1, 2, 6], [1, 3, 6], [1, 4, 6], [2, 1, 5], [3, 2, 8], [3, 4, 8]].forEach(function (c) {
+      const u = crowd(c[0], RING.slice(0, c[1]));
+      t.eq(Bz().crowdAt(u), c[1], 'L' + c[0] + ': ' + c[1] + ' foes next to him');
+      const hp0 = u.hp, h0 = healsBy(u);
+      const calls = healCalls(function () { use(t, u, u.skills[0], u.x, u.y, 'L' + c[0] + ' Transform, ' + c[1] + ' foes'); });
+      const l = lifts(calls);
+      t.eq(u.hp - hp0, c[2], 'L' + c[0] + ', ' + c[1] + ' adjacent foes: he heals ' + c[2]);
+      t.eq(healsBy(u) - h0, c[2], 'L' + c[0] + ', ' + c[1] + ' foes: the heal\'s src is Basanos (his heals stat grows by ' + c[2] + ')');
+      t.ok(l.length === 1 && l[0].src === u && l[0].target === u && l[0].n === c[2], 'L' + c[0] + ': one DD.Act.heal(Basanos, Basanos, ' + c[2] + ', { via: \'lift:basanos\' })');
+      t.eq(calls.filter(function (x) { return !x.sim; }).length, 1, 'L' + c[0] + ': and no other heal');
+    });
+    // counted AFTER the switch, from where he stands: allies, foes at distance 2 and diagonal foes add nothing
+    let u = crowd(1, [], 20, { heroes: [{ x: 2, y: 4, skills: ['bas_transform'] }, { id: 'test_knight', x: 3, y: 4 }] });
+    t.eq(mendOf(t, u, 'Transform next to an ally'), 2, 'an ally next to him: no bonus (2)');
+    u = crowd(1, [[4, 4], [3, 5], [1, 3]]);
+    t.eq(mendOf(t, u, 'Transform, foes at distance 2'), 2, 'foes at distance 2 (straight and diagonal): no bonus (2)');
+    u = crowd(1, [[3, 4]]);
+    A().kill(foes()[0], null);
+    t.eq(mendOf(t, u, 'Transform next to a dead foe'), 2, 'a dead foe next to him: no bonus (2)');
+    // once per turn: the second Transform heals nothing; the next turn's first heals again (the crowd counted again)
+    u = crowd(1, [[3, 4], [1, 4]]);
+    t.eq(mendOf(t, u, 'first Transform'), 6, 'first Transform with 2 foes: 6');
+    let calls = healCalls(function () { t.eq(mendOf(t, u, 'second Transform'), 0, 'second Transform the same turn: 0'); });
+    t.eq(lifts(calls).length, 0, 'second Transform: no lift call at all');
+    DD.Combat.endTurn();
+    t.eq(mendOf(t, u, 'next turn'), 6, 'next turn, first Transform: 6 again');
+    // at full HP it still fires (one 0-HP call: the sim counts it) and spends the mend
+    u = crowd(1, [[3, 4]], 0);
+    calls = healCalls(function () { use(t, u, u.skills[0], u.x, u.y, 'Transform at full HP'); });
+    t.ok(lifts(calls).length === 1 && lifts(calls)[0].healed === 0 && lifts(calls)[0].n === 4 && Bz().mendSpent(u), 'full HP: one call for 4 that heals 0; the mend is spent');
+    // Hair Trigger never heals (not even with a crowd); neither does Blood Moon
+    u = crowd(1, [[3, 4], [1, 4]], 0);
+    calls = healCalls(function () { A().damage(foes()[0], u, 16, { cause: 'other' }); });
+    t.ok(wolf(u) && u.hp === 12 && lifts(calls).length === 0, 'Hair Trigger with two foes next to him: a wolf at 12, no lift heal');
+    fight({ heroes: [{ x: 2, y: 4 }], enemies: [{ id: 'test_grunt', x: 3, y: 4, hpMult: 5 }, { id: 'test_grunt', x: 1, y: 4, hpMult: 5 }] });
+    u = B();
+    u.hp = 10;
+    DD.Combat.state.hype = 100;
+    calls = healCalls(function () { use(t, u, u.signature, u.x, u.y, 'Blood Moon in a crowd'); });
+    t.ok(wolf(u) && u.hp === 10 && lifts(calls).length === 0, 'Blood Moon in a crowd: the wolf, no lift heal');
+    // never revives: a downed Basanos can't Transform, and a forced resolve heals nothing
+    u = crowd(1, [[3, 4], [1, 4]]);
+    A().damage(foes()[0], u, 200, { cause: 'other' });
+    t.ok(u.downed && u.hp === 0, 'downed');
+    t.ok(DD.Combat.useSkill(u, u.skills[0], u.x, u.y) === false, 'a downed Basanos can\'t Transform');
+    calls = healCalls(function () { def.execute(DD.Targeting.buildCtx(u, u.skills[0], { x: u.x, y: u.y })); });
+    t.ok(u.downed && u.hp === 0 && lifts(calls).length === 0, 'a forced resolve on the downed Basanos: no heal, still down');
+    // the HUD preview shows the exact +N, and it is what happens
+    u = crowd(1, [[3, 4], [2, 3]]);
+    const pv = DD.Combat.preview(u, u.skills[0], u.x, u.y);
+    t.eq(pv && pv.perUnit[u.id] && pv.perUnit[u.id].heal, 6, 'the preview shows +6 on him (2 + 2 × 2 foes)');
+    previewMatches(t, u, u.skills[0], u.x, u.y, 'Transform in a crowd');
+    // the live desc after the switch
+    t.ok(desc('bas_transform', 1, u).indexOf('(max +4); used this turn.') >= 0, 'the live desc: "...(max +4); used this turn." ' + desc('bas_transform', 1, u));
+
+    // AutoPlay: the quick pass prices mend + crowd (healWorth); the exact pass leaves it to the dry run (the real heal)
+    function scores(v) {
+      const q = DD.Targeting.buildCtx(v, v.skills[0], { x: v.x, y: v.y });
+      const e = DD.Targeting.buildCtx(v, v.skills[0], { x: v.x, y: v.y });
+      e.autoplay = { preview: null };
+      return [Bz().transformScore(q), Bz().transformScore(e)];
+    }
+    [[0, 2], [1, 4], [2, 6], [3, 6]].forEach(function (c) {
+      const v = crowd(1, RING.slice(0, c[0]), 18);
+      const s = scores(v);
+      t.ok(Math.abs(s[0] - s[1] - DD.AutoPlay.healWorth(v, c[1])) < 1e-9, 'quick pass, ' + c[0] + ' foes next to him: + healWorth(Basanos, ' + c[1] + ') = ' + DD.AutoPlay.healWorth(v, c[1]).toFixed(1) + ' (' + (s[0] - s[1]).toFixed(2) + ')');
+    });
+    // AutoPlay walks into the crowd before he flips (2 AP: a walk, then Transform), the stunned grunts harmless
+    fight({ heroes: [{ x: 1, y: 4, skills: ['bas_transform'] }], enemies: [{ id: 'test_grunt', x: 5, y: 3, hpMult: 4 }, { id: 'test_grunt', x: 5, y: 5, hpMult: 4 }] });
+    u = B();
+    foes().forEach(function (f) { A().addStatus(f, 'stun', { turns: 3 }, u); });
+    u.hp = 9;
+    u.ap = 2;
+    calls = healCalls(function () { t.tryRun('AutoPlay turn', function () { DD.AutoPlay.takeTurn(); }); });
+    const got = lifts(calls);
+    t.ok(got.length === 1 && got[0].n === 6 && Bz().crowdAt(u) === 2, 'AutoPlay, hurt, 2 AP: walks between the two grunts, then Transforms for 6 (at ' + u.x + ',' + u.y +
+      ', ' + (got[0] ? 'mend ' + got[0].n : 'no mend') + ')');
   });
 })();

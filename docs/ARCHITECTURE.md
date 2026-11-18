@@ -131,7 +131,7 @@ the lead's patches to the V3 plan.
   sprite: SpriteSpec,                                  // §3.11
   basic: 'zar_basic',                                  // skill id — always available, never socketed
   signature: 'zar_signature',                          // skill id — costs 100 Hype (skill.hype = 100), never socketed
-  passive: { name: 'Drip Check', desc: '...', hooks: { /* §5.3 */ } },
+  passive: { name: 'Drip Check', desc: '...', hooks: { /* §5.3 */ } },   // optional autoplayEnd(unit, x, y) (§5.7, Nov 18)
   startingSkills: ['zar_fireball', 'zar_bling_throw'], // exactly 2 (socketed at run start)
   skillPool: [ /* 9-11 hero skill ids incl. startingSkills (the shipped kits have 9-10) */ ],
   summons: [],                                         // optional: summon ids this hero can create (for codex/tests)
@@ -898,7 +898,10 @@ damage(src, target, amount, opts) → dealt            // opts: element, skill, 
 damageTiles(src, tiles, amount, opts) → [{unit, dealt}]   // opts.filter: 'foes'|'friends'|'all' (relative to src), hitObjects: true
 damageObject(src, x, y, amount, { cause, reflect }) → destroyed (bool)   // finish D3: src's own hit (cause 'skill' by default,
                                  //   not an environmental cause, not a reflection) ends its Stealth, as an attack on a unit does
-heal(src, target, amount, opts) → healed
+heal(src, target, amount, opts) → healed              // opts: silent, cause; via: a label for measurement only (the
+                                 //   campaign sim's ledger, tests/sim/sim.js "== conditional heals"; Nov 18: every
+                                 //   conditional heal passes { via: 'lift:<heroId>' } with src = that hero); the engine
+                                 //   ignores it
 addBlock(target, n)
 addStatus(target, id, { stacks = 1, turns }, src) → instance|null     // turns default: def.defaultTurns ?? -1
 removeStatus(target, id) · hasStatus(target, id) · getStatus(target, id) · cleanse(target, 'debuff'|'buff', count)
@@ -1254,6 +1257,20 @@ same pair again within a round. **Objects**: an attack aimed at a breakable obje
 hint value (`objectValue`), plus — when the hit breaks an object that does something when destroyed — a dry run of the
 break (foes hurt / killed, allies hurt, surfaces, loot at `GOLD` 0.4 a gold piece); plain cover is worth 0 (never shot).
 Switch: `swap = false` (no swaps).
+**Conditional healing (Nov 18, plan E1-E2).** *End-of-turn tile value*: a hero passive may define
+`autoplayEnd(unit, x, y) → number`, what ending that unit's turn on (x, y) is worth in AutoPlay's damage-equivalent units
+(price a heal with `healWorth`): a turn-end heal no dry run sees (Pebbles' Hot Dog: on fire, on lava or next to a
+Burning foe). It must be PURE and read the CURRENT state (`DD.Combat.state`, `DD.Grid`, `DD.Act.hasStatus`; use x, y,
+not `unit.x` / `unit.y`): inside a dry run that is the copy, and `unit` is the copy (post-action HP and statuses, the
+Burn its skill just applied), elsewhere the real state with the unit virtually on (x, y). Each call goes through
+`DD.safe` (a throw is a DD.warn and worth 0; a non-finite value is 0); only the acting unit's own hero passive is asked
+(looked up once per decision; units without one cost nothing). AutoPlay adds it to the STAY branch of the end-of-turn
+value (`endValue`: the hit-and-run escape ends elsewhere and gets none; the dry runs of skills, consumables and hinted
+interactions read it in their copy after the action), to plain moves (`bestMove`) and to swaps (`bestSwap`), always
+against where the unit stands (`rest0`: staying put reads ≈ 0). `restAt(unit, x, y)` reads it for inspection.
+*Heal price*: `healWorth(unit, n)` = min(n, missing HP) × (1.5 when it misses more than half its max HP, else 0.8), the
+quick pass's own heal pricing; 0 at full HP, for n ≤ 0 and for a downed or dead unit. The shared definition for content
+AutoPlay terms (`aiScore` / `autoplayValue` / `autoplayEnd`); a hero file may keep a local copy.
 
 ### 5.8 `DD.MapGen` / `DD.Encounter` (MAPGEN)
 ```

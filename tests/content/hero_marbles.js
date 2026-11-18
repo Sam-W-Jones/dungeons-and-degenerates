@@ -103,9 +103,17 @@
       for (let lv = 1; lv <= s.levels.length; lv++) {
         const d = DD.skillDesc(s, lv, null);
         t.ok(d.length > 10 && !/undefined|NaN|\[object/.test(d), id + ' L' + lv + ': desc with user null: ' + d);
-        // DESIGN §6 Simplicity: one verb (+ at most one rider), reads in one breath, no if/else chains, no v1 terms
+        // DESIGN §6 Simplicity: one verb (+ at most one rider), reads in one breath, no if/else chains, no v1 terms. Nov 18:
+        // Walking Stick Whack's push carries one clause, the slam heal (plan §2.10, a recorded Deviation): the hit-and-push
+        // sentence stays clause-free, and the one "If" is that heal, exactly
+        let main = d;
+        if (id === 'mar_whack') {
+          const parts = /^(.*\.) (If it slams into something, heal \d+ HP\.)$/.exec(d);
+          t.ok(!!parts, id + ' L' + lv + ': the hit and push plus the one slam clause: ' + d);
+          main = parts ? parts[1] : d;
+        }
         t.ok(words(d) <= 25, id + ' L' + lv + ': desc reads in one breath (' + words(d) + ' words): ' + d);
-        t.ok(!/\b(if|unless|otherwise|instead|then also)\b/i.test(d), id + ' L' + lv + ': no if/else clauses: ' + d);
+        t.ok(!/\b(if|unless|otherwise|instead|then also)\b/i.test(main), id + ' L' + lv + ': no if/else clauses: ' + main);
         t.ok(!/telegraph|intent|guard|planning|\bXP\b/i.test(d + ' ' + s.flavor), id + ' L' + lv + ': no v1 terms (telegraph, intent, Guard, XP)');
         aps[DD.resolve(s.ap, s.levels[lv - 1], null, 1)] = 1;
       }
@@ -1467,10 +1475,218 @@
       objective: { type: 'custom', text: 'Testing' }, encounter: { id: 'mar_pt', checkObjective: function () { return null; } } });
     const m = DD.Combat.state.units.filter(function (u) { return u.defId === 'marbles'; })[0];
     const whack = DD.getSkill('mar_whack');
-    t.ok(/push it 2 tiles\.$/.test(DD.skillDesc(whack, 1, m)), 'no Cane: push it 2 tiles');
+    // (Nov 18: the push sentence is followed by the slam heal's clause, "If it slams into something, heal N HP.")
+    t.ok(/push it 2 tiles\. If it slams/.test(DD.skillDesc(whack, 1, m)), 'no Cane: push it 2 tiles');
     m.items = (m.items || []).concat(['mar_cane']);
-    t.ok(/push it 3 tiles\.$/.test(DD.skillDesc(whack, 1, m)), 'with the Cane: push it 3 tiles (' + DD.skillDesc(whack, 1, m) + ')');
-    t.ok(/push it 4 tiles\.$/.test(DD.skillDesc(whack, 3, m)), 'III with the Cane: 4 tiles');
-    t.ok(/push it 3 tiles\.$/.test(DD.skillDesc(whack, 1, { items: { weapon: 'mar_cane' } })), 'a party sheet (slot object) too');
+    t.ok(/push it 3 tiles\. If it slams/.test(DD.skillDesc(whack, 1, m)), 'with the Cane: push it 3 tiles (' + DD.skillDesc(whack, 1, m) + ')');
+    t.ok(/push it 4 tiles\. If it slams/.test(DD.skillDesc(whack, 3, m)), 'III with the Cane: 4 tiles');
+    t.ok(/push it 3 tiles\. If it slams/.test(DD.skillDesc(whack, 1, { items: { weapon: 'mar_cane' } })), 'a party sheet (slot object) too');
+  });
+})();
+
+// ---- Nov 18: conditional healing — "Respect Your Elders" (plan §4.5) --------------------------------------------------
+(function () {
+  'use strict';
+  const T = window.DD_TEST, DD = window.DD;
+  if (!T || !DD) return;
+  /** Sandbox (w × 3 by default): Marbles (level 3: 36 HP) at x0,1 with only Walking Stick Whack at `lv`; never ends. */
+  function scene(cfg) {
+    DD.Combat.sandbox({
+      w: cfg.w || 8, h: cfg.h || 3, seed: 7, enemyAi: false,
+      objective: { type: 'custom', text: 'Marbles slam test' }, encounter: { id: 'mar_slam', checkObjective: function () { return null; } },
+      heroes: [{ id: 'marbles', x: cfg.x0 === undefined ? 1 : cfg.x0, y: 1, level: 3, items: cfg.items || [] }].concat(cfg.allies || []),
+      enemies: cfg.enemies || [], terrain: cfg.terrain, objects: cfg.objects,
+    });
+    const u = DD.Combat.state.units.filter(function (x) { return x.defId === 'marbles'; })[0];
+    u.skills = [DD.Act.makeSlot('mar_whack', cfg.lv || 1)];
+    DD.Act.removeStatus(u, 'mar_remembered', { silent: true });
+    if (cfg.hurt) u.hp = u.maxHp - cfg.hurt;
+    return { u: u, sl: u.skills[0], foe: DD.Grid.unitAt(2, 1) };
+  }
+  function tileAt(x, y, t) { return function (tl) { if (tl.x === x && tl.y === y) tl.t = t; }; }
+  function G(x, y, id) { return { id: id || 'test_grunt', x: x, y: y }; }
+  function L(lv) { return DD.skillLevel(DD.getSkill('mar_whack'), lv); }
+  /** Every real DD.Act.heal call made while fn runs (previews and dry runs left out). */
+  function healCalls(fn) {
+    const list = [], orig = DD.Act.heal;
+    DD.Act.heal = function (src, target, n, opts) {
+      const healed = orig.apply(this, arguments);
+      if (!DD.Act.simulating) list.push({ src: src, target: target, n: n, via: opts && opts.via, healed: healed });
+      return healed;
+    };
+    try { fn(); } finally { DD.Act.heal = orig; }
+    return list;
+  }
+  function slams(calls) { return calls.filter(function (x) { return x.via === 'lift:marbles'; }); }
+  function healsBy(u) { const st = DD.Combat.state.stats.units[u.id]; return st ? st.heals : 0; }
+  const MASC_ONLY = /\b(she|her|hers|herself)\b/i;
+
+  T.suite('hero_marbles: conditional heal (Nov 18)', function (t) {
+    if (!DD.getHero('marbles') || !DD.getEnemy('test_grunt')) { t.skip('Professor Marbles or the fixtures are not loaded'); return; }
+    const def = DD.getSkill('mar_whack'), M = DD.Marbles, hd = DD.getHero('marbles');
+    const p0 = DD.problems.length;
+    t.ok(!!M && JSON.stringify(M.SLAM) === '[5,6,7]', 'DD.Marbles.SLAM = 5/6/7');
+    // desc == execute, word for word at I-III (numbers from L); no level key named heal; still a melee attack
+    [1, 2, 3].forEach(function (lv) {
+      const Lv = L(lv);
+      t.ok(Lv.slam === M.SLAM[lv - 1] && Lv.dmg === [5, 6, 7][lv - 1] && Lv.push === [2, 2, 3][lv - 1] && Lv.heal === undefined,
+        'L' + lv + ': ' + Lv.dmg + ' damage, push ' + Lv.push + ', slam ' + Lv.slam + ' (no level key named heal)');
+      t.eq(DD.skillDesc(def, lv, null), 'Deal ' + Lv.dmg + ' damage to an adjacent foe and push it ' + Lv.push + ' tiles. If it slams into something, heal ' + Lv.slam + ' HP.',
+        'L' + lv + ': the desc, word for word');
+      t.ok(DD.skillDesc(def, lv, null).split(/\s+/).length <= 22, 'L' + lv + ': still one breath (≤ 22 words)');
+    });
+    t.eq(DD.skillDesc(def, 1, { items: { weapon: 'mar_cane' } }), 'Deal 5 damage to an adjacent foe and push it 3 tiles. If it slams into something, heal 5 HP.', 'the Cane\'s +1 push still printed');
+    t.ok(def.kind === 'attack' && def.tags.indexOf('heal') < 0 && def.target.filter === 'enemy', 'still an attack on a foe (no heal tag: never an aimed revive)');
+    t.ok(def.heals === true, 'heals: true (the Radio Edit never bleeps it)');
+    const B = DD.BossSvammiel;
+    if (B && B.healsWith) [1, 2, 3].forEach(function (lv) { t.ok(B.healsWith(def, L(lv), null), 'healsWith(Walking Stick Whack L' + lv + ')'); });
+    else t.log('svammiel not loaded: healsWith checked as heals: true only');
+    t.eq((hd.barks.slam || []).join(' | '), ['Back in my day, walls hit BACK.', 'Ohoho! My hip just popped back in.', 'Forty years of kata for THAT sound.'].join(' | '),
+      'barks.slam: the plan\'s three lines');
+    (hd.barks.slam || []).forEach(function (l) { t.ok(!MASC_ONLY.test(l) && l.length <= 70, 'his slam bark: ' + l); });
+
+    // fires: a grunt with a wall right behind it → +5 / +6 / +7 (he starts hurt), his own heal, labelled
+    [1, 2, 3].forEach(function (lv) {
+      const Lv = L(lv);
+      const s = scene({ lv: lv, hurt: 15, enemies: [G(2, 1), G(7, 2)], terrain: tileAt(3, 1, 'wall') });
+      const hp0 = s.u.hp, heals0 = healsBy(s.u);
+      const calls = healCalls(function () { t.ok(DD.Combat.useSkill(s.u, s.sl, 2, 1), 'L' + lv + ': whack into the wall'); });
+      t.ok(s.foe.x === 2 && s.foe.hp === 14 - Lv.dmg - 3, 'L' + lv + ': it slams into the wall (stays, ' + Lv.dmg + ' + 3 bump)');
+      t.eq(s.u.hp - hp0, Lv.slam, 'L' + lv + ': he heals ' + Lv.slam);
+      t.eq(healsBy(s.u) - heals0, Lv.slam, 'L' + lv + ': the heal\'s src is Marbles (his heals stat grows by ' + Lv.slam + ')');
+      const got = slams(calls);
+      t.ok(got.length === 1 && got[0].src === s.u && got[0].target === s.u && got[0].n === Lv.slam, 'L' + lv + ': DD.Act.heal(Marbles, Marbles, ' + Lv.slam + ', { via: \'lift:marbles\' })');
+    });
+    // into another foe: the heal, and both take the bump; the map edge after a step; a crate in the way
+    let s = scene({ hurt: 15, enemies: [G(2, 1), G(4, 1)] });
+    const far = DD.Grid.unitAt(4, 1);
+    let c = healCalls(function () { DD.Combat.useSkill(s.u, s.sl, 2, 1); });
+    t.ok(s.foe.x === 3 && s.foe.hp === 14 - 5 - 3 && far.hp === 14 - 3 && slams(c).length === 1 && s.u.hp === s.u.maxHp - 10, 'slammed into another foe: both bumped, he heals 5');
+    s = scene({ w: 4, hurt: 15, enemies: [G(2, 1)] });
+    c = healCalls(function () { DD.Combat.useSkill(s.u, s.sl, 2, 1); });
+    t.ok(s.foe.x === 3 && slams(c).length === 1 && s.u.hp === s.u.maxHp - 10, 'one step, then the map edge: a slam, +5');
+    s = scene({ hurt: 15, enemies: [G(2, 1), G(7, 2)], objects: [{ x: 4, y: 1, id: 'crate' }] });
+    c = healCalls(function () { DD.Combat.useSkill(s.u, s.sl, 2, 1); });
+    t.ok(s.foe.x === 3 && slams(c).length === 1 && s.u.hp === s.u.maxHp - 10, 'into a crate: a slam, +5');
+    // (review:g4) a ledge it can't climb and an ally in the way are slams too (the ally takes the bump as well), and the
+    // quick pass's geometry agrees on the ledge
+    s = scene({ hurt: 15, enemies: [G(2, 1), G(7, 2)], terrain: function (tl) { if (tl.x === 3 && tl.y === 1) tl.h = 2; } });
+    t.ok(M.slamAhead(s.u, s.foe, 2) && def.aiScore(DD.Targeting.buildCtx(s.u, s.sl, { x: 2, y: 1 })) === DD.AutoPlay.healWorth(s.u, 5),
+      'aiScore: a ledge 2 levels up right behind it: the slam');
+    c = healCalls(function () { DD.Combat.useSkill(s.u, s.sl, 2, 1); });
+    t.ok(s.foe.x === 2 && slams(c).length === 1 && s.u.hp === s.u.maxHp - 10, 'into a ledge it can\'t climb: a slam, +5');
+    s = scene({ hurt: 15, enemies: [G(2, 1), G(7, 2)], allies: [{ id: 'test_knight', x: 3, y: 1 }] });
+    const pal = DD.Grid.unitAt(3, 1), palHp = pal ? pal.hp : 0;
+    c = healCalls(function () { DD.Combat.useSkill(s.u, s.sl, 2, 1); });
+    t.ok(!!pal && s.foe.x === 2 && pal.hp < palHp && slams(c).length === 1 && s.u.hp === s.u.maxHp - 10, 'into an ally: a slam (the ally is bumped too), +5');
+    // at full HP the call is still made (0 HP: the sim counts the slam)
+    s = scene({ enemies: [G(2, 1), G(7, 2)], terrain: tileAt(3, 1, 'wall') });
+    c = healCalls(function () { DD.Combat.useSkill(s.u, s.sl, 2, 1); });
+    t.ok(slams(c).length === 1 && slams(c)[0].healed === 0 && s.u.hp === s.u.maxHp, 'full HP: the heal is called and heals 0');
+
+    // doesn't fire otherwise: open floor, a pit, an immovable brute, a whack that kills
+    s = scene({ w: 10, hurt: 15, enemies: [G(2, 1), G(9, 2)] });
+    c = healCalls(function () { DD.Combat.useSkill(s.u, s.sl, 2, 1); });
+    t.ok(s.foe.x === 4 && slams(c).length === 0 && s.u.hp === s.u.maxHp - 15, 'open floor: pushed 2, no slam, no heal');
+    s = scene({ hurt: 15, enemies: [G(2, 1), G(7, 2)], terrain: tileAt(3, 1, 'pit') });
+    c = healCalls(function () { DD.Combat.useSkill(s.u, s.sl, 2, 1); });
+    t.ok(s.foe.dead && slams(c).length === 0 && s.u.hp === s.u.maxHp - 15, 'into a pit: yeeted, no slam, no heal');
+    s = scene({ hurt: 15, enemies: [G(2, 1, 'test_brute'), G(7, 2)] });
+    c = healCalls(function () { DD.Combat.useSkill(s.u, s.sl, 2, 1); });
+    t.ok(s.foe.x === 2 && slams(c).length === 0 && s.u.hp === s.u.maxHp - 15, 'an immovable brute: no push, no heal');
+    s = scene({ hurt: 15, enemies: [G(2, 1), G(7, 2)], terrain: tileAt(3, 1, 'wall') });
+    s.foe.hp = 3;
+    c = healCalls(function () { DD.Combat.useSkill(s.u, s.sl, 2, 1); });
+    t.ok(s.foe.dead && slams(c).length === 0 && s.u.hp === s.u.maxHp - 15, 'the whack kills (no push): no heal');
+    // never revives: a downed Marbles' whack (run directly) heals nothing and he stays down
+    s = scene({ enemies: [G(2, 1), G(7, 2)], allies: [{ id: 'test_knight', x: 6, y: 0 }], terrain: tileAt(3, 1, 'wall') });
+    DD.Act.damage(s.foe, s.u, 999, { cause: 'other' });
+    t.ok(s.u.downed, 'premise: Marbles is down');
+    c = healCalls(function () { def.execute(DD.Targeting.buildCtx(s.u, s.sl, { x: 2, y: 1 })); });
+    t.ok(s.u.downed && s.u.hp === 0 && slams(c).length === 0, 'downed: no heal is called, he stays down');
+
+    // preview: the heal is inside the action, so the preview shows +5 on Marbles, and nothing changes before the use
+    s = scene({ hurt: 15, enemies: [G(2, 1), G(7, 2)], terrain: tileAt(3, 1, 'wall') });
+    const hp1 = s.u.hp;
+    const pv = DD.Combat.preview(s.u, s.sl, 2, 1);
+    t.ok(pv && pv.perUnit[s.u.id] && pv.perUnit[s.u.id].heal === 5 && s.u.hp === hp1, 'the Whack\'s preview shows +5 on Marbles (and heals nothing yet)');
+    DD.Combat.useSkill(s.u, s.sl, 2, 1);
+    t.eq(s.u.hp, hp1 + 5, 'and the use heals exactly that');
+    s = scene({ w: 10, hurt: 15, enemies: [G(2, 1), G(9, 2)] });
+    const pv0 = DD.Combat.preview(s.u, s.sl, 2, 1);
+    t.ok(!(pv0.perUnit[s.u.id] && pv0.perUnit[s.u.id].heal), 'open floor: the preview shows no heal');
+
+    // AutoPlay quick pass: aiScore = healWorth(Marbles, slam) when the geometry says the push is cut short; else 0
+    const score = function (sc) { return def.aiScore(DD.Targeting.buildCtx(sc.u, sc.sl, { x: 2, y: 1 })); };
+    s = scene({ hurt: 15, enemies: [G(2, 1), G(7, 2)], terrain: tileAt(3, 1, 'wall') });
+    const w5 = DD.AutoPlay.healWorth(s.u, 5);
+    t.ok(w5 > 0 && score(s) === w5, 'aiScore: a wall behind the grunt, hurt: healWorth(Marbles, 5) = ' + w5);
+    t.ok(M.slamAhead(s.u, s.foe, 2), 'slamAhead: the wall');
+    const ex = DD.Targeting.buildCtx(s.u, s.sl, { x: 2, y: 1 });
+    ex.autoplay = { preview: {} };
+    t.eq(def.aiScore(ex), 0, 'aiScore: 0 in the exact pass (its dry run sees the heal)');
+    s.u.hp = s.u.maxHp;
+    t.eq(score(s), 0, 'aiScore: full HP, 0');
+    s = scene({ hurt: 15, enemies: [G(2, 1), G(4, 1)] });
+    t.ok(score(s) === w5 && M.slamAhead(s.u, s.foe, 2), 'aiScore: another unit 2 tiles behind it: the slam');
+    s = scene({ w: 4, hurt: 15, enemies: [G(2, 1)] });
+    t.ok(score(s) === w5, 'aiScore: the map edge after one step: the slam');
+    s = scene({ w: 10, hurt: 15, enemies: [G(2, 1), G(9, 2)] });
+    t.eq(score(s), 0, 'aiScore: open floor, 0');
+    s = scene({ w: 10, hurt: 15, enemies: [G(2, 1), G(9, 2)], terrain: tileAt(5, 1, 'wall') });
+    t.ok(score(s) === 0 && !M.slamAhead(s.u, s.foe, 2) && M.slamAhead(s.u, s.foe, 3), 'a wall 3 tiles behind: no slam with push 2 ...');
+    s.u.items = ['mar_cane'];
+    t.eq(score(s), w5, '... a slam with the Cane\'s +1 push');
+    s = scene({ hurt: 15, enemies: [G(2, 1), G(7, 2)], terrain: function (tl) { if (tl.x === 3 && tl.y === 1) tl.t = 'pit'; if (tl.x === 4 && tl.y === 1) tl.t = 'wall'; } });
+    t.eq(score(s), 0, 'aiScore: a pit first (it falls before the wall): 0');
+    s = scene({ hurt: 15, enemies: [G(2, 1, 'test_brute'), G(7, 2)], terrain: tileAt(3, 1, 'wall') });
+    t.eq(score(s), 0, 'aiScore: an immovable brute: 0');
+    s = scene({ hurt: 15, enemies: [G(2, 1), G(7, 2)], terrain: tileAt(3, 1, 'wall') });
+    s.foe.hp = 3;
+    t.eq(score(s), 0, 'aiScore: the whack would kill it (no push): 0');
+
+    // AutoPlay exact pass: the Whack's total into a wall includes the heal it dry-runs (the same scene with slam 0 for
+    // comparison: nothing else differs)
+    const whackTotal = function (slam) {
+      const keep = def.levels[0].slam;
+      def.levels[0].slam = slam;
+      try {
+        const sc = scene({ hurt: 20, enemies: [G(2, 1), G(7, 2)], terrain: tileAt(3, 1, 'wall') });
+        DD.Act.addStatus(sc.foe, 'stun', { turns: 2 }, sc.u);
+        const w = DD.AutoPlay.healWorth(sc.u, 5);
+        DD.AutoPlay.trace = 'all'; DD.AutoPlay.log = [];
+        try { DD.AutoPlay.takeTurn(); } finally { DD.AutoPlay.trace = false; }
+        const cand = DD.AutoPlay.log.filter(function (l) { return l.cand && l.cand.indexOf('mar_whack > 2,1') === 0 && typeof l.total === 'number'; })[0];
+        return { total: cand ? cand.total : null, w: w };
+      } finally { def.levels[0].slam = keep; }
+    };
+    const on = whackTotal(5), off = whackTotal(0);
+    t.ok(on.total !== null && off.total !== null, 'the exact pass priced the Whack both times (' + on.total + ' / ' + off.total + ')');
+    // at least the heal's price (healWorth); a little more is fine: 5 HP more also lowers the danger of where he ends
+    if (on.total !== null && off.total !== null) {
+      const d = on.total - off.total;
+      t.ok(d >= on.w - 0.15 && d <= on.w + 3, 'the Whack\'s exact total includes the slam heal (+' + d.toFixed(1) + ', healWorth ' + on.w + ')');
+    }
+    t.eq(L(1).slam, 5, '(the level is restored)');
+
+    // [heal QA-1] the log says why he healed, right after the engine's heal line; no slam heal, no line
+    s = scene({ hurt: 15, enemies: [G(2, 1), G(7, 2)], terrain: tileAt(3, 1, 'wall') });
+    let n0 = DD.Combat.state.log.length;
+    DD.Combat.useSkill(s.u, s.sl, 2, 1);
+    let lines = DD.Combat.state.log.slice(n0).map(function (l) { return l.text; });
+    const hl = lines.indexOf('Professor Marbles heals 5 HP.');
+    t.ok(hl >= 0 && lines[hl + 1] === 'Professor Marbles whacks ' + s.foe.name + ' into something solid. His hip pops back in. Respect your elders.',
+      'the log: the heal, then why (' + lines.join(' | ') + ')');
+    s = scene({ enemies: [G(2, 1), G(7, 2)], terrain: tileAt(3, 1, 'wall') });
+    n0 = DD.Combat.state.log.length;
+    DD.Combat.useSkill(s.u, s.sl, 2, 1);
+    lines = DD.Combat.state.log.slice(n0).map(function (l) { return l.text; });
+    t.ok(!lines.some(function (l) { return /hip pops back in/.test(l); }), 'full HP (the slam healed 0): no reason line');
+    s = scene({ w: 10, hurt: 15, enemies: [G(2, 1), G(9, 2)] });
+    n0 = DD.Combat.state.log.length;
+    DD.Combat.useSkill(s.u, s.sl, 2, 1);
+    lines = DD.Combat.state.log.slice(n0).map(function (l) { return l.text; });
+    t.ok(!lines.some(function (l) { return /hip pops back in/.test(l); }), 'open floor (no slam): no reason line');
+    t.eq(DD.problems.slice(p0).filter(function (p) { return /^Error in /.test(p); }).length, 0, 'no swallowed errors');
   });
 })();

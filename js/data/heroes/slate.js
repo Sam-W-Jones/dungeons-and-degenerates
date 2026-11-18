@@ -9,6 +9,9 @@
  * still squeeze (Stress Ball: damage + a self-heal), drag or throw it then; the victim is held for the same number of
  * its own turns as before. Only Hold Still grabs: another caller of DD.Slate.grab whose holder has no Short Fuse must
  * call DD.Slate.tickHold(holder) at that holder's turn ends itself.
+ * Conditional heal (Nov 18, "It Is Not a Hug"): at the end of each of his turns while he holds a foe (the grab turn
+ * too), he heals Hold Still's `hug` (4/5/5, stored on the Grappled instance; 4 for a direct grab), via 'lift:slate';
+ * a turn he squeezed with Stress Ball skips it (one grapple heal per turn). tickHold runs it before the countdown.
  * Throws lift an adjacent unit or object and land it up to N tiles away in a line, over units and low clutter: it and
  * the foe it hits take the damage, pits / lava / water do the rest, thrown objects shatter (barrels explode). Throws,
  * slams, drags and pulls are forced movement: they never provoke attacks of opportunity (Air Mail is an escape hatch).
@@ -25,6 +28,10 @@
   // AutoPlay: pinning a foe through its next turn, on top of the generic Grappled debuff term (sustain refit: 1.5 -> 2.5,
   // the spec's fallback: he grabbed 0.9 times an act 1 regular fight, target 1.2; docs/notes/balance.md)
   const HOLD_AI = 2.5;
+  // Nov 18 conditional heal: Hold Still's turn-end hold heal per level (`hug`, never `heal`: AutoPlay's quick pass credits L.heal).
+  // The conditional-healing balance pass raised the plan's 3/4/4 one step (T8: 0.98 hold heals a fight against 1.0;
+  // holdValue prices the hug, so a bigger one buys grabs; docs/notes/balance.md)
+  const HUG = [4, 5, 5];
   const RUNE = '#7af0ff';
   // canonical loose objects Slate can pick up (plus any object def / instance flagged `throwable: true`)
   const THROWABLE = { crate: 1, barrel: 1, barrel_explosive: 1, keg: 1, mushroom: 1, coffin: 1, candles: 1, brazier: 1, sla_boulder: 1 };
@@ -39,6 +46,10 @@
   function getSt(u, id) { return u && u.statuses ? DD.Act.getStatus(u, id) : null; }
   function has(u, id) { return !!getSt(u, id); }
   function hasItem(u, id) { return !!u && Array.isArray(u.items) && u.items.indexOf(id) >= 0; }
+  /** A skill socketed on this unit or run hero (combat slots and run heroes both keep skills as [{ id, level }]). */
+  function hasSkill(u, id) {
+    return !!u && Array.isArray(u.skills) && u.skills.some(function (s) { return !!s && (s === id || s.id === id); });
+  }
   function dirTo(a, b) { return DD.util.dirTo(a, b); }
   function step(p, d, k) { return { x: p.x + d.x * k, y: p.y + d.y * k }; }
   function plural(n, word) { return n + ' ' + word + (n === 1 ? '' : 's'); }
@@ -141,15 +152,46 @@
     // a grab on his own turn: that turn's end doesn't count (tickHold); a refresh keeps the same instance and data
     st.data = st.data || {};
     st.data.slaFresh = DD.Act.isOwnTurn(slate);
+    st.data.hug = HUG[0];   // Hold Still writes its level's `hug` over this after a successful grab
     DD.FX.text(v, 'Grappled!', { color: RUNE, size: 15 });
     DD.Act.log(slate.name + ' grabs ' + v.name + '. It is not a hug.', 'hero');
     return true;
   }
 
+  /** His per-fight bookkeeping (unit.data.sla; dry runs deep-copy it). */
+  function slaData(u) {
+    const d = u.data || (u.data = {});
+    return d.sla || (d.sla = { squeeze: -1 });
+  }
+  /** True when he squeezed with Stress Ball this turn (pure: never creates his bookkeeping). */
+  function squeezed(u) {
+    const s = S(), d = u && u.data && u.data.sla;
+    return !!s && !!d && d.squeeze === s.turn;
+  }
+  /** The hold heal the Grappled instance carries (Hold Still's level; 3 for a direct grab). */
+  function hugOf(st) { const n = st && st.data && +st.data.hug; return n > 0 ? n : HUG[0]; }
+
+  /**
+   * Nov 18 "It Is Not a Hug": at the end of his turn, still holding v (he can hold on, they are adjacent) and no Stress
+   * Ball squeeze this turn → he heals the hold's hug. Always called when that holds (0 at full HP: the sim counts fires).
+   */
+  function hugHeal(slate, v, st) {
+    if (!holdOk(slate, v) || squeezed(slate)) return 0;
+    const n = DD.Act.heal(slate, slate, hugOf(st), { via: 'lift:slate' });
+    if (n > 0) {
+      DD.Act.log(slate.name + ' holds ' + v.name + ' very, very still. It is NOT a hug. He feels a little better anyway.', 'hero');
+      DD.Act.maybeBark(slate, 'hug', 0.35);
+    }
+    return n;
+  }
+
   /** Grappled counts Slate's turns: the grab turn's own end doesn't count, then each of his turn ends takes one. */
   function tickHold(slate) {
     const v = heldBy(slate), st = v && getSt(v, HELD);
-    if (!st || st.turns < 0) return;
+    if (!st) return;
+    // the hold heal comes first: the grab turn's end heals too, and so does the turn he lets go
+    hugHeal(slate, v, st);
+    if (!getSt(v, HELD) || st.turns < 0) return;
     if (st.data && st.data.slaFresh) { st.data.slaFresh = false; return; }
     st.turns -= 1;
     if (st.turns <= 0) release(v, 'Let go.');
@@ -386,7 +428,8 @@
     desc: function (st) {
       const h = byId(st && st.source), name = h ? h.name : 'Slate';
       return 'Held by ' + name + ': can\'t move, and is dragged along when he walks (no attack of opportunity on him: they ' +
-        'move together). Free once they are apart, or when ' + name + ' lets go at the end of ' + holdEnds(h, st) + '.';
+        'move together). Free once they are apart, or when ' + name + ' lets go at the end of ' + holdEnds(h, st) + '. ' +
+        name + ' heals ' + hugOf(st) + ' HP at the end of each of his turns while he holds it.';
     },
     hooks: {
       // a hold that went stale (he was stunned, sheeped or downed, or they were moved apart) lets go
@@ -421,18 +464,32 @@
   });
 
   // ---- AutoPlay values (content side) --------------------------------------------------------------------
-  /** HP worth of a self-heal, the way AutoPlay prices heals (more below half HP). */
+  /** HP worth of a self-heal, the way AutoPlay prices heals (more below half HP): the shared DD.AutoPlay.healWorth (E2). */
   function healWorth(u, heal) {
+    if (DD.AutoPlay && typeof DD.AutoPlay.healWorth === 'function') return DD.AutoPlay.healWorth(u, heal);
     const miss = u.maxHp - u.hp;
     return miss > 0 ? Math.min(heal, miss) * (miss > u.maxHp / 2 ? 1.5 : 0.8) : 0;
   }
-  /** Stress Ball, quick pass only: it can't see a self-heal on a foe-aimed skill (the exact pass's dry run does). */
+  /** The hold heal a Stress Ball squeeze would forfeit this turn (he holds a foe, no squeeze yet this turn). */
+  function forfeitValue(u) {
+    const v = heldBy(u);
+    return v && holdOk(u, v) && !squeezed(u) ? healWorth(u, hugOf(getSt(v, HELD))) : 0;
+  }
+  /**
+   * Stress Ball: the quick pass prices its self-heal (the exact pass's dry run sees it); both subtract the turn-end hold
+   * heal a squeeze this turn forfeits (Nov 18: one grapple heal per turn; no dry run sees a turn-end heal).
+   */
   function stressScore(ctx) {
     const u = ctx.user;
-    if (ctx.autoplay || !active(u) || !ctx.L) return 0;
-    return healWorth(u, ctx.L.heal);
+    if (!active(u) || !ctx.L) return 0;
+    const forfeit = forfeitValue(u);
+    return ctx.autoplay ? -forfeit : healWorth(u, ctx.L.heal) - forfeit;
   }
-  /** Hold Still: the hold itself, plus the squeeze it sets up (usable now, or next turn: the hold lasts through it). */
+  /**
+   * Hold Still: the hold itself, the squeeze it sets up (usable now, or next turn: the hold lasts through it), and
+   * (Nov 18) the turn-end hold heals no dry run sees: the grab turn's for sure, each later one at 0.8. None when the
+   * grab's damage likely kills (nothing left to hold).
+   */
   function holdValue(ctx) {
     const u = ctx.user, v = ctx.targetUnit;
     if (!active(u) || !active(v) || !liftable(u, v)) return 0;
@@ -442,6 +499,10 @@
     if (sl && (!(sl.cd > 0) || (sl.cd === 1 && !sl.fresh))) {
       const L = DD.skillLevel(DD.getSkill('sla_stress_ball'), sl.level || 1);
       val += healWorth(u, L.heal) + 0.5 * L.dmg;
+    }
+    const H = ctx.L;
+    if (H && H.hug > 0 && !(DD.AI && DD.AI.estimate && DD.AI.estimate(u, v, H.dmg) >= v.hp)) {
+      val += healWorth(u, H.hug) * (1 + 0.8 * (H.turns || 1));
     }
     return val;
   }
@@ -470,12 +531,17 @@
 
   skill({
     id: 'sla_hold_still', name: 'Hold Still', icon: '🤼', kind: 'attack', tags: ['melee', 'grapple', 'root'], ap: 1, cooldown: 2,
-    levels: [{ dmg: 4, turns: 1 }, { dmg: 5, turns: 1 }, { dmg: 6, turns: 2 }],
+    levels: [{ dmg: 4, turns: 1, hug: HUG[0] }, { dmg: 5, turns: 1, hug: HUG[1] }, { dmg: 6, turns: 2, hug: HUG[2] }],
     // objects: false — he grapples foes, not barrels or crates (Love Tap pops or breaks one; Personal Space throws it)
     target: { type: 'unit', range: [1, 1], filter: 'enemy', canTarget: liftTarget, objects: false },
-    desc: function (L) {
+    // Nov 18: it heals (the turn-end hold heal), so Svammiel's Radio Edit never bleeps it (healsWith)
+    heals: true,
+    // [Nov 18, Deviation: hero-slate.md] grab + Grappled + the hold heal, the heal printed as a second sentence
+    desc: function (L, user) {
       return 'Grab an adjacent foe: ' + L.dmg + ' damage, and it is Grappled until the end of your next ' +
-        (L.turns === 1 ? 'turn' : L.turns + ' turns') + ' (can\'t move; dragged along when you walk).';
+        (L.turns === 1 ? 'turn' : L.turns + ' turns') + ' (can\'t move; dragged along when you walk). You heal ' + L.hug +
+        ' HP at the end of each of your turns while you hold it' +
+        (hasSkill(user, 'sla_stress_ball') ? ' (not on a turn you squeeze it with Stress Ball)' : '') + '.';
     },
     flavor: 'He hates being touched. He has no problem touching YOU.',
     autoplayValue: holdValue,
@@ -484,7 +550,10 @@
       if (!active(u) || !active(v)) return;
       DD.FX.lunge(u, v);
       DD.Act.damage(u, v, ctx.L.dmg, { tags: ['grapple'] });
-      if (active(u) && active(v)) grab(u, v, ctx.L.turns);
+      if (active(u) && active(v) && grab(u, v, ctx.L.turns)) {
+        const st = getSt(v, HELD);
+        if (st) { st.data = st.data || {}; st.data.hug = ctx.L.hug; }
+      }
     },
   });
 
@@ -778,6 +847,8 @@
     execute: function (ctx) {
       const u = ctx.user, v = ctx.targetUnit;
       if (!active(u) || !active(v) || holderOf(v) !== u) return;
+      // Nov 18: a squeeze is this turn's grapple heal; the turn-end hold heal skips it (they never stack)
+      if (S()) slaData(u).squeeze = S().turn;
       DD.FX.lunge(u, v);
       DD.FX.text(v, 'SQUEAK!', { color: RUNE, size: 15 });
       DD.Act.damage(u, v, ctx.L.dmg, { tags: ['grapple', 'squeeze'] });
@@ -1094,6 +1165,8 @@
       signature: ['THAT\'S IT. EVERYBODY OUT.', 'I\'VE HAD IT UP TO HERE!', 'TANTRUM. TIME.', 'THE FLOOR GOES TOO!', 'GET. OFF. MY. LAWN!'],
       squeeze: ['Hmph. Better.', 'Squeeze. Breathe. Squeeze.', 'Stop wriggling. This is for my health.',
         'Anger management. Very effective. For me.'],
+      // Nov 18: the turn-end hold heal (It Is Not a Hug)
+      hug: ['It is NOT a hug.', 'Hmph. Therapeutic.', 'Stop. Wiggling.'],
     },
   });
 
@@ -1133,5 +1206,6 @@
   // a tiny public surface for other content (bosses / items / events that want to poke Slate)
   DD.Slate = { rage: rage, flared: flared, gainRage: gainRage, spendRage: spendRage, heldBy: heldBy, holderOf: holderOf,
     grab: grab, release: release, tickHold: tickHold, releasesThisTurn: releasesThisTurn, flight: flight, throwUnit: throwUnit,
-    throwObject: throwObject, objThrowable: objThrowable, HOLD_AI: HOLD_AI, holdValue: holdValue };
+    throwObject: throwObject, objThrowable: objThrowable, HOLD_AI: HOLD_AI, holdValue: holdValue,
+    HUG: HUG, squeezed: squeezed, stressScore: stressScore };
 })();

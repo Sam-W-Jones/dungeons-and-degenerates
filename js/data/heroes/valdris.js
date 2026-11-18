@@ -8,7 +8,10 @@
  * Forge statuses: val_forged "Freshly Forged" (+N damage with every hit until the end of its next turn; attacks of
  * opportunity through modifyOpportunity) and val_flame_edge "Flame-Forged Edge" (its next damaging skill sets each foe it
  * hits Burning N, then it is spent).
- * Registers: hero valdris, 11 skills, 2 statuses, 3 items (all ids val_*).
+ * Conditional heal (Nov 18, "Hammer Out the Dents"): his passive's onCombatStart adds the silent rule val_dents (a HUD
+ * chip): when Block soaks a foe's hit on a unit of his side, that unit is Dented (val_dented); his next Forge Armor on it
+ * removes the status and heals it 7/8/9 (via 'lift:valdris'). Forge Armor never revives (target.revive: false).
+ * Registers: hero valdris, 11 skills, 3 statuses, 3 items (all ids val_*).
  */
 (function () {
   'use strict';
@@ -28,6 +31,10 @@
   const IRON = 3;                        // Strike While the Iron's Hot: +3 damage to Burning foes
   const FORGED = 'val_forged', EDGE = 'val_flame_edge';
   const BRIGHTFORGE = 'val_brightforge', EDGE_SKILL = 'val_flame_edge';   // Brightforge makes this skill free
+  const DENTED = 'val_dented', DENT_RULE = 'val_dents';                  // Hammer Out the Dents (Nov 18)
+  // Forge Armor I-III's heal on a Dented target (the conditional-healing balance pass, Nov 18: the plan's 4/5/6 raised to
+  // the top of its range, T6: the healers stay the best at healing others; docs/notes/balance.md)
+  const DENTS = [7, 8, 9];
   const EMBER = '#ff8a2a', GOLD = '#f2c14e', HOLY = '#fff1b8', STEEL = '#cfd6dd', SPARK = '#ffd27a';
 
   // ---- helpers ------------------------------------------------------------------------------------
@@ -47,6 +54,14 @@
     return !!d && d.cause === 'skill' && !d.opportunity && !!d.source && !!d.target && d.target !== d.source && hostile(d.source, d.target);
   }
   function hasItem(u, id) { return !!u && Array.isArray(u.items) && u.items.indexOf(id) >= 0; }
+  /** AutoPlay's shared heal price (DD.AutoPlay.healWorth, E2), with the same formula as a fallback. */
+  function healWorth(u, n) {
+    if (DD.AutoPlay && typeof DD.AutoPlay.healWorth === 'function') return DD.AutoPlay.healWorth(u, n);
+    n = Number(n);
+    if (!active(u) || !(n > 0)) return 0;
+    const miss = (u.maxHp || 0) - (u.hp || 0);
+    return miss > 0 ? Math.min(n, miss) * (miss > u.maxHp / 2 ? 1.5 : 0.8) : 0;
+  }
 
   /** How far a unit can strike on its next turn (a walk plus its longest damaging skill): aiScore helpers. */
   function strikeReach(u) {
@@ -117,6 +132,45 @@
       },
     },
   });
+
+  // ---- Hammer Out the Dents (Nov 18): Dented + the silent rule that dents ---------------------------------------
+  // a buff (cleanses that strip debuffs leave it): it promises a heal; Forge Armor spends it
+  DD.registerStatus({
+    id: DENTED, name: 'Dented', icon: '🔨', color: STEEL, type: 'buff', stacking: 'refresh', maxStacks: 1,
+    decay: 'never', defaultTurns: -1,
+    // a function, like every status desc (the registry calls desc(st))
+    desc: function () { return 'Its Block soaked a hit. Valdris\'s next Forge Armor on it hammers the dents out and heals it.'; },
+  });
+  /** A Valdris in the fight on u's side (himself included): someone who will hammer its dents out. */
+  function smithFor(u) {
+    const s = DD.Combat && DD.Combat.state;
+    return !!s && s.units.some(function (x) { return isValdris(x) && !x.dead && !hostile(x, u); });
+  }
+  /**
+   * The rule's hooks fire for every unit's onTakeDamage. A foe's hit (or one with no source) whose damage Block soaked,
+   * on a unit still standing (onTakeDamage runs before the down / death check) of Valdris' side: Dented. Source null on
+   * the status (not "a buff from someone else": no Rage for Slate). A friendly bump or splash into a Blocking ally never
+   * dents.
+   */
+  const DENT_HOOKS = {
+    onTakeDamage: function (d) {
+      const v = d && d.target;
+      if (!d || !(d.blocked > 0) || !active(v) || !(v.hp > 0) || has(v, DENTED)) return;
+      if (d.source && !hostile(d.source, v)) return;
+      if (!smithFor(v)) return;
+      DD.Act.addStatus(v, DENTED, {}, null);
+    },
+  };
+  /** Valdris' passive (onCombatStart): the Dents rule, once per fight. Silent: no "New rule" log line, the chip remains. */
+  function ensureDents() {
+    const s = DD.Combat && DD.Combat.state;
+    if (!s || !Array.isArray(s.rules) || s.rules.some(function (r) { return r && r.id === DENT_RULE; })) return null;
+    return DD.Act.addRule({
+      id: DENT_RULE, name: 'Dents', icon: '🔨', silent: true, turns: -1,
+      desc: 'Valdris is here: when Block soaks a foe\'s hit on his side, the one it hit is Dented; his next Forge Armor on it hammers the dents out and heals it.',
+      hooks: DENT_HOOKS,
+    });
+  }
 
   // ---- sprite -------------------------------------------------------------------------------------------
   // Armoured human cleric: chainmail (stocky 'armor' outfit) under a leather forge apron, long flowing golden hair with a
@@ -315,20 +369,42 @@
     },
   });
 
-  // Forge Armor (starter): Block. Playtest text-tone-25: US spelling like the Armor stat it sits next to (id unchanged)
+  // Forge Armor (starter): Block. Playtest text-tone-25: US spelling like the Armor stat it sits next to (id unchanged).
+  // Nov 18 (conditional healing): its one rider hammers the dents out of a Dented target (heals it). The level key is
+  // `dents`, never `heal` (AutoPlay's quick pass would credit a `heal` key ungated); kind 'buff', no 'heal' tag, and
+  // target.revive false: never an aimed revive.
   skill({
     id: 'val_forge_armour', name: 'Forge Armor', icon: '🛡️', kind: 'buff', tags: ['buff', 'block', 'forge'],
     ap: 1, cooldown: 1,
-    levels: [{ block: 6 }, { block: 8 }, { block: 10 }],
-    target: { type: 'unit', range: [0, 3], los: false, filter: 'allyOrSelf' },
-    desc: function (L, user) { return 'Valdris or an ally within ' + reach(user, 'val_forge_armour', 3) + ' gains ' + L.block + ' Block (until the start of its next turn).'; },
+    levels: [{ block: 6, dents: DENTS[0] }, { block: 8, dents: DENTS[1] }, { block: 10, dents: DENTS[2] }],
+    target: { type: 'unit', range: [0, 3], los: false, filter: 'allyOrSelf', revive: false },
+    desc: function (L, user) {
+      return 'Valdris or an ally within ' + reach(user, 'val_forge_armour', 3) + ' gains ' + L.block + ' Block (until the start of its next turn). ' +
+        'If it is Dented (its Block soaked a hit), he hammers the dents out: it heals ' + L.dents + ' HP.';
+    },
     flavor: 'Measured, hammered, riveted and polished in four seconds flat. The polishing took three of them.',
+    // the exact pass dry-runs the heal; the quick pass (which picks the targets worth a dry run) is told about it here
+    aiScore: function (ctx) {
+      if (ctx.autoplay) return 0;
+      const f = ctx.targetUnit, L = ctx.L || {};
+      return active(f) && has(f, DENTED) ? healWorth(f, L.dents) : 0;
+    },
     execute: function (ctx) {
       const u = ctx.user, f = ctx.targetUnit;
       if (!active(f)) return;
       if (f !== u) DD.FX.beam(u, f, { color: STEEL, width: 2 });
       clang(f, 12);
       DD.Act.addBlock(f, ctx.L.block);
+      if (!has(f, DENTED)) return;
+      DD.Act.removeStatus(f, DENTED, { silent: true });
+      if (!active(u) || !active(f)) return;
+      // always called on a Dented target (0 at full HP): the sim counts the fire
+      if (DD.Act.heal(u, f, ctx.L.dents, { via: 'lift:valdris' }) > 0) {
+        DD.FX.text(f, '🔨 Dents hammered out!', { color: STEEL, size: 14, parallel: true });
+        // [heal QA-1] the log says why the target healed (it was Dented)
+        DD.Act.log(u.name + ' hammers the dents out of ' + (f === u ? 'himself' : f.name) + '. Good as new. Better, even.', 'hero');
+        DD.Act.maybeBark(u, 'dents', 0.35);
+      }
     },
   });
 
@@ -582,6 +658,8 @@
       name: 'Strike While the Iron\'s Hot',
       desc: 'Valdris deals +' + IRON + ' damage to Burning foes, attacks of opportunity included.',
       hooks: {
+        // Nov 18: the Dents rule (Hammer Out the Dents, Forge Armor's rider), once per fight
+        onCombatStart: function (unit) { if (unit && !unit.dead) ensureDents(); },
         modifyOutgoingDamage: function (d) {
           if (!d || !isValdris(d.source) || !d.target || !has(d.target, 'burn')) return;
           if (d.opportunity) { d.valIron = true; return; }   // its +3 came through modifyOpportunity (o.flat)
@@ -638,9 +716,15 @@
         'Turn your back on my hammer? Bold.'],
       iron: ['Strike while the iron\'s hot!', 'Glowing nicely. Now: hammer.', 'Pre-heated. Perfect.', 'Hot iron! Hammer time!'],
       hair: ['Mind the hair.', 'Behold: conditioned perfection.', 'You may look. You may not touch.', 'Shampoo. Rinse. Blind.'],
+      // Nov 18: Forge Armor hammers the dents out (the heal > 0)
+      dents: ['Hold still. This\'ll only sting a lot.', 'Good as new. Better, actually: I used conditioner.',
+        'Every dent tells a story. This one says \'ow\'.'],
     },
   });
 
   /** Small public surface for tests and other content (read-only). */
-  DD.Valdris = { IRON: IRON, FORGED: FORGED, EDGE: EDGE, hammerGrip: hammerGrip, foesInReach: foesInReach };
+  DD.Valdris = {
+    IRON: IRON, FORGED: FORGED, EDGE: EDGE, DENTED: DENTED, DENT_RULE: DENT_RULE, DENTS: DENTS.slice(),
+    hammerGrip: hammerGrip, foesInReach: foesInReach, ensureDents: ensureDents,
+  };
 })();

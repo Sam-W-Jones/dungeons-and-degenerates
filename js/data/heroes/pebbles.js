@@ -2,8 +2,9 @@
  * Hero: PEBBLES, THE GOODEST BOY — a dog made of fire (he/him). v2-native (initiative, no telegraphs, no Guard),
  * DESIGN §6 "Pebbles" + "Simplicity": a melee skirmisher who sets things on fire, fetches foes and loves everyone.
  * Fireproof by def (resist fire 0, immune to Burn); passive "Hot Dog" = fire can't hurt him and ending his turn on fire
- * or lava heals him. His basic bite is melee, so it is also his attack of opportunity (Burn included); his dashes
- * (Hot Zoomies) never provoke one.
+ * or lava heals him (Nov 18, conditional healing, "Warming His Paws on a Goblin": next to a Burning foe too; one heal per
+ * turn end, via 'lift:pebbles'; PASSIVE.autoplayEnd tells AutoPlay where his turn ends cosy, engine hook E1). His basic
+ * bite is melee, so it is also his attack of opportunity (Burn included); his dashes (Hot Zoomies) never provoke one.
  * Registers: hero pebbles, 11 skills (peb_*), 3 items (peb_*). No custom statuses or summons.
  */
 (function () {
@@ -46,16 +47,36 @@
     return r && r[1] >= 1 ? r[1] : fallback;
   }
 
-  /** Is the unit standing in fire (a fire surface) or on lava? A flyer floats above the floor, so it is in neither. */
-  function inFire(u) {
-    const tl = u && G().tile(u.x, u.y);
+  /** Is (x, y) fire (a fire surface) or lava under u? A flyer floats above the floor, so it is in neither. Pure. */
+  function fireAt(u, x, y) {
+    const tl = u && G().tile(x, y);
     if (!tl || !G().feelsFloor(u)) return false;
     if (tl.surface && tl.surface.id === 'fire') return true;
     const td = G().terrain(tl);
     return !!(td && td.liquid === 'lava');
   }
+  /** Is the unit standing in fire (a fire surface) or on lava? */
+  function inFire(u) { return !!u && fireAt(u, u.x, u.y); }
+  /** Nov 18: an active foe of u with Burn (anyone's) next to (x, y)? No floor needed: he warms his paws on it. Pure. */
+  function burningNear(u, x, y) { return !!burningFoeNear(u, x, y); }
+  /** The first such Burning foe next to (x, y), or null (the log names it). Pure. */
+  function burningFoeNear(u, x, y) {
+    const s = DD.Combat && DD.Combat.state;
+    if (!s || !u) return null;
+    return s.units.filter(function (f) { return f !== u && foeOf(u, f) && has(f, 'burn') && G().dist(f, { x: x, y: y }) === 1; })[0] || null;
+  }
+  /** Would ending u's turn on (x, y) be cosy (Hot Dog): fire, lava, or a Burning foe next to it? One heal either way. */
+  function cozyAt(u, x, y) { return fireAt(u, x, y) || burningNear(u, x, y); }
   /** Hot Dog's heal for this unit (the Fireproof Dog Bed makes it bigger). */
   function cozyHeal(u) { return hasItem(u, DOG_BED) ? COZY_HEAL_BED : COZY_HEAL; }
+  /** AutoPlay's shared heal price (DD.AutoPlay.healWorth, E2), with the same formula as a fallback. */
+  function healWorth(u, n) {
+    if (DD.AutoPlay && typeof DD.AutoPlay.healWorth === 'function') return DD.AutoPlay.healWorth(u, n);
+    n = Number(n);
+    if (!active(u) || !(n > 0)) return 0;
+    const miss = (u.maxHp || 0) - (u.hp || 0);
+    return miss > 0 ? Math.min(n, miss) * (miss > u.maxHp / 2 ? 1.5 : 0.8) : 0;
+  }
   /** Spicy Nibble's Burn for this user (the Chewed-Up Fire Extinguisher adds 1). */
   function nibbleBurn(L, user) { return ((L && L.burn) || 1) + (hasItem(user, EXTINGUISHER) ? 1 : 0); }
 
@@ -444,8 +465,10 @@
     flavor: 'He sits. He sips his coffee. The room is on fire. This is fine. He is the fire.',
     aiScore: function (ctx) {
       const u = ctx.user;
-      // Hot Dog's heal at his turn end (a flying Pebbles floats over the fire: no heal)
-      return u && G().feelsFloor(u) ? Math.min(cozyHeal(u), Math.max(0, u.maxHp - u.hp)) * 0.8 : 0;
+      // Hot Dog's heal at his turn end (a flying Pebbles floats over the fire: no heal). Nov 18: the exact pass reads it
+      // from the dry run's end tile (PASSIVE.autoplayEnd, E1), so only the quick pass counts it here (never twice)
+      if (!u || (ctx && ctx.autoplay)) return 0;
+      return G().feelsFloor(u) ? Math.min(cozyHeal(u), Math.max(0, u.maxHp - u.hp)) * 0.8 : 0;
     },
     execute: function (ctx) {
       const u = ctx.user;
@@ -563,16 +586,32 @@
   // ---- the hero ---------------------------------------------------------------------------------------------
   const PASSIVE = {
     name: 'Hot Dog',
-    desc: 'Pebbles is made of fire: fire damage and Burn can\'t hurt him, and ending his turn on fire or lava heals him ' +
-      COZY_HEAL + ' HP.',
+    desc: 'Pebbles is made of fire: fire damage and Burn can\'t hurt him, and ending his turn on fire, on lava or next to a ' +
+      'Burning foe heals him ' + COZY_HEAL + ' HP.',
     // the immunity itself is data on the def (resist: { fire: 0 }, flags.immune: ['burn']): enemy estimates read it;
-    // the hook is the cosy part
+    // the hook is the cosy part. Nov 18 (Warming His Paws on a Goblin): a Burning foe next to him counts too; one heal
+    // per turn end (the cases never add up), always called when cosy (0 at full HP: the sim counts it), never a revive
     hooks: {
       onTurnEnd: function (unit) {
-        if (!active(unit) || !inFire(unit)) return;
-        const n = DD.Act.heal(unit, unit, cozyHeal(unit));
-        if (n > 0) DD.FX.text(unit, '🔥 Cozy!', { color: FLAME_HOT, size: 14 });
+        if (!active(unit) || !cozyAt(unit, unit.x, unit.y)) return;
+        const n = DD.Act.heal(unit, unit, cozyHeal(unit), { via: 'lift:pebbles' });
+        if (n > 0) {
+          DD.FX.text(unit, '🔥 Cozy!', { color: FLAME_HOT, size: 14 });
+          // [heal QA-1] the log says why he healed: his own fire first (the cases never add up), else the Burning foe
+          const toasty = fireAt(unit, unit.x, unit.y) ? null : burningFoeNear(unit, unit.x, unit.y);
+          DD.Act.log(toasty ? unit.name + ' warms his paws on ' + toasty.name + '. Toasty. For one of them.' :
+            unit.name + ' curls up in the flames. So cozy.', 'hero');
+          DD.Act.maybeBark(unit, 'cozy', 0.3);
+        }
       },
+    },
+    /**
+     * E1 (Nov 18): what ending his turn on (x, y) is worth to AutoPlay: Hot Dog's heal priced by healWorth when the tile
+     * is cosy (fire / lava under his paws, or an active Burning foe next to it), else 0. Pure: read in the current state
+     * (inside a dry run the copy, so the Burn his Nibble just put on a goblin counts).
+     */
+    autoplayEnd: function (unit, x, y) {
+      return active(unit) && cozyAt(unit, x, y) ? healWorth(unit, cozyHeal(unit)) : 0;
     },
   };
 
@@ -629,6 +668,8 @@
       // his attacks of opportunity (Spicy Nibble on a foe walking away from him)
       opportunity: ['Hey! Where are you going? Come back and play!', 'No running from the dog!', 'Chase! Chase! Caught you!',
         'Leaving? Take a souvenir! It\'s fire!'],
+      // Nov 18 (Warming His Paws on a Goblin): Hot Dog healed him at his turn end
+      cozy: ['Warm! Warm warm warm!', 'Cozy fire! Why is the fire yelling?', '*happy crackle*'],
     },
   });
 
@@ -638,6 +679,9 @@
     COZY_HEAL: COZY_HEAL, COZY_HEAL_BED: COZY_HEAL_BED, REKINDLE_HP: REKINDLE_HP,
     zoomPath: zoomPath,
     inFire: inFire,
+    fireAt: fireAt,
+    burningNear: burningNear,
+    cozyAt: cozyAt,
     cozyHeal: cozyHeal,
     fineTiles: fineTiles,
     burningFoes: burningFoes,

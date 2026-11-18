@@ -1283,6 +1283,128 @@
     t.ok(!st(g, 'slow'), 'nor when it comes back over them');
     t.eq(DD.Grid.hazardAt(4, 4, g), null, 'the crumbs are no hazard to anyone');
   });
+
+  // ---- Nov 18: conditional healing — "Approval Rating" (plan §4.6) ---------------------------------------------------
+  /** Every DD.Act.heal call made while fn runs: [{ src, target, n, via, healed, sim }]. */
+  function healCalls(fn) {
+    const list = [], orig = DD.Act.heal;
+    DD.Act.heal = function (src, target, n, opts) {
+      const healed = orig.apply(this, arguments);
+      list.push({ src: src, target: target, n: n, via: opts && opts.via, healed: healed, sim: !!DD.Act.simulating });
+      return healed;
+    };
+    try { fn(); } finally { DD.Act.heal = orig; }
+    return list;
+  }
+  function lifts(calls) { return calls.filter(function (x) { return !x.sim && x.via === 'lift:buga'; }); }
+  function healsBy(u) { const s = DD.Combat.state.stats.units[u.id]; return s ? s.heals : 0; }
+
+  T.suite('hero_buga: conditional heal (Nov 18)', function (t) {
+    const h = DD.getHero('buga'), B = DD.Buga;
+    t.ok(!!B && B.APPLAUSE_HEAL === 2 && B.CREDIT_GOLD === 2 && B.CHAIN_GOLD === 3, 'DD.Buga: APPLAUSE_HEAL 2 (gold 2, Chain 3 unchanged)');
+    t.eq(h.passive.desc, 'Whenever an ally (or a foe he bribed) defeats an enemy while Buga stands, he takes the credit: +' + B.CREDIT_GOLD + ' gold, and the applause heals him ' + B.APPLAUSE_HEAL + ' HP.',
+      'the passive desc, word for word, numbers from the constants');
+    // [heal QA-4] the plan's three applause lines claim the heal: their own pool (joined to the credit lines only when
+    // the applause healed him); the six old credit lines stay as they were
+    ['Four more years! Of HP!', 'Approval ratings: UP. Hit points: ALSO UP.', 'I felt that kill in my crust.'].forEach(function (l) {
+      t.ok(B.APPLAUSE_LINES.indexOf(l) >= 0 && B.CREDIT_LINES.indexOf(l) < 0, 'the applause lines (not the credit lines) include "' + l + '"');
+    });
+    t.eq(B.CREDIT_LINES.length, 6, 'the six old credit lines');
+    t.eq(B.APPLAUSE_LINES.length, 3, 'the plan\'s three applause lines');
+    B.CREDIT_LINES.concat(B.APPLAUSE_LINES).forEach(function (l) { t.ok(l.length <= 70 && !/\b(she|her|hers|herself)\b/i.test(l), 'credit line: ' + l); });
+
+    // an ally's kill: +2 gold and +2 HP (src Buga, via lift:buga); the killing blow's preview shows +2 on a hurt Buga
+    arena({ heroes: [buga([]), { id: 'test_knight', x: 4, y: 4 }], enemies: [{ id: 'test_grunt', x: 5, y: 4 }, { id: 'test_grunt', x: 8, y: 8 }] });
+    let b = unit('buga');
+    const k = unit('test_knight');
+    b.hp = b.maxHp - 10;
+    t.ok(toTurn(k), 'the knight\'s turn');
+    at(5, 4).hp = 2;
+    let g0 = gold();
+    const hp0 = b.hp, heals0 = healsBy(b);
+    const prev = DD.Combat.preview(k, slotOf(k, 'test_slash'), 5, 4);
+    let calls = healCalls(function () { t.ok(use(k, 'test_slash', { x: 5, y: 4 }) && !at(5, 4), 'the knight kills the grunt'); });
+    t.ok(gold() - g0 === 2 && b.hp - hp0 === 2, 'an ally\'s kill: +2 gold and +2 HP (' + (b.hp - hp0) + ')');
+    t.eq(healsBy(b) - heals0, 2, 'the heal\'s src is Buga (his heals stat +2)');
+    t.eq(prev && prev.perUnit[b.id] && prev.perUnit[b.id].heal, 2, 'the knight\'s killing-blow preview shows +2 on Buga');
+    t.ok(lifts(calls).length === 1 && lifts(calls)[0].src === b && lifts(calls)[0].target === b && lifts(calls)[0].n === 2, 'DD.Act.heal(Buga, Buga, 2, { via: \'lift:buga\' })');
+
+    // a foe Buga bribed kills its friend: +2; his own kill: nothing; an enemy-side summon: nothing; downed: nothing
+    arena({ enemyAi: true, order: ['buga', 'test_grunt'], heroes: [buga([], 1, 4), { id: 'test_knight', x: 0, y: 0 }],
+      enemies: [{ id: 'test_grunt', x: 4, y: 4 }, { id: 'test_grunt', x: 5, y: 4 }] });
+    b = unit('buga');
+    b.hp = b.maxHp - 10;
+    DD.Act.addStatus(at(4, 4), 'charmed', { turns: 1 }, b);
+    at(5, 4).hp = 3;
+    const gb = at(5, 4);
+    calls = healCalls(function () { DD.Combat.endTurn(); });
+    t.ok(gb.dead && b.hp === b.maxHp - 8 && lifts(calls).length === 1, 'the grunt he bribed kills its friend: +2 HP (' + b.hp + '/' + b.maxHp + ')');
+    arena({ heroes: [buga([]), { id: 'test_knight', x: 4, y: 4 }], enemies: [{ id: 'test_grunt', x: 2, y: 5 }, { id: 'test_grunt', x: 5, y: 4 }, { id: 'test_grunt', x: 8, y: 8 }] });
+    b = unit('buga');
+    b.hp = b.maxHp - 10;
+    at(2, 5).hp = 2;
+    calls = healCalls(function () { t.ok(use(b, 'buga_pamphlet', { x: 2, y: 5 }) && !at(2, 5), 'Buga finishes a grunt himself'); });
+    t.ok(b.hp === b.maxHp - 10 && lifts(calls).length === 0, 'his own kill: no credit, no applause');
+    const pup = DD.Act.summon(at(5, 4), 'test_hound', 7, 7, { noFx: true });
+    calls = healCalls(function () { DD.Act.damage(unit('test_knight'), pup, 99); });
+    t.ok(pup.dead && b.hp === b.maxHp - 10 && lifts(calls).length === 0, 'an enemy-side summon dies: nothing');
+    DD.Act.kill(b, null);
+    calls = healCalls(function () { DD.Act.damage(unit('test_knight'), at(5, 4), 99); });
+    t.ok(b.downed && b.hp === 0 && lifts(calls).length === 0, 'Buga downed: no credit, no heal (never a revive)');
+
+    // three kills in one swing: three credits, +6 HP; the Chain of Office pays 3 gold, the applause still 2; full HP: 0
+    arena({ heroes: [buga([], 2, 4, { items: ['buga_chain_of_office'] }), { id: 'test_knight', x: 4, y: 4, skills: [{ id: 'test_cleave', level: 1 }] }],
+      enemies: [{ id: 'test_grunt', x: 5, y: 4 }, { id: 'test_grunt', x: 5, y: 3 }, { id: 'test_grunt', x: 5, y: 5 }, { id: 'test_grunt', x: 8, y: 8 }] });
+    b = unit('buga');
+    b.hp = b.maxHp - 12;
+    const k3 = unit('test_knight');
+    toTurn(k3);
+    at(5, 4).hp = 2; at(5, 3).hp = 2; at(5, 5).hp = 2;
+    g0 = gold();
+    calls = healCalls(function () { t.ok(use(k3, 'test_cleave', { x: 5, y: 4 }) && !at(5, 4) && !at(5, 3) && !at(5, 5), 'the knight cleaves three grunts'); });
+    t.ok(b.hp === b.maxHp - 6 && lifts(calls).length === 3 && gold() - g0 === 9, 'three credits: +6 HP, and 3 × 3 gold with the Chain (' + b.hp + '/' + b.maxHp + ')');
+    b.hp = b.maxHp;
+    calls = healCalls(function () { DD.Act.damage(k3, at(8, 8), 99); });
+    t.ok(b.hp === b.maxHp && lifts(calls).length === 1 && lifts(calls)[0].healed === 0, 'at full HP: the heal is still called (0)');
+
+    // [heal QA-2 / QA-4] one label per credit (the applause folded into the credit text), and the applause lines only
+    // when the applause healed him: watch his labels and the lines he says (the cosmetic roll forced to "speak")
+    function watch(fn) {
+      const texts = [], said = [], FXt = DD.FX.text, bk = DD.Act.bark, rn = DD.rng.next;
+      DD.FX.text = function (who, text) { const e = FXt.apply(this, arguments); if (who === unit('buga')) texts.push(e && typeof e === 'object' ? e : { text: text }); return e; };
+      DD.Act.bark = function (who, line) { if (who === unit('buga')) said.push(line); return bk.apply(this, arguments); };
+      DD.rng.next = function () { return 0; };
+      try { fn(); } finally { DD.FX.text = FXt; DD.Act.bark = bk; DD.rng.next = rn; }
+      return { texts: texts.map(function (e) { return e.text; }), said: said };
+    }
+    arena({ heroes: [buga([]), { id: 'test_knight', x: 4, y: 4 }], enemies: [{ id: 'test_grunt', x: 5, y: 4 }, { id: 'test_grunt', x: 5, y: 5 }, { id: 'test_grunt', x: 8, y: 8 }] });
+    b = unit('buga');
+    b.hp = b.maxHp - 10;
+    toTurn(unit('test_knight'));
+    at(5, 4).hp = 2;
+    let w = watch(function () { use(unit('test_knight'), 'test_slash', { x: 5, y: 4 }); });
+    t.eq(w.texts.join(' | '), '🎖️ Credit taken! +2 gold 👏', 'a credit that heals: one label, the applause folded in (no second "Applause!" label)');
+    t.ok(w.said.length === 1 && B.CREDIT_LINES.concat(B.APPLAUSE_LINES).indexOf(w.said[0]) >= 0, 'he says a credit or applause line: ' + w.said[0]);
+    b.hp = b.maxHp;
+    at(5, 5).hp = 2;
+    let applause = 0;
+    for (let i = 0; i < 12; i++) {
+      // full HP: the applause heals 0, so its lines never play (12 forced rolls cover the 6-line pool's every slot)
+      const rn = DD.rng.next;
+      let k = 0;
+      DD.rng.next = function () { k++; return k === 1 ? 0 : (i + 0.5) / 12; };
+      try {
+        const said = [], bk = DD.Act.bark;
+        DD.Act.bark = function (who, line) { if (who === b) said.push(line); return bk.apply(this, arguments); };
+        try { DD.getHero('buga').passive.hooks.onAnyDeath(b, at(5, 5), { credit: unit('test_knight') }); } finally { DD.Act.bark = bk; }
+        said.forEach(function (l) { if (B.APPLAUSE_LINES.indexOf(l) >= 0) applause++; });
+      } finally { DD.rng.next = rn; }
+    }
+    t.eq(applause, 0, 'at full HP (the applause healed 0) the applause lines never play');
+    w = watch(function () { DD.Act.damage(unit('test_knight'), at(5, 5), 99); });
+    t.eq(w.texts.join(' | '), '🎖️ Credit taken! +2 gold', 'a credit at full HP: the plain credit label');
+    t.ok(w.said.length === 1 && B.CREDIT_LINES.indexOf(w.said[0]) >= 0, 'and a plain credit line: ' + w.said[0]);
+  });
 })();
 
 // ---- playtest fixes (Nov 12) ----------------------------------------------------------------------------------------

@@ -6,6 +6,9 @@
  *   of his allies.
  * - Debt (cor_debt, stacks = HP owed): what bargains cost. Paid in HP at the start of his next turn (ignores Block,
  *   never below 1 HP). Passive "Collateral Damage" (his own onAnyDeath hook): every foe that dies first pays off 4.
+ * - Nov 18 "Class Action Settlement" (conditional healing): a rune burst that hits 2 or more foes heals its owner the
+ *   rune's `settle` (Glyph of Warding's level at placement: 3 / 4 / 4), once per round (unit.data.cor.settled = round),
+ *   labelled 'lift:corelos'.
  * Public helpers for tests / other content: DD.Corelos (runes, placeRune, burst, burstAll, debt, addDebt, payOff...).
  */
 (function () {
@@ -22,6 +25,8 @@
   const CARD_PAYOFF = 7;
   const QUILL_BONUS = 2;
   const NOTARIZED_DEBT = 10;
+  const SETTLE = [3, 4, 4];       // Glyph I-III: a rune burst that hits 2+ foes heals him this (once per round, Nov 18)
+  const CLASS_SIZE = 2;           // foes a burst must hit to count as a class action
   const VIOLET = '#b77bff', VIOLET_LIGHT = '#e6d0ff', CRIMSON = '#c8203f', GOLD = '#e8c45a', PARCH = '#f3e6c4';
 
   function A() { return DD.Act; }
@@ -39,6 +44,16 @@
     return false;
   }
   function plural(n, w) { return n + ' ' + w + (n === 1 ? '' : 's'); }
+  /** His per-fight scratch (unit.data is fresh every fight and deep-copied by dry runs). */
+  function corData(u) { const d = u.data || (u.data = {}); return d.cor || (d.cor = {}); }
+  /** AutoPlay's shared heal price (DD.AutoPlay.healWorth, E2), with the same formula as a fallback. */
+  function healWorth(u, n) {
+    if (DD.AutoPlay && typeof DD.AutoPlay.healWorth === 'function') return DD.AutoPlay.healWorth(u, n);
+    n = Number(n);
+    if (!active(u) || !(n > 0)) return 0;
+    const miss = (u.maxHp || 0) - (u.hp || 0);
+    return miss > 0 ? Math.min(n, miss) * (miss > u.maxHp / 2 ? 1.5 : 0.8) : 0;
+  }
 
   // ---- cosmetic FX helpers ------------------------------------------------------------------------
   /** A rune-sealed letter for custom projectiles (visual only). */
@@ -103,7 +118,10 @@
     A().log('An old rune fizzles out (limit reached).', 'system');
   }
 
-  /** Inscribe a rune for owner. opts: { dmg, root }. The owner's oldest rune fizzles at the cap. Returns the object. */
+  /**
+   * Inscribe a rune for owner. opts: { dmg, root, settle } (settle: the class-action heal, default SETTLE[0]). The owner's
+   * oldest rune fizzles at the cap. Returns the object.
+   */
   function placeRune(owner, x, y, opts) {
     opts = opts || {};
     const s = S();
@@ -114,9 +132,10 @@
     s.data.corRuneSeq = (s.data.corRuneSeq || 0) + 1;
     const dmg = Math.max(0, Math.round(Number(opts.dmg) || 0));
     const root = !!opts.root;
+    const settle = opts.settle === undefined ? SETTLE[0] : Math.max(0, Math.round(Number(opts.settle) || 0));
     const o = A().placeObject(x, y, RUNE, {
       label: (root ? 'Binding Rune' : 'Rune') + ' (' + (dmg + quillBonus(owner)) + ' dmg' + (root ? ', roots' : '') + ')',
-      data: { owner: owner ? owner.id : null, dmg: dmg, root: root, seq: s.data.corRuneSeq },
+      data: { owner: owner ? owner.id : null, dmg: dmg, root: root, seq: s.data.corRuneSeq, settle: settle },
     });
     if (o) {
       FX().tile(x, y, 'glow', { color: VIOLET });
@@ -153,7 +172,30 @@
       hits.push({ unit: v, dealt: A().damage(owner, v, amount, { tags: ['cor_rune', 'arcane'], noHighGround: true }) });
     });
     if (d.root && opts.trigger && active(opts.trigger)) A().addStatus(opts.trigger, 'root', { turns: 1 }, owner);
+    if (hits.length >= CLASS_SIZE) settleUp(owner, d.settle === undefined ? SETTLE[0] : d.settle);
     return hits;
+  }
+
+  /** The round's class action is still unclaimed (pure: never creates his scratch). */
+  function canSettle(owner) {
+    const s = S(), d = owner && owner.data && owner.data.cor;
+    return !!s && active(owner) && !(d && d.settled === s.round);
+  }
+  /**
+   * Class Action Settlement (Nov 18): a burst hit 2+ foes; its owner heals n, once per round. Always called while the
+   * condition holds (0 HP at full HP: the round's settlement is spent all the same); FX and bark only when it healed.
+   */
+  function settleUp(owner, n) {
+    const s = S();
+    if (!owner || !collateral(owner) || !canSettle(owner)) return 0;
+    corData(owner).settled = s.round;
+    const healed = A().heal(owner, owner, n, { via: 'lift:corelos' });
+    if (healed > 0) {
+      FX().text(owner, '⚖️ Settled!', { color: GOLD, size: 14, parallel: true });
+      A().log('Class action! ' + owner.name + ' settles out of court and pockets ' + healed + ' HP.', 'hero');
+      A().maybeBark(owner, 'settle', 0.4);
+    }
+    return healed;
   }
 
   /** Burst a list of rune tiles in order, skipping any that went off (or vanished) in the meantime. */
@@ -340,7 +382,14 @@
       if (near && dist(p, near) < dist(f, near)) v += 0.3 * dmg;
     });
     if (ctx.L && ctx.L.root && v > 0) v += 1.5;
-    return Math.min(v, 1.5 * dmg);
+    v = Math.min(v, 1.5 * dmg);
+    // Nov 18: a crowd near the rune may make its burst a class action (the heal comes later: no dry run sees it)
+    if (ctx.L && ctx.L.settle > 0 && canSettle(me)) {
+      let near = 0;
+      s.units.forEach(function (f) { if (isFoe(me, f) && dist(f, p) <= 2) near++; });
+      if (near >= CLASS_SIZE) v += 0.4 * healWorth(me, ctx.L.settle);
+    }
+    return v;
   }
   /**
    * AutoPlay's worth of the deaths that will pay off a bargain's Debt (it prices any Debt like a flat debuff on him):
@@ -354,22 +403,24 @@
     return Math.min(ctx.L.debt, payoffFor(me) * soon, 4);
   }
 
-  // Starter: Glyph of Warding
+  // Starter: Glyph of Warding. Nov 18 (conditional healing): its one rider is the class action (key `settle`, never `heal`;
+  // III's Root stays its one added III rider)
   skill({
     id: 'cor_glyph', name: 'Glyph of Warding', icon: '🔯', kind: 'spell', tags: ['rune', 'trap', 'arcane'], ap: 1, cooldown: 0,
-    levels: [{ rune: 5 }, { rune: 6 }, { rune: 6, root: true }],
+    levels: [{ rune: 5, settle: SETTLE[0] }, { rune: 6, settle: SETTLE[1] }, { rune: 6, root: true, settle: SETTLE[2] }],
     target: { type: 'tile', range: [1, 4], los: false, filter: 'empty', canTarget: function (ctx) { return canRuneAt(ctx.target); } },
     area: { shape: 'custom', fn: function (ctx) { return ctx && ctx.target ? burstTiles(ctx.target) : []; } },
     desc: function (L, user) {
       return 'Inscribe a rune (max ' + RUNE_CAP + '): when a foe steps on it, ' + (L.root ? 'that foe is Rooted and ' : '') +
-        'foes on and next to it take ' + (L.rune + quillBonus(user)) + ' damage.';
+        'foes on and next to it take ' + (L.rune + quillBonus(user)) + ' damage. A burst that hits ' + CLASS_SIZE +
+        ' or more foes is a class action: you heal ' + L.settle + ' HP (once per round).';
     },
     flavor: 'Monsters never read the fine print. Or look at the floor.',
     execute: function (ctx) {
       const p = ctx.target;
       if (!p) return;
       FX().projectile(ctx.user, p, { kind: 'orb', color: VIOLET, ms: 220 });
-      if (!placeRune(ctx.user, p.x, p.y, { dmg: ctx.L.rune, root: !!ctx.L.root })) FX().text(p, 'No room for a rune', { color: '#bba6d6', size: 13 });
+      if (!placeRune(ctx.user, p.x, p.y, { dmg: ctx.L.rune, root: !!ctx.L.root, settle: ctx.L.settle })) FX().text(p, 'No room for a rune', { color: '#bba6d6', size: 13 });
     },
     autoplayValue: runeValue,
   });
@@ -752,12 +803,15 @@
         'Josiah, is that beak mask OSHA compliant?', 'Basanos, the werewolf clause is not boilerplate.'],
       signature: ['Did you even READ the fine print?!', 'Section 9, Clause 4: you lose.', 'Objection sustained. By me. Forever.',
         'Clause 666: you all sit this one out.'],
+      // Nov 18: a rune burst that hits 2+ foes heals him (Class Action Settlement, the heal > 0)
+      settle: ['Class action! I\'m the class.', 'Settled out of court. Mostly out of you.', 'Pleasure doing business.'],
     },
   });
 
   // ---- public helpers (tests, other content) ---------------------------------------------------------------
   DD.Corelos = {
     RUNE_CAP: RUNE_CAP, PAYOFF: PAYOFF, CARD_PAYOFF: CARD_PAYOFF, QUILL_BONUS: QUILL_BONUS,
+    SETTLE: SETTLE.slice(), CLASS_SIZE: CLASS_SIZE, canSettle: canSettle,
     runes: runeTiles, runesNear: runesNear, placeRune: placeRune, burst: burst, burstAll: burstAll,
     debt: debtOf, addDebt: addDebt, payOff: payOff, payoffFor: payoffFor, runeValue: runeValue, debtRelief: debtRelief,
   };

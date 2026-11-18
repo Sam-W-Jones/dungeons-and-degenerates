@@ -2,7 +2,7 @@
  * Suites "hero_syllamin: …" for js/data/heroes/syllamin.js (v2: initiative turns, no telegraphs, no Guard, simple
  * skills): the hero def and kit shape, the Heckler passive (Roasted / Emotional Damage / Hype), the basic, every pool
  * skill at every level (desc == effect, durations counted in the owner's own turns), cast ranges and line of sight,
- * the combos with other heroes, the Diss Track signature, the three items, edge cases (silenced / stunned / asleep /
+ * the combos with other heroes, the Diss Track signature, the four items (the Nov 18 Jar of Tears too), edge cases (silenced / stunned / asleep /
  * sheep / charmed user, too little AP, targets dying mid-skill, pits, lava, water, map edges, flying), attacks of
  * opportunity, exact previews and AutoPlay v2 battles.
  * Uses the test_ fixtures (tests/fixtures.js). Deterministic: fixed sandbox seeds.
@@ -159,8 +159,10 @@
     const glitter = DD.getSurface('syl_glitter');
     t.ok(glitter && glitter.slide === true && !glitter.onEnter && typeof glitter.draw === 'function' && glitter.react.fire, 'surface syl_glitter: slippery only, burns');
     const items = Object.keys(DD.defs.items).map(function (k) { return DD.getItem(k); }).filter(function (it) { return it.hero === HERO; });
-    t.eq(items.length, 3, 'three hero items');
+    // Nov 18 (conditional healing): the fourth is the common Jar of Tears (Theirs), his lift
+    t.eq(items.length, 4, 'four hero items (the Nov 18 Jar of Tears joins the three)');
     t.ok(items.some(function (it) { return it.rarity === 'rare'; }) && items.some(function (it) { return it.rarity === 'legendary'; }), 'a rare and a legendary item');
+    t.ok(items.some(function (it) { return it.id === 'syl_tear_jar' && it.rarity === 'common' && it.slot === 'trinket'; }), 'the Jar of Tears: a common trinket');
     items.forEach(function (it) {
       t.ok(it.id.indexOf('syl_') === 0 && it.desc.length > 10 && it.flavor.length > 10, 'item ' + it.id + ' text');
       t.ok(!(it.stats && it.stats.block) && !(it.hooks && (it.hooks.modifyGuard || it.hooks.onCombatStart)), 'item ' + it.id + ': no starting shield, no Guard');
@@ -1254,6 +1256,49 @@
     t.log('wins ' + wins + '/' + fights + ' · meltdowns ' + melts + ' · uses ' + JSON.stringify(used));
   });
 
+  // Nov 18: the Jar of Tears in AutoPlay's hands (worn fights: the campaign sim rarely rolls a common hero trinket, so
+  // the fixture encounters measure what one worn fight gives: plan §7 T8, lift:syllamin ≥ 0.8 fires / 1.2-5 HP per worn fight)
+  T.suite('hero_syllamin: Jar of Tears (Nov 18) — AutoPlay battles wearing it, fixture encounters at levels 1 / 3 / 5', function (t) {
+    if (!guard(t)) return;
+    if (!DD.Encounter || typeof DD.Encounter.build !== 'function') { t.skip('DD.Encounter not available'); return; }
+    const rng = DD.RNG('hero_syllamin:jar');
+    let fights = 0, fires = 0, healed = 0;
+    const w0 = warnings(), orig = DD.Act.heal;
+    DD.Act.heal = function (src, target, n, opts) {
+      const got = orig.apply(this, arguments);
+      if (!DD.Act.simulating && opts && opts.via === 'lift:syllamin') { fires++; healed += got; }
+      return got;
+    };
+    try {
+      [[1, ['test_a1_normal', 'test_a1_elite', 'test_a1_boss', 'test_a1_totems']],
+        [3, ['test_a2_normal', 'test_a2_elite', 'test_a2_boss', 'test_a2_keg']],
+        [5, ['test_a3_normal', 'test_a3_elite', 'test_a3_boss', 'test_a3_survive']]].forEach(function (row) {
+        const lvl = row[0];
+        row[1].forEach(function (encId, i) {
+          const en = DD.getEncounter(encId);
+          if (!en) { t.fail(encId + ' is not registered'); return; }
+          const loadout = LOADOUTS[lvl][i % LOADOUTS[lvl].length];
+          const party = [
+            DD.Combat.makeRunHero({ id: HERO, level: lvl, skills: loadout.map(function (p) { return { id: p[0], level: p[1] }; }), items: ['syl_tear_jar'] }),
+            DD.Combat.makeRunHero({ id: 'test_knight', level: lvl }),
+            DD.Combat.makeRunHero({ id: 'test_cleric', level: lvl }),
+            DD.Combat.makeRunHero({ id: 'test_mage', level: lvl }),
+          ];
+          const setup = DD.Encounter.build(en, party, { rng: DD.RNG(rng.int(1, 1e9)), difficulty: 'normal', act: en.act });
+          if (!setup || !setup.grid) { t.fail(encId + ': build failed'); return; }
+          DD.Combat.start(setup, { seed: rng.int(1, 1e9), headless: true, difficulty: 'normal', kind: en.kind });
+          let res = null;
+          t.tryRun(encId + ' @L' + lvl + ' (Jar)', function () { res = DD.AutoPlay.runBattle(30); });
+          fights++;
+          t.ok(res && !res.timeout, encId + ' @L' + lvl + ' (Jar): finished (' + (res && res.result) + ')');
+        });
+      });
+    } finally { DD.Act.heal = orig; }
+    t.eq(warnings(), w0, 'no warnings during the battles');
+    t.ok(fights === 12 && fires > 0 && healed > 0, 'the Jar drinks in real AutoPlay fights: ' + fires + ' fires, ' + healed + ' HP in ' + fights + ' fights');
+    t.log('Jar of Tears, worn: ' + (fires / Math.max(1, fights)).toFixed(2) + ' fires and ' + (healed / Math.max(1, fights)).toFixed(2) + ' HP a fight (' + fights + ' fixture fights)');
+  });
+
   T.suite('hero_syllamin: AutoPlay heckles the foe about to hit a wounded ally', function (t) {
     if (!guard(t)) return;
     // a wounded cleric with a tanky grunt next to it (and its friend behind): Heckle stops the hit and turns the grunt
@@ -1322,5 +1367,142 @@
     s.items = ['syl_electric_lute'];
     t.ok(/lightning damage/.test(d()) && !/psychic/.test(d()) && /water/.test(d()), 'with it: lightning, and the water it stands in (' + d() + ')');
     t.ok(!/lightning/.test(DD.skillDesc(DD.getSkill('syl_basic'), 1, null)), 'a codex card (no holder) keeps psychic');
+  });
+
+  // ---- Nov 18: conditional healing — "Jar of Tears (Theirs)" (plan §4.14) ----------------------------------------------
+  /** Every DD.Act.heal call made while fn runs: [{ src, target, n, via, healed, sim }]. */
+  function healCalls(fn) {
+    const list = [], orig = DD.Act.heal;
+    DD.Act.heal = function (src, target, n, opts) {
+      const healed = orig.apply(this, arguments);
+      list.push({ src: src, target: target, n: n, via: opts && opts.via, healed: healed, sim: !!DD.Act.simulating });
+      return healed;
+    };
+    try { fn(); } finally { DD.Act.heal = orig; }
+    return list;
+  }
+  function lifts(calls) { return calls.filter(function (x) { return !x.sim && x.via === 'lift:syllamin'; }); }
+  function healsBy(u) { const s = DD.Combat.state.stats.units[u.id]; return s ? s.heals : 0; }
+
+  T.suite('hero_syllamin: conditional heal (Nov 18)', function (t) {
+    if (!guard(t)) return;
+    const Y = DD.Syllamin, jar = DD.getItem('syl_tear_jar');
+    t.ok(Y.JAR === 'syl_tear_jar' && Y.JAR_HEAL === 3, 'DD.Syllamin.JAR = syl_tear_jar, JAR_HEAL = 3');
+    t.ok(!!jar && jar.name === 'Jar of Tears (Theirs)' && jar.slot === 'trinket' && jar.rarity === 'common' && jar.icon === '🫙' && jar.hero === HERO,
+      'the item: Jar of Tears (Theirs), a common trinket, 🫙, his own');
+    if (!jar) return;
+    t.ok(JSON.stringify(jar.stats) === '{}' && JSON.stringify(jar.hooks) === '{}', 'no stats, no hooks (the rule lives in emotionalDamage)');
+    t.eq(jar.desc, 'Whenever a foe suffers Emotional Damage from his roasts, Syllamin drinks its tears and heals ' + Y.JAR_HEAL + ' HP (once per turn).', 'desc, from the constant');
+    t.eq(jar.flavor, 'Faerie cuisine. Sustainably harvested from people who deserved it.', 'flavor');
+    t.ok(/\.$/.test(jar.desc) && jar.desc.length <= 150 && jar.flavor.length <= 120, 'item text lengths (desc ' + jar.desc.length + ' ≤ 150, ends with a period; flavor ' + jar.flavor.length + ' ≤ 120)');
+    const tears = DD.getHero(HERO).barks.tears || [];
+    t.eq(tears.join(' | '), ['Mm. Salty. Like your mom.', 'Your tears: delicious. Your face: still not.', 'Bottled. Labelled. Savoured.'].join(' | '), 'barks.tears: the plan\'s three lines');
+    [jar.desc, jar.flavor].concat(tears).forEach(function (l) {
+      t.ok(!/(^|[^a-z'])(she|her|hers|herself)([^a-z']|$)/i.test(l) && l.length <= 150, 'he/him (no she/her): ' + l);
+    });
+    t.ok(/\bhis\b/.test(jar.desc), 'the desc says "his"');
+
+    // fires: his third roast on a foe while he wears the Jar → +3; the src is Syllamin
+    sb({ heroes: [S(3, 4, { items: ['syl_tear_jar'] })], enemies: [E('test_grunt', 4, 4, 3), E('test_grunt', 8, 8, 3)] });
+    let me = syl(), g = at(4, 4);
+    me.hp = me.maxHp - 10;
+    use(me, me.basic, 4, 4);
+    use(me, me.basic, 4, 4);
+    t.eq(stacks(g), 2, 'Roasted 2');
+    let hp0 = me.hp, h0 = healsBy(me);
+    let pv = DD.Combat.preview(me, me.basic, 4, 4);
+    t.eq(pv && pv.perUnit[me.id] && pv.perUnit[me.id].heal, Y.JAR_HEAL, 'the third joke\'s preview shows +' + Y.JAR_HEAL + ' on him');
+    let calls = healCalls(function () { t.ok(use(me, me.basic, 4, 4), 'third Your Mom Joke'); });
+    let l = lifts(calls);
+    t.ok(has(g, 'stun') && !has(g, 'syl_roasted'), 'Emotional Damage');
+    t.eq(me.hp - hp0, Y.JAR_HEAL, 'he drinks its tears: +' + Y.JAR_HEAL);
+    t.eq(healsBy(me) - h0, Y.JAR_HEAL, 'the heal\'s src is Syllamin (his heals stat grows by ' + Y.JAR_HEAL + ')');
+    t.ok(l.length === 1 && l[0].src === me && l[0].target === me && l[0].n === Y.JAR_HEAL, 'one DD.Act.heal(Syllamin, Syllamin, 3, { via: \'lift:syllamin\' })');
+    // once per turn: a second Emotional Damage the same turn heals nothing; his next turn's does
+    calls = healCalls(function () { Y.roast(me, at(8, 8), 3); });
+    t.ok(has(at(8, 8), 'stun') && lifts(calls).length === 0 && me.hp === hp0 + Y.JAR_HEAL, 'a second Emotional Damage this turn: no heal call');
+    t.ok(!Y.jarReady(me), 'the turn\'s drink is spent');
+    DD.Combat.endRound();
+    t.ok(cur() === me && Y.jarReady(me), 'his next turn: ready again');
+    DD.Act.removeStatus(at(8, 8), 'stun', { silent: true });
+    calls = healCalls(function () { Y.roast(me, at(8, 8), 3); });
+    t.ok(lifts(calls).length === 1 && me.hp === hp0 + 2 * Y.JAR_HEAL, 'next turn, another meltdown: +' + Y.JAR_HEAL + ' again');
+    // two Emotional Damages in one action (Diss Track melts several foes at once): one heal
+    const s2 = sb({ heroes: [S(1, 1, { items: ['syl_tear_jar'] })], enemies: [E('test_grunt', 3, 3, 3), E('test_grunt', 5, 5, 3), E('test_boss', 7, 7)] });
+    me = syl();
+    me.hp = me.maxHp - 10;
+    s2.hype = 100;
+    calls = healCalls(function () { t.ok(use(me, me.signature, me.x, me.y), 'Diss Track'); });
+    t.ok(DD.Combat.enemies().every(function (u) { return has(u, 'stun') || has(u, 'weak'); }), 'three meltdowns in one action (the boss: Weakened)');
+    t.ok(lifts(calls).length === 1 && me.hp === me.maxHp - 10 + Y.JAR_HEAL, 'one heal (+' + Y.JAR_HEAL + '), not three');
+    // an elite / boss meltdown (Weakened, not Stunned) counts too
+    sb({ heroes: [S(1, 1, { items: ['syl_tear_jar'] })], enemies: [E('test_boss', 4, 4)] });
+    me = syl();
+    me.hp = me.maxHp - 10;
+    calls = healCalls(function () { Y.roast(me, at(4, 4), 3); });
+    t.ok(has(at(4, 4), 'weak') && lifts(calls).length === 1 && me.hp === me.maxHp - 10 + Y.JAR_HEAL, 'a boss\'s Emotional Damage (Weakened): +' + Y.JAR_HEAL);
+
+    // doesn't fire: no Jar; someone else's meltdown source; an ally (not an enemy) melting down
+    sb({ heroes: [S(3, 4), H('test_cleric', 1, 1)], enemies: [E('test_grunt', 4, 4, 3)] });
+    me = syl();
+    me.hp = me.maxHp - 10;
+    calls = healCalls(function () { Y.roast(me, at(4, 4), 3); });
+    t.ok(has(at(4, 4), 'stun') && lifts(calls).length === 0 && me.hp === me.maxHp - 10, 'without the Jar: no heal call');
+    sb({ heroes: [S(3, 4, { items: ['syl_tear_jar'] }), H('test_cleric', 1, 1)], enemies: [E('test_grunt', 4, 4, 3), E('test_grunt', 6, 6, 3)] });
+    me = syl();
+    me.hp = me.maxHp - 10;
+    const cleric = hero('test_cleric');
+    calls = healCalls(function () { Y.roast(cleric, at(4, 4), 3); Y.roast(null, at(6, 6), 3); });
+    t.ok(has(at(4, 4), 'stun') && has(at(6, 6), 'stun') && lifts(calls).length === 0 && me.hp === me.maxHp - 10, 'a meltdown roasted by the cleric, or by nobody: not his roasts, no heal');
+    calls = healCalls(function () { Y.emotionalDamage(cleric, me); });
+    t.ok(has(cleric, 'stun') && lifts(calls).length === 0 && me.hp === me.maxHp - 10 && Y.jarReady(me), 'an ally (not an enemy) suffering Emotional Damage: no heal, the turn\'s drink unspent');
+    // at full HP it still fires (one 0-HP call) and spends the turn's drink
+    sb({ heroes: [S(3, 4, { items: ['syl_tear_jar'] })], enemies: [E('test_grunt', 4, 4, 3)] });
+    me = syl();
+    calls = healCalls(function () { Y.roast(me, at(4, 4), 3); });
+    t.ok(lifts(calls).length === 1 && lifts(calls)[0].healed === 0 && me.hp === me.maxHp && !Y.jarReady(me), 'full HP: one call that heals 0; the drink is spent');
+    // never revives: a downed Syllamin's meltdown (a forced one) heals nothing
+    sb({ heroes: [S(3, 4, { items: ['syl_tear_jar'] }), H('test_cleric', 1, 1)], enemies: [E('test_grunt', 4, 4, 3)] });
+    me = syl();
+    DD.Act.damage(at(4, 4), me, 200, { cause: 'other' });
+    t.ok(me.downed && me.hp === 0, 'Syllamin is down');
+    calls = healCalls(function () { Y.emotionalDamage(at(4, 4), me); });
+    t.ok(has(at(4, 4), 'stun') && lifts(calls).length === 0 && me.downed && me.hp === 0, 'a meltdown credited to the downed Syllamin: no heal call, still down');
+    // the preview without the Jar shows no heal; with it, previews stay exact
+    sb({ heroes: [S(3, 4)], enemies: [E('test_grunt', 4, 4, 3)] });
+    me = syl();
+    me.hp = me.maxHp - 10;
+    Y.roast(me, at(4, 4), 2);
+    pv = DD.Combat.preview(me, me.basic, 4, 4);
+    t.ok(!(pv.perUnit[me.id] && pv.perUnit[me.id].heal), 'no Jar: the meltdown joke\'s preview shows no heal on him');
+
+    // [heal QA-1] the log says why he healed, right after the engine's heal line (whose tears, by name); none at full HP.
+    // [heal QA-2] one cue over his head: the tears bark, or else the "Delicious tears" label (never both)
+    function watch(fn, roll) {
+      const texts = [], barks = [], FXt = DD.FX.text, bk = DD.Act.bark, rn = DD.rng.next;
+      DD.FX.text = function (who, text) { if (who === syl()) texts.push(String(text)); return FXt.apply(this, arguments); };
+      DD.Act.bark = function (who, key) { if (who === syl()) barks.push(key); return bk.apply(this, arguments); };
+      DD.rng.next = function () { return roll; };
+      const n0 = DD.Combat.state.log.length;
+      try { fn(); } finally { DD.FX.text = FXt; DD.Act.bark = bk; DD.rng.next = rn; }
+      return { texts: texts, barks: barks, log: DD.Combat.state.log.slice(n0).map(function (e) { return e.text; }) };
+    }
+    [[0, true], [0.99, false]].forEach(function (c) {
+      sb({ heroes: [S(3, 4, { items: ['syl_tear_jar'] })], enemies: [E('test_grunt', 4, 4, 3)] });
+      me = syl();
+      me.hp = me.maxHp - 10;
+      const victim = at(4, 4), vname = victim.name;
+      const w = watch(function () { Y.roast(me, victim, 3); }, c[0]);
+      const hl = w.log.indexOf('Syllamin heals ' + Y.JAR_HEAL + ' HP.');
+      t.ok(hl >= 0 && w.log[hl + 1] === 'Syllamin bottles the tears of ' + vname + ' and drinks them. Salty. Restorative.', 'the log: the heal, then why (' + w.log.join(' | ') + ')');
+      const label = w.texts.filter(function (x) { return /Delicious tears/.test(x); }).length, barked = w.barks.indexOf('tears') >= 0;
+      t.ok(barked === c[1] && label === (c[1] ? 0 : 1), (c[1] ? 'the tears bark plays: no label under its bubble' : 'no bark: the label alone') + ' (bark ' + barked + ', labels ' + label + ')');
+    });
+    sb({ heroes: [S(3, 4, { items: ['syl_tear_jar'] })], enemies: [E('test_grunt', 4, 4, 3)] });
+    me = syl();
+    const wf = watch(function () { Y.roast(me, at(4, 4), 3); }, 0);
+    t.ok(!wf.log.some(function (x) { return /bottles the tears/.test(x); }) && wf.barks.indexOf('tears') < 0 && !wf.texts.some(function (x) { return /Delicious tears/.test(x); }),
+      'full HP (the drink healed 0): no reason line, no bark, no label');
+    t.ok(sane(t, 'jar of tears'), 'state sane');
   });
 })();
