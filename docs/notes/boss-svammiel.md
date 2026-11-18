@@ -65,7 +65,9 @@ Iterate: `bash tools/test.sh "suite=boss_svammiel&isolate=svammiel,bosses/dm"`. 
   AutoPlay's hint = the cancelled cheat's harm (lava 8 per hero on it, falls 25% max HP, a ban the skill's damage, Hype
   30 × 0.3, Rule Zero 0, else 8).
 - **Rigged Die** (12 HP, aimable): −1 Fudge now and −1 max, +1 Ruling, +8 Hype (paid by svammiel.js: the engine's puzzle
-  Hype is 0). **Master Die** (12 HP, aimable): −5 pencil each; all of them = CAUGHT.
+  Hype is 0). **Master Die** (12 HP, aimable): −5 pencil each; all of them = CAUGHT. AutoPlay hints while he is
+  uncaught (`N`): a Master Die 45 to break (`masterHint`), a Rigged Die 10 (`riggedHint`); V3.1 polish: AutoPlay prices
+  a hit that leaves a Master Die standing by the share of its HP the hit removes (`autoplay.js objectValue`).
 - **Honesty**: `threatAt` on his def declares the floor (this round's lava 8, a Tilt's fall / bump, a pending Floor
   Collapse's fall, this round's drops: 25% of max HP); E8 zones in `state.data.zones` (lava, swap, chairs with a line,
   tilt edge, imps, drops); the snaps and the cameo That's a 1 Now are mirrored in the estimates.
@@ -397,3 +399,17 @@ Paired act-4-alone sims on the audit's seeds 16000-16099 (details: docs/notes/ba
 ### Tests (QA, Nov 17)
 Iterated with `tools/test.sh "suite=<x>&isolate=<files>"`; final full `bash tools/test.sh`: **PASS — 1294 suites, 149,729
 assertions, 0 failures, 0 "Error in" lines** (`.tmp/qafix-content/test_full2.txt`).
+
+## V3.1 polish (Nov 18) — heal:polish (the release gate's leftovers; summary in docs/notes/v3-digest.md §8)
+- **The Radio Edit never bleeps a skill that heals** (the audit's request, D9): `healsWith(def, L, user)` skips kind
+  `'heal'`, a `'heal'` / `'drain'` tag, any level field with "heal" in its name worth > 0 at the skill's level (`L.heal`,
+  or a rider such as `L.selfHeal` / `L.healOnKill`), or the def's own `heals` flag (true, or `(L, user) → truthy`) for a
+  heal its fields don't name. Read from the def, never a list of ids: a heal the healing pass adds is skipped too. The
+  pick is otherwise unchanged. `DD.BossSvammiel.healsWith` is exposed for the suites.
+- **The twist's order in the debug sandbox** (`encounter=boss_dm&twist=1`, the DM alive): the twist trigger's `keyOf`
+  calls `twistShake` as the entrance starts, so "The table shakes…" comes first there too; in a run the DM's death
+  already shook it (dm.js) and the call is a no-op. This is the flow-4 `before` callback without an engine change.
+- **CAUGHT** (AutoPlay `objectValue`, RULES' file): a chip of a Master Die is now priced as progress toward the break.
+  Act 4 alone (seeds 21000-21099): CAUGHT 41% → 75% of his wins, Master Dice broken 1.43 → 2.22 a fight, Svammiel
+  72% → 81%. His campaign row is BAL's lever.
+- Tests: `boss_svammiel: the Radio Edit never bleeps a skill that heals …` (new), the twist suite's sandbox case.

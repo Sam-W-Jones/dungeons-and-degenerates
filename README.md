@@ -6,6 +6,9 @@ collectors, overdue liches, a beholder optometrist and, finally, the Dungeon Mas
 
 > **Version 2:** initiative turns, threat shading instead of enemy telegraphs, slow shared leveling, attacks of
 > opportunity and simple skills that get strong in combination. Hard but fair: the dice are not on your side.
+>
+> **Version 3:** a 17th hero pulls up a chair: Benedick the Inevitable, the snail knight. He apologises for being
+> late. He is not sorry about the slime.
 
 ## Play
 

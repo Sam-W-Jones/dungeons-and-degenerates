@@ -341,6 +341,12 @@
     t.eq(probe.length, 5, 'five more turns of his');
     t.ok(probe[0].form === 'dragon' && probe[0].turns === 2 && probe[0].mov === 5 && probe[0].basic === 'ben_slow_burn' && probe[0].fly, 'turn 1: the Dragonsnail (flying, move 5, Slow Burn, 2 turns)');
     t.ok(probe[1].form === 'dragon' && probe[1].turns === 1, 'turn 2: still the Dragonsnail (1 turn left)');
+    // V3.1 polish (QA HERO-5): the Dragonsnail opts into the turns badge, so the chip and the icon over him count down
+    t.ok(DD.getStatus('ben_dragon').showTurns === true, 'ben_dragon sets showTurns (the HUD\'s countdown)');
+    if (DD.UI && typeof DD.UI.statusChip === 'function') {
+      const badge = function (n) { const b = DD.UI.statusChip({ id: 'ben_dragon', stacks: 1, turns: n }).querySelector('.st-turns'); return b ? b.textContent : null; };
+      t.ok(badge(2) === '2' && badge(1) === '1', 'its chip reads 2, then 1 (' + badge(2) + ', ' + badge(1) + ')');
+    }
     t.ok(probe[2].form === 'snail' && probe[2].mov === 2 && probe[2].basic === 'ben_teeth' && !probe[2].fly, 'turn 3: a snail again (move 2, Teeth, grounded)');
     t.eq(probe.map(function (p) { return p.cd; }).join(','), '4,3,2,1,0', 'cooldown 4: locked his next 4 turns, ready on the 5th');
     t.ok(probe.every(function (p) { return p.hp === 20; }) && u.hp === 20, 'D9: emerging and landing never change his HP (20 throughout)');

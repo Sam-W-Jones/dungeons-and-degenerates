@@ -276,6 +276,76 @@
     }
   });
 
+  // V3.1 polish (Nov 18): DESIGN §5 / §9 quote the act-4 rows as landed (js/data/balance.js), the svammiel notes the
+  // Master Die's HP and AutoPlay hint as svammiel.js has them, and the README's version box names Benedick only (act 4
+  // stays a secret in the game until it is reached)
+  T.suite('docs: V3.1 — DESIGN §5 / §9 quote the act-4 rows as landed; the svammiel notes the Master Die; README\'s v3 line spoils nothing', function (t) {
+    const d = docs(t, ['docs/DESIGN.md', 'docs/notes/boss-svammiel.md', 'README.md']);
+    if (!d) return;
+    const design = d['docs/DESIGN.md'], s5 = flat(section(design, '## 5.')), s9 = flat(section(design, '## 9.'));
+    const B = DD.Balance;
+    if (!t.ok(!!B && !!B.act[4] && !!B.encounters, 'DD.Balance with act[4] and encounter rows')) return;
+    const a4 = B.act[4];
+    t.ok(s5.indexOf('`act[4]` ×' + mult(a4.dmg) + ' damage, HP ×' + mult(num1(a4.hp)) + ',') >= 0, '§5: act[4] ×' + mult(a4.dmg) + ' damage, HP ×' + mult(num1(a4.hp)));
+    // each door's row, in the words §5 uses ("×H HP / ×D damage", "×D damage", "×H HP with no damage row")
+    const rowText = function (e) {
+      const hp = e.hp !== undefined && e.hp !== 1, dmg = e.dmg !== undefined && e.dmg !== 1;
+      return hp && dmg ? '×' + mult(e.hp) + ' HP / ×' + mult(e.dmg) + ' damage' : hp ? '×' + mult(e.hp) + ' HP with no damage row' : '×' + mult(e.dmg) + ' damage';
+    };
+    [['boss_gardener', 'the Gardener'], ['boss_league', 'the League'], ['boss_galbraith', 'Galbraith'], ['boss_coven', 'the Coven'],
+      ['boss_goats', 'the Rapping Goats'], ['boss_svammiel', 'Svammiel']].forEach(function (p) {
+      const e = B.encounters[p[0]];
+      if (!e) { t.log(p[0] + ': no row'); return; }
+      t.ok(s5.indexOf(p[1] + ' ' + rowText(e)) >= 0, '§5: ' + p[1] + ' ' + rowText(e));
+    });
+    // the campaign numbers both sections quote, from the content and B.scale
+    const goats = B.encounters.boss_goats, sv = B.encounters.boss_svammiel;
+    const scaled = function (enemyId, encId) {
+      const def = DD.getEnemy(enemyId);
+      if (!def) return null;
+      const sc = B.scale('normal', 4, 'boss', { encounter: encId });
+      return { hp: def.hp, campaign: Math.max(1, Math.round(def.hp * sc.hp * B.tierHpOf(def.tier))) };
+    };
+    const svam = DD.getEnemy('svam_svammiel') ? scaled('svam_svammiel', 'boss_svammiel') : null;
+    if (svam && sv) {
+      const dmgAll = mult(num1(a4.dmg) * num1(sv.dmg));
+      t.ok(s5.indexOf('×' + dmgAll + ' damage in all with `act[4]`; his ' + svam.hp + ' HP read ' + svam.campaign + ' in a campaign') >= 0,
+        '§5: Svammiel ×' + dmgAll + ' damage in all, ' + svam.hp + ' HP → ' + svam.campaign);
+      t.ok(s9.indexOf(svam.hp + ' HP in three phases') >= 0 && s9.indexOf('campaign row ×' + mult(sv.hp) + ' HP / ×' + mult(sv.dmg) + ' damage, ×' + dmgAll + ' damage with `act[4]`: ' + svam.campaign + ' HP in a campaign') >= 0,
+        '§9 #11: ' + svam.hp + ' HP, the row ×' + mult(sv.hp) + ' / ×' + mult(sv.dmg) + ' (×' + dmgAll + '), ' + svam.campaign + ' in a campaign');
+    } else t.log('svammiel.js not loaded: his numbers are not checked');
+    const crew =['rap_billy', 'rap_kid', 'rap_turnip'].map(function (id) { return scaled(id, 'boss_goats'); });
+    const bear = scaled('rap_ursa', 'boss_goats');
+    if (goats && crew.every(Boolean) && bear) {
+      const hp = crew.reduce(function (a, c) { return a + c.hp; }, 0), camp = crew.reduce(function (a, c) { return a + c.campaign; }, 0);
+      t.ok(!goats.dmg && s5.indexOf('their ' + hp + ' HP read ' + camp + ' in a campaign, the bear\'s ' + bear.hp + ' read ' + bear.campaign) >= 0,
+        '§5: the goats ' + hp + ' → ' + camp + ', the bear ' + bear.hp + ' → ' + bear.campaign + ' (no damage row)');
+      t.ok(s9.indexOf(hp + ' HP between them (campaign row ×' + mult(goats.hp) + ' HP, no damage row: ' + camp) >= 0 && s9.indexOf('(' + bear.hp + ' HP; ' + bear.campaign + ' in a campaign)') >= 0,
+        '§9 #10: ' + hp + ' HP (' + camp + '), the bear ' + bear.hp + ' (' + bear.campaign + ')');
+    } else t.log('goats.js not loaded: their numbers are not checked');
+    // the Radio Edit's pick rule says it skips heals (svammiel.js healsWith)
+    if (DD.BossSvammiel && typeof DD.BossSvammiel.healsWith === 'function') {
+      t.ok(s9.indexOf('never a basic, a signature, a transform, a revive or a skill that heals') >= 0, '§9: the Radio Edit never bleeps a skill that heals');
+    }
+    // the svammiel notes: the Master Die's HP and AutoPlay hints as in N
+    const N = DD.BossSvammiel && DD.BossSvammiel.N;
+    if (N) {
+      const notes = flat(d['docs/notes/boss-svammiel.md']);
+      t.ok(notes.indexOf('**Master Die** (' + N.masterHp + ' HP, aimable)') >= 0, 'svammiel notes: Master Die ' + N.masterHp + ' HP');
+      t.ok(notes.indexOf('a Master Die ' + N.masterHint + ' to break (`masterHint`), a Rigged Die ' + N.riggedHint + ' (`riggedHint`)') >= 0,
+        'svammiel notes: hints ' + N.masterHint + ' / ' + N.riggedHint);
+      t.ok(s9.indexOf('**Master Dice** (' + N.masterHp + ' HP each)') >= 0, '§9 #11: Master Dice ' + N.masterHp + ' HP each');
+    } else t.log('DD.BossSvammiel.N not exposed: the notes\' numbers are not checked');
+    // README: the version box's v3 line names Benedick, the 17th hero, and nothing of act 4
+    const readme = d['README.md'];
+    const box = readme.split(/\r?\n/).filter(function (l) { return /^>/.test(l); }).map(function (l) { return l.replace(/^>\s?/, ''); }).join(' ');
+    const v3 = (/\*\*Version 3:\*\*.*/.exec(box) || [''])[0];
+    t.ok(/Benedick/.test(v3) && /17th hero/.test(v3), 'README: the version box has a v3 line naming Benedick, the 17th hero: ' + v3);
+    t.ok(!/Svammiel|\bAct IV\b|\bact 4\b|fourth act|four acts|Under the Table|Floor Boss|gauntlet|the twist|You thought this was over/i.test(readme),
+      'README: no act-4, Svammiel or twist spoiler anywhere');
+  });
+  function num1(x) { return x === undefined || x === null || !isFinite(+x) ? 1 : +x; }
+
   // ---- v2-digest §2: the kit lines the playtests caught ------------------------------------------------------------
   T.suite('docs: v2-digest §2 kit lines quote the registered costs and numbers (the generator reads a skill\'s own AP)', function (t) {
     const d = docs(t, ['docs/notes/v2-digest.md']);
@@ -384,5 +454,55 @@
     t.ok(/== stalls \(1 fights hit the round cap \d+/.test(txt) && txt.indexOf('seed 1 · a1 boss boss_x · round 30 · called a victory · standing: Syllamin 3/20, The Rat King 80/122') >= 0,
       'the stalls section lists the capped fight (seed, encounter, round, who was standing)');
     S.reset();
+  });
+
+  // V3.1 polish (the gate's leftover): with cameo=0 there is no door cheat to skip, so the sim never buys the Bribe
+  T.suite('tools: the campaign sim buys the Bribe with 200+ gold, never with cameo=0', function (t) {
+    const S = window.DD_SIM;
+    if (!S || typeof S.wantsBribe !== 'function') { t.ok(false, 'DD_SIM.wantsBribe exposed'); return; }
+    const snap = DD.Balance.snapshot();
+    try {
+      const bribe = { id: 'bribe', price: 85 };
+      DD.Balance.set('cameo.off', 0);
+      t.ok(S.wantsBribe(bribe, 200) && S.wantsBribe(bribe, 450), 'cameos on: the Bribe at 200+ gold');
+      t.ok(!S.wantsBribe(bribe, 199) && !S.wantsBribe({ id: 'bribe', price: 250 }, 220), 'not under 200, never over the purse');
+      t.ok(!S.wantsBribe({ id: 'heal', price: 30 }, 450), 'only the Bribe');
+      DD.Balance.set('cameo.off', 1);
+      t.ok(!S.wantsBribe(bribe, 450) && !S.wantsBribe(bribe, 9999), 'cameo=0 (cameo.off): never the Bribe, however rich');
+    } finally { DD.Balance.restore(snap); }
+  });
+
+  // heal pass (Nov 18): the sim's healing ledger (received by source, done to others, overheal) and healer groups
+  T.suite('tools: the campaign sim sorts heals by source and runs by healer group', function (t) {
+    const S = window.DD_SIM;
+    if (!S || typeof S.ledgerHeal !== 'function') { t.ok(false, 'DD_SIM.ledgerHeal exposed'); return; }
+    const G = S.reset();
+    try {
+      const slate = { kind: 'hero', side: 'hero', defId: 'slate' }, ell = { kind: 'hero', side: 'hero', defId: 'ellaria' };
+      const heroItem = Object.keys(DD.defs.items).filter(function (id) { return DD.defs.items[id].hero; })[0];
+      const gear = Object.keys(DD.defs.items).filter(function (id) { return !DD.defs.items[id].hero; })[0];
+      S.ledgerHeal(slate, slate, 5, 8, false, { k: 'skill', id: 'x' });          // his own kit: 5 HP, 3 overheal
+      S.ledgerHeal(ell, slate, 6, 6, false, { k: 'status', id: 'regen' });       // an ally's Regen
+      S.ledgerHeal(slate, slate, 4, 4, false, { k: 'consumable', id: 'p' });     // a potion
+      S.ledgerHeal(slate, slate, 2, 2, false, { k: 'item', id: heroItem });      // a hero item
+      S.ledgerHeal(slate, slate, 3, 3, false, { k: 'item', id: gear });          // gear
+      S.ledgerHeal(null, slate, 1, 1, false, { k: 'rule', id: 'r' });            // nobody's
+      S.ledgerHeal(slate, ell, 7, 9, false, { k: 'skill', id: 'x' });           // he heals her: done to others
+      const h = G.heroes.slate;
+      t.eq([h.rcv.self, h.rcv.ally, h.rcv.cons, h.rcv.heroItem, h.rcv.gear, h.rcv.other].join(','), '5,6,4,2,3,1', 'received: self, ally, consumable, hero item, gear, other');
+      t.eq(h.from.ellaria, 6, 'the ally column names its giver');
+      t.eq(h.rcvOver, 3, 'overheal on him: asked minus gained');
+      t.eq(h.done.others, 7, 'done: 7 HP on another hero');
+      t.eq(h.doneBy.skill, 7, '…through a skill');
+      t.eq(h.doneOver, 5, 'his overheal: 3 on himself + 2 on her');
+      t.eq(G.heroes.ellaria.done.others, 6, 'her Regen counts as done to others');
+      t.eq(S.groupsOf(['slate', 'kiri']).join(), 'none', 'no healer: the none group');
+      t.eq(S.groupsOf(['ellaria', 'josiah', 'kiri']).join(), 'ellaria,josiah', 'two healers: both groups');
+      S.startRun(['ellaria', 'slate', 'kiri', 'betty']);
+      S.finishRun({ seed: 1, party: ['ellaria', 'slate', 'kiri', 'betty'], won: false, stalls: 0, act: 2, cleared: 1, lastEnc: 'boss_x' });
+      t.eq(G.groups.ellaria.runs + ',' + G.groups.ellaria.clear[1] + ',' + G.groups.ellaria.lossTo.boss_x, '1,1,1', 'the Ellaria group: a run, act 1 cleared, lost to boss_x');
+      t.eq(G.heroes.slate.lossTo.boss_x, 1, 'per hero: where his runs end');
+      t.ok(/== healer groups/.test(S.reportText([])) && /== healing per hero/.test(S.reportText([])), 'the report prints the heal-pass sections');
+    } finally { S.reset(); }
   });
 })();

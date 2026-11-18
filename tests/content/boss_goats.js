@@ -329,6 +329,12 @@
     if (!t.ok(!!it, 'DJ Turnip winds up the bass')) return;
     const gold = G().danceTiles(S(), 'gold');
     t.ok(it.tiles.length === gold.length && it.tiles.every(function (p) { return gold.some(function (q) { return q.x === p.x && q.y === p.y; }); }), 'on the gold squares (2 heroes there, 1 on pink): ' + it.tiles.length + ' tiles');
+    // V3.1 polish (QA FIGHTS-13): the wind-up washes its squares in the colour its hint names (the gold tiles' own top),
+    // so the marked squares read gold, not the default red-over-gold salmon
+    const goldTop = DD.getTerrain && DD.getTerrain('rap_gold') ? DD.getTerrain('rap_gold').colors.top : null;
+    t.ok(it.data && it.data.hint === 'Bass → gold squares' && !!goldTop && it.data.tint === goldTop, 'the hint names gold and the tint is the gold squares\' colour (' + (it.data && it.data.tint) + ')');
+    const pinkTop = DD.getTerrain && DD.getTerrain('rap_pink') ? DD.getTerrain('rap_pink').colors.top : null;
+    t.ok(!!pinkTop && pinkTop !== goldTop, 'the pink squares have their own colour for a pink bass (' + pinkTop + ')');
     t.eq(DD.AI.intentDmg(tn, it), exp(N.bass), 'the marked number ' + exp(N.bass));
     const bl = who(BILLY);
     t.eq(DD.Grid.tile(bl.x, bl.y).t, 'rap_gold', 'Billy dances on a gold square');

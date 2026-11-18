@@ -40,8 +40,6 @@
     return out;
   }
   function hiddenAct(d) { const a = num(d && d.act); return a > 3 && !DD.UI.act4Seen(); }
-  /** A history entry's win: classic (a v2 summary has no `acts`, or a 3-act campaign) vs the four-act one. */
-  function isClassicWin(h) { return (h.result === 'victory' || h.result === 'win' || h.won === true) && !(num(h.acts) >= 4); }
 
   function records() {
     const UI = DD.UI, el = UI.el;
@@ -54,7 +52,8 @@
     const box = el('div.hall-records');
     // V3 (gated): the classic wins split out, the DM defeated, the floor bosses beaten
     const seen4 = UI.act4Seen();
-    const classic = seen4 ? (m.history || []).filter(isClassicWin).length : 0;
+    // the lifetime count (meta.js keeps it; the 20-entry history would undercount a v2 veteran)
+    const classic = seen4 ? num(s.classicWins) : 0;
     const cards = [
       card('🎲', runs, 'Campaigns finished'),
       card('👑', wins, seen4 && classic ? 'Campaigns won (of which classic: ' + classic + ')' : 'Campaigns won'),

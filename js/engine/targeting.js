@@ -673,9 +673,11 @@
           const e = p[id] || {};
           const u = DD.Combat.byId(id);
           const dmg = Math.max(0, Math.round(e.dmg || 0));
+          // custom: the entry is the def's own words (the HUD leads a unit's badge and the aim hint with its text)
           out.perUnit[id] = { dmg: dmg, heal: Math.max(0, Math.round(e.heal || 0)), lethal: !!(u && dmg >= u.hp + (u.block || 0)),
             blocked: Math.max(0, Math.round(e.blocked || 0)), block: Math.max(0, Math.round(e.block || 0)),
-            text: e.text || (dmg ? '−' + dmg : e.heal ? '+' + e.heal : ''), uncertain: out.uncertain, statuses: [], removed: [], moved: null };
+            text: e.text || (dmg ? '−' + dmg : e.heal ? '+' + e.heal : ''), uncertain: out.uncertain, statuses: [], removed: [], moved: null,
+            custom: true };
         }
         return out;
       }

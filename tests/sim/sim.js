@@ -18,14 +18,26 @@
  *                         cheats are its mechanics and stay), to measure what the cameo cheats cost
  *   bal=path:value,...    DD.Balance overrides for this page, e.g. bal=act.1.hp:1.3,hype.dealtPer:6,gold.fight.normal:[10,16]
  *   verbose=1             one line per run      json=1   raw per-fight records in #json
- *   healers=a,b           boss results are split by these heroes in the party (default ellaria,josiah)
+ *   healers=a,b           boss results are split by these heroes in the party (default ellaria,josiah); also the healer
+ *                         groups of the heal-pass sections (e.g. healers=ellaria,josiah,valdris)
  *   dump=1                print the units left and the last 40 log lines of every fight that hit the round cap
+ *   raw=1                 append "== raw tallies": R<TAB>key<TAB>value lines of additive counts (runs, wins, act clears,
+ *                         per hero, per healer group, bosses, encounters, lanes), to merge 100-seed pages with a sum
  * Output (#out): campaign win rate (Wilson 95% interval) and its 3-act equivalent, act clears, levels at bosses, per-kind
  * table (party HP lost, rounds, short wins, fights with downs, signatures, Hype by source, attacks of opportunity, boss
  * wind-ups), encounter table, the gauntlet (per lane with each door's puzzle counters, by position 1..L, order
  * frequency), the Svammiel table, cameos and cheats per act-4 fight (an error line on any budget violation), act-4
  * deaths and rounds per run, downs by cause, per-hero run wins, skill usage, gold flow. Counting wrappers
  * (Combat.useSkill etc.) are installed on this page only.
+ * Heal pass (Nov 18), own sections after "== heroes": "== healing per hero" (per fight the hero started: damage taken,
+ * downs, fights ended down, permanent deaths, Block gained; HP healed RECEIVED by source - self (his or her own kit),
+ * hero item, gear, Blessings / scars, consumables, allies (top givers), other - with the overheal on the hero and the
+ * revives; HP healed DONE on other heroes (by channel), on himself / herself, on summons, its overheal, help-ups given),
+ * "== hero shares" (run wins and act-(L-1) clears with Wilson intervals and the ratio to the median), "== where each
+ * hero's runs end" (losses by act and the last fight), "== healer groups" (healers=: runs, wins, act clears, Svammiel,
+ * what the losses lost to; 'none' = no healer in the starting party) and the permanent deaths by fight. The ledger
+ * wraps DD.Act.heal / revive / addBlock, Combat.interact, DD.Hooks.fire / fireOwn / some and DD.safe (for the channel:
+ * the innermost hook or execute frame) on this page only.
  * Stalls (balance audit, audit-4): a fight that hits the round cap is a STALL, neither a win nor a loss. timeout= only
  * decides how the run goes on; every win rate (encounters, fight kinds, bosses, lanes, the campaign, hero shares) leaves
  * stalls out of both sides, and the "== stalls" section lists each one. A run is a stalled run when its result hangs on a
@@ -34,8 +46,9 @@
  * sim only starts on a page with a <pre id="out"> (tests/sim/sim.html), so the test page can load this file.
  * Policies: level-ups learn until 4 skills then upgrade (15% random); a new skill never replaces one tagged 'shapeshift'
  * (Benedick's shell, Basanos's Transform and Blood Moon, Ellaria's Wild Shape: plan §7.2); loot by a simple score; gear
- * upgrades equipped; shop: heal under 60% HP, the Bribe with 200+ gold (gauntlet shops), items that beat a hero's gear
- * (best rarity first), tomes for heroes with < 4 skills, consumables with spare gold, a Blessing re-roll when rich;
+ * upgrades equipped; shop: heal under 60% HP, the Bribe with 200+ gold (gauntlet shops; never with cameo=0: no door
+ * cheat to skip), items that beat a hero's gear (best rarity first), tomes for heroes with < 4 skills, consumables with
+ * spare gold, a Blessing re-roll when rich;
  * tavern: recruit over the dead, rest under 75% HP or with 2+ scars, else train; gauntlet stops: a tavern under 70% HP
  * or with 2+ scars, a shop with 120+ gold, else an event; events at random; every fight by DD.AutoPlay.runBattle(maxr).
  */
@@ -116,6 +129,8 @@
       // V3: the gauntlet (per lane, per position 1..L, the order), Svammiel, the cameos, act-4 deaths and run length
       lanes: {}, pos: {}, firstDoor: {}, orders: {}, svam: null, cameo: { fights: 0, cameos: 0, cheats: 0, starts: 0, over: 0, early: 0, byLane: {} },
       a4: { runs: 0, deaths: [], rounds: [], twist: 0, dmWins: 0 }, runRounds: [], shapeshiftKept: 0,
+      // heal pass: runs by healer group (healers=), permanent deaths by the fight they happened in
+      groups: {}, fallenAt: {},
     };
   }
   let G = newTally();
@@ -141,7 +156,12 @@
     }
     return null;
   }
-  function H(id) { return G.heroes[id] || (G.heroes[id] = { runs: 0, wins: 0, fights: 0, dmg: 0, kills: 0, taken: 0, heals: 0, downs: 0, deaths: 0, summonDmg: 0, oppMade: 0, oppTaken: 0 }); }
+  // heal pass (Nov 18): the healing ledger (rcv / from / rcvOver / done / doneBy / doneOver / rev / helpUps / block),
+  // fights ended down, permanent deaths from the run's fallen list, act-(L-1) clears and where the hero's runs end
+  function H(id) {
+    return G.heroes[id] || (G.heroes[id] = { runs: 0, wins: 0, fights: 0, dmg: 0, kills: 0, taken: 0, heals: 0, downs: 0, deaths: 0, summonDmg: 0, oppMade: 0, oppTaken: 0,
+      rcv: {}, from: {}, src: {}, rcvOver: 0, done: {}, doneBy: {}, doneOver: 0, rev: {}, helpUps: 0, block: 0, endDown: 0, fallen: 0, aPrev: 0, losses: 0, lossAct: {}, lossTo: {} });
+  }
   function K(key) {
     return G.kinds[key] || (G.kinds[key] = { n: 0, wins: 0, hpLost: [], taken: [], rounds: [], short: 0, withDowns: 0, downs: 0, sigs: 0, hype: 0, hype100: 0, timeouts: 0,
       oppHero: 0, oppEnemy: 0, oppDmgH: 0, oppDmgE: 0, wuStart: 0, wuCancel: 0, wuLand: 0, wuHit: 0, wuDmg: 0 });
@@ -243,7 +263,139 @@
         H(unit.defId).downs++;
         curFight.downs++;
       }
-      return fire.apply(this, arguments);
+      if (!curFight) return fire.apply(this, arguments);
+      // the healing ledger: whose hooks are firing, and the heal asked for once every modifyHeal hook has had its say
+      ownerStack.push(unit);
+      try {
+        const res = fire.apply(this, arguments);
+        const h = arguments[2];
+        if (name === 'modifyHeal' && healFrames.length && h && typeof h === 'object') healFrames[healFrames.length - 1].want = h.cancel ? 0 : Math.max(0, Math.round(+h.amount || 0));
+        return res;
+      } finally { ownerStack.pop(); }
+    };
+    ['fireOwn', 'some'].forEach(function (k) {
+      const f = DD.Hooks[k];
+      if (typeof f !== 'function') return;
+      DD.Hooks[k] = function (name, unit) {
+        if (!curFight) return f.apply(this, arguments);
+        ownerStack.push(unit);
+        try { return f.apply(this, arguments); } finally { ownerStack.pop(); }
+      };
+    });
+    patchLedger();
+  }
+
+  // ---- the healing ledger (heal pass, Nov 18): who healed whom, through what ----------------------------------------
+  // Every combat heal goes through DD.Act.heal(src, target, amount): the channel is the innermost DD.safe frame (a hook
+  // of an item / hero passive / Blessing / scar / status / rule, a skill's or a consumable's execute, else the
+  // environment), the giver is src (summons credited to their owner), or for a src-less item / passive / Blessing / scar
+  // hook the unit whose hooks are firing. Overheal = the heal asked for (after modifyHeal) minus the HP it gave.
+  const safeStack = [], ownerStack = [], healFrames = [];
+  let interactBy = null;
+  /** { k: skill | consumable | item | passive | blessing | scar | status | rule | def | instance | env | none, id } */
+  function healChannel() {
+    for (let i = safeStack.length - 1; i >= 0; i--) {
+      const l = String(safeStack[i]);
+      let m = /^hook \S+ \((.*)\)$/.exec(l);
+      if (m) {
+        const s = m[1];
+        const pre = [['item ', 'item'], ['passive of ', 'passive'], ['random passive ', 'blessing'], ['status ', 'status'],
+          ['scar ', 'scar'], ['rule ', 'rule'], ['instance hooks of ', 'instance'], ['hooks of ', 'def']];
+        for (let j = 0; j < pre.length; j++) if (s.indexOf(pre[j][0]) === 0) return { k: pre[j][1], id: s.slice(pre[j][0].length) };
+        return { k: 'env', id: s };
+      }
+      if ((m = /^execute of (.+)$/.exec(l))) return { k: DD.defs.consumables[m[1]] ? 'consumable' : 'skill', id: m[1] };
+      if (/^wild surge /.test(l)) return { k: 'skill', id: l.slice(11) };
+      if (/^(desc of|canUse of|aiScore of|DD\.resolve)/.test(l)) continue;
+      if (l === 'sim runBattle') return { k: 'none', id: null };
+      return { k: 'env', id: l };
+    }
+    return { k: 'none', id: null };
+  }
+  const OWNER_CH = { item: 1, passive: 1, blessing: 1, scar: 1, instance: 1, def: 1 };
+  /** The unit behind a heal: src when it is a unit, else (item / passive / Blessing / scar hooks) the hooks' owner. */
+  function giverOf(src, ch) {
+    if (src && typeof src === 'object' && (src.kind === 'hero' || src.kind === 'summon' || src.kind === 'enemy' || src.side)) return src;
+    return OWNER_CH[ch.k] ? ownerStack[ownerStack.length - 1] || null : null;
+  }
+  function isHeroItem(id) { const d = id && DD.getItem(id); return !!(d && d.hero); }
+  /** The received column of a heal: self (the hero's own kit), heroItem, gear, bless (Blessings, scars), cons, ally, other. */
+  function rcvColumn(ch, giverHero, targetHero) {
+    if (ch.k === 'item') return isHeroItem(ch.id) ? 'heroItem' : 'gear';
+    if (ch.k === 'consumable') return 'cons';
+    if (ch.k === 'blessing' || ch.k === 'scar') return 'bless';
+    if (giverHero && giverHero === targetHero) return 'self';
+    return giverHero ? 'ally' : 'other';
+  }
+  /** Count one heal (got = HP gained, want = HP asked for or null when it never got that far, revived = it stood a downed
+   *  hero up). Exposed as DD_SIM.ledgerHeal for the tools suite (it then passes ch). */
+  function ledgerHeal(src, target, got, want, revived, ch) {
+    if (!target || target.side !== 'hero') return;
+    ch = ch || healChannel();
+    const g = heroOf(giverOf(src, ch));
+    const tid = target.kind === 'hero' ? target.defId : null;
+    const over = !revived && want !== null && want !== undefined ? Math.max(0, want - got) : 0;
+    if (tid) {
+      const h = H(tid);
+      const col = rcvColumn(ch, g, tid);
+      inc(h.rcv, col, got);
+      if (col === 'ally') inc(h.from, g, got);
+      else if (got > 0) inc(h.src, col + ':' + ch.k + ':' + (ch.id || '-'), got);
+      h.rcvOver += over;
+      if (revived) inc(h.rev, 'aimed');
+    }
+    if (g) {
+      const gh = H(g);
+      const to = tid === g ? 'self' : tid ? 'others' : 'summons';
+      inc(gh.done, to, got);
+      if (to === 'others') inc(gh.doneBy, ch.k, got);
+      gh.doneOver += over;
+    }
+  }
+  function patchLedger() {
+    const safe = DD.safe;
+    DD.safe = function (label) {
+      if (!curFight) return safe.apply(this, arguments);
+      safeStack.push(label);
+      try { return safe.apply(this, arguments); } finally { safeStack.pop(); }
+    };
+    const heal = DD.Act.heal;
+    DD.Act.heal = function (src, target) {
+      if (DD.Act.simulating || !curFight || !target) return heal.apply(this, arguments);
+      const frame = { want: null }, wasDown = !!target.downed;
+      healFrames.push(frame);
+      let got;
+      try { got = heal.apply(this, arguments); } finally { healFrames.pop(); }
+      ledgerHeal(src, target, +got || 0, frame.want, wasDown && !target.downed && got > 0);
+      return got;
+    };
+    // revives that are not a heal: a help-up (Combat.interact) or a hook (Phoenix jacket, a Blessing)
+    const interact = DD.Combat.interact;
+    DD.Combat.interact = function (unit) {
+      const prev = interactBy;
+      interactBy = unit;
+      try { return interact.apply(this, arguments); } finally { interactBy = prev; }
+    };
+    const revive = DD.Act.revive;
+    DD.Act.revive = function (target) {
+      const ok = revive.apply(this, arguments);
+      if (ok && !DD.Act.simulating && curFight && !healFrames.length && target && target.kind === 'hero') {
+        const ch = healChannel();
+        const by = interactBy && interactBy !== target ? interactBy : null;
+        const col = by ? 'helpUp' : ch.k === 'item' ? 'item' : ch.k === 'blessing' || ch.k === 'scar' ? 'bless' : 'other';
+        const h = H(target.defId);
+        inc(h.rev, col);
+        inc(h.rev, col + 'Hp', target.hp || 0);
+        const g = heroOf(by);
+        if (g && g !== target.defId) H(g).helpUps++;
+      }
+      return ok;
+    };
+    const addBlock = DD.Act.addBlock;
+    DD.Act.addBlock = function (target) {
+      const n = addBlock.apply(this, arguments);
+      if (n > 0 && !DD.Act.simulating && curFight && target && target.kind === 'hero') H(target.defId).block += n;
+      return n;
     };
   }
 
@@ -352,6 +504,11 @@
     manageGear();
   }
 
+  /** The Bribe with 200+ gold, never while Svammiel stays home (cameo=0: there is no door cheat to skip). */
+  function wantsBribe(svc, gold) {
+    if (!svc || svc.id !== 'bribe' || (DD.Balance.cameo && DD.Balance.cameo.off)) return false;
+    return gold >= 200 && gold >= svc.price;
+  }
   function shopVisit(r, p) {
     const s = S();
     G.gold.shopVisits++;
@@ -370,7 +527,7 @@
     });
     // V3 gauntlet shops: the Bribe (Svammiel skips the next door's cheat) with 200+ gold (plan §7.2)
     (inv.services || []).forEach(function (svc, i) {
-      if (svc.id === 'bribe' && s.gold >= 200 && s.gold >= svc.price && tryBuy('services', i)) inc(G.gold.bought, 'bribe');
+      if (wantsBribe(svc, s.gold) && tryBuy('services', i)) inc(G.gold.bought, 'bribe');
     });
     // items: best rarity first, if someone can wear it and it beats their gear
     const items = (inv.items || []).map(function (e, i) { return { e: e, i: i }; }).filter(function (x) { const d = DD.getItem(x.e.id); return d && d.rarity !== 'cursed'; });
@@ -515,6 +672,7 @@
       curFight.hypeMax = Math.max(curFight.hypeMax, cs.hype || 0);
       if (e && e.delta > 0) { const k = e.reason || '?'; curFight.hype[k] = (curFight.hype[k] || 0) + e.delta; }
     });
+    const fallen0 = (s.fallen || []).length;
     const t0 = performance.now();
     DD.safe('sim runBattle', DD.AutoPlay.runBattle, DD.AutoPlay, [MAXR]);
     G.fightMs += performance.now() - t0;
@@ -564,6 +722,14 @@
       if (u.kind === 'hero') h.taken += x.taken || 0; else h.summonDmg += x.dmg || 0;
     });
     heroes0.forEach(function (u) { H(u.defId).fights++; });
+    // heal pass: who ended a fight the party did not lose down (a scar, or a death at the third), and permanent deaths
+    if (outcome !== 'loss') heroes1.forEach(function (u) { if (u.downed || u.dead) H(u.defId).endDown++; });
+    const rs = S();
+    if (rs && rs.fallen && rs.fallen.length > fallen0) rs.fallen.slice(fallen0).forEach(function (id) { H(id).fallen++; inc(G.fallenAt, encId); });
+    if (enc.finale) {
+      const ids = heroes0.map(function (u) { return u.defId; });
+      groupsOf(ids).forEach(function (k) { const g = GR(k); g.sv.n++; if (outcome === 'win') g.sv.wins++; if (outcome === 'stall') g.sv.timeouts++; });
+    }
     heroes0.forEach(function (u) {
       (u.skills || []).forEach(function (sl) { const kk = u.defId + ':' + sl.id; G.socketed[kk] = (G.socketed[kk] || 0) + 1; });
       if (u.signature) { const kk = u.defId + ':' + u.signature.id; G.socketed[kk] = (G.socketed[kk] || 0) + 1; }
@@ -684,6 +850,15 @@
     return outcome;
   }
 
+  /** The healer groups a lineup falls in: each of healers= it includes, else 'none'. */
+  function groupsOf(ids) {
+    const g = HEALERS.filter(function (h) { return (ids || []).indexOf(h) >= 0; });
+    return g.length ? g : ['none'];
+  }
+  function GR(k) {
+    return G.groups[k] || (G.groups[k] = { runs: 0, wins: 0, stalled: 0, clear: zeros(), sv: { n: 0, wins: 0, timeouts: 0 }, lossAt: {}, lossTo: {} });
+  }
+
   /**
    * Count one finished run. r: { seed, party: [ids], won, stalls (its stalled fights), endedOnStall, act, cleared,
    * startAct (the act it started in: 1, or start=N), lastEnc (the last fight's encounter id), deaths, dead: [ids],
@@ -692,15 +867,24 @@
    */
   function finishRun(r) {
     const outcome = runOutcome(r.won, r.stalls || 0, r.endedOnStall);
-    if (outcome === 'win') { G.wins++; r.party.forEach(function (id) { H(id).wins++; }); }
+    const groups = groupsOf(r.party).concat(['all']).map(GR);
+    groups.forEach(function (g) { g.runs++; });
+    if (outcome === 'win') { G.wins++; r.party.forEach(function (id) { H(id).wins++; }); groups.forEach(function (g) { g.wins++; }); }
     else if (outcome === 'stall') {
       G.stalledRuns++;
       r.party.forEach(function (id) { const h = H(id); h.runs--; h.stalled = (h.stalled || 0) + 1; });
+      groups.forEach(function (g) { g.stalled++; });
     } else {
-      G.lossAt[(r.act || '?') + ''] = (G.lossAt[(r.act || '?') + ''] || 0) + 1;
-      G.lossTo[r.lastEnc || '?'] = (G.lossTo[r.lastEnc || '?'] || 0) + 1;
+      const at = (r.act || '?') + '', to = r.lastEnc || '?';
+      G.lossAt[at] = (G.lossAt[at] || 0) + 1;
+      G.lossTo[to] = (G.lossTo[to] || 0) + 1;
+      // heal pass: where the runs of each starting hero and of each healer group end
+      r.party.forEach(function (id) { const h = H(id); h.losses++; inc(h.lossAct, at); inc(h.lossTo, to); });
+      groups.forEach(function (g) { inc(g.lossAt, at); inc(g.lossTo, to); });
     }
-    for (let a = r.startAct || 1; a <= FINAL; a++) if ((r.cleared || 0) >= a) G.actClear[a]++;
+    for (let a = r.startAct || 1; a <= FINAL; a++) if ((r.cleared || 0) >= a) { G.actClear[a]++; groups.forEach(function (g) { g.clear[a]++; }); }
+    // the act-(L-1) equivalent per hero (act 3 cleared in a four-act campaign), over every run the hero started
+    if (FINAL > 1 && (r.cleared || 0) >= FINAL - 1) r.party.forEach(function (id) { H(id).aPrev++; });
     G.deaths += r.deaths || 0;
     (r.dead || []).forEach(function (id) { H(id).deaths++; });
     G.gold.earned += r.goldEarned || 0;
@@ -944,6 +1128,7 @@
         ' (summons ' + r1(h.summonDmg / f) + ') · kills ' + r1(h.kills / f) + ' · taken ' + r1(h.taken / f) + ' · heals ' + r1(h.heals / f) + ' · downs ' + r2(h.downs / f) + ' · deaths ' + h.deaths +
         ' · AoO ' + r2(h.oppMade / f) + '/' + r2(h.oppTaken / f) + (h.stalled ? ' · stalled runs ' + h.stalled : ''));
     });
+    healLines(median);
     out.push('\n== skill usage per hero (uses per fight socketed; * = never used while socketed ≥ 10 fights)');
     const byHero = {};
     Object.keys(G.socketed).forEach(function (k) { const hid = k.split(':')[0]; (byHero[hid] = byHero[hid] || []).push(k); });
@@ -974,7 +1159,105 @@
     out.push('== DD.warn lines (' + probs.length + ' distinct):');
     probs.forEach(function (k) { out.push('  ' + G.warns[k] + '× ' + k); });
     if (P.verbose === '1') { out.push('\n== runs'); lines.forEach(function (l) { out.push('  ' + l); }); }
+    if (P.raw === '1') rawLines();
     return out.slice();
+  }
+
+  /** "k/n (p%, CI a–b%)" for k successes in n decided. */
+  function rate(k, n) { return k + '/' + n + ' (' + pct(k, n) + (n ? ', CI ' + ci(k, n) : '') + ')'; }
+  const RCV_COLS = [['self', 'self'], ['heroItem', 'hero item'], ['gear', 'gear'], ['bless', 'Blessings'], ['cons', 'consumables'], ['ally', 'allies'], ['other', 'other']];
+  /** The heal pass sections: the healing ledger per hero, the act-(L-1) share, where each hero's runs end, healer groups. */
+  function healLines(median) {
+    const ids = Object.keys(G.heroes).sort();
+    if (!ids.length) return;
+    out.push('\n== healing per hero (per fight the hero started · received = HP healed on the hero, by source: self = his or her own kit, hero item, gear, ' +
+      'Blessings / scars, consumables, allies (their kits; top givers in [ ]), other (enemies, the map, nobody) · overheal = heal asked minus HP gained · ' +
+      'done = HP healed by the hero (and summons) on other heroes, on himself / herself, on summons · revived = help-ups and item / Blessing revives received; ' +
+      'ended down = fights not lost that he or she ended downed · perm deaths = the third down, any act · block = Block gained)');
+    ids.forEach(function (k) {
+      const h = G.heroes[k];
+      const f = Math.max(1, h.fights);
+      const rcvTot = RCV_COLS.reduce(function (a, c) { return a + (h.rcv[c[0]] || 0); }, 0);
+      const doneTot = (h.done.others || 0) + (h.done.self || 0) + (h.done.summons || 0);
+      const from = Object.keys(h.from).sort(function (a, b) { return h.from[b] - h.from[a]; }).slice(0, 3).map(function (x) { return x + ' ' + r1(h.from[x] / f); }).join(', ');
+      const by = Object.keys(h.doneBy).sort(function (a, b) { return h.doneBy[b] - h.doneBy[a]; }).map(function (x) { return x + ' ' + r1(h.doneBy[x] / f); }).join(', ');
+      const revN = ['helpUp', 'item', 'bless', 'other'].reduce(function (a, c) { return a + (h.rev[c] || 0); }, 0);
+      const srcs = Object.keys(h.src).sort(function (a, b) { return h.src[b] - h.src[a]; }).slice(0, 5).map(function (x) { return x + ' ' + r1(h.src[x] / f); }).join(' · ');
+      out.push('  ' + k.padEnd(9) + ' fights ' + String(h.fights).padStart(4) + ' · taken ' + r1(h.taken / f) + ' · downs ' + r2(h.downs / f) + ' · ended down ' + r2(h.endDown / f) +
+        ' · perm deaths ' + h.fallen + ' (' + r2(h.fallen / f) + '/fight) · block ' + r1(h.block / f) +
+        '\n' + ''.padEnd(13) + 'received ' + r1(rcvTot / f) + ': ' + RCV_COLS.map(function (c) { return c[1] + ' ' + r1((h.rcv[c[0]] || 0) / f) + (c[0] === 'ally' && from ? ' [' + from + ']' : ''); }).join(' · ') +
+        ' · overheal on ' + pron(k) + ' ' + r1(h.rcvOver / f) + ' (' + pct(h.rcvOver, rcvTot + h.rcvOver) + ') · revived ' + r2(revN / f) + (h.rev.aimed ? ' (+ ' + r2(h.rev.aimed / f) + ' by an aimed heal)' : '') +
+        '\n' + ''.padEnd(13) + 'done ' + r1(doneTot / f) + ': others ' + r1((h.done.others || 0) / f) + (by ? ' (' + by + ')' : '') + ' · self ' + r1((h.done.self || 0) / f) + ' · summons ' + r1((h.done.summons || 0) / f) +
+        ' · overheal ' + r1(h.doneOver / f) + ' (' + pct(h.doneOver, doneTot + h.doneOver) + ') · help-ups given ' + r2(h.helpUps / f) +
+        (srcs ? '\n' + ''.padEnd(13) + 'top non-ally sources (column:channel:id per fight): ' + srcs : ''));
+    });
+    // the run-win share and the act-(L-1) share with intervals and the ratio to the median
+    const prev = FINAL - 1;
+    const sh = ids.map(function (k) { const h = G.heroes[k]; return h.runs ? h.wins / h.runs : 0; }).sort(function (a, b) { return a - b; });
+    const ap = ids.map(function (k) { const h = G.heroes[k], n = h.runs + (h.stalled || 0); return n ? h.aPrev / n : 0; }).sort(function (a, b) { return a - b; });
+    const medA = ap.length ? (ap[(ap.length - 1) >> 1] + ap[ap.length >> 1]) / 2 : 0;
+    const med = median !== undefined ? median : sh.length ? (sh[(sh.length - 1) >> 1] + sh[sh.length >> 1]) / 2 : 0;
+    out.push('\n== hero shares (run wins of decided runs the hero started · act ' + prev + ' cleared of every run the hero started · ×median) · median run-win share ' + Math.round(100 * med) + '% · median act-' + prev + ' share ' + Math.round(100 * medA) + '%');
+    ids.forEach(function (k) {
+      const h = G.heroes[k], n = h.runs + (h.stalled || 0);
+      if (!n) return;
+      out.push('  ' + k.padEnd(9) + ' wins ' + rate(h.wins, h.runs).padEnd(28) + ' ×' + (med ? r2(h.wins / Math.max(1, h.runs) / med) : '-') +
+        ' · act ' + prev + ' cleared ' + rate(h.aPrev, n).padEnd(28) + ' ×' + (medA ? r2(h.aPrev / n / medA) : '-'));
+    });
+    out.push('\n== where each hero\'s runs end (decided losses of the runs the hero started: by act, and the top 5 last fights)');
+    ids.forEach(function (k) {
+      const h = G.heroes[k];
+      if (!h.losses) return;
+      out.push('  ' + k.padEnd(9) + ' losses ' + String(h.losses).padStart(3) + ' · by act ' + Object.keys(h.lossAct).sort().map(function (a) { return a + ': ' + h.lossAct[a]; }).join(', ') +
+        ' · to ' + Object.keys(h.lossTo).sort(function (a, b) { return h.lossTo[b] - h.lossTo[a]; }).slice(0, 5).map(function (e) { return e + ' ' + h.lossTo[e] + ' (' + pct(h.lossTo[e], h.losses) + ')'; }).join(' · '));
+    });
+    const gk = HEALERS.concat(['none', 'all']).filter(function (k) { return G.groups[k]; });
+    if (gk.length) {
+      out.push('\n== healer groups (healers=' + HEALERS.join(',') + '; a run counts in each group its starting party fits, none = no healer, all = every run; Svammiel: the lineup of the fight)');
+      gk.forEach(function (k) {
+        const g = G.groups[k];
+        const dec = g.runs - g.stalled;
+        const clears = []; for (let a = 1; a <= FINAL; a++) clears.push(a + ' ' + pct(g.clear[a], g.runs));
+        const lost = Object.keys(g.lossTo).sort(function (a, b) { return g.lossTo[b] - g.lossTo[a]; }).slice(0, 6).map(function (e) { return e + ' ' + g.lossTo[e]; }).join(' · ');
+        out.push('  ' + (k === 'none' || k === 'all' ? k : 'with ' + k).padEnd(13) + ' runs ' + String(g.runs).padStart(4) + ' · wins ' + rate(g.wins, dec) + (g.stalled ? ' (+' + g.stalled + ' stalled)' : '') +
+          ' · act cleared ' + clears.join(', ') + (g.sv.n ? ' · Svammiel ' + rate(g.sv.wins, g.sv.n - g.sv.timeouts) : '') +
+          (lost ? '\n' + ''.padEnd(16) + 'lost to: ' + lost : ''));
+      });
+    }
+    const fa = Object.keys(G.fallenAt).sort(function (a, b) { return G.fallenAt[b] - G.fallenAt[a]; });
+    if (fa.length) out.push('== permanent deaths by fight (top 12): ' + fa.slice(0, 12).map(function (e) { return e + ' ' + G.fallenAt[e]; }).join(' · '));
+  }
+  /** him / her for a hero id (the pronoun table: DD.Act.pronouns). */
+  function pron(id) {
+    try { return DD.Act.pronouns({ kind: 'hero', defId: id }).obj; } catch (e) { return 'them'; }
+  }
+
+  /** raw=1: additive counts (R<TAB>key<TAB>value) to merge pages with a sum (.tmp scripts); no rates, no lists. */
+  function rawLines() {
+    out.push('\n== raw tallies (raw=1: R<TAB>key<TAB>value, additive across pages)');
+    function emit(prefix, o) {
+      Object.keys(o || {}).forEach(function (k) {
+        const v = o[k], key = prefix + '.' + String(k).replace(/[\s\t]+/g, '_');
+        if (typeof v === 'number') { if (isFinite(v) && v) out.push('R\t' + key + '\t' + r2(v)); }
+        else if (v && typeof v === 'object' && !Array.isArray(v)) emit(key, v);
+      });
+    }
+    function arr(prefix, a) { (a || []).forEach(function (v, i) { if (typeof v === 'number' && v) out.push('R\t' + prefix + '.' + i + '\t' + v); }); }
+    emit('g', { runs: G.runs, wins: G.wins, stalledRuns: G.stalledRuns, fights: G.fights, timeouts: G.timeouts, deaths: G.deaths, failed: G.failed });
+    arr('actEnter', G.actEnter); arr('actClear', G.actClear); arr('downsByAct', G.downsByAct);
+    emit('lossAt', G.lossAt); emit('lossTo', G.lossTo); emit('fallenAt', G.fallenAt); emit('downs', G.downs);
+    Object.keys(G.heroes).forEach(function (k) { emit('hero.' + k, G.heroes[k]); });
+    Object.keys(G.groups).forEach(function (k) {
+      const g = G.groups[k];
+      emit('grp.' + k, { runs: g.runs, wins: g.wins, stalled: g.stalled, sv: g.sv, lossAt: g.lossAt, lossTo: g.lossTo });
+      arr('grp.' + k + '.clear', g.clear);
+    });
+    Object.keys(G.bossFights).forEach(function (k) { emit('boss.' + k, G.bossFights[k]); });
+    Object.keys(G.enc).forEach(function (k) { const e = G.enc[k]; emit('enc.' + k, { n: e.n, wins: e.wins, timeouts: e.timeouts, downs: e.downs, withDowns: e.withDowns }); });
+    Object.keys(G.lanes).forEach(function (k) { const x = G.lanes[k]; emit('lane.' + k, { n: x.n, wins: x.wins, timeouts: x.timeouts, downs: x.downs, withDowns: x.withDowns }); });
+    if (G.svam) emit('svam', { n: G.svam.n, wins: G.svam.wins, timeouts: G.svam.timeouts, downs: G.svam.downs, withDowns: G.svam.withDowns, caught: G.svam.caught });
+    emit('a4', { runs: G.a4.runs });
+    emit('err', { errors: G.errors.length, warns: Object.keys(G.warns).reduce(function (a, k) { return a + G.warns[k]; }, 0), stalls: G.stalls.length });
   }
 
   function report(overrides) {
@@ -987,7 +1270,8 @@
   // fresh tally; replaceIdx(runHero) is the socket a new skill would replace (never a 'shapeshift' one, -1 = skip it)
   window.DD_SIM = {
     fightOutcome: fightOutcome, runOutcome: runOutcome, recordFight: recordFight, finishRun: finishRun,
-    replaceIdx: replaceIdx, isShapeshift: isShapeshift, LANE_STATS: LANE_STATS,
+    replaceIdx: replaceIdx, isShapeshift: isShapeshift, LANE_STATS: LANE_STATS, wantsBribe: wantsBribe,
+    ledgerHeal: ledgerHeal, rcvColumn: rcvColumn, groupsOf: groupsOf,
     reset: function () { FINAL = DD.finalAct(); G = newTally(); return G; }, tally: function () { return G; },
     startRun: function (party) { G.runs++; G.actEnter[1]++; (party || []).forEach(function (id) { H(id).runs++; }); },
     reportText: function (overrides) { return reportLines(overrides || []).join('\n'); },

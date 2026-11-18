@@ -2322,12 +2322,21 @@
     });
     await withGate(true, async function () {
       DD.Meta.data.history = history.slice();
-      Object.assign(DD.Meta.data.stats, { runs: 3, wins: 2, dmDefeated: 2, miniBosses: 9 });
+      Object.assign(DD.Meta.data.stats, { runs: 3, wins: 2, dmDefeated: 2, miniBosses: 9, classicWins: 1 });
       t.tryRun('records (gate open)', function () { UI.show('hall', { tab: 'records' }); });
       const card = function (re) { return qa('.rec-card').filter(function (c) { return re.test(c.querySelector('.rc-label').textContent); })[0]; };
       t.ok(card(/^The DM defeated$/) && card(/^The DM defeated$/).querySelector('.rc-val').textContent === '2', 'records: the DM defeated');
       t.ok(card(/^Floor bosses beaten$/) && card(/^Floor bosses beaten$/).querySelector('.rc-val').textContent === '9', 'records: floor bosses beaten (the lifetime sum)');
       t.ok(card(/Campaigns won \(of which classic: 1\)/), 'records: campaigns won, of which classic');
+      // V3.1 polish: the classic count is the lifetime stat, not the 20-entry history (a v2 veteran with 25 classic wins
+      // whose history holds one of them still reads 25)
+      Object.assign(DD.Meta.data.stats, { runs: 30, wins: 26, classicWins: 25 });
+      t.tryRun('records (a v2 veteran)', function () { UI.show('hall', { tab: 'records' }); });
+      t.ok(card(/Campaigns won \(of which classic: 25\)/), 'records: of which classic reads stats.classicWins (25), not the history (1)');
+      Object.assign(DD.Meta.data.stats, { runs: 3, wins: 2, classicWins: 0 });
+      t.tryRun('records (no classic win)', function () { UI.show('hall', { tab: 'records' }); });
+      t.ok(card(/^Campaigns won$/), 'records: no classic win in the lifetime stat: plain "Campaigns won" (the history\'s v2 win is not counted)');
+      Object.assign(DD.Meta.data.stats, { runs: 3, wins: 2, classicWins: 1 });
       t.tryRun('history (gate open)', function () { UI.show('hall', { tab: 'history' }); });
       const rows = qa('.hist-row');
       const titles = rows.map(function (r) { return r.querySelector('.hist-title').textContent; });

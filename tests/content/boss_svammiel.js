@@ -651,6 +651,58 @@
     t.log('Radio Edit descs checked for ' + n + ' hero damage skills');
   });
 
+  // V3.1 polish (the audit's request, D9): a hero's heal is his own sustain; the Radio Edit skips any skill that heals,
+  // by a field or tag of the def (never a list of ids), so a heal added later is skipped too
+  T.suite('boss_svammiel: the Radio Edit never bleeps a skill that heals (tag heal / drain, kind heal, an L.heal or heal rider, the heals flag)', function (t) {
+    const zap = DD.getSkill('test_chain_zap');
+    const keep = { tags: zap.tags, kind: zap.kind, levels: zap.levels, heals: zap.heals };
+    const spec = [['test_mage', [['test_chain_zap', 3], ['test_fireball', 1]]]];
+    t.eq(pickOf(spec), 'test_chain_zap@test_mage', 'baseline: the level-III Chain Zap is the pick');
+    const cases = [
+      ['a \'heal\' tag', function () { zap.tags = keep.tags.concat(['heal']); }],
+      ['a \'drain\' tag', function () { zap.tags = keep.tags.concat(['drain']); }],
+      ['kind \'heal\'', function () { zap.kind = 'heal'; }],
+      ['an L.heal at its level', function () { zap.levels = keep.levels.map(function (L) { return Object.assign({}, L, { heal: 4 }); }); }],
+      ['a heal rider (L.healOnKill)', function () { zap.levels = keep.levels.map(function (L) { return Object.assign({}, L, { healOnKill: 3 }); }); }],
+      ['a heal rider as a function (L.selfHeal)', function () { zap.levels = keep.levels.map(function (L) { return Object.assign({}, L, { selfHeal: function () { return 2; } }); }); }],
+      ['the def\'s heals flag', function () { zap.heals = true; }],
+      ['the def\'s heals(L, user)', function () { zap.heals = function (L, u) { return !!u && L === DD.skillLevel(zap, 3); }; }],
+    ];
+    cases.forEach(function (c) {
+      try {
+        c[1]();
+        t.eq(pickOf(spec), 'test_fireball@test_mage', c[0] + ': skipped, the next damage skill is bleeped instead');
+      } finally { zap.tags = keep.tags; zap.kind = keep.kind; zap.levels = keep.levels; zap.heals = keep.heals; }
+    });
+    // a heal field worth 0 at this level, or only at another level, is no heal now
+    try {
+      zap.levels = keep.levels.map(function (L, i) { return Object.assign({}, L, { heal: i === 2 ? 0 : 5 }); });
+      t.eq(pickOf(spec), 'test_chain_zap@test_mage', 'L.heal 0 at its level (5 at the others): still the pick');
+    } finally { zap.levels = keep.levels; }
+    t.eq(pickOf(spec), 'test_chain_zap@test_mage', 'restored: the pick again');
+    // the real D9 heals the audit saw bleeped (10 of 130 picks), each next to a plain damage skill of the same hero
+    const real = [['slate', 'sla_stress_ball'], ['sparrow', 'spa_juicebox'], ['josiah', 'jos_leeches'], ['basanos', 'bas_savage_bite']];
+    let n = 0;
+    real.forEach(function (r) {
+      const h = DD.getHero(r[0]), heal = DD.getSkill(r[1]);
+      if (!h || !heal) return;
+      const other = (h.skillPool || []).map(function (id) { return DD.getSkill(id); }).filter(function (s) {
+        return s && s.id !== heal.id && !s.hype && (s.tags || []).indexOf('shapeshift') < 0 && !B().healsWith(s, DD.skillLevel(s, 1), null) && (+DD.resolve(DD.skillLevel(s, 1).dmg, DD.skillLevel(s, 1), null, 0) || 0) > 0;
+      })[0];
+      if (!other) { t.log(r[0] + ': no plain damage skill in the pool'); return; }
+      n++;
+      t.ok(B().healsWith(heal, DD.skillLevel(heal, 3), null), heal.name + ' (' + h.name + ') counts as a heal');
+      const got = pickOf([[r[0], [[heal.id, 3], [other.id, 1]]]]);
+      t.eq(got, other.id + '@' + r[0], heal.name + ' at level III is never bleeped: ' + other.name + ' at level I is');
+    });
+    t.log('real D9 heals checked: ' + n);
+    // nothing to bleep but heals: no pick, no cheat
+    try {
+      zap.tags = keep.tags.concat(['heal']);
+      t.eq(pickOf([['test_mage', [['test_chain_zap', 3]]]]), null, 'only a healing damage skill: no pick');
+    } finally { zap.tags = keep.tags; }
+  });
+
   T.suite('boss_svammiel: the Radio Edit refuses its skill all fight (E13 veto, and the 99-AP fallback)', function (t) {
     ['veto', 'cost'].forEach(function (mode) {
       if (mode === 'veto' && typeof DD.Combat.vetoOf !== 'function') { t.log('E13 not landed: the veto path is skipped'); return; }
@@ -895,6 +947,18 @@
           t.eq(S().log.filter(function (l) { return /^The table shakes\./.test(l.text); }).length, 1, 'the table shakes once');
           t.ok(DD.Meta.data.seen.bosses.svammiel, 'the spoiler gate opens (seen.bosses.svammiel)');
         } else t.log('the twist line (svam_twist, NARRATIVE) or the cameo engine is missing: the entrance is skipped');
+      });
+      // V3.1 polish: the debug sandbox twist (encounter=boss_dm&twist=1: main.js fires the victory cameos at fight start,
+      // the DM alive) plays in the real twist's order too: the shake, his line, the DM's "Oh no"
+      withActs(4, function () {
+        if (!(DD.Cameo && !DD.Cameo.stub && (DD.defs.narration.svam_twist || []).length)) { t.log('no cameo engine or svam_twist: the sandbox twist is skipped'); return; }
+        const setup = DD.Encounter.build('boss_dm', partyAt(5), { rng: DD.RNG('dmtw:sandbox'), difficulty: 'normal', act: 3 });
+        DD.Combat.start(setup, { seed: 'sandbox', headless: true, kind: 'boss', sandbox: true, initiative: 'heroesFirst' });
+        t.ok(S().units.some(function (u) { return u.defId === 'dungeon_master' && !u.dead; }), 'the DM is alive (a sandbox twist)');
+        act(function () { DD.Cameo.fire('victory', { result: 'victory', debug: true }); });
+        const iShake = at(/^The table shakes\./), iLine = at(/You thought this was over\?/), iOh = at(/"Oh no\. That's my DM\."/);
+        t.ok(iShake >= 0 && iShake < iLine && iLine < iOh, 'the sandbox twist\'s order: shake ' + iShake + ' < his line ' + iLine + ' < "Oh no" ' + iOh);
+        t.eq(S().log.filter(function (l) { return /^The table shakes\./.test(l.text); }).length, 1, 'the table shakes once');
       });
       withActs(3, function () { t.eq(DD.getEnemy('dungeon_master').barks.death.length, 2, 'acts 3 again: his death pool is back'); });
     } finally {

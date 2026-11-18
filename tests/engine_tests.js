@@ -2196,6 +2196,11 @@
     const own = Object.assign({}, tagged, { id: 'test_tmp_own', tags: [], preview: function (ctx) { const o = {}; o[ctx.targetUnit.id] = { dmg: 2 }; return o; } });
     const po = DD.Targeting.preview(h, own, { x: g.x, y: g.y }).perUnit[g.id];
     t.ok(po && po.dmg === 2 && po.block === 0 && po.blocked === 0 && Array.isArray(po.statuses) && po.moved === null, 'preview() override: { dmg, heal, blocked: 0, block: 0, statuses: [], ... }');
+    // V3.1 polish (render-ui QA HERO-1): a def's own preview entry says so (custom: true: the HUD leads with its text);
+    // a dry run's entry never does
+    t.eq(po && po.custom, true, 'preview() override entries carry custom: true');
+    const dry = DD.Targeting.preview(h, h.basic, { x: g.x, y: g.y }).perUnit[g.id];
+    t.ok(dry && dry.custom === undefined, 'a dry-run entry has no custom flag');
   });
 
   T.suite('engine: phase 4 — modifyFinalDamage, preventDeath, onAnyDeath, onAllyDowned, modifyHeal', function (t) {

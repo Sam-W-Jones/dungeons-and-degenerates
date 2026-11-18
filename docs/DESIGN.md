@@ -362,6 +362,12 @@ enemies never telegraph.
     the Lich's row scales his notices, his Late Fees stay flat; finish run, Nov 14: his fees stop at 12 and his row
     went from ×1.25 to ×1.3 HP to keep him where he was; Dr. Iris went from ×1.2 to ×1.1 HP with her closing time
     moved from round 14 to round 10, so her fights stop being 13-round dodge-slogs at the same win rate).
+  - Act 4 (V3, as landed after the balance audit, Nov 17): `act[4]` ×1.3 damage, HP ×1, for every act-4 fight; on
+    top of it each door's own row (`encounters`): the Gardener ×0.75 HP / ×1.45 damage, the League ×1.05 damage,
+    Galbraith ×0.95 damage, the Coven ×0.9 damage, the Rapping Goats ×0.8 HP with no damage row (×1: the Radio Edit
+    is paid back on their own row; their 285 HP read 228 in a campaign, the bear's 110 read 88), and Svammiel ×1.1 HP /
+    ×1.3 damage (×1.69 damage in all with `act[4]`; his 360 HP read 396 in a campaign). No order scaling
+    (`gauntlet.hpPerBeaten` / `dmgPerBeaten` 0: the door order stays a free choice).
   - Difficulty (`difficulty`, `extraEnemies`): Casual ×0.8 HP / ×0.8 damage · Normal ×1 · Brutal ×1.15 HP / ×1.05
     damage, plus one extra enemy in every regular fight.
   - Where that lands (the balance audit, normal unless stated): the act 1 bosses are won ~70%, the campaign ~33%
@@ -888,8 +894,8 @@ hero (that hero may answer back), then **one small, announced cheat** that previ
 with the exact text; a Bribe skips it): Green Thumb at the Gardener (two extra Strangler Vines), Nepotism at the League
 (+3 initiative each), That's a 1 Now at Galbraith (the first 10+ hit on him deals 1), The Floor Is Lava at the Coven
 (the approach to the cauldron is lava until the end of round 3) and the **Radio Edit** at the Rapping Goats (the
-party's highest-level damage skill — never a basic, a signature, a transform or a revive — is bleeped: it can't be
-used for the whole fight). Mid-fight he interjects at most 3 times (1 a round, 2 rounds apart). No act-4 mechanic
+party's highest-level damage skill — never a basic, a signature, a transform, a revive or a skill that heals (D9: a
+hero's heal is his own sustain) — is bleeped: it can't be used for the whole fight). Mid-fight he interjects at most 3 times (1 a round, 2 rounds apart). No act-4 mechanic
 relies on enemies blocking each other (both sides walk through their own side); heroes still block enemies, and the
 swap move is part of several answers. Normative specs: `.tmp/v3/design.md` §3 and the goats' addendum.
 6. **The Gardener** (it; *The Overgrown Conservatory*, a 14 × 12 greenhouse; 300 HP, init +1, large). A giant
@@ -929,22 +935,24 @@ swap move is part of several answers. Normative specs: `.tmp/v3/design.md` §3 a
 10. **The Rapping Goats** (he, all four; *The Barn Burner*, 15 × 14; the fifth door, the user's Nov 12 request). Three
     rapping black goats, crew name **Herd Mentality**: **Billy Bleatz** (the MC, holds the Golden Mic), **Lil' Kid**
     (the hype goat; his WHAT?! needs no line of sight) and **DJ Turnip** (eats his records; *Turnip the Bass* hits one
-    colour of the dance floor while a Speaker Stack stands); 255 HP between them, each on his own initiative. **The
-    Verse**: a diss at the Called-Out hero starts a bar, a different goat finishes it; three bars and the Golden Mic
-    drops **Bar None** (18 psychic + Weakened wherever that hero stands). Clap back at the **Mic Stand** to take the
-    heat, hide the hero from the next goat, shut the finisher up, interrupt the mic. At half the crew's combined HP the
-    snoring hay wakes: **Ursa Verse, the Paw-et Laureate**, a bear lyricist (110 HP) who takes the mic (Bar None 22).
-    When Betty is in the party, the first verse is about him. Every bar is original; the comedy is goat puns and
+    colour of the dance floor while a Speaker Stack stands; the marked squares wash in the colour the hint names);
+    285 HP between them (campaign row ×0.8 HP, no damage row: 228, §5), each on his own initiative. **The Verse**: a
+    diss at the Called-Out hero starts a bar, a different goat finishes it; three bars and the Golden Mic drops **Bar
+    None** (18 psychic + Weakened wherever that hero stands). Clap back at the **Mic Stand** to take the heat, hide the
+    hero from the next goat, shut the finisher up, interrupt the mic. At half the crew's combined HP the snoring hay
+    wakes: **Ursa Verse, the Paw-et Laureate**, a bear lyricist (110 HP; 88 in a campaign) who takes the mic (Bar None
+    22). When Betty is in the party, the first verse is about him. Every bar is original; the comedy is goat puns and
     battle-rap form, never the fur colour.
-11. **Svammiel, the Floor Boss** (he; *The Last Floor*, the linoleum under the DM's table, 17 × 14 over the void; 480
-    HP in three phases, flying until caught, init +4). The DM's DM, an original character: a winged demon who owns
-    every floor tile down there and cheats blatantly, for no reason, out loud. One **Round Cheat** a round, announced a
-    round ahead (the floor is lava, the Tilt, a Skill Ban, New Seating Chart, Moving Costs Extra — the swap move
-    included —, Bring a Friend…), **Snap Cheats** while he holds Fudge tokens, phase cheats at phase changes (I Go Twice;
-    You Can't Skip My Cutscenes). The party's answers: **Rulings** from the demoted DM at the kids' table (interact:
-    cancel a cheat, 10 damage), breaking his **Rigged Dice**. Phase 3 *FINE. NO MORE FLOOR.*: outer panels drop for good
-    and he pencils damage away until the party breaks his three **Master Dice**: **CAUGHT CHEATING** (grounded over
-    the void he made, an honest d20, every fall costs him 30). Defeat: the floor gives way under him.
+11. **Svammiel, the Floor Boss** (he; *The Last Floor*, the linoleum under the DM's table, 17 × 14 over the void; 360
+    HP in three phases, flying until caught, init +4; campaign row ×1.1 HP / ×1.3 damage, ×1.69 damage with `act[4]`:
+    396 HP in a campaign, §5). The DM's DM, an original character: a winged demon who owns every floor tile down there
+    and cheats blatantly, for no reason, out loud. One **Round Cheat** a round, announced a round ahead (the floor is
+    lava, the Tilt, a Skill Ban, New Seating Chart, Moving Costs Extra — the swap move included —, Bring a Friend…),
+    **Snap Cheats** while he holds Fudge tokens, phase cheats at phase changes (I Go Twice; You Can't Skip My
+    Cutscenes). The party's answers: **Rulings** from the demoted DM at the kids' table (interact: cancel a cheat, 10
+    damage), breaking his **Rigged Dice**. Phase 3 *FINE. NO MORE FLOOR.*: outer panels drop for good and he pencils
+    damage away until the party breaks his three **Master Dice** (12 HP each): **CAUGHT CHEATING** (grounded over the
+    void he made, an honest d20, every fall costs him 30). Defeat: the floor gives way under him.
 
 ## 10. Map themes
 | Theme | Act | Look | Features |

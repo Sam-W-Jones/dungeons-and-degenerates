@@ -73,6 +73,7 @@
   const PROGRESS = 1;        // a tile of walking distance toward the fight, when nothing is in reach
   const STALL_SPAWN = 0.25;  // weight of foes a hit calls in (a boss split) while the stalemate breaker is on
   const GATE_VALUE = 2;      // hitting a crate that seals a unit off from the fight (+0.5 a damage, +4 when it breaks)
+  const CHIP_EDGE = 10;      // a hit that leaves a hinted object standing: at most its damage + this (a kill adds 15+)
   const MAX_STEPS = 12;
   // v2 danger model (see the header)
   const RESPOND = 0.35;      // an enemy turn after the victim's own next turn: it can step away or deal with it first
@@ -1057,12 +1058,21 @@
   /**
    * Value of damaging an object: destroy-objective targets and hinted objects; [finish FF-3] a GATE (a crate or keg on
    * the cheapest way out for a unit no walk takes to the fight, breakOut) is worth breaking too. 0 for anything else.
+   * dmg: the HP the hit removes (at most what the object has). A hinted object's break is worth half the damage + its
+   * hint; [V3.1 polish] a hit that leaves it standing is progress toward that break: the hint × the share of its max
+   * HP the hit removes (a 12-HP Master Die chipped for 8: 2/3 of the way), never less than half the damage (low hints
+   * price as before) and at most the damage + CHIP_EDGE, under any killing blow of the same damage (+15 and the
+   * foe's threat), so AutoPlay never chases a chip over a kill.
    */
   function objectValue(unit, tl, dmg, destroyed) {
     if (!tl || !tl.obj) return 0;
     if (objectiveObj(tl.obj.id)) return dmg + (destroyed ? 15 : 0);
     const v = hintOf(tl.obj, unit, tl, 'break');
-    if (v > 0) return dmg * 0.5 + (destroyed ? v : 0);
+    if (v > 0) {
+      if (destroyed) return dmg * 0.5 + v;
+      const max = Math.max(num(tl.obj.maxHp), num(tl.obj.hp), dmg, 1);
+      return Math.max(dmg * 0.5, Math.min(v * dmg / max, dmg + CHIP_EDGE));
+    }
     const bo = G().objBlocksMove(tl.obj) ? breakOut(unit) : null;
     return bo && bo.gates[key(tl.x, tl.y)] ? GATE_VALUE + dmg * 0.5 + (destroyed ? GATE_VALUE * 2 : 0) : 0;
   }
@@ -2732,6 +2742,12 @@
   };
   /** Odds table (exposed for tests): lossOf(hits [{ p, d }], flat, pierce, block, hp) → { exp, down }. */
   AP.lossOf = lossOf;
+  /** What hitting the object on (x, y) for dmg is worth to unit (objectValue; dmg counts up to the HP it has). */
+  AP.objectValue = function (unit, x, y, dmg) {
+    const tl = G().tile(x, y), o = tl && tl.obj;
+    if (!o || !(o.hp > 0)) return 0;
+    return objectValue(unit, tl, Math.min(dmg, o.hp), dmg >= o.hp);
+  };
   /** How many of its single hits an AI unit was seen to deal per turn in this fight (1 until it showed more; max 4). */
   AP.hitsPerTurn = function (unit) { return unit ? hitsPerTurn(unit) : 1; };
 })();

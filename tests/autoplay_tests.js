@@ -1201,6 +1201,44 @@
     DD.Combat.endRound();
     t.ok(DD.AutoPlay.stall().quiet === 0, 'the boss losing HP is progress');
   });
+
+  // V3.1 polish (the gate's leftover, CAUGHT ~38% vs ≥ 60%): a hit that leaves a hinted object standing is progress
+  // toward its break (the share of its HP it removes, of the hint), not half its damage; capped under a killing blow
+  T.suite('autoplay: V3.1 — a hit on a two-hit hinted object is priced as progress toward the break (Master Dice), never over a kill', function (t) {
+    if (missing(t, ['test_mage', 'test_boss', 'test_minion'])) return;
+    if (typeof DD.AutoPlay.objectValue !== 'function') { t.ok(false, 'DD.AutoPlay.objectValue (inspection) exposed'); return; }
+    const die = { id: 'test_tmp_ap_die', name: 'Test Die', blocksMove: true, blocksLos: false, hp: 12, targetable: true, desc: 'A d20 the size of a hero.', autoplay: 45 };
+    const pip = { id: 'test_tmp_ap_pip', name: 'Test Pip', blocksMove: true, blocksLos: false, hp: 12, targetable: true, desc: 'A small hint.', autoplay: 6 };
+    [die, pip].forEach(function (d) { DD.registerObject(d); });
+    try {
+      arena({ heroes: [hero('test_mage', 1, 4, 1, [])], enemies: [{ id: 'test_boss', x: 6, y: 1 }],
+        objects: [{ x: 4, y: 6, id: 'test_tmp_ap_die' }, { x: 6, y: 7, id: 'test_tmp_ap_pip' }] });
+      const m = unitOf('test_mage'), V = function (x, y, dmg) { return DD.AutoPlay.objectValue(m, x, y, dmg); };
+      // the numbers: the share of the hint, at least half the damage, at most the damage + 10 (a kill adds 15+)
+      t.eq(V(4, 6, 2), 45 * 2 / 12, 'a 2-damage chip of a 12-HP die (hint 45): 45 × 2 / 12 = 7.5');
+      t.eq(V(4, 6, 4), 14, 'a 4-damage chip: 45 × 4 / 12 = 15, capped at 4 + 10 = 14 (a killing blow adds 15 to its damage)');
+      t.eq(V(4, 6, 12), 12 * 0.5 + 45, 'the break: half the damage + the whole hint (as before)');
+      t.eq(V(4, 6, 20), 12 * 0.5 + 45, 'overkill counts only the HP it had');
+      t.eq(V(6, 7, 4), 2, 'a low hint (6): never less than half the damage (2), as before');
+      DD.Grid.tile(4, 6).obj.hp = 4;
+      t.eq(V(4, 6, 4), 4 * 0.5 + 45, 'the second hit breaks it: the whole hint');
+      t.eq(V(4, 6, 3), 45 * 3 / 12, 'a chip of a hurt die: its share of the max HP (3 / 12 of 45)');
+      // in play: a bolt (4) at the die beats a bolt at the boss (4 → 3 after armor) …
+      arena({ heroes: [hero('test_mage', 1, 4, 1, [])], enemies: [{ id: 'test_boss', x: 4, y: 3 }], objects: [{ x: 3, y: 6, id: 'test_tmp_ap_die' }] });
+      A().addStatus(unitOf('test_mage'), 'root', { turns: 2 });
+      let log = watch(function () { DD.AutoPlay.takeTurn(); });
+      const first = log.filter(function (e) { return e.kind === 'skill'; })[0];
+      t.ok(first && first.x === 3 && first.y === 6, 'the first bolt chips the die, not the boss (' + said(log) + (first ? ' at ' + key(first) : '') + ')');
+      // … but a killing blow comes first
+      arena({ heroes: [hero('test_mage', 1, 4, 1, [])], enemies: [{ id: 'test_boss', x: 4, y: 3 }, { id: 'test_minion', x: 2, y: 2 }], objects: [{ x: 3, y: 6, id: 'test_tmp_ap_die' }] });
+      A().addStatus(unitOf('test_mage'), 'root', { turns: 2 });
+      const mn = unitOf('test_minion');
+      mn.hp = 3;
+      log = watch(function () { DD.AutoPlay.takeTurn(); });
+      const k1 = log.filter(function (e) { return e.kind === 'skill'; })[0];
+      t.ok(k1 && k1.x === mn.x && k1.y === mn.y && (mn.dead || mn.hp <= 0), 'a 3-HP minion in reach: the first bolt kills it (' + said(log) + (k1 ? ' at ' + key(k1) : '') + ')');
+    } finally { [die, pip].forEach(function (d) { delete DD.defs.objects[d.id]; }); }
+  });
 })();
 
 // ---- review of the playtest fixes (Nov 12): AutoPlay reads a Dazzled boss's drawn wind-up tiles as certain ---------

@@ -2024,10 +2024,25 @@
   }
   function unitsOf(state, pred) { return state && state.units ? state.units.filter(function (u) { return !u.dead && pred(u); }) : []; }
   /**
+   * A skill that heals at this level (the Radio Edit never bleeps one: D9 makes a hero's heal his own sustain, and a
+   * whole-fight ban of it cuts deeper than a turn of damage). Read from the def, never a list of ids, so a heal added
+   * later is skipped too: kind 'heal', a 'heal' or 'drain' tag, a level field named for a heal (L.heal, or a rider such
+   * as L.selfHeal / L.healOnKill: any key with "heal" in it) worth more than 0, or the def's own `heals` flag (true, or
+   * a function (L, user) → truthy) for a heal its fields don't name.
+   */
+  function healsWith(def, L, u) {
+    if (def.kind === 'heal') return true;
+    const tags = def.tags || [];
+    if (tags.indexOf('heal') >= 0 || tags.indexOf('drain') >= 0) return true;
+    for (const k in (L || {})) if (/heal/i.test(k) && (+DD.resolve(L[k], L, u, 0) || 0) > 0) return true;
+    if (typeof def.heals === 'function') return !!DD.safe('heals of ' + def.id, def.heals, def, [L, u]);
+    return !!def.heals;
+  }
+  /**
    * The Radio Edit's pick (deterministic, no RNG): over the heroes in the fight (party order) and each one's socketed
-   * skills (never the basic, the signature, a 'shapeshift' skill or a revive), the skills whose current level deals
-   * damage now; the highest level, then the higher L.dmg, then party order, then slot order. → { unit, slot, def,
-   * level, dmg } | null.
+   * skills (never the basic, the signature, a 'shapeshift' skill, a revive or a skill that heals: healsWith), the skills
+   * whose current level deals damage now; the highest level, then the higher L.dmg, then party order, then slot order.
+   * → { unit, slot, def, level, dmg } | null.
    */
   function radioPick(state) {
     let best = null, hi = 0;
@@ -2039,6 +2054,7 @@
         if ((u.basic && u.basic.id === def.id) || (u.signature && u.signature.id === def.id)) return;
         if ((def.target && def.target.filter === 'downedAlly') || (DD.Targeting && DD.Targeting.revivesWith && DD.Targeting.revivesWith(u, sl))) return;
         const level = sl.level || 1, L = DD.skillLevel(def, level);
+        if (healsWith(def, L, u)) return;
         const dmg = +DD.resolve(L.dmg, L, u, 0) || 0;
         if (!(dmg > 0)) return;
         const c = { unit: u, slot: sl, def: def, level: level, dmg: dmg, ui: ui, si: si };
@@ -2250,7 +2266,10 @@
     id: ACTOR, name: 'Svammiel', title: 'The Floor Boss', icon: '😈', color: '#c0213a', enemy: SVAM,
     triggers: [
       { id: 'start', on: 'start', act: 4, style: 'swoop' },
+      // keyOf runs as the entrance starts: the table shakes first (plan §2.1). In a run the DM's death already shook it
+      // (dm.js → twistShake, a no-op here); the debug sandbox twist (encounter=boss_dm&twist=1, the DM alive) shakes it now
       { id: 'twist', on: 'victory', act: 3, kind: 'boss', when: function (s) { return DD.Cameo.campaignGoesOn(s); }, key: 'svam_twist', style: 'entrance', force: true,
+        keyOf: function (s) { twistShake(s); return 'svam_twist'; },
         banner: { title: 'YOU THOUGHT THIS WAS OVER?' }, bubble: 'I, SVAMMIEL, CONTROL ALL.', then: twistExtras },
       { id: 'shadow', on: 'round', act: 3, encounter: 'boss_dm', when: function (s) { return DD.Cameo.campaignGoesOn(s) && dmPhase3(); }, style: 'shadow', once: true },
       { id: 'down', on: 'heroDowned', act: 4, key: 'svam_down', style: 'bubble' },
@@ -2303,7 +2322,7 @@
     descOf: descOf, cancelTarget: function () { return cancelTarget(fight()); }, rulingOpen: rulingOpen, rulingValue: rulingValue, askRuling: askRuling,
     dropPanel: function (id, opts) { return dropPanel(fight(), id, opts); }, placeMasterDice: function () { return placeMasterDice(S(), fight()); },
     markDrops: function (r) { return markDrops(S(), fight(), r); }, caught: caughtCheating, standingMaster: standingMaster, threatAt: threatAt,
-    radioPick: radioPick, radioDesc: radioDesc, applyCameoCheat: applyCameoCheat, situation: situation, passiveText: passiveText, updateBoard: updateBoard,
+    radioPick: radioPick, healsWith: healsWith, radioDesc: radioDesc, applyCameoCheat: applyCameoCheat, situation: situation, passiveText: passiveText, updateBoard: updateBoard,
     slideOutcome: slideOutcome, onRoundEnd: encRoundEnd, onRoundStart: encRoundStart, namedBark: namedBark,
     // twistShake: called at runtime by dm.js (the twist's first beat as the DM dies); the rest: suites
     twistShake: twistShake, windTurns: function (u) { return windTurns(S(), u || findSvam()); }, aheadDescOf: aheadDescOf, radioLanded: radioLanded,

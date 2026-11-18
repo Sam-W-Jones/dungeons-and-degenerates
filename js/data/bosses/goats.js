@@ -51,6 +51,8 @@
   const KITER = { style: 'ranged', keepDistance: 2 };
   const DJ = { style: 'ranged', keepDistance: 3 };
   const C = { gold: '#d9b44a', pink: '#ff3fb4', fur: '#2b2730', muzzle: '#5a5560', eye: '#e8a33a', hoof: '#16131a', barn: '#7a2418' };
+  // the dance floor's two colours as their tiles' tops: the bass wind-up washes its squares in the colour its hint names
+  const FLOOR_TINT = { gold: C.gold, pink: '#e83aa3' };
   // one-off bubbles said from the fight logic (addendum §8, §11, §17.5; the suite lints them with the pools)
   const LINE = {
     micCheck: 'Mic check. One, two. One, two. ...Three goats.',
@@ -932,7 +934,7 @@
     desc: 'A gold square of the dance floor (lit planks). Turnip the Bass drops on one colour at a time: gold or pink.',
     draw: function (g) { planks(g, 'rgba(90,60,10,0.35)', 'rgba(255,236,160,0.28)'); } });
   DD.registerTerrain({ id: TER.pink, name: 'Pink Square', walkable: true, cost: 1, blocksLos: false,
-    colors: { top: '#e83aa3', left: '#b42b7e', right: '#8e2064' },
+    colors: { top: FLOOR_TINT.pink, left: '#b42b7e', right: '#8e2064' },
     desc: 'A pink square of the dance floor (lit planks). Turnip the Bass drops on one colour at a time: gold or pink.',
     draw: function (g) { planks(g, 'rgba(70,10,40,0.35)', 'rgba(255,190,232,0.26)'); } });
   function colourOf(t) { return t && t.t === TER.gold ? 'gold' : t && t.t === TER.pink ? 'pink' : null; }
@@ -1251,7 +1253,7 @@
       const colour = pickColour(s), tiles = danceTiles(s, colour), st = stand(s);
       const at = st ? { x: st.x, y: st.y } : tiles[0];
       const it = api.windUp(unit, SK.bass, at, { anchor: 'ground', tiles: tiles, label: 'Turnip the Bass', noCooldown: true,
-        data: { hint: 'Bass → ' + colour + ' squares' } });
+        data: { hint: 'Bass → ' + colour + ' squares', tint: FLOOR_TINT[colour] } });
       if (it) {
         unit.data.bassCd = 2;
         stat('bass');

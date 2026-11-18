@@ -19,6 +19,10 @@ normal four-act campaign wins 35% against "about 25%"; Benedick's random-party s
 sim runs with 0 errors; the four-act campaign 24.0%; act 4 secret until reached; Benedick live from the start. Two
 explained misses stay with the lead: Svammiel 90.6% (plan 80-85%) and CAUGHT ~38% of his wins (plan ≥ 60%).
 
+**V3.1 polish (Nov 18)** (§8): the gate's ten leftovers are done. AutoPlay now chips two-hit hinted objects: CAUGHT 41% →
+75% of his wins in act-4-alone sims (which also lifts him there, 72% → 81%: BAL's row); the Radio Edit skips heals;
+acts 1-3 unchanged; 1298 suites green.
+
 ---------------------------------------------------------------------------------------------------------------------
 
 ## 1. What V3 is, file by file
@@ -407,6 +411,68 @@ entrance rests on the sims (176/176) and the QA fights lens.
 - **The user's call**: voice-8's two softened goat lines (Syllamin, Marbles); the README's "Version 2" box could become a
   v3 line (Benedick only, no act-4 spoiler).
 - **Housekeeping**: `bash.exe.stackdump` at the repo root is a Git Bash crash dump — don't commit it.
+
+---------------------------------------------------------------------------------------------------------------------
+
+## 8. V3.1 polish (Nov 18) — the gate's leftovers (heal:polish)
+
+Done first because several change what the sims measure (the healing pass's baseline). No hero's sustain or numbers,
+nothing of Ellaria. Each fix has a regression assertion in its owner's tests.
+
+| # | file(s) | what | regression |
+|---|---|---|---|
+| 1 | `js/ui/screens/hall.js` | `records()` reads the lifetime `stats.classicWins` (meta.js keeps it) instead of counting the 20-entry history; the unused `isClassicWin` went | `tests/ui_tests.js` Hall suite: `classicWins: 1` in the stats, a v2 veteran (25 classic, 1 in the history) reads 25, 0 reads plain "Campaigns won" |
+| 2 | `js/data/bosses/goats.js` | the bass wind-up passes `tint` = the named colour's own tile top (`FLOOR_TINT`: gold `#d9b44a`, pink `#e83aa3`); the hint text is unchanged | `boss_goats` skills suite: hint "Bass → gold squares" with the gold tiles' colour |
+| 3 | `js/data/heroes/benedick.js` | `showTurns: true` on `ben_dragon` (display only) | `hero_benedick` shell suite: the flag, the chip reads 2 then 1 |
+| 4 | `js/engine/targeting.js` | def-preview entries carry `custom: true` (the HUD's shape check stays as the fallback) | `engine: phase 4 — previews…`: custom on a def's own entry, none on a dry run's |
+| 5 | `js/data/bosses/svammiel.js` | the Radio Edit never bleeps a skill that heals: `healsWith(def, L, user)` (kind `'heal'`, tag `'heal'` / `'drain'`, any level field with "heal" in its name worth > 0 at the skill's level, or the def's own `heals` flag / function); the pick is otherwise unchanged | `boss_svammiel: the Radio Edit never bleeps a skill that heals…` (8 shapes on a fixture skill, a 0 at its level, Stress Ball / Juice Box / Prescribe Leeches / Savage Bite at III lose to a plain skill at I) |
+| 6 | `js/engine/autoplay.js` | `objectValue`: see below | `autoplay: V3.1 — a hit on a two-hit hinted object…` (the numbers via the new `DD.AutoPlay.objectValue`, a chip beats a boss hit, a kill beats a chip) |
+| 7 | `tests/sim/sim.js` | `wantsBribe`: never the Bribe with `cameo=0` (no door cheat to skip) | `tools: the campaign sim buys the Bribe…` (docs_tests.js) |
+| 8 | `README.md` | the version box gains a "Version 3" line: Benedick the Inevitable, the snail knight, the 17th hero; nothing of act 4 | `docs: V3.1 — …` (the line, and no act-4 / Svammiel / twist word anywhere in the README) |
+| 9 | `docs/DESIGN.md`, `docs/notes/boss-svammiel.md` | §5 "Balance rows" quotes the act-4 rows as landed (`act[4]` ×1.3 damage; each door's row; the goats ×0.8 HP, no damage row, 285 → 228 and the bear 110 → 88; Svammiel ×1.1 / ×1.3, ×1.69 in all, 360 → 396); §9 #10 / #11 the same HP and rows, 12-HP Master Dice, the Radio Edit skips heals; the svammiel notes give the hints (`masterHint` 45, `riggedHint` 10) | `docs: V3.1 — …` (every number read from `DD.Balance`, the defs and `DD.BossSvammiel.N`) |
+| 10 | `js/data/bosses/svammiel.js` | the debug sandbox twist logs "The table shakes…" first: the twist trigger's `keyOf` calls `twistShake` as the entrance starts (a no-op in a run, where the DM's death already shook it) | `boss_svammiel: the twist…`: a sandbox twist with the DM alive, shake < his line < "Oh no", once |
+
+**6, AutoPlay `objectValue`.** A hit that leaves a hinted object standing was worth `dmg × 0.5`, so a 12-HP Master Die
+(hint 45) chipped for 8 scored 4 against 8 for hitting Svammiel, and AutoPlay rarely started a die it could not break in
+one hit. Now a chip is progress toward the break: the hint × the share of the object's max HP the hit removes, never less
+than `dmg × 0.5` (low hints price as before) and at most `dmg + CHIP_EDGE` (10) — a killing blow adds 15 + the foe's
+threat to its damage, so AutoPlay never chases a chip over a kill. The break itself is unchanged (`dmg × 0.5` + the
+hint), as are destroy objectives and gates. Smashes were never priced here (the hint offer pays them the whole hint).
+Other hinted breakables move with it (the League's bodies, Galbraith's crystals, the speakers, Rigged Dice, blasts on
+the DM's panels, the Lich's shelves), each still capped under a kill.
+
+**The measure** (`tools/sim.sh "seeds=100&from=21000&start=4&level=5"`, one page each, the same seeds and parties; both
+runs carry fixes 1-5 and 7-10, so the pair isolates #6; reports `.tmp/v31/caught_before.txt` / `caught_after.txt`):
+
+| act 4 alone, normal | before | after |
+|---|---|---|
+| CAUGHT (% of Svammiel fights · % of his wins) | 32% · **41%** | 63% · **75%** (plan ≥ 60%: PASS) |
+| Master Dice broken per Svammiel fight (of 3) | 1.43 | 2.22 |
+| Svammiel won | 72% (49/68) | **81%** (55/68) |
+| doors | 92% (394/426) | 93% (402/434): the League 88 → 92 (bodies broken 0.8 → 1.66, raised 0.83 → 0.26), Galbraith's crystals 1.36 → 1.83 a fight |
+| act 4 cleared | 49% | 55% |
+| errors / `DD.warn` / timeouts | 0 / 0 / 0 | 0 / 0 / 0 |
+
+Acts 1-3 do not move: `acts=3`, seeds 13000-13099 (the gate's own `a3_*` seeds) 31% (31/100) against the gate's 30%,
+every act-3 and earlier boss within a fight of it (the DM 31/41 vs 30/42; `.tmp/v31/a3_after.txt`). **For BAL / the
+healing pass:** AutoPlay now catches him as the plan asks, and catching him makes him easier — act 4 alone Svammiel
++9 points (n 68). In the campaign he read 90.6% at the gate (plan 80-85%), so expect him higher there; the lever is his
+row (`encounters.boss_svammiel`, ×1.1 HP / ×1.3 damage) or `N.masterHp` / `N.caught`, never a hero. The four-act
+campaign was not re-measured here (the healing pass's baseline run does it).
+
+**Look (#2).** `tools/shot.sh "debug=1&screen=combat&encounter=boss_goats&acts=4&seed=3&autoplay=1&fast=1"` at 27 s
+(`.tmp/v31/bass3.png`, 1920×1080): "Turnip the Bass 13" pending, the marked squares read gold under the danger tape and
+red outline, the pink ones stay pink.
+
+**Tests.** Iterated with `isolate`; final full `bash tools/test.sh` (Nov 18, `.tmp/v31/test_full.txt`): **PASS — 1298
+suites, 149,790 assertions, 0 failures**, missing scripts 0; the console's "Error in" lines are the gate's own 28
+intentional ones, line for line (`boom`, `intentional test error`, `exploded`, …), none from these files.
+
+### Left open
+- The rest of the lead's DESIGN §5 / §9 numbers request (§6 "Lead (docs)": the Gardener, the League, Galbraith, the Coven,
+  WHAT?! 8, Bar None, Svammiel's hits; the act-4 band table in §5 still lists the plan's 255 / 480): not in this pass.
+- The healing pass designs the 16 lifts next; the Radio Edit already skips any heal it adds (a `heal` / `drain` tag, a
+  level field with "heal" in its name, or `heals: true` on a heal its fields don't name).
 
 ---------------------------------------------------------------------------------------------------------------------
 

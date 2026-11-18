@@ -827,6 +827,7 @@
   DD.registerStatus({
     id: DRAGON, name: 'Dragonsnail', icon: '🐉', color: EMBER, type: 'buff', stacking: 'refresh', maxStacks: 1,
     decay: 'turnEnd', skipFresh: false, defaultTurns: DRAGON_TURNS, flying: true,
+    showTurns: true,   // QA HERO-5: the chip and the icon over him count the flight down (2 → 1)
     desc: function (st) {
       const n = st && st.turns > 0 ? st.turns : DRAGON_TURNS;
       return 'Dragonsnail: flying, +' + DRAGON_MOV + ' move, Slow Burn basic attack, Dragonsnail skills ready, no slime trail. ' +
