@@ -4,6 +4,8 @@
  * Add a new file here ONLY if your area owns it (see docs/ARCHITECTURE.md §1).
  * V3 (act 4, the 17th hero): the new files are listed in load order. heroes/benedick.js and bosses/goats.js ship as empty
  * stubs (their owners replace them); the other new V3 files do not exist until their owners land them (skipped meanwhile).
+ * h19 (heroes 18-20, docs/notes/h19-contract.md): heroes/rasma.js, biz.js and gus.js load after benedick.js, in the
+ * user's order; wave 0 ships them as empty stubs (their hero owners replace them).
  */
 window.DD_MANIFEST = [
   // core (lead)
@@ -68,6 +70,9 @@ window.DD_MANIFEST = [
   'js/data/heroes/hjalmar.js',
   'js/data/heroes/pebbles.js',
   'js/data/heroes/benedick.js',   // V3: the 17th hero (available from the start, acts 1-3 too)
+  'js/data/heroes/rasma.js',      // h19: the 18th hero (wave 0 ships an empty stub; HERO-RASMA replaces it)
+  'js/data/heroes/biz.js',        // h19: the 19th hero, with Hjalmarino and Spooder (stub first; HERO-BIZ)
+  'js/data/heroes/gus.js',        // h19: the 20th hero, Phat Gus (stub first; HERO-GUS)
 
   // enemies + encounters
   'js/data/enemies/act1.js',

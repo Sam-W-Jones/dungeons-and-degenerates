@@ -205,7 +205,8 @@
     t.ok(!!hoard && hoard.loot === true, 'the Hoard Pile is flagged loot (flyers pocket it)');
     const s43 = flat(section(design, '### 4.3'));
     t.ok(s43.indexOf('still lacks') < 0 && s43.indexOf('Hoard Pile') >= 0, 'DESIGN §4.3 no longer calls the Hoard Pile an open request');
-    // heroes-5: no hero kit cashes in Wet, so DESIGN names the payoffs that exist (items and consumables)
+    // heroes-5: DESIGN never promises a kit-side lightning payoff for Keg Stand / Healing Spring and names the payoffs that
+    // exist (items and consumables); h19: Rasma's frost and lightning blades now cash in Wet, named beside them in §6
     t.ok(all.indexOf('soaks foes for lightning') < 0 && all.indexOf('Wet for lightning') < 0, 'DESIGN no longer promises a kit-side lightning payoff for Keg Stand / Healing Spring');
     [['con_thunder_jar', DD.getConsumable], ['con_frost_flask', DD.getConsumable], ['syl_electric_lute', DD.getItem]].forEach(function (p) {
       const def = p[1](p[0]);

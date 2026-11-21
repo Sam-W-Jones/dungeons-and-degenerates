@@ -25,8 +25,9 @@ Technical contract: `docs/ARCHITECTURE.md`. This doc is the design intent + cont
    — synergy between heroes is the fun.
 3. **Comedy everywhere.** Skill names, barks, enemy names, items, events, narration, death screens — every surface
    gets a joke, but mechanics text stays crystal clear.
-4. **One more run.** Short runs (~45–75 min), branching maps, random rewards, all 17 heroes from the first run (V3:
-   Benedick joined the sixteen of v2; every count of heroes is read from the registry, so another hero breaks nothing).
+4. **One more run.** Short runs (~45–75 min), branching maps, random rewards, all 20 heroes from the first run (V3:
+   Benedick joined the sixteen of v2; h19: Rasma, Biz and Phat Gus make twenty; every count of heroes is read from the
+   registry, so another hero breaks nothing).
 
 ## 2. Tone & comedy guide
 - Voice: an affectionate roast of tabletop gaming. The narrator is **The DM** — snarky, sleep-deprived, secretly
@@ -35,11 +36,13 @@ Technical contract: `docs/ARCHITECTURE.md`. This doc is the design intent + cont
   "I check for traps", murderhobos, the party splitting, the DM's pet NPC), character personality, puns,
   bureaucratic monsters (tax goblins, union kobolds, overdue-library liches), mundane problems in a fantasy world.
 - Keep it PG-13. Mild innuendo OK; no slurs, no punching down, no real-world politics. The heroes (sixteen in v2,
-  seventeen with V3's Benedick) are the player's real campaign characters — roast them **affectionately**; never make
-  them pathetic or mean-spirited.
+  seventeen with V3's Benedick, twenty with h19's Rasma, Biz and Phat Gus) are the player's real campaign characters —
+  roast them **affectionately**; never make them pathetic or mean-spirited.
 - Pronouns are exact: **she/her** for Ellaria, Sparrow and Kiri; **he/him** for everyone else (Zarathor, Syllamin,
-  Professor Marbles, Marwyn, Josiah, Corelos, Slate, Mayor Buga, Betty, Basanos, Valdris, Hjalmar, Pebbles, and V3's
-  **Benedick**). Lines that only get a hero's name from the engine (`{hero}`) use no pronoun for them.
+  Professor Marbles, Marwyn, Josiah, Corelos, Slate, Mayor Buga, Betty, Basanos, Valdris, Hjalmar, Pebbles, V3's
+  **Benedick**, and h19's **Rasma**, **Biz** and **Phat Gus**). Biz's two mechanical summons, **Hjalmarino** (a
+  monkey) and **Spooder** (a spider), have no stated pronoun: "it", or no pronoun at all, never he or she. Lines that
+  only get a hero's name from the engine (`{hero}`) use no pronoun for them.
 - **Act 4's cast (V3; the user's answers)**: Svammiel **he**; the Gardener **it** (a machine); the League of Villainy's
   Kelek, Warduke, Zarak and Zargash **he**, Skylla **she**; Grand Magister Galbraith **he**; the Coven's Granny Gristle,
   Auntie Brine and Cousin Mildred **she**; the Rapping Goats (Herd Mentality) Billy Bleatz, Lil' Kid, DJ Turnip and
@@ -57,7 +60,7 @@ Technical contract: `docs/ARCHITECTURE.md`. This doc is the design intent + cont
 - Lines are short. Barks ≤ 70 characters. Flavor ≤ 120. Event text 2–5 sentences.
 
 ## 3. Run structure & meta progression
-- **Party select**: choose 4 of the 17 heroes + difficulty (Casual / Normal / Brutal). "Roll for Party" randomizes.
+- **Party select**: choose 4 of the 20 heroes + difficulty (Casual / Normal / Brutal). "Roll for Party" randomizes.
 - **Starting kit**: every run starts with a Bucket of Ice Water in the pockets (`DD.Balance.start`: a revive for a
   downed ally). There is no generic starting heal (the user, Nov 12, D9): sustain comes from the heroes themselves (§6).
 - **Acts** (three regular acts, then V3's secret fourth below): each regular act is a branching map of 7 rows + a boss
@@ -109,8 +112,8 @@ Technical contract: `docs/ARCHITECTURE.md`. This doc is the design intent + cont
 - **Death**: a downed hero revives after combat at 1 HP with a **Scar** (comedic permanent debuff, e.g.
   "Trick Knee: −1 move", "Bruised Ego: −5% damage"). The **third** down in a run kills them permanently
   ("written out of the campaign"). All heroes downed in combat = **TPK** → game over.
-- **Unlocks (v2, user request): all 17 heroes are available from the start** (V3's Benedick included) — every hero
-  def has `unlock: null`.
+- **Unlocks (v2, user request): all 20 heroes are available from the start** (V3's Benedick and h19's Rasma, Biz and
+  Phat Gus included) — every hero def has `unlock: null`.
   The unlock machinery (`unlock: { act }` / `{ boss }`, DD.Meta unlock lists, the act-clear unlock banner, the
   "I'm the DM's Favorite" toggle) stays in the code for possible future use but unlocks nothing today.
   (Previously: Josiah after Act 1, Sparrow after Act 2, Corelos after the DM, Mayor Buga after Grimble, Slate after
@@ -204,7 +207,8 @@ to the wizard.
 - **No riders on objects** (lead decision D4). On an object a skill deals its damage and nothing else: no statuses,
   pulls or pushes, lifesteal, stolen gold or heals, and no item, status or passive riders either (the Electric Lute's
   water shock, the Echo Chamber Blessing's second hit, on-hit statuses). What counts the use itself does not change:
-  AP, cooldowns, charges and Hype for using a skill still count. Previews and AutoPlay's dry runs match.
+  AP, cooldowns, charges and Hype for using a skill still count (so do Phat Gus's acorns: an eater aimed at a crate
+  still eats, with no stress eating). Previews and AutoPlay's dry runs match.
 - **Stealth and objects** (lead decision D3). Attacking an object ends Stealth exactly as attacking a unit does (the
   same exceptions: hazards, surfaces, bumps, falls, explosions and Thorns don't count as attacking). Whacking a crate
   is not subtle.
@@ -381,6 +385,14 @@ enemies never telegraph.
   fight (v2) a party is about level 2 at the Act 1 boss, 3–4 at the Act 2 boss and 5 at the DM.
 - Hero basic attack 4–6. Skill (L1): single target 7–10 for 2 AP, AoE 4–6 per target for 2 AP, cooldown 1–3.
   Level II ≈ +25%, level III ≈ +50% or one added rider. Signature: 15–25 damage or a game-changing effect.
+- h19's three outside these bands on purpose (level I; their notes carry the reasons): Biz's basic, *Rivet Gun*, deals
+  3, below the basic band (he is weak in a straight fight: his robots fight for him), and Biz is complexity 3 (the
+  second after Benedick: three bodies a turn); Rasma's initiative −1 sits on a melee hero (his manners: "after you").
+  The above-band hits are each priced by their own resource: Biz's *Big Red Button* deals 8 to each foe next to one of
+  his robots for 1 AP, once a fight and at the cost of that robot (it is scrapped); Phat Gus's *The Hollow Hungers*
+  deals 12 (and Roots) for 2 AP and 2 acorns, and his *All You Can Eat* 3 per acorn eaten to each adjacent foe (9 with
+  full cheeks) for 2 AP and every acorn he holds; Rasma's *Do Keep the Change* deals up to 15 for 2 AP with a full
+  blade (6, +2 per charge left, and the enchantment's own +3; it spends every charge), cooldown 3.
 - Fights last 4–7 rounds. Expect to take damage every round; positioning, control and healing keep it fair.
 - No XP (v2): one hero levels up per won fight (§3).
 - Gold: start 60. Normal fight 12–20, elite 35–50, boss 50–70 (no per-act growth). Prices: common item 40, rare 80,
@@ -399,8 +411,9 @@ SpriteSpec, and 3–6 barks per key. Requirements for every kit:
     "and then also", no per-skill mini-systems. The desc reads in one breath (about 12 words + numbers).
   - **Levels**: II = bigger numbers; III = bigger numbers or ONE added simple rider.
   - **Combos carry the power**: shared statuses (oil → fire, Marked, Vulnerable, Rooted, Stunned, the hero's own
-    signature status; Wet foes for lightning or frost — no hero skill deals either, so the payoff is the Thunder Jar,
-    the Frost Flask or Syllamin's Electric Lute, and a Wet foe can't Burn), positioning (pull into a cleave, push into
+    signature status; Wet foes for frost or lightning — Rasma's enchanted sword deals both (The Cold Shoulder freezes
+    a Wet foe, Positively Shocking hits it 50% harder), the Thunder Jar, the Frost Flask and Syllamin's Electric Lute
+    pay it off too, and a Wet foe can't Burn), positioning (pull into a cleave, push into
     pits/lava/allies), surfaces and Hype. Each hero has 2–3 clear setup or payoff skills that pair with other heroes.
   - **Passive**: one clear rule, still the character's comedic core.
   - Pool of **9–10 skills** (2 starting): fewer, sharper skills beat many fiddly ones. Comedy stays in names,
@@ -409,7 +422,19 @@ SpriteSpec, and 3–6 barks per key. Requirements for every kit:
     generic skill), so the log and the codex never confuse the hell hound's leap with Basanos' Pounce. V3 reserves
     Benedick's names from the day he is planned (act-4 enemies never use them): Fourteen Thousand Teeth, Slow Burn,
     Coming Out of My Shell, Slime Line, I'll Wait, Lettuce Pray, Shellacking, Spit Shine, Snail Mail, Morning Breath,
-    Wing It, Riddle Me This, The Inevitable, A Sticky Situation, Snail Slime, In His Shell, Dragonsnail.
+    Wing It, Riddle Me This, The Inevitable, A Sticky Situation, Snail Slime, In His Shell, Dragonsnail. h19 reserves
+    its three kits' names the same way (no enemy or boss skill ever uses them). Rasma's: *Pardon Me*, *The Cold
+    Shoulder*, *Positively Shocking*, *Most Disarming*, *With All Due Respect*, *Sweeping Bow*, *Sending My
+    Regards*, *Do Keep the Change*, *Touché*, *Tea, Anyone?*, *A Disapproving Look*, *A Thousand Pardons*, *Enchanté*,
+    *Frosty Blade*, *Shocking Blade*, *Disarming Blade*, *En Garde*, *Rapier Wit*, *Bespoke Waistcoat*, *The Spare
+    Monocle*. Biz's: *Rivet Gun*, *Duct Tape*, *Overclock*, *Turn It Off and On
+    Again*, *Big Red Button*, *Nothing to See Here*, *Firmware Update*, *World Wide Web*, *Zip Line*, *Synergy*,
+    *Spoodmarino!*, *Monkey Wrench*, *Cymbal Crash*, *Pew Pew*, *Thwip!*, *Batteries Included*, *Overclocked*,
+    *Updated*, *Rebuilding*, *Booting Up*, *Scrap Heap*, *Hjalmarino*, *Spooder*, *Mechanical Monkey*, *Mechanical Spider*,
+    *Universal Remote*, *Extended Warranty*, *Spare Tail*. Phat Gus's (his name too): *Phat Gus*, *Incisor Decision*,
+    *Don't Listen to the Trees*, *Root Canal*, *The Hollow Hungers*, *All You Can Eat*, *Down the Squirrel Hole*, *Too
+    Many Eyes*, *The Tree That Isn't There*, *Hangry*, *Fine, Have One*, *The Acorn That Should Not Be*, *The Woods
+    Provide*, *Cheekful of Acorns*, *The Nom-Nom-Nomicon*, *Cheeks of Holding*, *Winter Coat (Built In)*.
 - **Sustain (D9 and Nov 18, the user: "linked to the characters themselves ... without overloading each character with
   a self-heal"; "I want everyone else brought up but by conditional healing").** No party gets a generic heal (§3).
   Healing others belongs to the healers: Ellaria, Josiah and Valdris, whose Forge Armor hammers the dents out of armor
@@ -417,21 +442,25 @@ SpriteSpec, and 3–6 barks per key. Requirements for every kit:
   Juice Box shared with a hurt friend when the foe was Bleeding). Every other hero heals on a condition that grows out
   of his or her own verbs, one source each, spread across delivery types: starting skills (Basanos' Transform, +2 per
   adjacent foe; Slate's Hold Still, at each turn end while he holds a foe; Marbles' Walking Stick Whack, when the push
-  slams into something; Kiri's Ethereal Step, out of melee; Corelos' Glyph of Warding, when a burst hits two foes),
-  passives (Buga's applause when an ally kills; Betty's leftovers; Pebbles' Hot Dog, also next to a Burning foe;
-  Hjalmar's pratfall laughs, with Canned Laughter adding 4; Benedick's stuck foes, with the Snail Mucin Serum adding 3;
-  Marwyn's surge, +2 per foe he Taunted; Josiah's samples from Poisoned deaths) and hero items (Zarathor's Loyalty
-  Card, Syllamin's Jar of Tears). Pool skills and items add more of the same verbs (Stress Ball, Savage Bite,
-  Five-Second Rule, Keg Stand, Leeches, the Bib, the Dog Bed). Death-saves aside, no heal reads an HP threshold (Hair
-  Trigger only changes Basanos' form), none is a combat-start shield, and none of these is an aimed heal: they never
-  revive or cleanse. Ellaria is unchanged (D11).
+  slams into something; Kiri's Ethereal Step, out of melee; Corelos' Glyph of Warding, when a burst hits two foes;
+  h19: Biz's Overclock, when he ends that turn next to the robot he overclocked), passives (Buga's applause when an
+  ally kills; Betty's leftovers; Pebbles' Hot Dog, also next to a Burning foe; Hjalmar's pratfall laughs, with Canned
+  Laughter adding 4; Benedick's stuck foes, with the Snail Mucin Serum adding 3; h19: Rasma's afterglow, when a sword
+  strike spends his enchantment's last charge; Phat Gus's stress eating (the first Eat skill each turn with a foe next to
+  him, never on an object hit), with the Winter Coat (Built In) adding 2; Marwyn's surge, +2 per foe he Taunted; Josiah's samples from
+  Poisoned deaths) and hero items (Zarathor's Loyalty Card, Syllamin's Jar of Tears). Pool skills and items add more
+  of the same verbs (Stress Ball, Savage Bite, Five-Second Rule, Keg Stand, Leeches, the Bib, the Dog Bed). Each of
+  h19's three heals only himself (Biz never restores HP to a living robot: he tapes, scraps and reboots them).
+  Death-saves aside, no heal reads an HP threshold (Hair Trigger only changes Basanos' form), none is a combat-start
+  shield, and none of these is an aimed heal: they never revive or cleanse. Ellaria is unchanged (D11).
 - Mix of AP costs (1–3), cooldowns and one or two "big" skills with charges/long cooldowns.
 - Three meaningful levels per skill (numbers and/or a new rider at III). `desc` always exact for the level.
 - The passive is the character's comedic core and must change how you play them.
 
 Every brief below matches the registered kit (`js/data/heroes/<id>.js`; level-by-level texts in
 `docs/notes/v2-digest.md` §2 and each hero's notes, which win if this section ever drifts). Numbers are level I unless
-a range is shown. All 17 heroes are available from the start (§3; V3 added Benedick, last below).
+a range is shown. All 20 heroes are available from the start (§3; V3 added Benedick and h19 Rasma, Biz and Phat Gus,
+the last four below).
 
 ### Zarathor the Bedazzled — Tiefling Warlock (he/him)
 Fire-wielding tiefling obsessed with wild magic and **bling**: gold chains, rings, a gold tooth, sunglasses indoors.
@@ -742,6 +771,99 @@ lettuce. Role: slow shell tank; a flying fire-breather in bursts. 28 HP (+4/leve
   top; a sealed shell with a BRB sign and glowing cracks; an ember-shelled Dragonsnail with green bat wings, horns,
   smoking nostrils and the helm askew on one horn, still dangling a slimy foot.
 
+### Rasma the Monotaur — Minotaur Spellsword (he/him)
+h19, the 18th hero (the user, Nov 18; normative spec `.tmp/h19/addendum-rasma.md`). Available from the start.
+User's brief: *Rasma, a monocle-wearing monotaur who speaks in formal, polite english. He is a spellsword (he enchants
+his sword with magical effects to deal damage).* A seven-foot minotaur with a gold monocle (one lens: hence, he insists,
+a monotaur), a cravat, a mustard waistcoat under a claret tailcoat and the finest manners in the dungeon. He apologises
+for every strike, lets everyone else go first and fights with a sword in one hand and a bone-china teacup in the other;
+he has never spilled a drop. Role: melee spellsword; enchant, then strike. 32 HP (+4/level), move 4, init −1.
+- Passive *Enchanté*: his sword holds one enchantment at a time; each sword strike that hits a foe (attacks of
+  opportunity and ripostes too) uses one of its charges; the strike that uses the last heals him 5 HP.
+- Basic *Pardon Me* (5, adjacent). Starters: *The Cold Shoulder* (a frost enchantment, 3 charges: +3-4 and Slow; Wet
+  foes freeze) and *With All Due Respect* (9-13, adjacent).
+- Pool: Positively Shocking (a lightning enchantment: +3-4, +50% against Wet foes, each strike arcs 2-4 to another foe),
+  Most Disarming (a charm enchantment: +3-4 and Weak), Sweeping Bow (every adjacent foe), Sending My Regards (a sword
+  strike at range 4), Do Keep the Change (a strike that cashes in every charge left), Touché (until his next turn the
+  first adjacent foe to hit him takes a sword strike back), Tea, Anyone? (a foe or ally is Wet), A Disapproving Look
+  (Silence a non-boss).
+- Signature *A Thousand Pardons*: every foe within 2 takes three strikes of 6: lightning, then frost, then plain steel
+  (a Wet foe takes 24 and is Frozen).
+- Sustain (D9 and Nov 18): his afterglow (the passive) is his only heal: 5 HP when a sword strike spends his
+  enchantment's last charge.
+- Combos: Ellaria's puddles, Marwyn's Keg Stand, water and his own Tea leave foes Wet for his frost (Frozen: allies'
+  physical hits +50%, Betty's Kick 'Em) and his lightning (+50%), and for the Thunder Jar, the Frost Flask and the
+  Electric Lute; Most Disarming and the Look blunt a dangerous foe's next turn.
+- Sprite: a chestnut bull head with ivory horns and a gold monocle on a chain (it pops out when he is hurt), a white
+  cravat, a mustard waistcoat, a claret tailcoat; a sword glowing ice-blue, yellow or rose by enchantment with charge
+  pips on the guard; a cup and saucer, always level.
+
+### Biz the Subcontractor — Lizardfolk Artificer (he/him)
+h19, the 19th hero (the user, Nov 18; normative spec `.tmp/h19/addendum-biz.md`). Available from the start.
+User's brief: *Biz, a lizard-man artificer who relies on his mechanical summons, Hjalmarino (a monkey) and Spooder (a
+spider) to fight for him.* A cheerful lizardfolk tinkerer who does not fight: he has people for that, robot people.
+Hjalmarino is a mechanical cymbal monkey in a teal knockoff fez (Hjalmar calls it a knockoff; Biz calls it an homage);
+Spooder is a small blue-steel spider-bot with two big googly eyes and a toy blaster. Biz overclocks them, tapes them up,
+blows them up and reboots them, then basks on their hot engines. Role: robot commander who hides behind his bots. 22 HP
+(+3/level), move 4, init −1, complexity 3.
+- Passive *Batteries Included*: he starts each fight with Hjalmarino and Spooder, who act on his turn with their own AP.
+  A scrapped one leaves a Scrap Heap and reboots there at the start of his third turn after, with a third of its HP, and
+  sits that turn out, booting up (no actions; Overclock can't target a robot that came back this turn).
+  Their models follow his level: Mk II from level 4, Mk III from 7.
+- Hjalmarino (HP 4 + twice Biz's level, no armor, climbs): Monkey Wrench (2-4; it also hits foes that walk away) and
+  Cymbal Crash (Confused; not bosses). Spooder (HP 3 + twice Biz's level, can't be Rooted): Pew Pew (2-3 within 3)
+  and Thwip! (Rooted).
+- Basic *Rivet Gun* (3, within 3: the weakest basic in the game).
+- Starters: *Duct Tape* (Block for him or a robot) and *Overclock* (a robot gains 1 AP now and runs hot).
+- Pool: Turn It Off and On Again (reboot a robot at its Scrap Heap now, full HP; it boots up that turn, III acts at
+  once), Big Red Button (once a fight a robot self-destructs on the foes next to it), Nothing to See Here (Stealth his
+  robots' hits don't break), Firmware Update (a robot's hits +1-2 for the fight), World Wide Web (every foe next to
+  Spooder Rooted), Zip Line (Spooder reels him or an ally to it), Synergy (a hit that grows with every robot next to the
+  foe).
+- Signature *Spoodmarino!*: scrapped robots reboot at full HP (booting up), then every foe within 2 of one takes 12 and
+  is Rooted.
+- Sustain (D9 and Nov 18): Overclock's robot runs hot; if Biz ends that turn next to it, he basks and heals 3-4 HP. No
+  skill restores HP to a living robot (he reboots or tapes them).
+- Combos: Thwip! and World Wide Web pin foes for Kick 'Em, Snail Mail and traps; Cymbal Crash makes a foe swing at its
+  friends and turns a wind-up; Zip Line delivers or rescues an ally; the Big Red Button pays off any pull or Taunt that
+  gathered foes around Hjalmarino; a robot can swap Biz out of melee without him provoking.
+- Sprite: a chartreuse gecko in blueprint-blue coveralls with goggles, a wrench, a blueprint and a blinking antenna; a
+  tin cymbal monkey in a teal fez with a turning key and a spring tail; a blue-steel spider-bot with wobbling googly
+  eyes, a toy blaster and a spool of silk.
+
+### Phat Gus the Unfathomable — Squirrel (Mostly Cheeks) Snackromancer (he/him)
+h19, the 20th hero (the user, Nov 18; normative spec `.tmp/h19/addendum-gus.md`). Available from the start.
+User's brief: *Phat Gus, a fat squirrel with weird eldritch forest powers who eats food.* The user's answers (Nov 18):
+"Phat Gus" is his full name; he is an actual squirrel (an animal, like Pebbles and Benedick, never a squirrel-person:
+paws, cheeks and mouth, the beanie his only garment), never called a druid, russet, with an acorn-cap beanie, and he
+doesn't climb; the size jokes are his own, and villains never aim at his body ("fat" is his word only; a squirrel or a
+rodent is just what he is). A very round, very mellow squirrel with a direct line to something ancient and hungry in
+the deep woods, which he mostly uses to get snacks. Acorns fall into his cheeks from a tree that isn't there; every one
+he eats lets the woods whisper, bite and stare through him. He has standards (acorns, not chairs) and does not share
+(usually). Role: eldritch control that runs on acorns. 30 HP (+4/level), move 4, init +2.
+- Passive *The Woods Provide*: an acorn falls into his cheeks at the start of each of his turns (they hold 3; he starts
+  each fight with 1; a full cheek makes it bonk off). Skills that say "Eat" eat them. Stress eating: the first time each
+  turn a foe is next to him after he eats, he heals 3 HP (at full HP that first time heals nothing; an eater aimed at an
+  object still eats, and nothing rides on it).
+- Basic *Incisor Decision* (5, adjacent; 7 against a Confused foe). Starters: *Don't Listen to the Trees* (eat 1: foes
+  within 2 take 4 psychic damage and are Confused) and *Root Canal* (eat 1: roots hit a foe within 4, no sight needed:
+  5 damage and Weakened).
+- Pool: The Hollow Hungers (eat 2: the floor bites a foe for 12 and Roots it), All You Can Eat (eat every acorn: 3
+  psychic damage per acorn to each adjacent foe), Down the Squirrel Hole (eat 1: tunnel within 4, no sight; foes by the
+  hole are Confused), Too Many Eyes (eat 1: Mark every foe around a tile), The Tree That Isn't There (acorns rain on an
+  area for 4; +1 acorn if there's room), Hangry (0 AP, empty cheeks only: Empowered), Fine, Have One (give an ally an acorn: Hasted,
+  +1 AP).
+- Signature *The Acorn That Should Not Be*: a colossal acorn with too many eyes lands within 5: 16 damage to every foe
+  within 2 of it, Confused; then his cheeks fill up.
+- Sustain (D9 and Nov 18): stress eating (his passive); his hero item *Winter Coat (Built In)* adds 2 (5 in all). Never
+  on a kill, an object or a death (Betty's), never on leaving melee (Kiri's), never a button, never a threshold.
+- Combos: Confused crowds swing at each other after a pull-in (Mosh Pit, Center of Attention); the Hollow's Root sets up
+  Kick 'Em; Too Many Eyes Marks a crowd for the party's area hits; Root Canal Weakens the brute before it swings; Fine,
+  Have One gives a big hitter a fourth AP.
+- Sprite: a near-spherical russet squirrel whose cheeks puff with every acorn held, buck teeth, an acorn-cap beanie and
+  an emergency acorn in his paws, a huge bushy tail with three eyes in the fur, dark leaves drifting upward around him
+  and a green-violet murk with blinking eyes underfoot.
+
 ### 6.1 Design notes — open overlaps (documented, not redesigned)
 Skills from the user's briefs that ended up doing nearly the same job. They are fine in play (different heroes,
 different forms); a later design pass may differentiate them. Nothing here changes the game.
@@ -763,6 +885,37 @@ different forms); a later design pass may differentiate them. Nothing here chang
   Buga's Crumb Trail (a ranged floor patch: his stops walks, Buga's Slows) · Lettuce Pray ≈ Divine Forge's Block (small
   radius, no damage buff) · I'll Wait is the only single-target ranged taunt. His transform shares Basanos's shape on
   paper only: delayed, timed, cooldown-gated, protective and ranged, and it never heals.
+- **Rasma (h19)**: Touché ≈ Spiked Pauldrons / Barkskin / Gun Show (Thorns): his is one riposte (two at III) that
+  carries his enchantment · Sweeping Bow ≈ Frenzy / Wing It / Big Wag (every adjacent foe; its rider comes from his
+  blade) · his enchantments ≈ Freshly Forged / Flame-Forged Edge / Empowered (weapon buffs): his are on himself only,
+  one at a time, elemental, counted in charges, on attacks of opportunity too, never fire (not Pebbles' fire, not
+  Valdris' forge, not Corelos' glyphs; no transform, so not Basanos either) · Tea, Anyone? ≈ Keg Stand's splash (Wet;
+  his is aimed, single, no heal) · A Disapproving Look is the hero side's only Silence.
+- **Biz (h19)**: Nothing to See Here ≈ Goblin Mode's Stealth (no teleport) · Zip Line ≈ Air Mail / The Ol' Switcheroo
+  (moving an ally; Spooder reels, no damage) · Turn It Off and On Again ≈ Summon Corgi (a re-summon, only of a scrapped
+  robot, at its heap) · World Wide Web ≈ Zoomies' shape (an owner skill centred on a pet; Root, no damage) · Thwip! ≈
+  Chew Toy / Bear Trap (a single Root, here a robot's; Biz lays nothing a foe springs, so not Hjalmar's traps). Near
+  shapes against the other heroes' summons: Ellaria's corgis (one at the start, up to three, random names, beasts that
+  bite and bark a Taunt) and Josiah's Onyx (one raven at every fight start, called back by Raven Dive) ≈
+  Batteries Included's start (exactly two machines from the start, never more, fixed names, two different jobs, no
+  taunt; a scrapped one reboots at its Scrap Heap) · Corelos' Infernal Lawyer (an imp summoned once a fight that pokes
+  and Taunts), Zarathor's Statue of Me (an immovable gold statue that Taunts) and Sparrow's Evil Twin (a Blood Clone
+  that Taunts) ≈ a robot as a body on the board: Biz's never taunt, act on his turn with their own skills (Confused,
+  Rooted) and come back. A first on the hero side: the Big Red Button's sacrifice.
+- **Phat Gus (h19)**: Don't Listen to the Trees ≈ Hair Flip (a status around the hero): his is Confused (attacks turn,
+  may hit friends), deals psychic damage and costs an acorn · Down the Squirrel Hole ≈ Ethereal Step (a teleport): his
+  ignores sight, costs an acorn and Confuses the foes he left; it never heals on leaving · Hangry ≈ Liquid Courage
+  (Empowered): his needs empty cheeks · Too Many Eyes ≈ Murder of Crows III (Josiah) / Lullaby of Mediocrity III
+  (Syllamin), which add Marked 3 to their areas: his Marks at every level, for 1 AP and an acorn, with no damage and no
+  Sleep · Fine, Have One ≈ Campaign Promise (Mayor Buga) / Hype Man (Syllamin): an ally gains 1 AP on its next turn;
+  his is the Haste status (the only Haste a hero hands an ally; a wild surge's Caffeine Surge Hastes only the surger, at
+  random), costs 1 AP and an acorn, and reaches 1 / 2 / 3 tiles · The Hollow Hungers ≈ Entangling Roots (Ellaria: damage + Rooted): his is one foe, a floor that bites for 12 (no bramble surface, no area,
+  no plant), for 2 acorns; Root Canal's roots never Root (they Weaken). He eats his own acorns, never on a kill, an
+  object or a death (not Betty's Eats Anything), is never called a druid (not Ellaria) and never transforms (not
+  Basanos or Benedick).
+- **Confused on the hero side (h19, plan D7)**: Phat Gus's status (three skills) and Hjalmarino's Cymbal Crash (one
+  adjacent foe, never a boss). Two kits share it on purpose: a cross-hero combo (Cymbal Crash sets up Phat Gus's
+  Incisor Decision), not a duplicate skill. A wild surge's Confused Duck (at random, no hero's skill) also honks a foe Confused.
 - Other open calls: Zarathor's starters (Throw Money At It + Wild Card would put his wild magic in his hands from
   turn 1; the ui suite's POOL list moves with them); the Plot Armor Blessing keeps a walk going at 1 HP where the
   Phoenix Feather ends it.
@@ -999,8 +1152,9 @@ teal + plum · the Rapping Goats hay gold + neon magenta over barn red (colour i
 crimson + gold with graph-paper cream.
 
 ## 11. Events & narration
-35 events (2–3 choices each, at least one with a risk/reward trade; none grants XP — a level-up goes through the
-DM's rotation, and a named level-up is rare and costs something). **Every hero has a hero event** (only when that hero
+39 events in acts 1-3 (22 hero events and 17 generic, with V3's and h19's; 2–3 choices each, at least one with a
+risk/reward trade; none grants XP — a level-up goes through the DM's rotation, and a named level-up is rare and costs
+something). **Every hero has a hero event** (only when that hero
 is in the party; Slate and Mayor Buga have two): Zarathor and a bling merchant (Glimmerjaw); Syllamin's rap battle;
 Professor Marbles' lost marbles; Marwyn and a MAGNIFICENT mirror; Ellaria and a lost corgi; Josiah's Plague-Rat Union;
 Sparrow's blood bank; Corelos' patron's fine print; Slate and the noisy kids, or a sculptor who wants to "fix" him;
@@ -1011,7 +1165,10 @@ Session Cancelled (Real Life), Fountain of Questionable Youth, Cursed Ring Clear
 Lawyers), Snack Run, Retcon, I Check for Traps, Mimics Anonymous, the Infernal DMV…
 Narrator lines for every key in ARCHITECTURE §3.10 (8+ lines each), plus 30+ loading-screen tips (79 today), each one
 mechanically true.
-**V3**: Benedick's hero event *Le Bistro Escargot* (acts 1-3, like every hero event). **Act-4 events**
+**V3**: Benedick's hero event *Le Bistro Escargot* (acts 1-3, like every hero event). **h19**: Rasma is begged to
+teach the evening class at a goblin finishing school (*The Finishing School*), Biz goes through a scrap pile left out
+for him (*Free to a Good Home*), and Phat Gus finds a picnic laid out by the woods (*A Picnic for One (Squirrel)*);
+acts 1-3, like every hero event, each with one free choice and one risk / reward trade. **Act-4 events**
 (`js/data/events_act4.js`, `acts: [4]`, never a fight; enough for every event stop of the gauntlet): The DM's Support
 Group, Svammiel's Suggestion Box, League Recruitment Drive, The Coven's Bake Sale, Galbraith's Book Signing, The
 Gardener's Compost Heap (optionally Herd Mentality's Merch Table). **Narration in act 4**: the DM narrates demoted and

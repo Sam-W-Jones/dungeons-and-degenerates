@@ -45,8 +45,8 @@
  * giver hero started (the hero the label names), fires per fight (every call with the label, 0-HP calls included), HP
  * per fight realized and of it to self / to others / to summons, the overheal (asked minus gained, share of asked), the
  * same by fight kind (regular / elite / mini / boss: per fight of that kind the hero started), and for the item-gated
- * labels (WORN: the Loyalty Card, the Jar of Tears, Canned Laughter, the Snail Mucin Serum, the Fireproof Dog Bed) the
- * fights the hero started wearing the item, with fires and HP per worn fight.
+ * labels (WORN: the Loyalty Card, the Jar of Tears, Canned Laughter, the Snail Mucin Serum, the Fireproof Dog Bed and,
+ * h19, the Winter Coat (Built In)) the fights the hero started wearing the item, with fires and HP per worn fight.
  * Stalls (balance audit, audit-4): a fight that hits the round cap is a STALL, neither a win nor a loss. timeout= only
  * decides how the run goes on; every win rate (encounters, fight kinds, bosses, lanes, the campaign, hero shares) leaves
  * stalls out of both sides, and the "== stalls" section lists each one. A run is a stalled run when its result hangs on a
@@ -54,7 +54,9 @@
  * The tallies and the report are exposed as window.DD_SIM (tools suite in tests/docs_tests.js, integration suite); the
  * sim only starts on a page with a <pre id="out"> (tests/sim/sim.html), so the test page can load this file.
  * Policies: level-ups learn until 4 skills then upgrade (15% random); a new skill never replaces one tagged 'shapeshift'
- * (Benedick's shell, Basanos's Transform and Blood Moon, Ellaria's Wild Shape: plan §7.2); loot by a simple score; gear
+ * (Benedick's shell, Basanos's Transform and Blood Moon, Ellaria's Wild Shape: plan §7.2) or one whose forgetWarning
+ * resolves non-empty for that RunHero (h19 plan D4, read as the forget picker reads it: Rasma's last enchantment, Biz's
+ * Overclock; the report line "kept a protected skill" counts both kinds); loot by a simple score; gear
  * upgrades equipped; shop: heal under 60% HP, the Bribe with 200+ gold (gauntlet shops; never with cameo=0: no door
  * cheat to skip), items that beat a hero's gear (best rarity first), tomes for heroes with < 4 skills, consumables with
  * spare gold, a Blessing re-roll when rich;
@@ -178,8 +180,10 @@
   // ---- conditional heals (Nov 18, plan E3): DD.Act.heal's opts.via labels ------------------------------------------
   // the item-gated labels: the item whose wearer's fights the "worn" columns count (plan §4: the two new trinkets and the
   // three amplifiers that keep their old bonus over the passive's heal)
+  // h19: Phat Gus's Winter Coat (Built In) adds to his stress eating (addendum-gus §12; an unknown item is never worn, so
+  // the entry is inert until gus.js registers it)
   const WORN = { 'lift:zarathor': 'zar_loyalty_card', 'lift:syllamin': 'syl_tear_jar', 'lift:hjalmar': 'hja_canned_laughter',
-    'lift:benedick': 'ben_mucin_serum', 'lift:pebbles': 'peb_dog_bed' };
+    'lift:benedick': 'ben_mucin_serum', 'lift:pebbles': 'peb_dog_bed', 'lift:gus': 'gus_winter_coat' };
   /** A label's tally: calls (0-HP ones too), HP realized, to self / others / summons / foes, overheal, by fight kind, worn. */
   function LB(label) {
     return G.lifts[label] || (G.lifts[label] = { hero: null, calls: 0, hp: 0, self: 0, others: 0, summons: 0, foes: 0, over: 0, k: {}, worn: { calls: 0, hp: 0 } });
@@ -227,18 +231,27 @@
   /** The fight-kind label: a gauntlet door is a 'miniboss' (the run's node type) though the engine plays it as a boss. */
   function kindLabel(k) { return k === 'miniboss' ? 'mini' : k; }
 
-  // ---- the shapeshift rule (plan §7.2, addendum-benedick V14) -----------------------------------------------------
+  // ---- the protected-skill rule (plan §7.2, addendum-benedick V14; h19 plan D4) -----------------------------------
   /** True for a skill tagged 'shapeshift' (a transform the sim must never forget: Benedick's shell, Basanos's Transform
    *  and Blood Moon, Ellaria's Wild Shape). */
   function isShapeshift(id) { const d = DD.getSkill(id); return !!(d && Array.isArray(d.tags) && d.tags.indexOf('shapeshift') >= 0); }
-  /** The socket a new skill replaces: the lowest-level skill not tagged 'shapeshift' (ties → the first); -1 when every
-   *  socketed skill is one (then the new skill is skipped). */
+  /** h19 (plan D4): true when the skill's forgetWarning resolves non-empty for that RunHero, read exactly as the level-up
+   *  forget picker reads it (DD.UI.chooseSkillSlot: DD.resolve(def.forgetWarning, null, rh, '')): a keystone the player is
+   *  warned about is one the sim keeps too (Rasma's last enchantment, Biz's Overclock). */
+  function warns(id, rh) {
+    const d = DD.getSkill(id);
+    return !!(d && d.forgetWarning !== undefined && d.forgetWarning !== null && DD.resolve(d.forgetWarning, null, rh, ''));
+  }
+  /** Never forgotten by the sim's level-up policy: tagged 'shapeshift', or its forgetWarning speaks for this RunHero. */
+  function isProtected(id, rh) { return isShapeshift(id) || warns(id, rh); }
+  /** The socket a new skill replaces: the lowest-level skill that is not protected (isProtected; ties → the first); -1
+   *  when every socketed skill is (then the new skill is skipped). */
   function replaceIdx(rh) {
     const list = (rh && rh.skills) || [];
     let lo = -1, naive = -1;
     list.forEach(function (s, k) {
       if (naive < 0 || s.level < list[naive].level) naive = k;
-      if (!isShapeshift(s.id) && (lo < 0 || s.level < list[lo].level)) lo = k;
+      if (!isProtected(s.id, rh) && (lo < 0 || s.level < list[lo].level)) lo = k;
     });
     if (naive >= 0 && naive !== lo) G.shapeshiftKept++;   // v2's rule (lowest level, ties → the first) would have forgotten it
     return lo;
@@ -554,7 +567,7 @@
       const c = d.choices[order[k]];
       const hero = c.heroId ? s.party[DD.Run.indexOf(c.heroId)] : null;
       let ri;
-      // a full hero forgets his lowest-level skill, never a 'shapeshift' one (plan §7.2); with only those, no skill
+      // a full hero forgets his lowest-level skill, never a protected one (plan §7.2, h19 D4); with only those, no skill
       if (c.type === 'skill' && hero && hero.skills.length >= 4) { ri = replaceIdx(hero); if (ri < 0) continue; }
       const res = DD.Run.takeReward(order[k], ri !== undefined ? { replaceIdx: ri } : {});
       took = res && res.ok;
@@ -1200,7 +1213,7 @@
       }).join(' · '));
     });
     out.push('\n== consumables used: ' + JSON.stringify(G.cons));
-    out.push('== rewards taken: ' + JSON.stringify(G.rewardsTaken) + ' · level choices: ' + JSON.stringify(G.levelChoices) + ' · skill replacements that kept a shapeshift skill ' + G.shapeshiftKept);
+    out.push('== rewards taken: ' + JSON.stringify(G.rewardsTaken) + ' · level choices: ' + JSON.stringify(G.levelChoices) + ' · skill replacements that kept a protected skill (shapeshift or forgetWarning, h19 D4) ' + G.shapeshiftKept);
     const gg = G.gold, n = Math.max(1, G.runs);
     out.push('== gold per run: earned ' + r1(gg.earned / n) + ' · spent in shops ' + r1(gg.shopSpent / n) + ' · shop visits ' + r1(gg.shopVisits / n) +
       ' (avg gold on entry ' + r1(gg.shopGoldIn / Math.max(1, gg.shopVisits)) + ') · event net ' + r1(gg.eventDelta / n) + ' · fined ' + r1(gg.fined / n) +
@@ -1365,11 +1378,12 @@
   }
 
   // the tallies and the report, for the tools suite (tests/docs_tests.js) and the integration suite: reset() starts a
-  // fresh tally; replaceIdx(runHero) is the socket a new skill would replace (never a 'shapeshift' one, -1 = skip it);
-  // started(heroUnits, kind) counts the fights they start (all, by kind, worn: E3)
+  // fresh tally; replaceIdx(runHero) is the socket a new skill would replace (never a protected one: tagged 'shapeshift'
+  // or warned about by its forgetWarning for that RunHero, h19 D4; -1 = skip it); started(heroUnits, kind) counts the
+  // fights they start (all, by kind, worn: E3)
   window.DD_SIM = {
     fightOutcome: fightOutcome, runOutcome: runOutcome, recordFight: recordFight, finishRun: finishRun,
-    replaceIdx: replaceIdx, isShapeshift: isShapeshift, LANE_STATS: LANE_STATS, wantsBribe: wantsBribe,
+    replaceIdx: replaceIdx, isShapeshift: isShapeshift, warns: warns, isProtected: isProtected, LANE_STATS: LANE_STATS, wantsBribe: wantsBribe,
     ledgerHeal: ledgerHeal, rcvColumn: rcvColumn, groupsOf: groupsOf, started: started, WORN: WORN,
     reset: function () { FINAL = DD.finalAct(); G = newTally(); return G; }, tally: function () { return G; },
     startRun: function (party) { G.runs++; G.actEnter[1]++; (party || []).forEach(function (id) { H(id).runs++; }); },

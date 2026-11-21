@@ -304,3 +304,4 @@ The 13 failing suites belong to other owners:
 - **voice-8** (a lead / user call, done as the QA hint suggested): Syllamin #3 and the Marbles closer #2 softened (no jab at
   his mother; forgetful, never forgettable). **HERO-7**: the Benedick bar no longer repeats Svammiel's "last Tuesday".
   Suite "QA voice-8 / HERO-7". Deviation: these three lines differ from addendum §17 (the lead may restore voice-8).
+  **Decided (Nov 18, the user): "Keep them"** - the softened voice-8 lines stay as shipped; nothing to restore.

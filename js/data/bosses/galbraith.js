@@ -298,6 +298,11 @@
     ['marbles', 'Professor Marbles! We were students together! You forgot?'],
     ['valdris', 'A forge cleric, Valdris. Hitting things with prayer. Quaint.'],
     ['benedick', 'Galbraith\'s Escargot, Benedick. A classic. Hold still.'],
+    // h19 (addendum-rasma §19.4, addendum-biz §19.4, addendum-gus §20.4)
+    ['rasma', 'Rasma! A fellow of breeding! Galbraith\'s Polite Disintegration, then.'],
+    ['biz', 'Galbraith\'s Grand Disassembly, Biz. Do hold still.'],
+    // [h19 review:shared] not "Eldritch powers, Phat Gus? …": Svammiel's roast of him opens with those words
+    ['gus', 'Weird woods magic, Phat Gus? Quaint. I have TENURE in eldritch.'],
   ];
   /** A named line about `about` (or any hero in this fight), '' when none fits. Cosmetic RNG. */
   function namedLine(about) {
@@ -705,7 +710,14 @@
       const u = ctx.user;
       if (isGal(u)) { spend(u, N.cost.chain); boss(u).stats.chains++; }
       let from = u;
-      ctx.foes.forEach(function (f) { DD.FX.beam(from, f, { color: '#cfe3ff', width: 2 }); from = f; });
+      // a hop leaves from the foe it just struck: that foe flinches, it does not cast (fx_render beamShooter; the beams
+      // play before the damage, so the renderer's struck-unit rule can't tell; fix:polish, render-ui's request)
+      ctx.foes.forEach(function (f) {
+        const look = { color: '#cfe3ff', width: 2 };
+        if (from !== u) look.shooter = false;
+        DD.FX.beam(from, f, look);
+        from = f;
+      });
       bark(u, 'attack', 0.3);
       ctx.foes.forEach(function (f) { if (active(f)) zap(ctx, f, ctx.L.dmg, 'lightning'); });
     } });

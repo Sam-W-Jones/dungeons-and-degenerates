@@ -21,6 +21,9 @@
  *
  * V3: the 'cameo' FX (Svammiel: entrance / swoop / shadow / bubble, hosted as DD.FXRender.moments.cameo), banner
  * options fit / frames (the League's stretching name), a boss def's boss.sting with its banner, goats bleat.
+ *
+ * h19: a beam gives the unit on its start tile a cast pose unless opts `shooter: false`, or that unit was struck a few
+ * events ago and the beam goes on to its own side (an arc or chain hop from a victim: beamShooter).
  */
 (function () {
   'use strict';
@@ -113,6 +116,21 @@
       if (Math.round(x) === Math.round(p.x) && Math.round(y) === Math.round(p.y)) return u;
     }
     return null;
+  }
+  /**
+   * [h19 qa-rasma-1] The unit a beam is cast by: the one on its start tile, except with `shooter: false` (opts) and
+   * except a unit struck a moment ago that the beam carries on from to one of its own side (the foe Rasma's strike hit
+   * as the lightning arcs on to its friend, a riposte's arc, a chain-lightning hop). That one only flinches.
+   */
+  const STRUCK_EVTS = 8, STRUCK_MS = 1500;
+  function beamShooter(evt) {
+    if (!evt || evt.shooter === false || !evt.from) return null;
+    const u = unitAtPos(evt.from);
+    const v = u && u.vis;
+    if (!v || !(v._struckId > 0)) return u;
+    const recent = evt.id >= v._struckId && evt.id - v._struckId <= STRUCK_EVTS && nowMs() - num(v._struckAt, -Infinity) <= STRUCK_MS;
+    const to = recent && evt.to ? unitAtPos(evt.to) : null;
+    return to && to !== u && to.side === u.side ? null : u;
   }
 
   let ticking = false;
@@ -1959,7 +1977,7 @@
     beam: {
       start: function (evt) {
         evt._fx = addBeam(evt);
-        evt._shooter = unitAtPos(evt.from);
+        evt._shooter = beamShooter(evt);
         if (evt._shooter && evt._shooter.vis && evt.from && evt.to) {
           const fc = facingToward(posOf(evt.from), posOf(evt.to));
           if (fc) evt._shooter.vis.facing = fc;
@@ -2001,6 +2019,7 @@
         if (!u) return;
         evt._hp0 = num(v && v.hp, num(evt.hp, 0) + num(evt.amount, 0));
         evt._b0 = num(v && v.block, num(evt.block, 0));
+        if (v && !evt.cost) { v._struckId = num(evt.id, 0); v._struckAt = nowMs(); }   // beamShooter
         const amount = Math.max(0, Math.round(num(evt.amount, 0)));
         const blocked = typeof evt.blocked === 'number' ? Math.max(0, Math.round(evt.blocked)) : 0;
         if (evt.cost) addFloat({ unit: u, text: '-' + amount + ' HP', color: '#d77bff', size: 14, font: NUM_FONT });

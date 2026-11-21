@@ -21,7 +21,8 @@
  * board through the yawAware painter; other object painters are billboards.
  * V3: act-4 theme looks (bg, tint, walls, the DM's table overhead), ambients pollen / stars / notes (unknown kinds fall
  * back), content zones from state.data.zones (E8: tinted tiles, a chest-height line, a label; nothing when absent) and
- * the 17th campfire seat.
+ * the 17th campfire seat. h19: seats for the 18th to 20th heroes (each hero keyed to the seat at his display-order
+ * index).
  */
 (function () {
   'use strict';
@@ -3537,7 +3538,8 @@
       c.fillStyle = 'rgba(14,8,12,0.88)'; c.fill();
       c.lineWidth = 1.2; c.strokeStyle = col; c.stroke();
       drawGlyph(c, (def && def.icon) || '❔', x, cyy, size * 0.8);
-      if (st.stacks > 1) label(c, String(st.stacks), x + size * 0.42, cyy + size * 0.38, Math.max(7, Math.round(8 * z)), '#ffffff', { strokeWidth: 2.2 });
+      // h19 (plan D9): a status def with showStacks prints its count from 1 (Rasma's last charge, Phat Gus's one acorn)
+      if (st.stacks > (def && def.showStacks ? 0 : 1)) label(c, String(st.stacks), x + size * 0.42, cyy + size * 0.38, Math.max(7, Math.round(8 * z)), '#ffffff', { strokeWidth: 2.2 });
       // [QA HERO-5] a timed form that opts in (status def showTurns): its turns left, amber, bottom left
       if (def && def.showTurns && st.turns > 0) label(c, String(st.turns), x - size * 0.42, cyy + size * 0.38, Math.max(7, Math.round(8 * z)), '#ffcf7a', { strokeWidth: 2.2 });
       x += size + gap;
@@ -3716,7 +3718,7 @@
    * Small units standing right behind d (a pixie behind Marwyn, a rat behind a bugbear) whose bodies d's widget box
    * would cover: their sprite boxes, so the widget rises above them instead of hiding them.
    */
-  function bodiesUnder(w, list, zoom) {
+  function bodiesUnder(w, list, zoom, heads) {
     const out = [];
     for (let k = 0; k < list.length; k++) {
       const o = list[k], e = o.d;
@@ -3725,6 +3727,24 @@
       const ix = Math.min(w.x1, b.x1) - Math.max(w.x0, b.x0), iy = Math.min(w.y1, b.y1) - Math.max(w.y0, b.y0);
       if (ix > 0 && iy > 0 && ix * iy >= 0.3 * (b.x1 - b.x0) * (b.y1 - b.y0)) out.push({ x0: b.x0, x1: b.x1, y0: b.y0, y1: b.y1, body: true });
     }
+    // [h19 gus-hpbar-covers-face] and over the head of the selected (or acting) unit behind it, whatever its size: a front
+    // foe's bar never sits across that face (Phat Gus's cheeks in melee, Pebbles, Benedick)
+    (heads || []).forEach(function (h) {
+      if (h.d === w.d || h.d.sy >= w.d.sy) return;
+      const ix = Math.min(w.x1, h.x1) - Math.max(w.x0, h.x0), iy = Math.min(w.y1, h.y1) - Math.max(w.y0, h.y0);
+      if (ix > 0 && iy > 0 && ix * iy >= 0.15 * (h.x1 - h.x0) * (h.y1 - h.y0)) out.push({ x0: h.x0, x1: h.x1, y0: h.y0, y1: h.y1, body: true });
+    });
+    return out;
+  }
+  /** The head boxes (top 60% of the sprite box) of the focus units (ids: the selected and the acting one). */
+  function focusHeads(list, zoom, focus) {
+    const out = [];
+    list.forEach(function (w) {
+      const d = w.d;
+      if (!focus[d.u.id] || d.downed || d.alpha < 0.3) return;
+      const b = spriteBox(d, zoom);
+      out.push({ d: d, id: d.u.id, x0: b.x0, x1: b.x1, y0: b.y0, y1: b.y0 + (b.y1 - b.y0) * 0.6 });
+    });
     return out;
   }
 
@@ -3733,13 +3753,13 @@
    * already placed rises just above it (at most a few rows, so it never drifts far from its unit). A widget also
    * rises over the bodies of small units right behind its unit, so it never hides them.
    */
-  function layoutWidgets(list, zoom) {
+  function layoutWidgets(list, zoom, heads) {
     const order = list.slice().sort(function (a, b) { return b.d.sy - a.d.sy || a.d.sx - b.d.sx; });
     const placed = [];
     for (let i = 0; i < order.length; i++) {
       const w = order[i];
       const limit = -4 * (w.y1 - w.y0 + 2);
-      const avoid = placed.concat(bodiesUnder(w, list, zoom || 1));
+      const avoid = placed.concat(bodiesUnder(w, list, zoom || 1, heads));
       let dy = 0;
       for (let guard = 0; guard < 16; guard++) {
         let hit = null;
@@ -3771,7 +3791,11 @@
       if (d.alpha < 0.25 || d.sx === undefined) continue;
       widgets.push(measureWidget(F, c, d));
     }
-    const boxes = layoutWidgets(widgets, F.zoom);
+    const focus = {};
+    if (F.ov && F.ov.selectedId !== null && F.ov.selectedId !== undefined) focus[F.ov.selectedId] = 1;
+    if (F.ov && F.ov.turnUnitId) focus[F.ov.turnUnitId] = 1;
+    F.focusHeads = focusHeads(widgets, F.zoom, focus);
+    const boxes = layoutWidgets(widgets, F.zoom, F.focusHeads);
     F.widgetBoxes = boxes;
     for (let i = 0; i < widgets.length; i++) {
       const wg = widgets[i], d = wg.d, u = d.u, z = wg.z, dy = wg.dy;
@@ -3918,6 +3942,8 @@
       objTargets: [], reviveTargets: [],
       // rules run (moving through allies, breaking objects); empty = nothing drawn
       passTiles: [], swapTiles: [], swap: null, ghosts: null, breakTargets: [], objPreview: null,
+      // h19 (QA-BIZ-2): [{ unitId, from: {x, y}, to: {x, y} }] where the armed action moves a unit (landing marked)
+      moves: null,
     };
   }
 
@@ -3953,6 +3979,18 @@
     return set;
   }
 
+  /** overlay.moves → [{ unitId, from, to }] with integer tiles (at most 8), or null. */
+  function movesOf(list) {
+    if (!Array.isArray(list)) return null;
+    const out = [];
+    const ok = function (p) { return !!p && isFinite(p.x) && isFinite(p.y); };
+    for (let i = 0; i < list.length && out.length < 8; i++) {
+      const m = list[i];
+      if (m && ok(m.to)) out.push({ unitId: m.unitId, from: ok(m.from) ? { x: m.from.x | 0, y: m.from.y | 0 } : { x: m.to.x | 0, y: m.to.y | 0 }, to: { x: m.to.x | 0, y: m.to.y | 0 } });
+    }
+    return out.length ? out : null;
+  }
+
   function buildOverlay(F) {
     const o = R.overlay || {};
     const th = threatArrays(F, o.threat);
@@ -3974,6 +4012,7 @@
       ghosts: o.ghosts && typeof o.ghosts === 'object' ? o.ghosts : null,
       breakTargets: Array.isArray(o.breakTargets) && o.breakTargets.length ? tileSet(F, o.breakTargets) : null,
       objPreview: o.objPreview && o.objPreview.x !== undefined ? o.objPreview : null,
+      moves: movesOf(o.moves),
       target: tileSet(F, o.targetTiles), area: tileSet(F, o.areaTiles),
       deploy: tileSet(F, o.deployTiles), interact: tileSet(F, o.interactTiles),
       selectedId: o.selectedId === undefined ? null : o.selectedId, hover: o.hover || null,
@@ -4455,9 +4494,50 @@
     }
   }
 
+  /**
+   * [h19 QA-BIZ-2] Where the armed action puts a unit it moves (overlay.moves [{ unitId, from, to }], from the dry run's
+   * perUnit moved: Zip Line, pulls, pushes, swaps): a mint diamond on the landing tile and an arcing arrow to it.
+   */
+  const MOVE_MARK = '#8ff0c8';
+  function drawMoves(F, c) {
+    const list = F.ov.moves;
+    if (!list) return;
+    c.save();
+    c.lineCap = 'round'; c.lineJoin = 'round';
+    for (let i = 0; i < list.length; i++) {
+      const m = list[i], ta = gridTile(F, m.from.x, m.from.y), tb = gridTile(F, m.to.x, m.to.y);
+      if (!tb) continue;
+      const b = Iso.toWorld(m.to.x, m.to.y, topLevel(F, tb));
+      c.beginPath(); diamond(c, b.x, b.y, HW - 6, HH - 3);
+      c.fillStyle = rgba(MOVE_MARK, 0.2 + 0.1 * pulse(4)); c.fill();
+      c.setLineDash([5, 4]); c.lineWidth = 2; c.strokeStyle = MOVE_MARK; c.stroke(); c.setLineDash([]);
+      F.landings = (F.landings || 0) + 1;
+      if (!ta) continue;
+      const a = Iso.toWorld(m.from.x, m.from.y, topLevel(F, ta));
+      const len = Math.hypot(b.x - a.x, b.y - a.y);
+      if (len < 4) continue;
+      const p1 = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 - Math.min(26, 8 + len * 0.18) };
+      const q = function (t) { const u = 1 - t; return { x: u * u * a.x + 2 * u * t * p1.x + t * t * b.x, y: u * u * a.y + 2 * u * t * p1.y + t * t * b.y }; };
+      const cut = Math.min(0.3, 10 / len), s1 = q(1 - cut);
+      c.beginPath();
+      for (let k = 0; k <= 14; k++) { const p = q(cut + (1 - 2 * cut) * k / 14); if (k) c.lineTo(p.x, p.y); else c.moveTo(p.x, p.y); }
+      c.lineWidth = 4.4; c.strokeStyle = 'rgba(10,15,30,0.85)'; c.stroke();
+      c.lineWidth = 2.4; c.strokeStyle = MOVE_MARK; c.stroke();
+      const pb = q(1 - cut - 0.08), ang = Math.atan2(s1.y - pb.y, s1.x - pb.x);
+      c.save();
+      c.translate(s1.x, s1.y); c.rotate(ang);
+      c.beginPath(); c.moveTo(3, 0); c.lineTo(-7, -5.5); c.lineTo(-4.5, 0); c.lineTo(-7, 5.5); c.closePath();
+      c.fillStyle = MOVE_MARK; c.fill();
+      c.lineWidth = 1.3; c.strokeStyle = 'rgba(10,15,30,0.9)'; c.stroke();
+      c.restore();
+    }
+    c.restore();
+  }
+
   function drawPath(F, c) {
     const ov = F.ov;
     drawSwap(F, c);
+    drawMoves(F, c);
     if (!ov.path || !ov.path.length) return;
     const pts = [];
     const sel = ov.selectedId !== null ? unitDrawById(F, ov.selectedId) : null;
@@ -4775,14 +4855,17 @@
     '0,3': 'title_sign', '0,6': 'bush', '6,6': 'mushroom', '6,5': 'barrel', '1,0': 'bush',
   };
   // the whole table sits at the fire: the ring of tiles two steps out (the classic eight seats first, then the rest,
-  // alternating sides), so every hero gets a spot and nobody sits in the flames
+  // alternating sides), so every hero gets a spot and nobody sits in the flames. Seat i belongs to the i-th hero of
+  // the display order (titleHeroes), so a hero who has not registered leaves his chair empty and nobody moves up
   const TITLE_SLOTS = [[2, 5], [4, 5], [1, 4], [5, 4], [1, 2], [5, 2], [2, 1], [4, 1],
     [1, 3], [5, 3], [3, 5], [3, 1], [1, 5], [5, 1], [1, 1], [5, 5],
+    // h19: Rasma standing by the water, Biz at the west edge with his toolbox, Phat Gus foraging under the tree
+    [6, 2], [0, 4], [0, 1],
     [4, 6]];   // and Benedick on the path, still arriving
-  // fallback when DD.UI is not loaded (same order as DD.UI.HERO_ORDER: the original ten, the newer six, then V3's
-  // Benedick, who arrives last, obviously)
+  // fallback when DD.UI is not loaded (same order as DD.UI.HERO_ORDER: the original ten, the newer six, h19's Rasma,
+  // Biz and Phat Gus, then V3's Benedick, who arrives last, obviously)
   const HERO_ORDER = ['zarathor', 'syllamin', 'marbles', 'marwyn', 'ellaria', 'josiah', 'buga', 'sparrow', 'slate', 'corelos',
-    'kiri', 'betty', 'basanos', 'valdris', 'hjalmar', 'pebbles', 'benedick'];
+    'kiri', 'betty', 'basanos', 'valdris', 'hjalmar', 'pebbles', 'rasma', 'biz', 'gus', 'benedick'];
   let titleState = null, titleHeroKey = '';
   const titleBark = { at: 4, unitId: null, text: '', until: 0 };
   let stars = null;
@@ -4845,23 +4928,40 @@
     },
   });
 
+  /**
+   * The heroes at the campfire → [{ id, seat }] (seat: an index into TITLE_SLOTS), in the display order. h19: a hero
+   * of the order keeps the seat at his index in it, so one who is not registered (or locked) leaves his chair empty
+   * and Benedick stays on the path; a registered hero the order does not list takes the first free seats after them.
+   */
   function titleHeroes() {
     const all = Object.keys((DD.defs && DD.defs.heroes) || {});
     const order = DD.UI && Array.isArray(DD.UI.HERO_ORDER) && DD.UI.HERO_ORDER.length ? DD.UI.HERO_ORDER : HERO_ORDER;
     all.sort(function (a, b) {
       const ia = order.indexOf(a), ib = order.indexOf(b);
-      return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+      return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib);
     });
     const unlocked = all.filter(function (id) {
       if (!DD.Meta || typeof DD.Meta.isUnlocked !== 'function') return true;
       return !!safeGet('meta:isUnlocked', 'DD.Meta.isUnlocked', function () { return DD.Meta.isUnlocked(id); });
     });
-    return (unlocked.length ? unlocked : all).slice(0, TITLE_SLOTS.length);
+    const pool = unlocked.length ? unlocked : all;
+    const own = function (id) { const i = order.indexOf(id); return i >= 0 && i < TITLE_SLOTS.length ? i : -1; };
+    const taken = {}, out = [];
+    pool.forEach(function (id) { const i = own(id); if (i >= 0) { taken[i] = true; out.push({ id: id, seat: i }); } });
+    let free = 0;
+    pool.forEach(function (id) {
+      if (own(id) >= 0) return;
+      while (free < TITLE_SLOTS.length && taken[free]) free++;
+      if (free >= TITLE_SLOTS.length) return;
+      taken[free] = true;
+      out.push({ id: id, seat: free });
+    });
+    return out;
   }
 
   function titleDiorama() {
     const heroes = titleHeroes();
-    const key = heroes.join(',');
+    const key = heroes.map(function (e) { return e.id + '@' + e.seat; }).join(',');
     if (titleState && key === titleHeroKey) return titleState;
     titleHeroKey = key;
     const tiles = [];
@@ -4872,8 +4972,8 @@
           obj: oid ? { id: oid, hp: 0, maxHp: 0, data: {} } : null });
       }
     }
-    const units = heroes.map(function (id, i) {
-      const s = TITLE_SLOTS[i], h = +TITLE_HGT[s[1]][s[0]];
+    const units = heroes.map(function (e) {
+      const id = e.id, i = e.seat, s = TITLE_SLOTS[i], h = +TITLE_HGT[s[1]][s[0]];
       // everyone faces the fire (the two seats in line with it on screen look at each other's side of it)
       const sx = s[0] - s[1];
       return {
@@ -6040,8 +6140,12 @@
           booms: (F.booms || []).map(function (b) { return Object.assign({}, b); }),
           // rules run: ⇄ rings drawn under swappable allies, allies faded by overlay.ghosts
           swapRings: F.swapRings || 0, ghosted: F.ghosted || 0,
+          // h19 (QA-BIZ-2): the landing marks drawn for overlay.moves; (gus-hpbar) the selected / acting unit's head box,
+          // which a front unit's HP widget rises over
+          landings: F.landings || 0,
+          heads: (F.focusHeads || []).map(function (h) { return { id: h.id, x0: h.x0, x1: h.x1, y0: h.y0, y1: h.y1 }; }),
           // V3: content zones drawn (E8: tiles tinted, the line's screen ends, the label's box), the ambient drawn, and
-          // on the title the campfire seats ({ id: hero id, x, y } in seat order)
+          // on the title the campfire seats ({ id: hero id, x, y } in the display order)
           zones: (F.zoneStats || []).map(function (z) { return JSON.parse(JSON.stringify(z)); }),
           ambient: { kind: ambient.kind, color: ambient.color, n: ambient.list.length,
             front: ambient.list.filter(function (p) { return p.front; }).length, notes: ambient.list.filter(function (p) { return !!p.note; }).length },
@@ -6253,9 +6357,17 @@
       const l = themeLook(id);
       return { bg: l.bg.slice(), ambient: l.ambient, ambientColor: l.ambientColor, backdrop: l.backdrop, tint: l.tint };
     },
-    /** The title campfire's seats [[x, y], …] in fill order (a copy); heroes sit in DD.UI.HERO_ORDER, else HERO_ORDER. */
+    /**
+     * The title campfire's seats [[x, y], …] (a copy). h19: seat i belongs to the i-th hero of DD.UI.HERO_ORDER (else
+     * HERO_ORDER); a registered hero neither lists takes the first free seat.
+     */
     get TITLE_SLOTS() { return TITLE_SLOTS.map(function (s) { return s.slice(); }); },
     /** The renderer's own hero order (a copy), used when DD.UI is not loaded. */
     get HERO_ORDER() { return HERO_ORDER.slice(); },
+    /** h19 (tests): a tile of the title diorama → { t: terrain, h: height, obj: object id | null }, null off it. */
+    titleTile: function (x, y) {
+      if (!(x >= 0 && x < 7 && y >= 0 && y < 7) || x !== Math.floor(x) || y !== Math.floor(y)) return null;
+      return { t: TITLE_TMAP[TITLE_TER[y][x]], h: +TITLE_HGT[y][x], obj: TITLE_OBJ[x + ',' + y] || null };
+    },
   });
 })();

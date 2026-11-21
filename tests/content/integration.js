@@ -5,6 +5,8 @@
  * real heroes. V3 (plan .tmp/v3/design.md §8.4 "Integrator"): act coverage to DD.finalAct() (act 4 = the registry's L
  * lanes + a finale), the twist line on the act-3 boss's board only with the gauntlet on, the DM's cameo pool, the
  * pronoun sweep across every act-4 text, four-act campaigns, determinism of cosmetic pools and the sim's shapeshift rule.
+ * h19 (plan .tmp/h19/plan.md §2.3): Rasma, Biz and Phat Gus in the roster and the pronoun sweep (Biz's constructs "it"),
+ * the sim keeping their keystones, determinism with Biz's robots and Phat Gus's whispers, and the cross-new-hero combos.
  * Suites that need the full roster skip themselves in isolated runs (&isolate=...).
  */
 (function () {
@@ -19,10 +21,13 @@
   function norm(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); }
   // v2: the heroes, all available from the start (DESIGN §3, user request), and the user's pronouns (SHE, the rest he).
   // V3: the roster itself is the registry (realHeroes()); the integrator adds a new hero here once he or she is
-  // registered: Benedick, the 17th (he, the user, Nov 12)
+  // registered: Benedick, the 17th (he, the user, Nov 12); h19: Rasma, Biz and Phat Gus, the 18th-20th (all he/him, the
+  // user, Nov 18), added once all three registered (an unregistered id here skips the whole cross-content suite)
   const ALL = ['zarathor', 'syllamin', 'marbles', 'marwyn', 'ellaria', 'josiah', 'sparrow', 'corelos', 'slate', 'buga',
-    'kiri', 'betty', 'basanos', 'valdris', 'hjalmar', 'pebbles', 'benedick'];
+    'kiri', 'betty', 'basanos', 'valdris', 'hjalmar', 'pebbles', 'benedick', 'rasma', 'biz', 'gus'];
   const SHE = { ellaria: 1, sparrow: 1, kiri: 1 };
+  // h19 (plan D8): Biz's two constructs have no stated pronoun ("it" or none, never he / she, the user, Nov 18)
+  const CONSTRUCTS = { biz: ['biz_hjalmarino', 'biz_spooder'] };
   function fullRoster() { return ALL.every(function (id) { return !!DD.getHero(id); }); }
 
   // ---- cross-content consistency ---------------------------------------------------------------------------------
@@ -42,7 +47,7 @@
     t.ok(REAL.length >= ALL.length && ALL.every(function (id) { return REAL.indexOf(id) >= 0; }), REAL.length + ' real heroes in the registry, every hero of the pronoun list among them');
     const unlisted = REAL.filter(function (id) { return ALL.indexOf(id) < 0; });
     if (unlisted.length) t.log('registered heroes not yet in the pronoun list ALL (integrator): ' + unlisted.join(', '));
-    t.log(REAL.length + ' heroes in the registry (17 with the full V3 content): ' + REAL.join(', '));
+    t.log(REAL.length + ' heroes in the registry (20 with the full h19 content): ' + REAL.join(', '));
     vals(DD.defs.items).forEach(function (it) { if (it.hero) t.ok(!!DD.getHero(it.hero), it.id + ': hero item names an existing hero'); });
     const encs = vals(DD.defs.encounters).filter(function (e) { return !isTest(e.id); });
     ['grimble', 'rat_king', 'lichtenstein', 'dr_iris', 'dungeon_master'].forEach(function (b) {
@@ -124,6 +129,8 @@
     REAL.forEach(function (id) { t.ok(evs.some(function (e) { return e.hero === id; }), id + ': has a hero event'); });
     // V3 landing order (plan §4.12): NARRATIVE lands a new hero's event before the hero's file lands, so a hero the roster
     // is still waiting for is logged, not failed (any other unknown hero id still fails: a typo). Benedick has landed.
+    // h19 (plan D5 / D6): the voice owner landed Rasma's, Biz's and Phat Gus's events from day one; all three hero files
+    // have registered, so the list is empty again (a future hero's id goes here while his event lands first)
     const PENDING_HEROES = [];
     evs.forEach(function (e) {
       if (!e.hero) return;
@@ -167,6 +174,40 @@
       });
     });
     t.ok(checked > 300, 'pronoun sweep saw the heroes\' text (' + checked + ' sentences)');
+    // h19 (plan D8): the constructs' OWN texts carry no gendered pronoun at all: the summon defs (name, names, desc, barks)
+    // and their skills (name, flavor, the desc at levels 1-3). A sentence of their owner's text or the narration that
+    // names a construct keeps the owner rule above (Biz he/him: his passive's "who act on his turn" is about Biz)
+    const GENDERED = /\b(he|him|his|himself|she|her|hers|herself)\b/i;
+    const botBad = [];
+    let botTexts = 0;
+    Object.keys(CONSTRUCTS).forEach(function (owner) {
+      const h = DD.getHero(owner);
+      t.eq((h.summons || []).slice().sort().join(','), CONSTRUCTS[owner].slice().sort().join(','), owner + ': his summons are exactly ' + CONSTRUCTS[owner].join(', '));
+      CONSTRUCTS[owner].forEach(function (sid) {
+        const sd = DD.getSummon(sid);
+        if (!t.ok(!!sd, sid + ': a registered summon')) return;
+        t.eq(sd.pronoun, 'it', sid + ' (' + (sd.names || [sd.name]).join(', ') + '): pronoun "it" (plan D8)');
+        const texts = [];
+        const add = function (s, path) { if (typeof s === 'string' && s) texts.push({ s: s, path: path }); };
+        add(sd.name, sid + '.name');
+        (sd.names || []).forEach(function (n, i) { add(n, sid + '.names[' + i + ']'); });
+        add(typeof sd.desc === 'function' ? sd.desc(null) : sd.desc, sid + '.desc');
+        Object.keys(sd.barks || {}).forEach(function (k) { [].concat(sd.barks[k] || []).forEach(function (b, i) { add(b, sid + '.barks.' + k + '[' + i + ']'); }); });
+        t.ok((sd.skills || []).length >= 2, sid + ': its own skills (' + (sd.skills || []).join(', ') + ')');
+        (sd.skills || []).forEach(function (kid) {
+          const sk = DD.getSkill(kid);
+          if (!t.ok(!!sk, sid + ': its skill ' + kid + ' is registered')) return;
+          add(sk.name, kid + '.name');
+          add(sk.flavor, kid + '.flavor');
+          [1, 2, 3].forEach(function (lv) { add(DD.skillDesc(sk, lv, null), kid + '.desc' + lv); });
+        });
+        texts.forEach(function (x) { botTexts++; if (GENDERED.test(x.s)) botBad.push(x.path + ': "' + x.s.slice(0, 120) + '"'); });
+      });
+    });
+    t.ok(botTexts >= 40, 'the construct sweep read ' + botTexts + ' texts of Hjalmarino, Spooder and their four skills');
+    t.eq(botBad.length, 0, 'no he / him / his / she / her in a construct\'s own text: ' + botBad.slice(0, 8).join(' | '));
+    t.ok(!GENDERED.test('*the key winds down*') && GENDERED.test('Spooder curls up his legs.') && GENDERED.test('Hjalmarino bangs her cymbals.'),
+      'the construct sweep flags "his" and "her" and passes a pronoun-free bark');
     // narration: no line twice on the same key (several authors share keys like boss_start)
     Object.keys(DD.defs.narration).forEach(function (k) {
       const seen = {};
@@ -947,16 +988,24 @@
     });
   });
 
-  T.suite('integration: V3 — determinism: more lines in the cosmetic pools leave an act-4 AutoPlay fight bit-identical', function (t) {
+  T.suite('integration: V3 — determinism: more lines in the cosmetic pools leave an act-4 AutoPlay fight bit-identical (h19: also with Biz\'s robots and Phat Gus\'s whispers)', function (t) {
     const A4 = gauntletAct();
     if (!A4 || !fullRoster() || !DD.Run.startAtAct || !DD.getCameo || !DD.getCameo('svammiel')) { t.skip('needs every hero and the act-4 content (isolated run)'); return; }
-    const party = ['betty', 'kiri', 'benedick', 'josiah'].filter(function (id) { return !!DD.getHero(id); });
-    while (party.length < 4) party.push(realHeroes().filter(function (id) { return party.indexOf(id) < 0; })[0]);
+    function fill(ids) {
+      const p = ids.filter(function (id) { return !!DD.getHero(id); });
+      while (p.length < 4) p.push(realHeroes().filter(function (id) { return p.indexOf(id) < 0; })[0]);
+      return p;
+    }
+    // V3's party, then h19's (plan §2.3): Biz (two summons on his turn, the Hjalmar gag with Hjalmar there) and Phat Gus
+    // (cosmetic whispers on every meal), each fight played twice with every cosmetic pool it can draw from grown by a line
+    const PARTIES = [{ tag: 'v3', seed: 'int-determinism', party: fill(['betty', 'kiri', 'benedick', 'josiah']) },
+      { tag: 'h19', seed: 'int-determinism-h19', party: fill(['biz', 'gus', 'hjalmar', 'josiah']) }];
     const lane = act4Encounters().filter(function (e) { return e.gauntlet && e.gauntlet.lane === 'goats'; }).length ? 'goats' : (act4Encounters().filter(function (e) { return e.gauntlet; })[0] || { gauntlet: {} }).gauntlet.lane;
+    let party = PARTIES[0].party, runSeed = PARTIES[0].seed;
     /** One act-4 door fought by AutoPlay from a fresh run; returns what the mechanics left behind. */
     function play() {
       DD.Meta.reset(false);
-      DD.Run.newRun(party, 'normal', 'int-determinism');
+      DD.Run.newRun(party, 'normal', runSeed);
       DD.Run.startAtAct(A4, { level: 5, gear: 'auto', noShow: true });
       const S = DD.Run.state;
       for (let g = 0; g < 4; g++) {
@@ -975,36 +1024,56 @@
         units: cs.units.map(function (u) { return [u.defId, u.hp, u.x, u.y, !!u.dead, !!u.downed].join(':'); }).join(' '),
         cheats: cs.rules.filter(function (r) { return r.cheat; }).map(function (r) { return r.id; }).join(','),
         cameos: (cs.stats && cs.stats.cameos) || 0,
+        bots: cs.units.filter(function (u) { return u.kind === 'summon' && CONSTRUCTS.biz.indexOf(u.defId) >= 0; }).length,
       };
+    }
+    /** Push a line onto an array pool; the undo pops it. */
+    function grow(arr, line, added) {
+      if (!Array.isArray(arr)) return;
+      arr.push(line);
+      added.push(function () { arr.pop(); });
     }
     runLab(function () {
       withActs(Math.max(A4, DD.finalAct()), function () {
-        const a = play();
-        if (!t.ok(!!a, 'premise: the ' + lane + ' door was fought (' + (a && a.enc) + ', ' + (a && a.result) + ' in round ' + (a && a.round) + ')')) return;
-        // add a line to every cosmetic pool the fight can draw from: Svammiel's pools, the goats' bars, every act-4 bark
-        const added = [];
-        Object.keys(DD.defs.narration).forEach(function (k) {
-          if (!/^(svam_|rap_|goats_|league_|galbraith_|gard|cov_)/.test(k)) return;
-          DD.defs.narration[k].push('An extra line for the determinism check (' + k + ').');
-          added.push(function () { DD.defs.narration[k].pop(); });
-        });
-        vals(DD.defs.enemies).filter(function (e) { return e.act === A4 && e.barks; }).forEach(function (e) {
-          Object.keys(e.barks).forEach(function (k) {
-            if (!Array.isArray(e.barks[k])) return;
-            e.barks[k].push('An extra bark (' + k + ').');
-            added.push(function () { e.barks[k].pop(); });
+        PARTIES.forEach(function (P) {
+          party = P.party;
+          runSeed = P.seed;
+          const label = P.tag + ' [' + party.join(',') + ']';
+          const a = play();
+          if (!t.ok(!!a, label + ': premise: the ' + lane + ' door was fought (' + (a && a.enc) + ', ' + (a && a.result) + ' in round ' + (a && a.round) + ')')) return;
+          // add a line to every cosmetic pool the fight can draw from: Svammiel's pools, the goats' bars, every act-4 bark;
+          // h19: the party's own barks, every summon's barks (Biz's robots), Phat Gus's whispers and the Hjalmar gag's lines
+          const added = [];
+          Object.keys(DD.defs.narration).forEach(function (k) {
+            if (!/^(svam_|rap_|goats_|league_|galbraith_|gard|cov_)/.test(k)) return;
+            grow(DD.defs.narration[k], 'An extra line for the determinism check (' + k + ').', added);
           });
+          vals(DD.defs.enemies).filter(function (e) { return e.act === A4 && e.barks; }).forEach(function (e) {
+            Object.keys(e.barks).forEach(function (k) { grow(e.barks[k], 'An extra bark (' + k + ').', added); });
+          });
+          const before = added.length;
+          if (P.tag === 'h19') {
+            party.forEach(function (id) { const h = DD.getHero(id); Object.keys(h.barks || {}).forEach(function (k) { grow(h.barks[k], 'An extra hero bark (' + k + ').', added); }); });
+            vals(DD.defs.summons).forEach(function (sd) { Object.keys(sd.barks || {}).forEach(function (k) { grow(sd.barks[k], 'An extra beep (' + k + ').', added); }); });
+            if (DD.Gus) grow(DD.Gus.WHISPERS, '...an extra whisper...', added);
+            if (DD.Biz) grow(DD.Biz.TIN_LINES, 'An extra tin-double line.', added);
+          }
+          let b = null;
+          try { b = play(); } finally { added.forEach(function (undo) { undo(); }); }
+          t.ok(added.length > 50, label + ': ' + added.length + ' cosmetic pools got an extra line (' + (added.length - before) + ' of them the party\'s, the summons\' and the h19 pools)');
+          t.eq(JSON.stringify(b), JSON.stringify(a), label + ': the same fight, bit for bit: the result, round, combat RNG state, Hype, every unit\'s HP and tile, the cheats');
+          t.ok(a.cameos > 0, label + ': Svammiel\'s cameo played in it (' + a.cameos + ' lines)');
+          if (P.tag === 'h19') {
+            t.ok(party.indexOf('biz') < 0 || a.units.indexOf(CONSTRUCTS.biz[0]) >= 0 || a.units.indexOf(CONSTRUCTS.biz[1]) >= 0,
+              label + ': Biz\'s robots were on the board (' + a.bots + ' standing or scrapped at the end)');
+            t.log(label + ': ' + a.enc + ' ' + a.result + ' in round ' + a.round + ' · ' + a.units);
+          }
         });
-        let b = null;
-        try { b = play(); } finally { added.forEach(function (undo) { undo(); }); }
-        t.ok(added.length > 50, added.length + ' cosmetic pools got an extra line');
-        t.eq(JSON.stringify(b), JSON.stringify(a), 'the same fight, bit for bit: the result, round, combat RNG state, Hype, every unit\'s HP and tile, the cheats');
-        t.ok(a.cameos > 0, 'Svammiel\'s cameo played in it (' + a.cameos + ' lines)');
       });
     });
   });
 
-  T.suite('integration: V3 — the campaign sim never forgets a shapeshift skill (Benedick\'s shell, Basanos\'s Transform, Ellaria\'s Wild Shape)', function (t) {
+  T.suite('integration: V3 — the campaign sim never forgets a shapeshift skill (Benedick\'s shell, Basanos\'s Transform, Ellaria\'s Wild Shape) nor, h19, one whose forgetWarning speaks', function (t) {
     const S = window.DD_SIM;
     if (!S || typeof S.replaceIdx !== 'function') { t.skip('tests/sim/sim.js not loaded'); return; }
     const shapes = vals(DD.defs.skills).filter(function (d) { return !isTest(d.id) && (d.tags || []).indexOf('shapeshift') >= 0; });
@@ -1018,5 +1087,224 @@
       t.ok(i > 0 && rh.skills[i].id !== d.id && rh.skills[i].level === 1, d.id + ': a new skill replaces ' + (rh.skills[i] ? rh.skills[i].id : i) + ', not the transform');
     });
     if (shapes.length) t.eq(S.replaceIdx({ skills: shapes.slice(0, 4).map(function (d) { return { id: d.id, level: 1 }; }) }), -1, 'with nothing but shapeshift skills the sim skips the new one (-1)');
+
+    // h19 (plan .tmp/h19/plan.md D4): a skill whose forgetWarning resolves non-empty for that RunHero is never forgotten
+    // either, read as the level-up forget picker reads it (DD.resolve(def.forgetWarning, null, rh, '')): Rasma's last
+    // enchantment, Biz's Overclock. Three temporary test_ skills, removed after the check.
+    if (!t.ok(typeof S.warns === 'function' && typeof S.isProtected === 'function', 'DD_SIM.warns and DD_SIM.isProtected exist (h19 D4)')) return;
+    const KEY = 'test_h19_keystone', LAST = 'test_h19_last', OTHER = 'test_h19_other';
+    function kindCount(rh) { return ((rh && rh.skills) || []).filter(function (s) { const d = DD.getSkill(s.id); return !!d && (d.tags || []).indexOf('test_h19_kind') >= 0; }).length; }
+    function tmp(def) { return DD.registerSkill(Object.assign({ owner: 'test_knight', kind: 'utility', target: { type: 'self' }, execute: function () {} }, def)); }
+    function withFiller(first) { return { skills: first.concat(filler.map(function (id, i) { return { id: id, level: 1 + (i % 2) }; })) }; }
+    try {
+      tmp({ id: KEY, name: 'Test Keystone (h19)', forgetWarning: 'Without it nothing works.' });
+      tmp({ id: LAST, name: 'Test Last of Its Kind (h19)', tags: ['test_h19_kind'],
+        forgetWarning: function (L, rh) { return kindCount(rh) === 1 ? 'The last of its kind.' : ''; } });
+      tmp({ id: OTHER, name: 'Test Another of Its Kind (h19)', tags: ['test_h19_kind'] });
+      // a string warning: kept at level I in socket 0 (where v2's rule would forget it), like a transform
+      const rhKey = withFiller([{ id: KEY, level: 1 }]), iKey = S.replaceIdx(rhKey);
+      t.ok(iKey > 0 && rhKey.skills[iKey].id !== KEY && rhKey.skills[iKey].level === 1, KEY + ' (a string forgetWarning): a new skill replaces ' + (rhKey.skills[iKey] ? rhKey.skills[iKey].id : iKey) + ', not it');
+      t.ok(!S.isShapeshift(KEY) && S.warns(KEY, rhKey) && S.isProtected(KEY, rhKey), KEY + ': protected by its warning, not by a tag');
+      // an (L, rh) => string warning speaks for the RunHero it is about: the last of its kind is kept, one of two is not
+      const rhLast = withFiller([{ id: LAST, level: 1 }]), iLast = S.replaceIdx(rhLast);
+      t.ok(iLast > 0 && rhLast.skills[iLast].id !== LAST, LAST + ': the last of its kind is kept (the new skill replaces ' + (rhLast.skills[iLast] ? rhLast.skills[iLast].id : iLast) + ')');
+      t.eq(String(DD.resolve(DD.getSkill(LAST).forgetWarning, null, rhLast, '')), 'The last of its kind.', 'the forget picker would show the same words for that RunHero');
+      const rhTwo = { skills: [{ id: LAST, level: 1 }, { id: OTHER, level: 1 }].concat(filler.slice(0, 2).map(function (id) { return { id: id, level: 2 }; })) };
+      t.eq(S.warns(LAST, rhTwo), false, 'with another of its kind socketed the warning is silent');
+      t.eq(S.replaceIdx(rhTwo), 0, '…so the sim may forget it (lowest level, ties to the first: socket 0)');
+      t.eq(S.replaceIdx({ skills: [{ id: KEY, level: 1 }, { id: LAST, level: 1 }] }), -1, 'with nothing but protected skills the sim skips the new one (-1)');
+      t.eq(S.warns(filler[0], rhKey), false, filler[0] + ' (no forgetWarning) is not protected');
+    } finally {
+      [KEY, LAST, OTHER].forEach(function (id) { delete DD.defs.skills[id]; });
+    }
+    t.ok(!DD.getSkill(KEY) && !DD.getSkill(LAST) && !DD.getSkill(OTHER), 'the temporary test_ skills are gone');
+    // the protected set of the 17 shipped heroes (logged, not pinned): the forgetWarning rule adds none of theirs, since
+    // today only Basanos's Transform and Benedick's shell carry a warning and both are tagged 'shapeshift'
+    const NEW = ['rasma', 'biz', 'gus'];
+    const shipped = ALL.filter(function (id) { return NEW.indexOf(id) < 0 && !!DD.getHero(id); });
+    const byTag = [], byWarn = [], added = [];
+    shipped.forEach(function (hid) {
+      const h = DD.getHero(hid);
+      h.skillPool.concat(h.startingSkills.filter(function (s) { return h.skillPool.indexOf(s) < 0; })).forEach(function (sid) {
+        const rh = { id: hid, level: 1, skills: [{ id: sid, level: 1 }] };
+        const tag = S.isShapeshift(sid), warn = S.warns(sid, rh);
+        if (tag) byTag.push(sid);
+        if (warn) byWarn.push(sid);
+        if (warn && !tag) added.push(sid);
+      });
+    });
+    t.log(shipped.length + ' shipped heroes: protected by the tag ' + (byTag.join(', ') || 'none') + '; warned about ' + (byWarn.join(', ') || 'none') +
+      '; added by the forgetWarning rule ' + (added.length ? added.join(', ') + ' (the protected set of the 17 CHANGED)' : 'none (the protected set of the 17 is unchanged)'));
+    NEW.forEach(function (hid) {
+      const h = DD.getHero(hid);
+      if (!h) { t.log(hid + ': not registered yet (the wave-0 stub)'); return; }
+      const own = h.skillPool.concat(h.startingSkills.filter(function (s) { return h.skillPool.indexOf(s) < 0; }));
+      const warned = own.filter(function (sid) { return S.warns(sid, { id: hid, level: 1, skills: [{ id: sid, level: 1 }] }); });
+      t.log(hid + ': skills a lone socket keeps by their forgetWarning: ' + (warned.join(', ') || 'none'));
+    });
+    // h19 integrator (plan D4): the rule keeps the real keystones of the new kits. Rasma's ONLY enchantment (the last of
+    // its kind) at level I in socket 0, where v2's rule would forget it; with two enchantments socketed neither speaks;
+    // Biz's Overclock always (a string warning); Phat Gus has no keystone to keep
+    if (DD.getHero('rasma')) {
+      const ENCH = ['ras_cold_shoulder', 'ras_shocking', 'ras_disarming'];
+      t.ok(ENCH.every(function (id) { const d = DD.getSkill(id); return !!d && d.forgetWarning !== undefined; }), 'Rasma\'s three enchantments carry a forgetWarning');
+      const rest = DD.getHero('rasma').skillPool.filter(function (id) { return ENCH.indexOf(id) < 0; }).slice(0, 3);
+      ENCH.forEach(function (e) {
+        const rh = { id: 'rasma', level: 1, skills: [{ id: e, level: 1 }].concat(rest.map(function (id, i) { return { id: id, level: 1 + (i % 2) }; })) };
+        const i = S.replaceIdx(rh);
+        t.ok(S.isProtected(e, rh) && i > 0 && rh.skills[i].id !== e && rh.skills[i].level === 1, e + ' (his only enchantment): kept; a new skill replaces ' + (rh.skills[i] ? rh.skills[i].id : i));
+      });
+      const two = { id: 'rasma', level: 1, skills: [{ id: ENCH[0], level: 1 }, { id: ENCH[1], level: 2 }].concat(rest.slice(0, 2).map(function (id) { return { id: id, level: 2 }; })) };
+      t.ok(!S.isProtected(ENCH[0], two) && !S.isProtected(ENCH[1], two) && S.replaceIdx(two) === 0, 'with two enchantments neither is protected: the sim may forget the level-I one (socket 0)');
+      t.eq(S.replaceIdx({ id: 'rasma', level: 1, skills: [{ id: ENCH[2], level: 1 }] }), -1, 'with his one enchantment the only socket, the sim skips the new skill (-1)');
+    } else t.log('rasma: not registered (isolated run): his keystone check is skipped');
+    if (DD.getHero('biz')) {
+      const rest = DD.getHero('biz').skillPool.filter(function (id) { return id !== 'biz_overclock'; }).slice(0, 3);
+      const rh = { id: 'biz', level: 1, skills: [{ id: 'biz_overclock', level: 1 }].concat(rest.map(function (id, i) { return { id: id, level: 1 + (i % 2) }; })) };
+      const i = S.replaceIdx(rh);
+      t.ok(!S.isShapeshift('biz_overclock') && S.warns('biz_overclock', rh) && i > 0 && rh.skills[i].id !== 'biz_overclock',
+        'Biz\'s Overclock (his heal) is kept by its forgetWarning; a new skill replaces ' + (rh.skills[i] ? rh.skills[i].id : i));
+    } else t.log('biz: not registered (isolated run): his keystone check is skipped');
+    if (DD.getHero('gus')) {
+      const g = DD.getHero('gus');
+      t.eq(g.skillPool.filter(function (id) { return S.isProtected(id, { id: 'gus', level: 1, skills: [{ id: id, level: 1 }] }); }).join(','), '', 'Phat Gus: no protected skill (nothing for the sim to keep)');
+    }
+    // review-contract (h19): the report's keep count names both kinds (the counter is still G.shapeshiftKept)
+    if (typeof S.reportText === 'function' && typeof S.tally === 'function') {
+      const kept = S.tally().shapeshiftKept;
+      t.ok(new RegExp('skill replacements that kept a protected skill \\(shapeshift or forgetWarning, h19 D4\\) ' + kept + '(?!\\d)').test(S.reportText([])),
+        'the sim report counts shapeshift and forgetWarning keeps under one label (' + kept + ' so far)');
+    }
+  });
+
+  // =====================================================================================================================
+  // h19: heroes 18-20 together (plan .tmp/h19/plan.md §2.3; D11 keeps each new hero's own suite free of the others)
+  // =====================================================================================================================
+  T.suite('integration: h19 — Biz\'s robots with Phat Gus: Cymbal Crash sets up the 7-damage bite, Fine, Have One hastes Spooder, and a robot next to him is no foe to stress-eat at', function (t) {
+    if (!DD.getHero('biz') || !DD.getHero('gus') || !DD.Biz || !DD.Gus || !DD.getEnemy('test_grunt')) { t.skip('needs biz.js, gus.js and tests/fixtures.js (isolated run)'); return; }
+    function arena(enemies) {
+      DD.Combat.sandbox({ w: 9, h: 9, seed: 'int-h19', enemyAi: false, noPlan: true,
+        heroes: [{ id: 'biz', x: 1, y: 4, level: 1, skills: [] }, { id: 'gus', x: 5, y: 4, level: 1, skills: [] }], enemies: enemies,
+        objective: { type: 'custom', text: 'h19 together' }, encounter: { id: 'int_h19_arena', checkObjective: function () { return null; } } });
+      const biz = DD.Combat.heroes().filter(function (u) { return u.defId === 'biz'; })[0];
+      const gus = DD.Combat.heroes().filter(function (u) { return u.defId === 'gus'; })[0];
+      return { biz: biz, gus: gus, hj: DD.Biz.constructOf(biz, 'hjalmarino'), sp: DD.Biz.constructOf(biz, 'spooder') };
+    }
+    function put(u, x, y) { return !!u && ((u.x === x && u.y === y) || DD.Act.teleport(u, x, y, { fx: false, noEnter: true })); }
+    function slot(u, id) { return DD.Combat.slotsOf(u).filter(function (sl) { return sl.id === id; })[0] || null; }
+    function use(u, sl, x, y, label) {
+      const why = sl ? DD.Combat.canUse(u, sl) : 'no slot';
+      const ok = why === true && DD.Combat.useSkill(u, sl, x, y);
+      t.ok(ok, label + ' (@' + x + ',' + y + (why === true ? '' : ': ' + why) + ')');
+      return ok;
+    }
+    function lifts(fn) {
+      const list = [], orig = DD.Act.heal;
+      DD.Act.heal = function (src, target, n, opts) {
+        const got = orig.apply(this, arguments);
+        if (!DD.Act.simulating && opts && /^lift:/.test(String(opts.via))) list.push(String(opts.via) + '>' + (target && target.defId));
+        return got;
+      };
+      try { fn(); } finally { DD.Act.heal = orig; }
+      return list;
+    }
+    // 1. Hjalmarino's Cymbal Crash on Biz's turn, then Phat Gus's Incisor Decision on his: 7 against the Confused grunt,
+    //    5 against the plain one beside it
+    let a = arena([{ id: 'test_grunt', x: 4, y: 4, hpMult: 5 }, { id: 'test_grunt', x: 6, y: 4, hpMult: 5 }]);
+    if (!t.ok(!!(a.biz && a.gus && a.hj && a.sp), 'premise: Biz, Phat Gus and both robots are on the board')) return;
+    const mad = DD.Grid.unitAt(4, 4), calm = DD.Grid.unitAt(6, 4);
+    t.ok(put(a.hj, 4, 3), 'premise: Hjalmarino next to the first grunt');
+    DD.Combat.giveTurnTo(a.biz);
+    use(a.hj, slot(a.hj, 'biz_cymbal_crash'), 4, 4, 'Hjalmarino crashes its cymbals at the grunt');
+    t.ok(DD.Act.hasStatus(mad, 'confused'), 'the grunt is Confused');
+    DD.Combat.giveTurnTo(a.gus);
+    const m0 = mad.hp, c0 = calm.hp;
+    use(a.gus, a.gus.basic, 4, 4, 'Phat Gus bites the Confused grunt');
+    use(a.gus, a.gus.basic, 6, 4, 'Phat Gus bites the plain grunt');
+    t.eq(m0 - mad.hp, 7, 'Incisor Decision deals 7 to the foe Hjalmarino Confused');
+    t.eq(c0 - calm.hp, 5, '…and 5 to one it did not');
+    // 2. Fine, Have One on Spooder: Hasted, so it has 1 more AP on Biz's next turn
+    a = arena([{ id: 'test_grunt', x: 8, y: 8 }]);
+    t.ok(put(a.sp, 5, 5), 'premise: Spooder next to Phat Gus');
+    DD.Combat.giveTurnTo(a.gus);
+    DD.Gus.setCheeks(a.gus, 2);
+    a.gus.skills = [DD.Act.makeSlot('gus_have_one', 1)];
+    use(a.gus, a.gus.skills[0], 5, 5, 'Phat Gus gives Spooder an acorn (reluctantly)');
+    t.ok(DD.Act.hasStatus(a.sp, 'haste'), 'Spooder is Hasted');
+    for (let i = 0; i < 12 && DD.Combat.current() !== a.biz && !DD.Combat.state.result; i++) DD.Combat.endTurn();
+    const spAp = a.sp.ap;
+    t.eq(spAp, a.sp.maxAp + 1, 'Spooder has ' + (a.sp.maxAp + 1) + ' AP on Biz\'s next turn (' + spAp + ')');
+    // 3. the robots are his allies: eating with only Hjalmarino next to him heals nothing; with a grunt there, 3
+    a = arena([{ id: 'test_grunt', x: 5, y: 7, hpMult: 5 }]);
+    t.ok(put(a.hj, 5, 3) && put(a.sp, 4, 4), 'premise: both robots next to Phat Gus, the grunt 3 tiles away');
+    DD.Combat.giveTurnTo(a.gus);
+    DD.Gus.setCheeks(a.gus, 2);
+    a.gus.hp = a.gus.maxHp - 5;
+    a.gus.skills = [DD.Act.makeSlot('gus_root_canal', 1)];
+    let got = lifts(function () { use(a.gus, a.gus.skills[0], 5, 7, 'Root Canal with only robots next to him'); });
+    t.eq(got.join(','), '', 'no stress eating: a robot next to him is no foe');
+    const g = DD.Grid.unitAt(5, 7);
+    t.ok(put(g, 6, 4), 'premise: the grunt walks up next to him');
+    DD.Combat.giveTurnTo(a.gus);
+    DD.Gus.setCheeks(a.gus, 2);
+    a.gus.skills = [DD.Act.makeSlot('gus_root_canal', 1)];
+    got = lifts(function () { use(a.gus, a.gus.skills[0], 6, 4, 'Root Canal with the grunt next to him'); });
+    t.eq(got.join(','), 'lift:gus>gus', 'stress eating with the grunt next to him: one lift:gus on himself');
+    t.log('h19 together: Cymbal Crash → bite ' + (m0 - mad.hp) + ' (plain ' + (c0 - calm.hp) + '), Spooder ' + spAp + ' AP after Fine, Have One');
+  });
+})();
+
+// h19 QA fixes (QA FIXER, core cluster, Nov 20): the engine's preview names the AP Overclock gives (QA-BIZ-6) and the
+// signature log line has one bang (QA-BIZ-8), on Biz's real kit.
+(function () {
+  'use strict';
+  const T = window.DD_TEST;
+  const DD = window.DD;
+  if (!T || !DD) return;
+
+  T.suite('integration: h19 QA — Overclock\'s preview gives the robot "+N AP" (the level\'s grant, +1 with the Universal Remote) and the real use agrees; "Biz unleashes Spoodmarino!" has one bang', function (t) {
+    if (!DD.getHero('biz') || !DD.Biz || !DD.getEnemy('test_grunt') || !DD.getSkill('biz_overclock')) { t.skip('needs biz.js and tests/fixtures.js (isolated run)'); return; }
+    function arena(items) {
+      DD.Combat.sandbox({ w: 9, h: 9, seed: 'int-h19-qa', enemyAi: false, noPlan: true,
+        heroes: [{ id: 'biz', x: 1, y: 4, level: 1, skills: [], items: items || [] }], enemies: [{ id: 'test_grunt', x: 8, y: 8, hpMult: 5 }],
+        objective: { type: 'custom', text: 'h19 qa' }, encounter: { id: 'int_h19_qa', checkObjective: function () { return null; } } });
+      const biz = DD.Combat.heroes().filter(function (u) { return u.defId === 'biz'; })[0];
+      return { biz: biz, sp: biz && DD.Biz.constructOf(biz, 'spooder'), hj: biz && DD.Biz.constructOf(biz, 'hjalmarino') };
+    }
+    // fix:balance B3 (Nov 21): N reads the level (1 since Overclock's 2 → 1), never a literal
+    const grant = DD.getSkill('biz_overclock').levels[0].ap;
+    [[[], grant], [['biz_universal_remote'], grant + 1]].forEach(function (c) {
+      const a = arena(c[0]);
+      const tag = c[0].length ? ' (Universal Remote)' : '';
+      if (!t.ok(!!(a.biz && a.sp && a.hj), 'premise: Biz and both robots' + tag)) return;
+      DD.Combat.giveTurnTo(a.biz);
+      const sl = DD.Act.makeSlot('biz_overclock', 1);
+      a.biz.skills = [sl];
+      [a.sp, a.hj].forEach(function (robot) {
+        sl.cd = 0; sl.usedThisTurn = false;
+        a.biz.ap = Math.max(a.biz.ap || 0, 1);
+        const p = DD.Combat.preview(a.biz, sl, robot.x, robot.y);
+        const e = p.perUnit[robot.id];
+        t.ok(!!e && e.ap === c[1] && !e.apNext && !p.uncertain && e.text.indexOf('+' + c[1] + ' AP') === 0,
+          'aim at ' + robot.name + tag + ': ap ' + c[1] + ', "' + (e && e.text) + '"');
+        t.ok(!p.perUnit[a.biz.id], 'no entry for Biz\'s own 1 AP' + tag);
+        t.log('Overclock → ' + robot.name + tag + ': "' + (e && e.text) + '"');
+        const ap0 = robot.ap;
+        t.ok(DD.Combat.useSkill(a.biz, sl, robot.x, robot.y) && robot.ap === ap0 + c[1], 'the real Overclock gives ' + robot.name + ' ' + c[1] + ' AP' + tag);
+      });
+    });
+    // the signature's log line: one bang
+    const a = arena();
+    if (!a.biz || !a.biz.signature) { t.ok(false, 'premise: Biz has his signature'); return; }
+    const def = DD.getSkill(a.biz.signature.id);
+    DD.Combat.giveTurnTo(a.biz);
+    DD.Combat.state.hype = 100;
+    a.biz.ap = Math.max(a.biz.ap || 0, 3);
+    const pts = DD.Targeting.validTargets(a.biz, a.biz.signature);
+    const n0 = DD.Combat.state.log.length;
+    const ok = pts.length > 0 && DD.Combat.useSkill(a.biz, a.biz.signature, pts[0].x, pts[0].y);
+    // h19:gate: match the skill's own name; the narrator's cosmetic signature pool (DD.rng) has an "unleashes" line too
+    const line = DD.Combat.state.log.slice(n0).filter(function (l) { return l.text.indexOf(' unleashes ' + def.name) >= 0; })[0];
+    t.ok(ok && !!line && line.text === a.biz.name + ' unleashes ' + def.name && !/!!/.test(line.text), 'logged "' + (line && line.text) + '"');
   });
 })();

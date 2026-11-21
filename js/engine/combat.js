@@ -1839,7 +1839,8 @@
       if (r.slot && unit.signature === r.slot) {
         DD.Act.bark(unit, 'signature');
         DD.Act.narrate('signature', { hero: unit.name });
-        DD.Act.log(unit.name + ' unleashes ' + r.def.name + '!', 'hero');
+        // [h19 QA-BIZ-8] a name that already shouts ("Spoodmarino!", "BEHOLD, MARWYN!") gets no second bang
+        DD.Act.log(unit.name + ' unleashes ' + r.def.name + (/[!?]$/.test(r.def.name) ? '' : '!'), 'hero');
       }
       Combat.resolveSkill(unit, slot, { x: x, y: y }, { pay: true });
       return true;

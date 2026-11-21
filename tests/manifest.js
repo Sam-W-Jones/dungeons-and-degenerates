@@ -1,6 +1,7 @@
 /* Test files loaded after the game manifest (missing ones are skipped). One file per owning area.
  * V3: content/hero_benedick.js and content/boss_goats.js ship as empty stubs (their owners replace them); the other new
- * V3 suites do not exist until their owners land them. */
+ * V3 suites do not exist until their owners land them. h19: content/hero_rasma.js, hero_biz.js and hero_gus.js ship as
+ * empty stubs in wave 0 (docs/notes/h19-contract.md); their hero owners replace them. */
 window.DD_EXTRA_SCRIPTS = [
   'tests/fixtures.js',        // rules: test-only heroes/enemies/summons (ids prefixed "test_")
   'tests/core_tests.js',      // lead (V3): DD.finalAct and the act rows, gauntlet scaling, cameo registry, narration variants
@@ -36,6 +37,9 @@ window.DD_EXTRA_SCRIPTS = [
   'tests/content/hero_hjalmar.js',
   'tests/content/hero_pebbles.js',
   'tests/content/hero_benedick.js',       // V3: the 17th hero
+  'tests/content/hero_rasma.js',          // h19: the 18th hero (wave 0: an empty stub; HERO-RASMA replaces it)
+  'tests/content/hero_biz.js',            // h19: the 19th hero (stub first; HERO-BIZ)
+  'tests/content/hero_gus.js',            // h19: the 20th hero (stub first; HERO-GUS)
   'tests/content/shared.js',              // items
   'tests/content/kit.js',                 // generic skills + consumables
   'tests/content/passives.js',            // the Table of Questionable Blessings

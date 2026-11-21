@@ -5985,3 +5985,94 @@
     t.eq(DD.problems.length, p0, 'no warnings');
   });
 })();
+
+// =====================================================================================================
+// h19 QA fixes (QA FIXER, core cluster, Nov 20): previews name the AP an action gives; a signature name that already
+// shouts is logged with one bang.
+// =====================================================================================================
+(function () {
+  'use strict';
+  const T = window.DD_TEST;
+  const DD = window.DD;
+  const H = T.helpers.H, E = T.helpers.E, hero = T.helpers.hero, quiet = T.helpers.quiet;
+  function slotOf(u, id) { return DD.Combat.slotsOf(u).filter(function (s) { return s.id === id; })[0]; }
+
+  T.suite('engine: h19 QA-BIZ-6 — a preview names the AP an action gives ("+1 AP" now, "+1 AP next turn" banked), never the actor\'s own cost', function (t) {
+    const C = DD.Combat;
+    quiet({ w: 9, h: 9, heroes: [H(1, 1, 'test_summoner'), H(1, 4, 'test_knight')], enemies: [E(8, 8)], enemyAi: false });
+    const s = hero(0), k = hero(1);
+    const tur = DD.Act.summon(s, 'test_turret', 3, 1, { ready: true, noFx: true });
+    const gb = slotOf(s, 'test_bark_order');   // Good Boy!: 1 AP, "An ally gains 1 AP this turn."
+    t.ok(!!tur && !!gb && C.isTurnOf(s) && C.isTurnOf(tur) && !C.isTurnOf(k), 'setup: the summoner\'s turn; the turret acts with it, the knight does not');
+    // a unit of the acting group: AP to spend now
+    const tAp = tur.ap, sAp = s.ap;
+    const p = C.preview(s, gb, tur.x, tur.y);
+    const e = p.perUnit[tur.id];
+    t.ok(!!e && e.ap === 1 && !e.apNext && !p.uncertain && e.text === '+1 AP', 'the turret: ap 1, text "+1 AP" (' + (e && e.text) + ')');
+    t.ok(!p.perUnit[s.id], 'the actor\'s own 1 AP cost is no entry (the card\'s pips show it)');
+    t.ok(C.useSkill(s, gb, tur.x, tur.y) && tur.ap === tAp + 1 && s.ap === sAp - 1, 'the real use: the turret has 1 more AP now, the summoner paid 1 (preview = reality)');
+    // another hero, whose turn it is not: banked for its next turn (Act.gainAp's apBank)
+    gb.cd = 0; gb.usedThisTurn = false;
+    const bank0 = k.apBank || 0, kAp = k.ap || 0;
+    const p2 = C.preview(s, gb, k.x, k.y);
+    const e2 = p2.perUnit[k.id];
+    t.ok(!!e2 && e2.apNext === 1 && !e2.ap && e2.text === '+1 AP next turn', 'the knight: apNext 1, text "+1 AP next turn" (' + (e2 && e2.text) + ')');
+    t.ok(!p2.perUnit[s.id], 'again no entry for the actor');
+    t.ok(C.useSkill(s, gb, k.x, k.y) && (k.apBank || 0) === bank0 + 1 && (k.ap || 0) === kAp, 'the real use banks 1 AP for the knight\'s next turn');
+    // an AP drain and a gift to the actor itself (inline defs: nothing paid), and an action that touches no AP
+    const drain = { id: 'test_tmp_ap_drain', name: 'Tmp Drain', target: { type: 'unit', range: [0, 9], filter: 'any' }, levels: [{}],
+      execute: function (ctx) { if (ctx.targetUnit) DD.Act.gainAp(ctx.targetUnit, -1); } };
+    const e3 = DD.Targeting.preview(s, drain, { x: k.x, y: k.y }).perUnit[k.id];
+    t.ok(!!e3 && e3.apNext === -1 && e3.text === '−1 AP next turn', 'a drain: "−1 AP next turn" (' + (e3 && e3.text) + ')');
+    const self = { id: 'test_tmp_ap_self', name: 'Tmp Coffee', target: { type: 'self' }, levels: [{}],
+      execute: function (ctx) { DD.Act.gainAp(ctx.user, 2); } };
+    const e4 = DD.Targeting.preview(s, self, { x: s.x, y: s.y }).perUnit[s.id];
+    t.ok(!!e4 && e4.ap === 2 && e4.text === '+2 AP', 'AP the action gives its own user shows: "+2 AP" (' + (e4 && e4.text) + ')');
+    const fx = C.preview(s, slotOf(s, 'test_whip'), 2, 1);
+    t.ok(!fx.perUnit[s.id], 'a skill that gives no AP: no actor entry');
+    // a lethal hit says KO, not "−N AP"
+    const kill = { id: 'test_tmp_ap_kill', name: 'Tmp Kill', target: { type: 'unit', range: [0, 9], filter: 'any' }, levels: [{}],
+      execute: function (ctx) { if (ctx.targetUnit) DD.Act.kill(ctx.targetUnit, ctx.user); } };
+    const e5 = DD.Targeting.preview(s, kill, { x: tur.x, y: tur.y }).perUnit[tur.id];
+    t.ok(!!e5 && e5.lethal && !e5.ap && !/AP/.test(e5.text), 'a KO carries no AP change (' + (e5 && e5.text) + ')');
+    // dice: the AP over other rolls (aggregate), never the real roll
+    const dice = { id: 'test_tmp_ap_dice', name: 'Tmp Dice', target: { type: 'unit', range: [0, 9], filter: 'any' }, levels: [{}],
+      execute: function (ctx) { if (ctx.targetUnit) DD.Act.gainAp(ctx.targetUnit, ctx.state.rng.next() < 0.5 ? 1 : 2); } };
+    const pd = DD.Targeting.preview(s, dice, { x: tur.x, y: tur.y });
+    const ed = pd.perUnit[tur.id];
+    const agg = pd.samples > 1;
+    t.ok(pd.uncertain && !!ed && ed.uncertain && /^\? /.test(ed.text) && ed.ap >= 1 && ed.ap <= 2 &&
+      (agg ? ed.apMin >= 1 && ed.apMax <= 2 && /\+\d(–\d)? AP/.test(ed.text) : /\+[12] AP/.test(ed.text)),
+      'a random gift: uncertain, "' + (ed && ed.text) + '" (' + pd.samples + ' samples)');
+    // T.diff with no opts (AutoPlay's callers) reports the raw AP change
+    s.ap = 2;
+    const real = C.state;
+    const raw = DD.Targeting.simulate(function (sim) {
+      DD.Combat.byId(s.id).ap -= 1;
+      return DD.Targeting.diff(real, sim, false);
+    });
+    t.ok(!!raw && raw.perUnit[s.id] && raw.perUnit[s.id].ap === -1 && raw.perUnit[s.id].text === '−1 AP', 'diff without opts: the raw change ("−1 AP")');
+    const paid = DD.Targeting.simulate(function (sim) {
+      DD.Combat.byId(s.id).ap -= 1;
+      return DD.Targeting.diff(real, sim, false, { actor: s.id, paid: 1 });
+    });
+    t.ok(!!paid && !paid.perUnit[s.id], 'with { actor, paid: 1 }: the paid AP is left out');
+  });
+
+  T.suite('engine: h19 QA-BIZ-8 — a signature whose name already ends in "!" or "?" is logged with one bang', function (t) {
+    const def = DD.getSkill('test_mage_sig'), name0 = def.name;
+    try {
+      [['Mass Assert', 'Mass Assert!'], ['Mass Assert!', 'Mass Assert!'], ['Mass Assert?', 'Mass Assert?']].forEach(function (c) {
+        def.name = c[0];
+        quiet({ heroes: [H(1, 1)], enemies: [E(4, 1), E(7, 7)], enemyAi: false });
+        const h = hero(), s = DD.Combat.state;
+        s.hype = 100;
+        const n0 = s.log.length;
+        t.ok(DD.Combat.useSkill(h, h.signature, h.x, h.y), '"' + c[0] + '": used');
+        // h19:gate: match the skill's own name; the narrator's cosmetic signature pool (DD.rng) has an "unleashes" line too
+        const line = s.log.slice(n0).filter(function (l) { return /unleashes Mass Assert/.test(l.text); })[0];
+        t.eq(line && line.text, h.name + ' unleashes ' + c[1], 'logged "' + (line && line.text) + '"');
+      });
+    } finally { def.name = name0; }
+  });
+})();

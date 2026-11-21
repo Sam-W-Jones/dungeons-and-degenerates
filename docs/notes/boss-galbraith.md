@@ -215,3 +215,16 @@ Zarathor, Marbles, Syllamin 80% (1.5 counters a fight).
 ## QA fixes (Nov 17, QA FIXER content cluster; the full list: docs/notes/boss-svammiel.md "QA fixes (Nov 17)")
 - **voice-5**: `galbraith_encore` #2 reads "A spotlight finds Galbraith, now a floating skull in a crown. He bows ..." (he,
   never it). Suite "boss_galbraith: QA voice-5". **FIGHTS-11** (svammiel.js): That's a 1 Now removes its chip once spent.
+
+## Polish (fix:polish, Nov 21; render-ui's request, `docs/notes/hud-v2.md` "h19 QA fixes")
+- **Why**: since h19 qa-rasma-1, `fx_render.js` gives the unit on a beam's start tile the cast pose (and turns it to face
+  the target) unless opts `shooter: false`, or that unit was struck by a `damage` FX a moment before and the beam goes on
+  to its own side. Chain Lightning (Abridged) queues all its beams before its damage, so on each hop the hero the bolt
+  had just reached "cast" lightning at its friend. Fix (the request's, nothing else): the hops (`from !== u`) pass
+  `shooter: false`; Galbraith's own first beam, the Frostbite Ray and the Counterspell's beam keep their cast. Look,
+  targets, damage, order and slots are unchanged (display only; no AI, AutoPlay or sim path reads FX opts).
+- **Test**: "boss_galbraith: polish — Chain Lightning's hops leave from the struck foe with shooter: false …" (spies on
+  `DD.FX.push`: three beams, the first from Galbraith without `shooter: false`, each hop from the hero the last beam
+  reached with it, colour and width unchanged, the three lightning hits unchanged, the ray still his). The renderer's
+  half is "sprites: h19 qa-rasma-1". `bash tools/test.sh "suite=boss_galbraith&isolate=galbraith,svammiel"`: 19 suites,
+  381 assertions, PASS (one review suite skips isolated, as before).

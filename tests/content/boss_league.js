@@ -649,7 +649,7 @@
     // the user's heroes (DESIGN §2; Benedick, V3's 17th, may not have landed yet): the registry's name wins when loaded
     const ROSTER = { zarathor: 'Zarathor', syllamin: 'Syllamin', marbles: 'Professor Marbles', marwyn: 'Marwyn', ellaria: 'Ellaria', josiah: 'Josiah',
       sparrow: 'Sparrow', corelos: 'Corelos', slate: 'Slate', buga: 'Mayor Buga', kiri: 'Kiri', betty: 'Betty', basanos: 'Basanos', valdris: 'Valdris',
-      hjalmar: 'Hjalmar', pebbles: 'Pebbles', benedick: 'Benedick' };
+      hjalmar: 'Hjalmar', pebbles: 'Pebbles', benedick: 'Benedick', rasma: 'Rasma', biz: 'Biz', gus: 'Phat Gus' };
     IDS.forEach(function (id) {
       (DD.League.NAMED[id] || []).forEach(function (p) {
         const h = DD.getHero(p[0]);

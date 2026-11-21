@@ -583,3 +583,148 @@ one shot (`debug=1&acts=4&act=4&screen=event&event=ev_a4_book_signing`).
   the counters whispered at an announcement (No Healing, No Signatures, Hype Confiscated) never say "this round" early;
   **FIGHTS-06** the Coven lava counter says it never burns a hag. **voice-4**: the Skill Ban "radio edit" quip stays in
   `svam_quip_svam_ban`; svammiel.js plays it only after the Radio Edit landed this run. Suite "svammiel_lines: QA".
+
+## h19 — heroes 18-20: Rasma, Biz and Phat Gus (H19-VOICE, Nov 18)
+
+READY: h19 voice pools
+
+Every per-hero line other files carry for the three, landed before their hero files (plan D5), verbatim from the judged
+addenda: Rasma `.tmp/h19/addendum-rasma.md` §19, Biz `addendum-biz.md` §19, Phat Gus `addendum-gus.md` §20 (each line
+measured ≤ 70; the longest is Galbraith's Rasma line, 69). Grant: ARCHITECTURE §1 "h19", H19-VOICE.
+
+### Files
+| File | What |
+|---|---|
+| `js/data/svammiel_lines.js` | `HEROES.rasma` / `.biz` / `.gus`: 6 roasts (each names its hero in exact case: "Rasma", "Biz", "Gus" / "Phat Gus"), 3 comebacks in the hero's own voice, 1 twist reaction. Act-4 only, like every pool here. Rasma says "sir" only in his comeback to Svammiel (he). |
+| `js/data/bosses/svammiel.js` | `barks.named` + 3: "Stop bowing, Rasma! Just HIT me like a normal bull!", "Biz, your spider is in my EAR! Get it OUT!", "Put DOWN the acorn, Phat Gus! That's MY floor's acorn!" |
+| `js/data/bosses/goats.js` | `DISS` / `CLOSE` / `BACK` `.rasma` / `.biz` / `.gus` (4 couplets `setup|punchline`, the setup names him; 2 closers; 2 comebacks in his voice); `BANTER` + `{ hero: 'biz' }` (Hjalmarino's cymbals) and `{ hero: 'gus' }` (the chewing, never his shape). Rasma's addendum has no banter. |
+| `js/data/events.js` | `ev_ras_finishing_school` "The Finishing School" 🫖, `ev_biz_scrap` "Free to a Good Home" 🛠️, `ev_gus_picnic` "A Picnic for One (Squirrel)" 🧺: acts [1, 2, 3], `HERO_WEIGHT`, `hero`, `requires: withHero(id)`, 4-5 sentences, one free choice (40 gold), one risk / reward (50%), hints that name the hero, nothing of act 4. |
+| `js/data/bosses/gardener.js` / `galbraith.js` / `coven.js` (Granny Gristle) / `league.js` | one named line per new hero (`NAMED`): the Gardener's three, Galbraith's three, Granny's three, Zarak's Rasma and Biz lines, Warduke's Phat Gus line. |
+| `js/data/narrator.js` | verified, not edited (below). |
+| `tests/content/svammiel_lines.js` | `ROSTER` + `rasma: 'Rasma', biz: 'Biz', gus: 'Phat Gus'` (stand-ins until the files land); `RESERVED` + the three kits' reserved names (addenda §19.5 / §19.5 / §20.5); the count lint + `eighteen|nineteen|twenty`. |
+| `tests/content/narrative.js` | `HERO_EVENTS`, `HERO_NAMES` (`gus: 'Phat Gus'`), `H19_ONE_EVENT_HEROES` (joined to the one-event check), the three events' outcome checkers (`SPEC`), `NAMED_LEVEL_UPS` + `ev_gus_picnic` with `NAMED_HINT`, `COUNT_WORDS` + `eighteen|nineteen|twenty`, the no-act-4-spoiler walk over every real hero (Benedick's alone before). |
+| `tests/content/boss_goats.js` | `ROSTER` + the three; the HERO-7 joke split per new hero (below). |
+| `tests/content/boss_svammiel.js` | three exact-line asserts for the named barks (the count line ~141 is the contract's / integrator's, untouched). |
+| `tests/content/boss_{gardener,league,galbraith,coven}.js` | the NAMES / ROSTER maps + the three; the gardener `heroWords` regex + `Rasma|Biz|Phat|Gus`. |
+
+### The joke split (`boss_goats: QA voice-8 / HERO-7`, one check per new hero)
+Each joke has one owner, asserted both ways (present in its owner's pool, absent from the other's): Svammiel's roasts
+keep "monotaur", the apologies, the smudged monocle (Rasma); the warranty, the reboot ("off and on"), "hiding behind",
+cold-blooded and the recall (Biz); the storage unit and the rent (Phat Gus). The goats' bars and closers keep the cup /
+teacup / china shop, the blade colours, the cold shoulder (Rasma); the rapping robots, Spooder's name, tribute vs
+knockoff, the button (Biz); burying acorns (Phat Gus). Comebacks (`rap_back_*`, the hero's own voice) are outside the
+split, as for Benedick.
+
+### Pronouns and tone (checked by hand and by the suites)
+- Rasma, Biz, Phat Gus he/him everywhere. Hjalmarino and Spooder never get a gendered pronoun: "Hjalmarino claps its
+  cymbals. It does not help."; Zarak's "Tell it I'm an ORC!"; the goats' "a key in its back". In "He shows it to
+  Spooder." the "He" is Biz (plan D8's owner rule, not a pronoun for the construct).
+- Rasma is formal and polite in every line of his ("I'm afraid I must decline your hospitality. Firmly."); "sir" only in
+  the Svammiel comeback, "Gentlemen" only at the goats (he).
+- Phat Gus is an actual squirrel (request.md): no hands, pockets or gear in any line; villains roast his snacking, his
+  cheeks and the creepy trees, never his body; "fat" appears nowhere. The two borderline lines the lead kept stay
+  (Granny's "lovely pie dish", the Gardener's "GRAZING IS PROHIBITED").
+- No line names another hero (the party-filter lints in svammiel_lines, boss_goats and the four boss suites), and no
+  line names one new hero next to another (plan D11). No "only" / "first" Haste or Confuse anywhere (D7).
+
+### narrator.js tips (verified, no edit)
+No new hop, immovable or pocket hero: "Professor Marbles, Betty and Hjalmar hop up 2 levels…" stays true (it names the
+hopping heroes; Hjalmarino is a summon, and "monkeys: born climbers" covers it); Slate is still the only immovable hero;
+"Josiah adds a fourth" pocket (Phat Gus never uses the pockets); "Summons act on their owner's turn" and "Tab cycles
+summons" hold for Biz's constructs; "Summoned allies vanish when the fight ends" holds (they redeploy every fight); the
+Confused tip is the status's rule, unchanged.
+
+### Deviations
+- **Rasma's event, the third label**: the addendum's "Demand satisfaction from the one with the dagger." is 49
+  characters; the narrative suite caps labels at 40. Now "Challenge the one with the dagger." (34; the outcome still
+  "challenges the goblin to a duel of manners").
+- **Biz's event, "Dig for the good stuff."**: both outcomes start with `standIn(s)` and the damage is guarded with
+  `if (s.idx >= 0)`, as in every other hero event (the addendum's two lines had neither; the suite needs the stand-in
+  sentence when the event is forced open without Biz).
+- **Phat Gus's named level-up**: the addendum's hint "50%: Phat Gus levels up. 50%: …" failed the narrative lint "a
+  level-up is the rotation or a named hero" (it only knew hints that open with the name). `NAMED_HINT` now also takes a
+  chance prefix, and `NAMED_LEVEL_UPS` lists `ev_gus_picnic` (4 named level-ups; the suite's cap is 4). DESIGN §11's
+  rule holds: a named level-up is rare, in the hero's own event, and costs something (here a 50% risk of 30% max HP).
+- **The three events' outcome checkers (`SPEC`)** are not named in the grant's list, but every event needs one ("has a
+  checker for each of its choices"), as V3's voice owner added Benedick's.
+- **The spoiler walk** reads a function item desc through `DD.skillDesc(d, 1, null)` (as the UI does, and as `kit.js`
+  checks it with no holder) instead of `String(desc)`, which would stringify the function's source once every hero is
+  walked; it adds the hero's `role`.
+- **League**: addendum-gus gives Phat Gus's League line to "any member, he": Warduke says it (the League's professional;
+  a "policy").
+- `svammiel_lines.js` names suite: a clash with the reserved list is labelled "a hero-side reserved name (Benedick, h19)".
+
+### Requests
+- **h19 integrator (DESIGN §11)**: the classic events now number **39** (22 hero events + 17 generic); §11 still says 35
+  (v2's count; V3's bistro made 36). The three events are named in §11 already.
+- **h19 integrator**: nothing else of mine waits on the hero files. Once `rasma`, `biz` and `gus` register, the coverage
+  loops (svammiel_lines, boss_svammiel's one-named-line loop, boss_goats' voice, the narrative stand-ins) read their real
+  names, which match the lists here ("Rasma", "Biz", "Phat Gus").
+- **Anyone adding a fifth named level-up**: the narrative suite caps them at 4 (`named.length <= 4`).
+
+### Runs
+All on a tree where none of the three hero files registers yet (the coverage loops play them with fixture stand-ins
+under their real names):
+- `tools/test.sh "suite=svammiel_lines&isolate=svammiel,heroes/"`: PASS, 11 suites, 4747 assertions.
+- `tools/test.sh "suite=narrative&isolate=events,narrator,narrative,heroes/"`: PASS, 17 suites, 16065 assertions (the
+  spoiler walk: 17 heroes, 2181 texts; the three logged as not landed).
+- `tools/test.sh "suite=boss_goats&isolate=goats,heroes/"`: PASS, 20 suites (1 skip as before), 696 assertions (the
+  joke split: 21).
+- `tools/test.sh "suite=boss_svammiel&isolate=svammiel,heroes/"`: PASS, 26 suites (3 skips as before), 718 assertions.
+- The four voice suites `boss_{gardener,league,galbraith,coven}: voice` (isolate `<boss>,heroes/`): PASS, 138 / 985 /
+  118 / 446 assertions.
+- Full `bash tools/test.sh`: **PASS — 1323 suites, 152638 assertions, 0 failures**, missing scripts none, 0 "Error in"
+  lines (`.tmp/h19/voice/full_test.txt`).
+
+### Review (h19) — `review:shared`, Nov 19
+All three hero files registered (20 real heroes). Every new line read aloud: Svammiel's roasts, comebacks, twist
+reactions and named barks, the goats' bars, closers, comebacks and banter, the three events and the optional named
+lines. Affectionate, short and in the right names (Rasma, Biz, Phat Gus / Gus), he/him, Hjalmarino and Spooder only
+ever "it" (Zarak's "Tell it", the goats' "a key in its back", "Hjalmarino claps its cymbals"), Rasma's "sir" only to
+Svammiel and "Gentlemen" only to the goats, no villain line about Phat Gus's body, no dialect markers, no line naming an
+absent hero, no "only / first" Haste or Confuse (D7), no act-4 word in a new hero's own texts.
+
+**Fixed** (each pinned by the new suite "svammiel_lines: h19 review — …"; the old lines fail it):
+- `svam_twist_react_rasma`: "Another villain? How thoughtful. I'd only just put the kettle on." was Benedick's
+  reaction ("Another boss? Splendid. I'd only just arrived for this one.") in a waistcoat, against addendum-rasma §3
+  rule 4 (Rasma is not Benedick). Now **"How marvellous, a second host! I'm afraid I'll need another cup."** (64; his
+  "marvellous" and "I'm afraid", the cup). The suite bars Benedick's phrases and the "I'd only just" frame from Rasma's
+  own lines and "sir" / "madam" outside his Svammiel comebacks.
+- Galbraith on Phat Gus: "Eldritch powers, Phat Gus? I have TENURE in eldritch powers." opened with the same three
+  words as Svammiel's roast "Eldritch powers, Phat Gus? I'm the eldritch power. …" (two act-4 villains, one run). Now
+  **"Weird woods magic, Phat Gus? Quaint. I have TENURE in eldritch."** (63; Galbraith's "Quaint", the tenure kept).
+- Granny Gristle on Biz: "Biz, dearie! I do love a cold-blooded boy." retold Svammiel's "cold-blooded" (the joke
+  split gives it to him). Now **"Biz, dearie! Come fix Granny's cauldron. It's only a little cursed."** (67; the Coven's
+  Family Cauldron, the handyman wanted). The suite checks every act-4 villain's named line for the three against
+  Svammiel's openers (first three words) and his split jokes (12 lines).
+- The no-act-4 walk (`narrative: V3 — nothing a first run meets …`) now reads every level of every skill, and each
+  hero's own summons (name, names, desc, barks) and statuses by his skill prefix: Biz's constructs and their skills,
+  Rasma's blades, Phat Gus's cheeks. 20 heroes, 3271 texts (2631 before), all clean.
+
+**Kept on purpose**: Granny's "lovely pie dish" and the Gardener's "GRAZING IS PROHIBITED" (the lead's call; neither
+reads mean); the goats' "That's your stomach. We can hear." (his hunger, not his shape); the picnic's "He feels bigger.
+Wiser. Mostly bigger." (narration of his own feeling after eating a tree, not a villain); Biz's and Phat Gus's twist
+reactions both say "Hang on." (only one hero reacts per twist, `svammiel.js` twistExtras).
+
+**Deviations** (from the addenda, for the reasons above): the three rewritten lines.
+
+**Runs**: `suite=svammiel_lines,boss_svammiel,boss_goats,narrative,boss_{gardener,league,galbraith,coven}` with the
+bosses and `heroes/` isolated, all 20 registered: PASS, 144 suites, 25572 assertions (before the fixes); after:
+voice suites PASS 60 suites / 6855, narrative PASS 17 suites (the walk 3271 texts). One shot: Phat Gus's event at
+1024×640 (`.tmp/h19/review-shared/event_gus_1024.png`), the text and the three choices inside the card.
+
+### QA fixes (h19 qa-fix:content, Nov 20) — findings `voice-2`, `voice-10`, `gus-size-lines-outside-voice`
+- **Joke split (voice-2)**: the plan (§1.2) gives Svammiel the apologies and the stress eating. The goats' Rasma bar
+  "Rasma says sorry with a sword in his hand, …" (an apology joke, and Basanos's "says sorry every time he swings" bar
+  next to it) is now **"Rasma yells "Touché!" every time he gets hit,|man, that's not a riposte. That's a nervous
+  tic."**; their Phat Gus bar "Phat Gus stress-eats every time it gets tense, …" (Svammiel's "Stress eating, Gus?
+  Wonderful.") is now **"Phat Gus says "Fine, have ONE," like it costs him a limb,|one acorn for a friend? That's
+  generous, for him."** `boss_goats` SPLIT: Rasma's Svammiel side `/apologi[sz]|\bsorry\b/`, goats `+ /touch[ée]/`;
+  Phat Gus's Svammiel side `+ /stress/`, goats `+ /have one/`. (addendum-rasma §19.3's finer split, "the apologies
+  ruining villainy" vs "sorry with a sword", is overruled by the plan's wording, which ranks above it.)
+- **"rolled in" (voice-10, gus-size-lines)**: the goats' first Phat Gus bar opens **"Phat Gus showed up with his cheeks
+  stuffed tight,"** (rhyme and chewing joke kept; "rolled" next to his own "Rolling, rolling, rolling." read as a
+  villain's roundness pun). `boss_goats` now checks his bars and closers for roll / round / sphere / fat / chubby /
+  belly.
+- **The picnic (gus-size-lines)**: "He feels bigger. Wiser. Mostly bigger." (narration, not his own voice) is now **"He
+  feels wiser. Mostly fuller."** The review's "kept on purpose" for that line above is superseded.

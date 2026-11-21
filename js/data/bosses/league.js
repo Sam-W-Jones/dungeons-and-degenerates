@@ -1081,6 +1081,8 @@
       ['betty', 'Betty. Horns on the head? Mine come on a helmet. Professional.'],
       ['basanos', 'Basanos. A monster hunter? I hunt hunters. Better pay.'],
       ['pebbles', 'A dog, Pebbles? ...No. I don\'t pet on the clock.'],
+      // h19 (addendum-gus §20.4: any member, he; the League's professional)
+      ['gus', 'The League of Villainy has a snack policy, Phat Gus. It\'s NO.'],
     ],
     lg_skylla: [
       ['zarathor', 'Two warlocks, Zarathor. Only one of us has a decent patron.'],
@@ -1095,6 +1097,9 @@
       ['marwyn', 'Marwyn! Huge beard! Nobody calls YOU a dwarf! Unfair!'],
       ['slate', 'You\'re a golem, Slate. You don\'t get to call ME short.'],
       ['hjalmar', 'Short and sneaky, Hjalmar? Respect. You\'re no dwarf either.'],
+      // h19 (addendum-rasma §19.4, addendum-biz §19.4)
+      ['rasma', 'A minotaur with a monocle! And they call ME a dwarf, Rasma?'],
+      ['biz', 'That tin monkey called me a dwarf, Biz! Tell it I\'m an ORC!'],
     ],
     lg_zargash: [
       ['valdris', 'A cleric with good hair, Valdris. A sin. A vanity sin.'],

@@ -898,3 +898,107 @@ The QA findings for `js/render/*`, `js/ui/*`, `css/style.css` (most severe first
   (self-aimed heal; the ally case unchanged; nothing at full HP; with Marbles loaded, the Whack into a wall reads
   "Hits 1 foe for N · 💚 you heal 5").
 - Display only: no engine, AI or AutoPlay path reads the hint; no balance number moves.
+
+## h19 QA fixes (render-ui cluster, Nov 20) — QA FIXER
+
+The h19 QA findings for `js/render/*`, `js/ui/*`, `css/style.css` and `README.md` (most severe first). This section is the
+cluster's notes; `render-world.md` and `ui-v2.md` point here. Every fix is display only: no engine, AI, AutoPlay or sim
+path reads these fields, so no balance number moves and no sim was run (the audit's numbers stand).
+
+### Fixed
+- **qa-rasma-1 (minor) — the foe Rasma struck "cast" his Positively Shocking arc at its friend.** `fx_render.js`
+  `beamShooter(evt)`: a beam's start-tile unit gets the cast pose and turns to face the target, except (a) with opts
+  `shooter: false`, (b) a unit struck by a `damage` FX at most 8 events / 1.5 s before whose beam goes on to its own
+  side (the struck foe as the arc jumps to its friend, a riposte's arc, the Thunder Jar's and act 2's chain hops). It
+  only flinches. A struck unit lashing back at the other side (Hellish Rebuke) still casts. The fix hint's "only a unit
+  object casts" could not work: `FX.beam` stores `posOf(from)`, a plain {x, y, h}, for units and points alike
+  (`js/core/fx_core.js`, the lead's file). Re-played with qa:rasma's probe (`.tmp/h19/qa-fix-ru/rasma_play.json`, step
+  "arc strike"): the struck grunt's poses `{ idle: 87, hurt: 20 }` (was `cast: 27`), facing −1 → −1 (was → 1).
+- **QA-BIZ-2 (minor) — Zip Line never showed the landing tile.** Generic for every pull, push and reposition the dry run
+  reports: the HUD fills `overlay.moves = [{ unitId, from, to }]` from `perUnit[id].moved` while aiming (the actor
+  landing on the very tile it clicks, a blink, is left out); the renderer draws a dashed mint diamond on the landing
+  tile and an arcing arrow from the unit (`drawMoves`, `renderTo(...).landings`); the hint adds "↷ Kiri lands next to
+  Spooder" (the units around the landing tile once everyone moved, the actor as "you"), else "↷ X moves N tiles", or
+  "↷ N units move (landings marked)" past two. The ↷ badge stays. Looked at: `.tmp/h19/qa-fix-ru/zip_aim.png`
+  (qa:biz's stop=zip scene: "↷ Kiri lands next to Spooder", the mark beyond Spooder).
+- **QA-BIZ-4 (minor) — no cue for where to end the turn to bask.** A new optional hero passive hook
+  `turnEndNote(hero, x, y, moved)` → text ('' = nothing): what the hero's own rule makes of his turn ending on (x, y);
+  `moved = { unit, x, y }` when a summon of his is the one hovering a move (the note is for him where he stands, with it
+  on the hovered tile). The HUD shows it in the move hint (his, and his summon's), the tile panel (a tile that has one)
+  and the End Turn tooltip (where he stands now: "won't bask"). A throwing hook is contained and reported.
+  **Shows once `biz.js` defines it** (request below); Pebbles and Benedick may reuse it.
+- **SCR-1 (minor) + qa-rasma-6 (polish) — hotbar names broke mid-word / lost words to the clamp.** `.hs-name` wraps at
+  spaces only (`word-break: normal; overflow-wrap: normal`) and `fitNames` steps a name that overflows (a word wider
+  than the slot, or a third line) through `.fit1` (.54rem), `.fit2` (.5rem), `.fit3` (.46rem), `.fit4` (.46rem, three
+  tight lines, line-height 1: the slot's slack holds them, 3 px to spare over the level pips at 1024×640); only a word
+  no step fits gets `.fit-break` (the old break). One layout read per step; it runs on each bar build, on resize and
+  when the web fonts arrive; the text node is untouched (tests read `.hs-name` textContent). Every hero's 244 skill
+  names (`.tmp/h19/qa-fix-ru/names.js`: qa:screens' probe plus the fit): **0 mid-word splits, 0 clamped** at 1024×640
+  (200 base, 24 fit1, 10 fit2, 7 fit3, 3 fit4: Fourteen Thousand Teeth, A Disapproving Look, The Acorn That Should Not
+  Be) and at 1280×720 (224 base, 10 / 7 / 3). Rasma's bar at 1024 (`rasma_hotbar_1024_crop.png`): "A / DISAPPROVING /
+  LOOK", "SENDING MY / REGARDS", "A THOUSAND / PARDONS". `DD.HUD.fitNames()` refits on demand (probes).
+- **QA-BIZ-5 (polish) — "(range 1–99)".** `targetInstruction` prints "anywhere" (or "anywhere N+ tiles away") from
+  `DD.UI.ANYWHERE_RANGE` (now exported, 30), the skill tooltip's Range pill words. Zip Line reads "(anywhere)"; its
+  real reach from Spooder is the highlighted targets (the def's `canTarget`).
+- **gus-passive-live-numbers (polish) — base numbers in the passive text.** `DD.UI.passiveText(passive, who)`: the
+  passive's optional `liveDesc(who)` (who = the combat unit or the RunHero; a blank or throwing one falls back), else
+  its `desc` (a string, or a function of who). Used by the HUD's party card tooltip, bar head and inspect panel, the
+  party sheet (`screens/party.js`, the RunHero) and `heroTooltipHtml(id, { who })`; party select, the Hall and recruit
+  keep the base text (no hero yet). **Shows once `gus.js` adds `liveDesc: passiveDesc`** (request below).
+- **gus-hpbar-covers-face (polish).** `renderer.js` widget layout: the head box (top 60% of the sprite box) of the
+  selected unit and of the unit whose turn it is is an obstacle for the HP widgets of units in front of it, whatever
+  its size (`focusHeads`, `renderTo(...).heads`); a front foe's bar rises clear of the face with the usual off-centre
+  leader line. Before, only units under 80% of the front unit's height counted. qa:gus's chomp scene at rot 0
+  (`.tmp/h19/qa-fix-ru/gus_chomp_r0_crop.png`): the grunt's "18" sits above the beanie, his cheeks clear.
+- **SCR-2 (polish) — hard straight edges through Phat Gus's tail on the party select card.** `css/style.css`: the card
+  art (`.hc-art .portrait.noframe .portrait-canvas`) fades out at the left, right and top edges (10%) as well as the
+  feet (two masks, intersected); no hero file touched (D12). Softens Rasma's tail and sword, Benedick's shell and
+  Pebbles too. Looked at: `.tmp/h19/qa-fix-ru/ps_1920_row4.png`, `ps_1920_gus.png`.
+- **SCR-3 (polish) — README listed Benedick before the three.** The party line now runs "…, Pebbles, Rasma the
+  Monotaur, Biz (with Hjalmarino and Spooder, his mechanical monkey and spider), Phat Gus and Benedick the Inevitable.
+  Benedick is a courteous snail knight…"; every other word and the Version 3 / 3.3 lines as they were.
+
+### Not done
+- QA-BIZ-5's optional rewording of a friendly KO on one's own construct ("💥 Hjalmarino is scrapped (reboots later)"):
+  the reboot is Biz's rule and a generic HUD line would have to guess it. Content could give the Big Red Button a def
+  preview text instead.
+
+### Deviations
+- qa-rasma-1: no "unit object only" rule (impossible, see above); a render-side rule plus the `shooter: false` opt-out.
+- Contract additions (ARCHITECTURE is the lead's file: request below): `FX.beam` opts `shooter: false`;
+  `R.overlay.moves`; `renderTo(...).landings` / `.heads`; hero passive `turnEndNote(hero, x, y, moved)` and
+  `liveDesc(who)`; `DD.UI.passiveText`, `DD.UI.ANYWHERE_RANGE`; `DD.HUD.fitNames()`, `endTurnTip()`, `turnEndNote()`.
+
+### Requests
+- **HERO-BIZ / content (`js/data/heroes/biz.js` PASSIVE)** (QA-BIZ-4): add
+  `turnEndNote: function (unit, x, y, moved) { return baskNote(unit, x, y, moved); }` with `baskNote` built like
+  `baskEnd` (biz.js ~541): '' when he already basked this turn or no construct of his is Overclocked by him; else the
+  best `st.data.bask` of an Overclocked construct of his orthogonally next to (x, y), where the construct that is
+  `moved.unit` counts as standing on (moved.x, moved.y): "♨️ Biz basks on Spooder's hot engine: +3 HP", or "♨️ Biz
+  won't bask here: not next to Spooder". The content half of the finding (a log line when an Overclocked robot is
+  alive but not next to him at his turn end) stays content's call.
+- **HERO-GUS / content (`js/data/heroes/gus.js` PASSIVE ~l.1037)** (gus-passive-live-numbers): add
+  `liveDesc: passiveDesc` (it already takes the unit or the RunHero); keep `desc: passiveDesc(null)` for party select.
+- **Content (optional; the renderer already covers these)**: `shooter: false` on `rasma.js:160` (the arc), on the hops
+  of `galbraith.js:713` (`from !== u`: its beams play before the damage, so the struck rule cannot see them) and on
+  `consumables.js:424` / `act2.js:940`. `sparrow.js:259` (the drained foe "casts" the blood beam at Sparrow) has the
+  same quirk, but it is a shipped hero's file (D12): left as is.
+- **Lead (ARCHITECTURE §7.2 overlay, §7.4 FX, §3.1 hero passive)**: the contract additions under Deviations.
+- **Integrator / docs (`tests/docs_tests.js`)** (SCR-3): pin the README party line to `UI.HERO_ORDER` (the three after
+  Pebbles, Benedick last); nothing pins it today.
+
+### Tests
+- `tests/sprite_tests.js`: "sprites: h19 qa-rasma-1 …" (the arc from a struck foe: no cast pose, it flinches, keeps its
+  facing; a caster still casts and faces; `shooter: false`; a rebuke at the other side still casts; a chain hop does
+  not).
+- `tests/render_tests.js`: "render: h19 QA-BIZ-2 …" (one landing mark on the tile with the arrow toward the unit at yaw
+  0 / 30 / 200, nothing without `moves`, junk harmless), "render: h19 gus-hpbar-covers-face …" (a short hero behind a
+  foe whose bar crosses his head: selected or acting, the bar rises clear; the front unit selected: unchanged).
+- `tests/hud_tests.js`: "hud: h19 QA-BIZ-2 …" (the Grappling Hook's pull: `overlay.moves`, "↷ Test Grunt lands next to
+  you", cancel clears it, Blink adds nothing), "hud: h19 QA-BIZ-4 …" (a test passive's note in her move hint, the mud
+  tile's panel, End Turn, the hound's move with `moved`, an empty note adds nothing, a throwing one is contained),
+  "hud: h19 QA-BIZ-5 …", "hud: h19 gus-passive …", "hud: h19 SCR-1 …" (nine long names at the 1024 root size: whole
+  words, nothing clamped, each step needed, the text untouched; a short name stays base; an impossible word breaks).
+- `tests/ui_tests.js`: "ui: h19 SCR-2 … (real page)" (every card picture has the two intersected fades; a frameless
+  portrait elsewhere keeps its one).
+- Full `bash tools/test.sh`: PASS, 0 "Error in" lines.

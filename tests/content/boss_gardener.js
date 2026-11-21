@@ -704,11 +704,11 @@
     });
     t.ok(checked >= 8, checked + ' sentences name the Gardener');
     // generic lines name no hero
-    const heroWords = /\b(Zarathor|Syllamin|Marbles|Professor|Marwyn|Corelos|Josiah|Ellaria|Sparrow|Slate|Mayor|Buga|Kiri|Betty|Basanos|Valdris|Hjalmar|Pebbles|Benedick)\b/;
+    const heroWords = /\b(Zarathor|Syllamin|Marbles|Professor|Marwyn|Corelos|Josiah|Ellaria|Sparrow|Slate|Mayor|Buga|Kiri|Betty|Basanos|Valdris|Hjalmar|Pebbles|Benedick|Rasma|Biz|Phat|Gus)\b/;
     Object.keys(d.barks).forEach(function (k) { if (k !== 'named') d.barks[k].forEach(function (l) { t.ok(!heroWords.test(l), 'generic bark ' + k + ' names no hero: "' + l + '"'); }); });
     // named lines: each names its hero exactly; Benedick's verbatim
     const NAMES = { pebbles: 'Pebbles', betty: 'Betty', hjalmar: 'Hjalmar', ellaria: 'Ellaria', marbles: 'Professor Marbles', marwyn: 'Marwyn', valdris: 'Valdris',
-      zarathor: 'Zarathor', benedick: 'Benedick' };
+      zarathor: 'Zarathor', benedick: 'Benedick', rasma: 'Rasma', biz: 'Biz', gus: 'Phat Gus' };
     B().NAMED.forEach(function (p) {
       const h = DD.getHero(p[0]);
       t.ok(!!NAMES[p[0]] && p[1].indexOf(NAMES[p[0]]) >= 0 && p[1].length <= 70, p[0] + ': names ' + NAMES[p[0]] + ' exactly: "' + p[1] + '"');

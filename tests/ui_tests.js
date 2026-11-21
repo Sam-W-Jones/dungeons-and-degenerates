@@ -1408,14 +1408,18 @@
   const NEW_HEROES = ['kiri', 'betty', 'basanos', 'valdris', 'hjalmar', 'pebbles'];
   // V3: the 17th hero joins after the v2 six (plan §4.12: "he arrives last, obviously")
   const V3_HEROES = ['benedick'];
+  // h19 (plan D2): the 18th to 20th heroes, in the user's order, sit down after the v2 six and before Benedick, who
+  // still arrives last
+  const H19_HEROES = ['rasma', 'biz', 'gus'];
   const SIZES = [[1024, 640], [1280, 720], [1600, 900], [1920, 1080]];
 
   /**
-   * V3 (plan §4.12, §8.4): until Benedick registers (and for an 18th hero after him), the fit suite pads the frame's
-   * roster with cloned heroes up to `n`: the clone carries the longest role, name, race, class and epithet of the
-   * roster, the worst case for a card (the V3 review added race / class / epithet: Benedick's two-line "Snail (Dragon,
-   * Allegedly) Knight of the Margins" overflowed the Hall at 1600×900 while the role-only clones fit). Returns the ids
-   * added (unpadHeroes removes them).
+   * V3 (plan §4.12, §8.4): until the newest heroes register (h19: Rasma, Biz and Phat Gus make 20; and for a 21st
+   * after them), the fit suite pads the frame's roster with cloned heroes up to `n`: the clone carries the longest
+   * role, name, race, class and epithet of the roster, the worst case for a card (the V3 review added race / class /
+   * epithet: Benedick's two-line "Snail (Dragon, Allegedly) Knight of the Margins" overflowed the Hall at 1600×900
+   * while the role-only clones fit). The worst case is read from the registry, so a new hero with a longer string
+   * becomes it. Returns the ids added (unpadHeroes removes them).
    */
   function padHeroes(W, n) {
     const ids = W.DD.UI.heroIds();
@@ -1489,6 +1493,10 @@
     const lastV2 = Math.max.apply(null, NEW_HEROES.map(function (id) { return UI.HERO_ORDER.indexOf(id); }));
     t.ok(V3_HEROES.every(function (id) { return UI.HERO_ORDER.indexOf(id) > lastV2; }) && UI.HERO_ORDER[UI.HERO_ORDER.length - 1] === V3_HEROES[V3_HEROES.length - 1],
       'V3: Benedick joins after the v2 six, last in UI.HERO_ORDER');
+    // h19 (plan D2): Rasma, Biz and Phat Gus, in the user's order, right after the v2 six and before Benedick
+    const h19At = H19_HEROES.map(function (id) { return UI.HERO_ORDER.indexOf(id); });
+    t.ok(h19At.every(function (i, k) { return i === lastV2 + 1 + k; }) && h19At[h19At.length - 1] < UI.HERO_ORDER.indexOf('benedick'),
+      'h19: Rasma, Biz and Phat Gus join after the v2 six, in the user\'s order, before Benedick (' + h19At.join(', ') + ')');
     // the registered real heroes, in the display order (an id in HERO_ORDER that is not registered is ignored)
     const real = UI.HERO_ORDER.filter(function (id) { return !!DD.getHero(id); });
     const registered = Object.keys(DD.defs.heroes).filter(function (id) { return id.indexOf('test_') !== 0; });
@@ -1595,12 +1603,12 @@
         t.ok(ok, w + '×' + h + ': the party select is up');
         if (!ok) continue;
         await tick(80);
-        // V3 (plan §4.12): the registered roster, then (padded with cloned worst-case cards) 17 until Benedick has
-        // landed, and 18 for the next hero after him
+        // V3 (plan §4.12): the registered roster, then (padded with cloned worst-case cards) every count up to 21. h19
+        // (plan §1.3): 18 and 19 while Rasma, Biz and Phat Gus land one by one, 20 once all three have, and 21 for the
+        // next hero after them, so the CSS is proven before they register
         const real = heroN();
         const counts = [real];
-        if (real < 17) counts.push(17);
-        if (real < 18) counts.push(18);
+        for (let n = Math.max(real + 1, 17); n <= 21; n++) counts.push(n);
         for (let c = 0; c < counts.length; c++) {
           const pad = counts[c] > real ? padHeroes(W, counts[c]) : [];
           try {
@@ -1658,6 +1666,13 @@
       const bad3 = cardProblems(W, opts, '.ro-name, .ro-role');
       t.eq(bad3.length, 0, at + ': recruit cards: nothing clipped' + (bad3.length ? ' — ' + bad3.slice(0, 4).join(' | ') : ''));
       t.ok(mb && mb.scrollHeight <= mb.clientHeight + 2, at + ': the pick needs no scrolling (' + (mb && mb.scrollHeight) + ' / ' + (mb && mb.clientHeight) + ')');
+      // [h19 review:shared] the recruits come in the roster's display order (UI.heroIds), as on party select and in
+      // the Hall: Rasma, Biz and Phat Gus after Pebbles, Benedick last (the run layer's registry order had him before them)
+      const inParty = ((W.DD.Run.state && W.DD.Run.state.party) || []).map(function (rh) { return rh && rh.id; });
+      const want = W.DD.UI.heroIds().filter(function (id) { return inParty.indexOf(id) < 0; })
+        .map(function (id) { const d = W.DD.getHero(id); return d.name + (d.epithet ? ' ' + d.epithet : ''); });
+      const got = opts.map(function (o) { const n = o.querySelector('.ro-name'); return n ? n.textContent.trim() : ''; });
+      t.eq(got.join(' | '), want.join(' | '), at + ': the recruit pick lists them in the roster\'s order');
       W.DD.UI.closeAllModals('test');
       // a fresh run for the next roster size (its tavern rolls the recruits again)
       if (W.DD.Run && typeof W.DD.Run.clear === 'function') W.DD.Run.clear();
@@ -2779,5 +2794,70 @@
     } finally {
       if (had) d.showTurns = was; else delete d.showTurns;
     }
+  });
+
+  // h19 (H19-SEATS, plan D9; ARCHITECTURE §3.3, §7.2): Rasma's last charge and Phat Gus's one acorn read "1"
+  T.suite('ui: h19 — a status def with showStacks prints its stack count on the chip from 1; without it, from 2; nothing else changes', function (t) {
+    const UI = DD.UI;
+    const ids = ['ras_frost', 'gus_cheeks', 'burn', 'inspired'].filter(function (id) { return !!DD.getStatus(id); });
+    if (!ids.length) { t.skip('no status to try'); return; }
+    const id = ids[0], d = DD.getStatus(id);
+    const own = function (k) { return { had: Object.prototype.hasOwnProperty.call(d, k), was: d[k] }; };
+    const keep = { showStacks: own('showStacks'), showTurns: own('showTurns') };
+    const badge = function (st) { const b = UI.statusChip(st).querySelector('.st-stacks'); return b ? b.textContent : null; };
+    try {
+      d.showTurns = false;
+      d.showStacks = false;
+      t.eq(badge({ id: id, stacks: 1, turns: -1 }), null, id + ' without the flag: one stack, no number');
+      t.eq(badge({ id: id, stacks: 3, turns: -1 }), '3', 'three stacks: "3"');
+      d.showStacks = true;
+      t.eq(badge({ id: id, stacks: 1, turns: -1 }), '1', 'with showStacks: one stack reads "1" (the last charge, the one acorn)');
+      t.eq(badge({ id: id, stacks: 3, turns: -1 }), '3', 'three stacks still "3"');
+      t.eq(badge({ id: id, turns: -1 }), '1', 'an instance without a stack count reads "1", never "undefined"');
+      t.eq(badge({ id: id, stacks: 0, turns: -1 }), null, 'zero stacks: no number');
+      const chip = UI.statusChip({ id: id, stacks: 1, turns: 2 });
+      t.ok(!chip.querySelector('.st-turns'), 'it adds no turns badge (showTurns is its own flag)');
+      t.ok(!/×1/.test(UI.statusTooltipHtml({ id: id, stacks: 1, turns: -1 })), 'the tooltip title keeps its ×n from 2 (the chip shows the 1)');
+      // a status that does not opt in is unchanged
+      const other = Object.keys(DD.defs.statuses || {}).filter(function (k) { const s = DD.getStatus(k); return s && !s.showStacks && k !== id; })[0];
+      if (other) t.eq(badge({ id: other, stacks: 1, turns: -1 }), null, other + ' (no flag): one stack, no number');
+      ['ras_frost', 'ras_shock', 'ras_charm', 'gus_cheeks'].forEach(function (k) {
+        const s = DD.getStatus(k);
+        if (s) t.log(k + (s.showStacks ? ' sets showStacks: its chip reads "1" at one stack' : ' does not set showStacks (its owner\'s call): it reads from 2'));
+      });
+    } finally {
+      Object.keys(keep).forEach(function (k) { if (keep[k].had) d[k] = keep[k].was; else delete d[k]; });
+    }
+  });
+
+  // [h19 SCR-2] Phat Gus's face-framed card art ended in hard straight edges through his tail (Rasma's and Benedick's too):
+  // the card art fades out at the left, right and top edges as well as the feet; other frameless portraits are unchanged
+  T.suite('ui: h19 SCR-2 — the party select card art fades out at its left, right and top edges (no hard cut through a tail) (real page)', async function (t) {
+    const f = await gameFrame('debug=1&screen=partySelect', 1920, 1080);
+    try {
+      const W = f.contentWindow;
+      const ok = await frameUntil(function () { return W.DD && W.DD.UI && W.DD.UI.current === 'partySelect' && W.document.querySelector('.hc-art .portrait-canvas'); }, 15000);
+      t.ok(ok, 'the party select is up');
+      if (!ok) return;
+      const doc = W.document;
+      const fades = function (n) { const cs = W.getComputedStyle(n); return String(cs.maskImage || cs.webkitMaskImage || '').split(/(?=linear-gradient)/).filter(function (s) { return /linear-gradient/.test(s); }); };
+      const cvs = Array.prototype.slice.call(doc.querySelectorAll('.hc-art .portrait.noframe .portrait-canvas'));
+      t.ok(cvs.length >= 20, cvs.length + ' card pictures');
+      const parts = fades(cvs[0]);
+      t.eq(parts.length, 2, 'two fades: ' + parts.join(' | '));
+      const clearN = function (p) { return (p.match(/transparent|rgba\(0, 0, 0, 0\)/g) || []).length; };
+      t.ok(parts.some(function (p) { return /to right|90deg/.test(p) && clearN(p) >= 2; }), 'one fades both side edges');
+      t.ok(parts.some(function (p) { return !/to right|90deg/.test(p) && clearN(p) >= 2; }), 'one fades the top and the feet');
+      const cs = W.getComputedStyle(cvs[0]);
+      t.ok(/intersect|source-in/.test(String(cs.maskComposite || cs.webkitMaskComposite || '')), 'and they intersect (' + (cs.maskComposite || cs.webkitMaskComposite) + ')');
+      t.eq(cvs.filter(function (c) { return W.getComputedStyle(c).maskImage !== cs.maskImage; }).length, 0, 'every card the same');
+      // a frameless portrait outside the cards keeps the feet-only fade
+      const host = doc.createElement('div');
+      host.appendChild(W.DD.UI.portrait('zarathor', 64, { frame: false }));
+      doc.body.appendChild(host);
+      const other = host.querySelector('.portrait-canvas');
+      if (other) t.eq(fades(other).length, 1, 'a frameless portrait elsewhere keeps its one fade');
+      host.remove();
+    } finally { f.remove(); }
   });
 })();

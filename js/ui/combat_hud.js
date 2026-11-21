@@ -596,6 +596,27 @@
   }
 
   /**
+   * [h19 QA-BIZ-4] What a hero's own passive says about his turn ending here: passive.turnEndNote(hero, x, y, moved) →
+   * text ('' for nothing). For a hero, him ending the turn on (x, y); for a summon of his (moved = { unit, x, y }), him
+   * ending it where he stands once it has moved to (x, y). Biz: "♨️ Biz basks on Spooder's hot engine: +3 HP".
+   */
+  function turnEndNote(u, x, y) {
+    if (!active(u)) return '';
+    let hero = u, at = { x: x, y: y }, moved = null;
+    if (u.kind === 'summon' && u.ownerId) {
+      hero = byId(u.ownerId);
+      if (!active(hero)) return '';
+      at = { x: hero.x, y: hero.y };
+      moved = { unit: u, x: x, y: y };
+    }
+    if (hero.kind !== 'hero') return '';
+    const hd = DD.getHero(hero.defId), pv = hd && hd.passive;
+    if (!pv || typeof pv.turnEndNote !== 'function') return '';
+    const r = DD.safe('turnEndNote of ' + hd.id, pv.turnEndNote, pv, [hero, at.x, at.y, moved]);
+    return typeof r === 'string' ? r.trim() : '';
+  }
+
+  /**
    * Aura threats (shared definition): damage `unit` would take standing on (x, y) from enemies' NON-telegraphed
    * effects before the next player phase — auras, gazes, end-of-round effects (Dr. Iris's Clinical Gaze,
    * Lich-tenstein's Late Fees). An enemy (def hooks, or a status on it) may define
@@ -745,6 +766,26 @@
     });
     return p;
   }
+  /**
+   * [h19 QA-BIZ-6, fix:polish] The AP a preview entry gives or takes (the engine's `ap` = to spend now, `apNext` = banked
+   * for the unit's next turn; an uncertain entry's `apMin` / `apMax` ranges), in the engine's words: "+2 AP", "−1 AP next
+   * turn", "+1–2 AP". '' when none. The number is always the entry's (Overclock's grant may change), never a constant.
+   */
+  function apLabel(e, next) {
+    if (!e) return '';
+    const k = next ? 'apNext' : 'ap';
+    const lo = e[k + 'Min'] !== undefined ? num(e[k + 'Min']) : num(e[k]);
+    const hi = e[k + 'Max'] !== undefined ? num(e[k + 'Max']) : num(e[k]);
+    if (!lo && !hi) return '';
+    const sign = function (n) { return (n < 0 ? '−' : '+') + Math.abs(n); };
+    const body = lo === hi ? sign(hi) : lo >= 0 ? '+' + lo + '–' + hi : hi <= 0 ? '−' + (-hi) + '–' + (-lo) : sign(lo) + '–' + sign(hi);
+    return body + ' AP' + (next ? ' next turn' : '');
+  }
+  /** Both AP labels of an entry; none when a def's own preview text already names the AP. */
+  function apLabels(e) {
+    if (!e || (e.hudCustom && / AP\b/.test(e.hudCustom))) return [];
+    return [apLabel(e, false), apLabel(e, true)].filter(Boolean);
+  }
   /** Engine preview → renderer badges: dmg counts Block absorbed too (the HP bar splits it), extras as icons. */
   function overlayPreviews(p) {
     const out = {};
@@ -759,6 +800,8 @@
       const up = revivedIn(e);
       if (up) parts.push(upText(e));
       if (e.block > 0) parts.push('+' + e.block + '🛡');
+      // [h19 QA-BIZ-6] the AP it gives or takes: Overclock's robot reads "+2 AP ♨️"
+      if (!up && !e.lethal) apLabels(e).forEach(function (s) { parts.push(s); });
       (e.statuses || []).slice(0, 3).forEach(function (sid) { const ic = statusIcon(sid); if (ic) parts.push(ic); });
       if (e.moved) parts.push('↷');
       out[id] = { dmg: num(e.dmg) + num(e.blocked), heal: up ? 0 : num(e.heal), lethal: !!e.lethal, text: parts.join(' ') };
@@ -791,19 +834,53 @@
     return (p.objects || []).some(function (o) { return o.x === at.x && o.y === at.y && o.destroyed; }) ||
       (p.explosions || p.hudBlasts || []).some(function (b) { return b.x === at.x && b.y === at.y; });
   }
+  /**
+   * [h19 QA-BIZ-2] The units a preview moves: [{ unit, to }] from the dry run's perUnit `moved` (unit order). The actor
+   * landing on the very tile it clicks (a blink, a leap) is left out: the click already says where.
+   */
+  function movesOf(p, u, at) {
+    const per = (p && p.perUnit) || {};
+    const out = [];
+    (S() ? S().units : []).forEach(function (x) {
+      const e = per[x.id];
+      if (x.dead || !e || !e.moved || !isFinite(e.moved.x) || !isFinite(e.moved.y)) return;
+      if (x === u && at && e.moved.x === at.x && e.moved.y === at.y) return;
+      out.push({ unit: x, to: { x: e.moved.x, y: e.moved.y } });
+    });
+    return out;
+  }
+  /** "↷ Kiri lands next to Spooder" (the units around the landing tile once everyone has moved), else "↷ Kiri moves 3 tiles". */
+  function movedLine(u, m, all) {
+    const after = function (x) { const o = all.filter(function (k) { return k.unit === x; })[0]; return o ? o.to : x; };
+    const you = m.unit === u;
+    const near = S().units.filter(function (x) {
+      if (x === m.unit || x.dead) return false;
+      const q = after(x);
+      return Math.abs(q.x - m.to.x) + Math.abs(q.y - m.to.y) === 1;
+    }).sort(function (a, b) { return (a === u ? 0 : DD.Grid.hostile(u, a) ? 2 : 1) - (b === u ? 0 : DD.Grid.hostile(u, b) ? 2 : 1); });
+    const name = function (x) { return x === u ? 'you' : x.name; };
+    if (near.length) return '↷ ' + (you ? 'you land' : m.unit.name + ' lands') + ' next to ' + near.slice(0, 2).map(name).join(' and ') + (near.length > 2 ? ' and ' + (near.length - 2) + ' more' : '');
+    const n = Math.abs(m.to.x - m.unit.x) + Math.abs(m.to.y - m.unit.y);
+    return '↷ ' + (you ? 'you move ' : m.unit.name + ' moves ') + plural(n, 'tile');
+  }
   /** One-line summary of a preview for the hint bar (foes hit, KOs, friendly fire, revives, Hype, objects, blasts). */
   function previewSummary(u, p, at) {
     if (!p) return '';
     const brk = previewBreaks(p, at);
     const per = p.perUnit || {};
     let foes = 0, kos = 0, heals = 0, total = 0;
-    const allies = [], ups = [], custom = {}, customOrder = [];
+    const allies = [], ups = [], custom = {}, customOrder = [], aps = [];
     Object.keys(per).forEach(function (id) {
       const t = byId(id), e = per[id];
       // [QA HERO-1] a def's own preview text, grouped by text: "📦 11 next turn → Test Grunt"
       if (t && e && e.hudCustom) {
         if (!custom[e.hudCustom]) { custom[e.hudCustom] = []; customOrder.push(e.hudCustom); }
         custom[e.hudCustom].push(t.name);
+      }
+      // [h19 QA-BIZ-6] AP given or taken, now or banked: "Hjalmarino +2 AP", "Slate +1 AP next turn", the actor's own as "you"
+      if (t && e && !revivedIn(e) && !e.lethal) {
+        const al = apLabels(e);
+        if (al.length) aps[t === u ? 'unshift' : 'push']((t === u ? 'you' : t.name) + ' ' + al.join(', '));
       }
       if (!t || t === u) return;
       if (revivedIn(e)) { ups.push('🆘 ' + upText(e).replace('UP! ', 'UP! ' + t.name + ' gets back up with ') + ' (0 AP now; ' + upWhen(t) + ')'); return; }
@@ -837,12 +914,17 @@
     if (kos) parts.push('💀 ' + kos + ' KO');
     if (heals) parts.push('💚 heals ' + plural(heals, 'ally', 'allies'));
     if (allies.length) parts.push('⚠ hits ' + (allies.length <= 2 ? allies.join(' and ') : allies.length + ' allies') + '!');
+    if (aps.length) parts.push('⚡ ' + (aps.length <= 3 ? aps.join(', ') : aps.slice(0, 2).join(', ') + ' and ' + (aps.length - 2) + ' more'));
     if (p.hype > 0) parts.push('+' + p.hype + ' Hype');
     (p.objects || []).filter(function (o) { return !((det || brk) && at && o.x === at.x && o.y === at.y); }).slice(0, 2).forEach(function (o) {
       const d = DD.getObject(o.id);
       if (o.destroyed) parts.push('💥 ' + (d ? d.name : o.id));
     });
     (p.spawned || []).slice(0, 2).forEach(function (sp) { parts.push('✨ ' + sp.name); });
+    // [h19 QA-BIZ-2] where a moved unit lands (the board also marks the tile)
+    const mv = movesOf(p, u, at);
+    if (mv.length > 2) parts.push('↷ ' + mv.length + ' units move (landings marked)');
+    else mv.forEach(function (m) { parts.push(movedLine(u, m, mv)); });
     const self = per[u.id];
     if (self && self.dmg > 0) parts.push(det ? '⚠ ' + u.name + ' is in the blast: −' + self.dmg + (self.lethal ? ' 💀' : '') : 'costs you ' + self.dmg + ' HP');
     // [heal QA-3] the actor's own heal inside the action (a slam into a wall, a ghosting, a crowded Transform, a drain):
@@ -921,7 +1003,10 @@
     if (tg.type === 'self') return 'Click ' + u.name + ' (or press the key again) to use it';
     if (tg.type === 'dir') return 'Aim with the mouse and click a direction';
     const r = DD.safe('HUD range', DD.Targeting.range, DD.Targeting, [u, def, armedLevel()]) || [1, 1];
-    const rt = r[1] <= 1 ? 'adjacent' : 'range ' + (r[0] === r[1] ? r[1] : r[0] + '–' + r[1]);
+    // [h19 QA-BIZ-5] a reach past any board reads "anywhere", as the skill's Range pill does (DD.UI.ANYWHERE_RANGE)
+    const any = num(DD.UI && DD.UI.ANYWHERE_RANGE, 30);
+    const rt = r[1] <= 1 ? 'adjacent' : r[1] >= any ? (r[0] > 1 ? 'anywhere ' + r[0] + '+ tiles away' : 'anywhere') :
+      'range ' + (r[0] === r[1] ? r[1] : r[0] + '–' + r[1]);
     let what = tg.type === 'tile' ? (FILTER_TEXT[tg.filter] && tg.filter !== 'any' ? FILTER_TEXT[tg.filter] : 'a tile') : (FILTER_TEXT[tg.filter || 'enemy'] || 'a target');
     // v2 (user requests): the extra targets on offer right now — explosive objects, downed allies
     if (tg.type !== 'tile') {
@@ -1406,7 +1491,12 @@
 .hud-skill.kind-summon .hs-icon { background: radial-gradient(circle at 50% 35%, #2c5a6a, #0c1d24); border-color: rgba(120,210,240,.6); }
 .hud-skill.kind-move .hs-icon { background: radial-gradient(circle at 50% 35%, #2f4a6e, #0d1626); border-color: rgba(140,180,255,.6); }
 .hud-skill.kind-utility .hs-icon { background: radial-gradient(circle at 50% 35%, #4b4b4b, #181818); border-color: rgba(220,220,220,.5); }
-.hud-skill .hs-name { font-family: var(--f-display); font-weight: 700; font-size: .6rem; line-height: 1.12; color: var(--gold-4); max-width: 100%; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; word-break: break-word; }
+.hud-skill .hs-name { font-family: var(--f-display); font-weight: 700; font-size: .6rem; line-height: 1.12; color: var(--gold-4); max-width: 100%; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; word-break: normal; overflow-wrap: normal; }
+.hud-skill .hs-name.fit1 { font-size: .54rem; }
+.hud-skill .hs-name.fit2 { font-size: .5rem; letter-spacing: -.01em; }
+.hud-skill .hs-name.fit3 { font-size: .46rem; letter-spacing: -.02em; }
+.hud-skill .hs-name.fit4 { font-size: .46rem; letter-spacing: -.02em; line-height: 1; -webkit-line-clamp: 3; }
+.hud-skill .hs-name.fit-break { overflow-wrap: anywhere; }
 .hud-skill .hs-key { position: absolute; left: .22rem; top: .22rem; font-size: .58rem; min-width: 1.15em; height: 1.2em; }
 .hud-skill .hs-ap { position: absolute; right: .2rem; top: .2rem; min-width: 1.1rem; height: 1.1rem; padding: 0 .15rem; border-radius: 999px; display: flex; align-items: center; justify-content: center; font-size: .64rem; font-weight: 900; color: #062433; background: radial-gradient(circle at 35% 30%, #e0f8ff, var(--ap) 60%, #1d6f94); border: 1px solid #c8f1ff; box-shadow: 0 1px 2px rgba(0,0,0,.6); }
 .hud-skill .hs-ap.free { color: #06240e; background: radial-gradient(circle at 35% 30%, #eaffe0, #73c96f 60%, #2b6f2c); border-color: #d6ffc8; }
@@ -1499,6 +1589,7 @@
 .hi-line.brk { color: #cfe4f2; }
 .hi-line.revive { color: #c6f7cf; }
 .hi-line.fly { color: #d6e9ff; }
+.hi-line.endnote { color: #ffd9b0; }
 .hi-flavor { font-size: .76rem; font-style: italic; color: var(--text-3); line-height: 1.35; border-top: 1px solid rgba(198,156,75,.2); padding-top: .35rem; }
 
 .hud-log { position: absolute; top: 4.05rem; right: var(--hg); width: 17.6rem; display: flex; flex-direction: column; padding: .38rem .45rem .45rem; pointer-events: auto; z-index: 2; }
@@ -1845,7 +1936,7 @@
       const eng = engagedBy(u);
       if (eng.length) h += '<div class="tt-aura">⚔ ' + esc('Engaged: moving away provokes ' + eng.map(function (r) { return r.unit.name + (r.skillName ? ' (' + r.skillName + ')' : '') + ' ' + r.dmg; }).join(', ') + '. Skill dashes, pushes and teleports don\'t.') + '</div>';
     }
-    if (u.kind === 'hero' && d.passive) h += '<div class="tt-desc"><b>' + esc(d.passive.name || 'Passive') + ':</b> ' + esc(d.passive.desc || '') + '</div>';
+    if (u.kind === 'hero' && d.passive) h += '<div class="tt-desc"><b>' + esc(d.passive.name || 'Passive') + ':</b> ' + esc(DD.UI.passiveText(d.passive, u)) + '</div>';
     if (u.kind === 'hero') h += blessingsHtml(u);
     if (u.kind !== 'hero' && d.desc) h += '<div class="tt-flavor">' + esc(d.desc) + '</div>';
     const items = (u.items || []).map(function (id) { const it = DD.getItem(id); return it ? (it.icon || '') + ' ' + it.name : null; }).filter(Boolean);
@@ -2734,7 +2825,7 @@
     const warn = stunned(u) ? 'Stunned' : hasSt(u, 'sheep') ? 'Sheep — can only move' : hasSt(u, 'root') ? 'Rooted — can\'t move' : hasSt(u, 'silenced') ? 'Silenced — no spells' : '';
     if (warn) E.barHead.appendChild(el('span.bh-warn', null, warn));
     DD.UI.tooltip(E.barHead, u.kind === 'hero' && d.passive
-      ? '<div class="tt"><div class="tt-title">' + esc(d.passive.name || 'Passive') + '</div><div class="tt-desc">' + esc(d.passive.desc || '') + '</div>' + blessingsHtml(u) + '</div>'
+      ? '<div class="tt"><div class="tt-title">' + esc(d.passive.name || 'Passive') + '</div><div class="tt-desc">' + esc(DD.UI.passiveText(d.passive, u)) + '</div>' + blessingsHtml(u) + '</div>'
       : function () { return unitTooltipHtml(u); }, { pos: 'top' });
     const skills = el('div.hud-group');
     m.slots.forEach(function (x) { skills.appendChild(buildSkillButton(u, x)); });
@@ -2751,6 +2842,29 @@
       m.acts.slice(0, 3).forEach(function (x, i) { acts.appendChild(buildActButton(u, x, i)); });
       E.barGroups.appendChild(acts);
     }
+    fitNames(E.barGroups);
+  }
+
+  /**
+   * [h19 SCR-1 / qa-rasma-6] Hotbar names keep their words whole: a name with a word wider than its slot, or one that
+   * needs a third line ("A / THOUSAND / PARDONS"), steps its font down (.54 → .5 → .46rem), then takes three tight lines
+   * at .46rem (the slot's slack holds them); only past the last step may a word break (the old rule). One layout read per
+   * step; a bar that is not laid out (hidden) is left as it is. Runs on every bar build, a window resize (the slots
+   * narrow under 1180 px) and when the web fonts arrive.
+   */
+  const NAME_FIT = ['fit1', 'fit2', 'fit3', 'fit4'];
+  function nameOverflows(n) { return n.scrollWidth > n.clientWidth + 1 || n.scrollHeight > n.clientHeight + 1; }
+  function fitNames(root) {
+    if (!root) return 0;
+    let list = Array.prototype.slice.call(root.querySelectorAll('.hud-skill .hs-name'));
+    list.forEach(function (n) { n.classList.remove('fit1', 'fit2', 'fit3', 'fit4', 'fit-break'); });
+    list = list.filter(function (n) { return n.clientWidth > 0 && nameOverflows(n); });
+    for (let i = 0; i < NAME_FIT.length && list.length; i++) {
+      list.forEach(function (n) { if (i) n.classList.remove(NAME_FIT[i - 1]); n.classList.add(NAME_FIT[i]); });
+      list = list.filter(nameOverflows);
+    }
+    list.forEach(function (n) { n.classList.add('fit-break'); });
+    return list.length;
   }
 
   /** The units that act between the end of this turn and the next hero turn (what End Turn plays out). */
@@ -2776,6 +2890,9 @@
       const foes = next.filter(function (u) { return !playerSide(u); }).length;
       if (foes) h += '<div class="tt-foot">' + esc(plural(foes, 'enemy', 'enemies') + ' act before your next hero. Hold Alt to see where they can reach.') + '</div>';
     }
+    // [h19 QA-BIZ-4] what his own turn-end rule makes of where he stands (Biz: basks, or won't)
+    const note = cur && cur.side === 'hero' ? turnEndNote(cur, cur.x, cur.y) : '';
+    if (note) h += '<div class="tt-target">' + esc(note) + '</div>';
     return h + '</div>';
   }
   function rollTip() {
@@ -3103,7 +3220,7 @@
         box.push(el('div.hi-sec', null, '⚠ Auras: ' + auraTotal(auras) + ' before ' + u.name + '\'s next turn'));
         auras.slice(0, 4).forEach(function (t) { box.push(el('div.hi-line.aura', null, auraDetail(t))); });
       }
-      if (u.kind === 'hero' && d.passive) box.push(el('div.hi-line', { html: '<b>' + esc(d.passive.name || 'Passive') + ':</b> ' + esc(d.passive.desc || '') }));
+      if (u.kind === 'hero' && d.passive) box.push(el('div.hi-line', { html: '<b>' + esc(d.passive.name || 'Passive') + ':</b> ' + esc(DD.UI.passiveText(d.passive, u)) }));
       const bless = u.kind === 'hero' && typeof DD.UI.passiveChip === 'function' ? (u.passives || []).filter(function (p) { return p && p.def; }) : [];
       if (bless.length) box.push(el('div.hi-bless', null, bless.map(function (p) { return DD.UI.passiveChip({ id: p.id, level: p.level }, { tipPos: 'left', role: !!p.role }); })));
     }
@@ -3192,6 +3309,9 @@
       box.push(el('div.hi-sec', null, '⚠ If ' + sel.name + ' ends the turn here'));
       auras.slice(0, 4).forEach(function (x) { box.push(el('div.hi-line.aura', null, auraDetail(x))); });
     }
+    // [h19 QA-BIZ-4] his own turn-end rule on this tile (Biz's bask; for his summon: once it has moved here)
+    const endNote = sel && controllable(sel) ? turnEndNote(sel, t.x, t.y) : '';
+    if (endNote) box.push(el('div.hi-line.endnote', null, endNote));
     return box;
   }
 
@@ -3368,7 +3488,9 @@
           parts.push('⚠ Ending the turn here: <b>' + esc(here.map(function (t) { return t.label + ' ' + t.dmg + (t.pierce ? ' (ignores Block)' : ''); }).join(' + ')) + '</b> before ' + esc(u.name) + '\'s next turn' + lethal + '.');
         }
         if (e.edge) parts.push('Next to a drop — easy to get shoved in.');
-        if (parts.length) return { text: parts.join(' '), cls: 'warn' };
+        // [h19 QA-BIZ-4] the hero's own turn-end rule (Biz's bask), for him or for his summon's move
+        const endNote = turnEndNote(u, h.x, h.y);
+        if (parts.length) return { text: parts.join(' ') + (endNote ? ' ' + esc(endNote) : ''), cls: 'warn' };
         const escape = now0.length ? ' ✓ Out of ' + esc(now0.map(function (t) { return t.label; }).join(' and ')) + ' here (' + auraTotal(now0) + ' where ' + esc(u.name) + ' stands).' : '';
         // next to foes whose attack of opportunity is spent this round: this walk away is free
         const spent = spentGuards(u);
@@ -3376,7 +3498,7 @@
         // rules run: say so when the walk goes through allies (they never block a friend)
         const thru = walkedThrough(u, e);
         const via = thru.length ? ' Walks through ' + esc(DD.UI.andList(thru.map(function (o) { return o.name; }))) + '.' : '';
-        return { text: 'Move here: ' + moveCost(u) + ' AP' + (e.cost ? ' (path cost ' + e.cost + ' of ' + effMov(u) + ')' : '') + '.' + via + escape + free + (escape || free ? '' : ' <span class="hh-dim">· hold <b>Alt</b> for enemy reach</span>'), cls: escape || free ? 'good' : '' };
+        return { text: 'Move here: ' + moveCost(u) + ' AP' + (e.cost ? ' (path cost ' + e.cost + ' of ' + effMov(u) + ')' : '') + '.' + via + escape + free + (endNote ? ' ' + esc(endNote) : '') + (escape || free ? '' : ' <span class="hh-dim">· hold <b>Alt</b> for enemy reach</span>'), cls: escape || free ? 'good' : '' };
       }
       // rules run: an adjacent ally — swap places (or select it); a farther one — walk through it
       const si = hoveredSwap(u, h);
@@ -3465,6 +3587,7 @@
     ov.threat = null; ov.reach = null;
     ov.objTargets = []; ov.reviveTargets = [];
     ov.passTiles = []; ov.swapTiles = []; ov.swap = null; ov.ghosts = null; ov.breakTargets = []; ov.objPreview = null;
+    ov.moves = null;
   }
   /**
    * Target tiles → overlay, plus the v2 extras: explosive objects (💥 marker), breakable ones (rules run: 🔨 marker)
@@ -3593,6 +3716,9 @@
       const p = previewAt(u, t);
       if (p) {
         ov.areaTiles = (tileDetonates(p, t) ? [{ x: t.x, y: t.y }].concat(p.blast || []) : p.tiles || []).slice(); ov.previews = overlayPreviews(p);
+        // [h19 QA-BIZ-2] where the action puts each unit it moves (the dry run's perUnit moved): the landing tile
+        const mv = movesOf(p, u, t);
+        if (mv.length) ov.moves = mv.map(function (m) { return { unitId: m.unit.id, from: { x: m.unit.x, y: m.unit.y }, to: { x: m.to.x, y: m.to.y } }; });
         // rules run: aimed at a breakable object — its HP bar shows the hit (overlay.objPreview)
         const brk = previewBreaks(p, t);
         if (brk) ov.objPreview = { x: t.x, y: t.y, dmg: num(brk.dmg), breaks: !!brk.destroyed };
@@ -4994,6 +5120,10 @@
     // any input (pointer, wheel, keys — over the board or the panels) restarts the idle clock
     M.onInput = function () { noteInput(); };
     INPUT_EVENTS.forEach(function (n) { window.addEventListener(n, M.onInput, { capture: true, passive: true }); });
+    // [h19 SCR-1] the hotbar names refit when the slots change width or the web fonts arrive
+    M.onFit = function () { if (M) fitNames(M.els.barGroups); };
+    window.addEventListener('resize', M.onFit);
+    if (document.fonts && document.fonts.addEventListener) document.fonts.addEventListener('loadingdone', M.onFit);
     // host the initiative dice moment for fx_render's 'initiative' marker
     if (DD.FXRender && DD.FXRender.moments) DD.FXRender.moments.initiative = MOMENT_HOST;
     // V3: and Svammiel's blocking cameos (fx_render's 'cameo' event)
@@ -5014,6 +5144,10 @@
     if (M.onAltDown) window.removeEventListener('keydown', M.onAltDown, true);
     if (M.onAltUp) window.removeEventListener('keyup', M.onAltUp, true);
     if (M.onBlur) window.removeEventListener('blur', M.onBlur);
+    if (M.onFit) {
+      window.removeEventListener('resize', M.onFit);
+      if (document.fonts && document.fonts.removeEventListener) document.fonts.removeEventListener('loadingdone', M.onFit);
+    }
     if (DD.FXRender && DD.FXRender.moments && DD.FXRender.moments.initiative === MOMENT_HOST) delete DD.FXRender.moments.initiative;
     if (DD.FXRender && DD.FXRender.moments && DD.FXRender.moments.cameo === CAMEO_HOST) delete DD.FXRender.moments.cameo;
     M.offs.forEach(function (off) { DD.safe('HUD unsubscribe', off); });
@@ -5040,6 +5174,11 @@
   /** HUD actions for tests and the console (the same code paths the mouse and keyboard use). */
   DD.HUD = {
     mounted: function () { return !!M; },
+    /** [h19 SCR-1] Refit the hotbar names now (after a probe changes one); → how many still had to break a word. */
+    fitNames: function () { return M ? fitNames(M.els.barGroups) : 0; },
+    /** [h19 QA-BIZ-4] The End Turn button's tooltip HTML, and a hero passive's turn-end note for a unit ending on (x, y). */
+    endTurnTip: function () { return M ? endTurnTip() : ''; },
+    turnEndNote: function (unit, x, y) { const u = unit && unit.id ? unit : byId(unit); return M && u ? turnEndNote(u, x === undefined ? u.x : x, y === undefined ? u.y : y) : ''; },
     selected: function () { return selectedUnit(); },
     mode: function () { return M ? Object.assign({}, M.mode) : null; },
     lock: function () { return lockReason(); },

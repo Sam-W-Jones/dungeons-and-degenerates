@@ -147,12 +147,19 @@
         return { content: UI.heroMini(rh, i, { tooltip: false }), desc: rh.dead ? 'Written out — the seat is empty.' : 'Leaves the campaign.', onPick: function () { pickNew(i); } };
       }),
     });
+    // [h19 review:shared] the recruits in the roster's display order (party select, the Hall): the run layer lists them
+    // in registry order, which put Benedick before Rasma, Biz and Phat Gus once the twenty loaded
+    const rank = UI.heroIds();
+    const shown = cands.slice().sort(function (a, b) {
+      const ia = rank.indexOf(a), ib = rank.indexOf(b);
+      return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib) || cands.indexOf(a) - cands.indexOf(b);
+    });
     function pickNew(replaceIdx) {
       const lvl = joinLevel(run, replaceIdx);
       UI.choice({
         title: 'Recruit: Who Joins?', icon: '🍺', size: 'lg', cancelLabel: 'Back', onCancel: doRecruit,
         text: 'New recruits join at level ' + lvl + ' (the lowest level of the heroes who stay) with full HP, an automatic build and their Blessings already rolled.',
-        options: cands.map(function (id) {
+        options: shown.map(function (id) {
           const d = DD.getHero(id);
           return {
             content: el('div.recruit-opt', { style: { '--hc': d.color || '#c9a24f' } }, UI.portrait(id, 56), el('div.ro-text', null, el('div.ro-name', null, d.name + (d.epithet ? ' ' + d.epithet : '')), el('div.ro-role', null, [d.race, d.cls].filter(Boolean).join(' ') + (d.role ? ' · ' + d.role : '')))),

@@ -65,10 +65,34 @@ V3 adds these owners and files (each new file's suite and notes belong to its ow
 | BAL | `js/data/balance.js` (after the flip) + each fight's knobs through its owner |
 | QA | `.tmp/v3/qa/` only (screenshots, playtest notes; findings go to the owners as requests) |
 
+**h19 (heroes 18-20: Rasma, Biz and Phat Gus; plan `.tmp/h19/plan.md` §1, decisions §0.2 D1-D14; the lead's contract
+`docs/notes/h19-contract.md`).** The v2 and V3 rows keep their files; h19 adds three hero owners and grants two wave-1
+owners named blocks inside other owners' files (the block, never the whole file: the rest stays its owner's). None of
+the 17 shipped heroes' files changes (D12). Landing rule (D5): wave 0 lands empty valid stubs, the manifests and the
+count widenings; the voice owner lands all three heroes' pools, named lines and events from day one; the seats owner
+lands the order, the seats and the 20-card fit; the hero owners replace their stubs; the integrator adds the ids to
+`ALL` / `REAL` last. `docs/DESIGN.md` has one writer at a time (D13): the contract pastes the three briefs, hero owners
+write changes as a "DESIGN §6 brief (h19)" block in their notes, the integrator re-syncs, BAL updates number quotes.
+
+| h19 owner | Files (writes) |
+|---|---|
+| Lead: contract (wave 0, `h19:contract`; `h19:review-contract` owns the same files for its run) | this file (§1 h19 rows, §3.1, §3.2 `forgetWarning`, §3.3 `showStacks`), `docs/DESIGN.md` (§1-3 counts and pronouns, §5 notes, §6 house rules / reserved names / Sustain / the three briefs / §6.1, §11), `js/manifest.js`, `tests/manifest.js`, `tests/core_tests.js` (the manifest suites), the stubs `js/data/heroes/{rasma,biz,gus}.js` and `tests/content/hero_{rasma,biz,gus}.js` and the note skeletons `docs/notes/hero-{rasma,biz,gus}.md` (their hero owners replace all nine), `tests/content/boss_svammiel.js` (the named-line count only), `tests/content/integration.js` (`PENDING_HEROES` and the forget-rule twin only), `tests/sim/sim.js` (the protected-skill rule, `WORN['lift:gus']`, the header), `docs/notes/h19-contract.md` |
+| H19-VOICE (`h19:voice`, wave 1: the NARRATIVE, C5, C6 and C1-C4 per-hero blocks) | in the game files, only the `rasma`, `biz` and `gus` entries of: `js/data/svammiel_lines.js` (`HEROES.rasma` / `.biz` / `.gus`), `js/data/bosses/svammiel.js` (`barks.named`: the three lines), `js/data/bosses/goats.js` (the three heroes' `rap_diss_*` / `rap_close_*` / `rap_back_*` in DISS / CLOSE / BACK, optional BANTER `{ hero: id }`), `js/data/events.js` (three hero events: `ev_ras_finishing_school`, `ev_biz_scrap`, `ev_gus_picnic`), the optional one named line per new hero in `js/data/bosses/{gardener,league,galbraith,coven}.js`; `js/data/narrator.js` (verify only: a tip that turns false); in their suites, only these lists and checks: `tests/content/svammiel_lines.js` (ROSTER, reserved names, COUNT_WORDS), `tests/content/narrative.js` (HERO_EVENTS, HERO_NAMES, `H19_ONE_EVENT_HEROES`, COUNT_WORDS, the no-act-4-spoiler walk over every real hero), `tests/content/boss_goats.js` (ROSTER, one joke-split check per hero), `tests/content/boss_svammiel.js` (the three exact named lines, never the count line), `tests/content/boss_{gardener,league,galbraith,coven}.js` (NAMES maps, the gardener `heroWords` regex); `docs/notes/narrative.md` ("h19", the line "READY: h19 voice pools") |
+| H19-SEATS (`h19:seats`, wave 1: the META-UI and RENDER-WORLD lists) | `js/ui/ui.js` (`UI.HERO_ORDER`, `statusChip`'s `showStacks`), `css/style.css` (the party select `.ps-roster.many` / `.ps-body.many`, the Hall `.hall-heroes.many`, the tavern recruit grid), `js/ui/screens/{party_select,hall,tavern}.js` (the 20-card fit and comments), `tests/ui_tests.js` (`H19_HEROES` beside `V3_HEROES`, `padHeroes` and the padded counts to 20 and 21, the hero-order and roster-fit suites and their comments, one new `showStacks` chip suite), `js/render/renderer.js` (`TITLE_SLOTS`, the fallback hero order, the board glyph's `showStacks`), `tests/render_tests.js` (the title-seat and fallback-order checks, one new `showStacks` glyph suite), `docs/notes/ui-v2.md` ("h19", the line "READY: h19 seats") and `docs/notes/render-world.md` ("h19") |
+| HERO-RASMA (`h19:hero-rasma`) | `js/data/heroes/rasma.js`, `tests/content/hero_rasma.js`, `docs/notes/hero-rasma.md` (replace the stubs; spec `.tmp/h19/addendum-rasma.md`) |
+| HERO-BIZ (`h19:hero-biz`) | `js/data/heroes/biz.js`, `tests/content/hero_biz.js`, `docs/notes/hero-biz.md` (replace the stubs; spec `.tmp/h19/addendum-biz.md`) |
+| HERO-GUS (`h19:hero-gus`) | `js/data/heroes/gus.js`, `tests/content/hero_gus.js`, `docs/notes/hero-gus.md` (replace the stubs; spec `.tmp/h19/addendum-gus.md`) |
+| Reviewers (`review:rasma`, `review:biz`, `review:phat-gus`, `review:shared`) | for their run, the files of what they review: a hero's three files; `review:shared` the voice and seats blocks above |
+| Integrator (`h19:integrate`) | `tests/content/integration.js` (the integrator's file, as in v2 and V3; h19's changes: `ALL` += the three, `PENDING_HEROES = []`, the constructs' pronoun sweep, the determinism suite's party holding Biz and Phat Gus, the roster log's "17 with the full V3 content"), `tests/content/shared.js` (`REAL`, optional `HERO_PREFIX`), `tests/content/boss_svammiel.js` (the named count back to `===` the registry), `tests/content/kit.js` (`OPT_OUT`: verify only), `tests/sim/sim.js`, `tests/docs_tests.js` (the stale Wet comment only), `README.md` (no act-4 spoiler), `docs/DESIGN.md` (the three §6 briefs, §6.1, Sustain and reserved names, re-synced with the hero notes), `docs/notes/h19-digest.md` (new: the three kit tables) |
+| BAL (`h19:balance`, then `h19:audit`) | `js/data/balance.js`, `tests/balance_tests.js`, the **numbers only** in `js/data/heroes/{rasma,biz,gus}.js` (+ their suites' number asserts and sim bands), DESIGN §5 quotes and the three briefs' numbers, `docs/notes/balance.md` ("h19 pass"); the auditor: the same files and the digest's numbers section |
+| QA (`qa:rasma`, `qa:biz`, `qa:gus`, `qa:screens`, `qa:voice`; then the fixers and `h19:gate`) | the lenses: `.tmp/h19/qa/<lens>/` only (findings go to the owners); the fixers `qa-fix:core`, `qa-fix:render-ui`, `qa-fix:content` by the plan's §2.6 clusters (never Ellaria's files or one of the 17 heroes' files); the gate: any file for a blocker, `.tmp/h19/release-notes.md` |
+| Polish fixer (`fix:polish`, Nov 21: the cross-fixer requests that had not landed) | named blocks only: `js/data/heroes/biz.js` (the passive's `turnEndNote`, two comments), `js/data/heroes/gus.js` (the passive's `liveDesc`, stress eating's once a turn), `js/ui/combat_hud.js` (a preview's `ap` / `apNext` on the badge and in the hint), `js/data/bosses/galbraith.js` (the chain's hop beams), this file (the h19 hook and field lines), new suites in `tests/content/{hero_biz,hero_gus,boss_galbraith}.js` and `tests/hud_tests.js`, the matching notes and `docs/notes/h19-digest.md` §7 (polish) |
+
 Notes/hand-offs: `docs/notes/<area>.md` (owned by that area). Never edit another area's files; if you need a change
 there, write it under **Requests** in your notes file (the lead integrates). `docs/notes/v2-digest.md` is the map of
 the whole v2 game (counts, kits, sims, open requests by owner); `docs/notes/v3-contract.md` lists the V3 contract and
-the lead's patches to the V3 plan.
+the lead's patches to the V3 plan; `docs/notes/h19-contract.md` lists the h19 contract (heroes 18-20), every owner's
+grant and the READY lines.
 
 ## 2. Core (already implemented — read the source)
 
@@ -113,9 +137,10 @@ the lead's patches to the V3 plan.
   color: '#e25822',                                    // UI accent
   unlock: null,                                        // null = starter; { act: N } = unlocked by first clear of act N;
                                                        // { boss: enemyId } = unlocked the first time that boss is beaten.
-                                                       // v2: every hero is null (V3: all 17 available, Benedick
-                                                       //   included; DESIGN §3). Counts of heroes are read from the
-                                                       //   registry (DD.defs.heroes), never a literal
+                                                       // v2: every hero is null (all 20 available: V3's Benedick and
+                                                       //   h19's Rasma, Biz and Phat Gus included; DESIGN §3). Counts
+                                                       //   of heroes are read from the registry (DD.defs.heroes),
+                                                       //   never a literal
   stats: { hp: 24, ap: 3, mov: 4, armor: 0, init: 1 }, // level-1 base; init = v2 initiative modifier (−2..+4)
   growth: { hp: 4 },                                   // per level-up
   flags: {},                                           // flying | hop (climb 2 levels) | large | immovable
@@ -132,6 +157,17 @@ the lead's patches to the V3 plan.
   basic: 'zar_basic',                                  // skill id — always available, never socketed
   signature: 'zar_signature',                          // skill id — costs 100 Hype (skill.hype = 100), never socketed
   passive: { name: 'Drip Check', desc: '...', hooks: { /* §5.3 */ } },   // optional autoplayEnd(unit, x, y) (§5.7, Nov 18)
+                                                       // h19 (optional, pure, display only; never read by the engine,
+                                                       //   AI or AutoPlay): liveDesc(who) → text, the rule with this
+                                                       //   hero's live numbers (who = the combat unit or the RunHero;
+                                                       //   DD.UI.passiveText, §8.1; `desc` stays the base text for
+                                                       //   party select, the Hall and recruit; Phat Gus's items);
+                                                       //   turnEndNote(hero, x, y, moved) → text ('' = nothing), what
+                                                       //   his own rule makes of his turn ending on (x, y); moved =
+                                                       //   { unit, x, y } when a summon of his hovers a move (it counts
+                                                       //   as standing there, he where he stands); the HUD shows it
+                                                       //   (§8.3; Biz's bask). Both go through DD.safe: a throw or a
+                                                       //   blank falls back to desc / nothing
   startingSkills: ['zar_fireball', 'zar_bling_throw'], // exactly 2 (socketed at run start)
   skillPool: [ /* 9-11 hero skill ids incl. startingSkills (the shipped kits have 9-10) */ ],
   summons: [],                                         // optional: summon ids this hero can create (for codex/tests)
@@ -168,8 +204,14 @@ the lead's patches to the V3 plan.
     revive: undefined,            // v2: false = a heal never aimed at a downed ally; true = may be (any area)
   },
   objectDmg: undefined,           // optional number | (L, user) => number: what an aimed object hit deals (default L.dmg)
-  forgetWarning: undefined,       // optional string | (L, runHero) => string: the level-up forget picker shows it on this
-                                  //   skill's card (what forgetting a keystone costs: Basanos' Transform)
+  forgetWarning: undefined,       // optional string | (null, runHero) => string: the level-up forget picker shows it on this
+                                  //   skill's card (what forgetting a keystone costs: Basanos' Transform); h19 (plan D4):
+                                  //   the campaign sim never forgets a skill tagged 'shapeshift' or whose forgetWarning
+                                  //   resolves non-empty for that RunHero (DD.resolve(def.forgetWarning, null, rh, ''),
+                                  //   as the picker reads it; tests/sim/sim.js replaceIdx). The resolve passes no level:
+                                  //   a function form is called (null, runHero) through DD.safe (a throw is reported
+                                  //   and reads ''), so it must not read L (Rasma's lastEnchantWarning counts his
+                                  //   socketed blades)
   area: { shape: 'circle', size: 1 },   // §5.2 shapes; size may be (L, user) => n. Default { shape: 'single' }
   anchor: 'self',                 // enemy intents only: 'self' | 'ground' | 'unit' (§6.1)
   desc: (L, user) => `Deal ${L.dmg} fire damage in radius ${L.r}. Ignites oil.`,   // must be correct for every level
@@ -177,7 +219,8 @@ the lead's patches to the V3 plan.
   canUse: null,                   // optional (ctx) => true | 'reason'  (checked before targeting)
   execute(ctx) { /* effects via DD.Act — see §5.4 */ },
   aiScore: null,                  // optional (ctx) => number  — extra desirability for AI/autoplay
-  preview: null,                  // optional (ctx) => { [unitId]: { dmg?, heal?, text? } } for HUD previews
+  preview: null,                  // optional (ctx) => { [unitId]: { dmg?, heal?, text?, ap?, apNext? } } for HUD previews
+                                  //   (h19: ap / apNext as in PreviewEntry, §5.2)
 }
 ```
 **ctx** (built by `DD.Targeting.buildCtx(user, skillOrSlot, target)`):
@@ -228,6 +271,9 @@ mid-resolution (always re-check `unit.dead` after damage). Enemy `telegraph` tex
 { id: 'burn', name: 'Burning', icon: '🔥', color: '#ff7a1a', type: 'debuff',  // 'buff' | 'debuff'
   stacking: 'stack',   // 'stack': stacks add, turns = max · 'refresh': stacks = max, turns = max · 'none': ignore re-apply
   maxStacks: 99, decay: 'turnEnd',   // when `turns` ticks down: 'turnEnd' | 'turnStart' | 'never'
+  showTurns: undefined,  // optional true (V3 QA): DD.UI.statusChip and the board glyph also print its turns left (§7.2, §8.1)
+  showStacks: undefined, // optional true (h19, plan D9; H19-SEATS): the chip and the board glyph print the stack count
+                         //   from 1 (default: from 2): Rasma's last charge, Phat Gus's one acorn. Display only
   desc: (st) => `Takes ${st.stacks} fire damage at the end of its turn.`,
   hooks: { onTurnEnd(unit, st) { ... } } }   // §5.3 hook names; status hooks receive the instance `st` as LAST arg
 ```
@@ -733,6 +779,10 @@ buildCtx(user, skillOrSlot, target {x,y}|null, extra) → ctx (§3.2)
 preview(user, slot, target) → { tiles, units, perUnit: { [id]: PreviewEntry }, uncertain, samples, spawned, objects, hype }
 simulate(fn(sim, rec), opts) → fn's result   // dry run on a copy (opts.seed: other dice; opts.record → { result, draws, uncertain })
 pure(fn) → fn()                               // a query: combat-RNG draws inside are put back
+diff(real, sim, uncertain, opts?) → { [id]: PreviewEntry }   // h19 (QA-BIZ-6): the per-unit change between two states;
+                                              //   opts { actor, paid }: the actor's entry adds back the `paid` AP its use
+                                              //   cost (preview passes the user and ctx.paid.ap); AutoPlay's callers pass
+                                              //   none (the raw change, AP included)
 // v2 (user requests, §3.2)
 aimsAtObjects(user, skillOrSlot) → bool       // can be aimed at objects: volatile ones (validTargets entries { x, y, obj,
                                               //   detonates: true }) and (rules run) breakable ones ({ x, y, obj, dmg, hp, breaks });
@@ -757,13 +807,19 @@ object's tile + any blast its breaking sets off; per-unit entries as usual (what
 `preview` is a **dry run**: the skill resolves on a deep copy of the state (same code path as a real use: costs,
 hooks, Hype, deaths) with FX / events / log / run gold silenced, then everything is restored. `PreviewEntry = { dmg
 (HP lost), blocked, heal, block (gained), lethal, statuses: [added ids], removed: [ids], moved: {x,y}|null,
-uncertain, text }` (text like `"−6 · Burn 2 · moved · KO"`); `spawned: [{ defId, name, x, y, side, kind }]`,
-`objects: [{ x, y, id, dmg, destroyed }]`, `hype` (gained). A def `preview(ctx)` override returns
-`{ [unitId]: { dmg, heal, blocked, block, text } }` (missing numbers are 0).
+ap, apNext, uncertain, text }` (text like `"−6 · Burn 2 · moved · KO"`); h19 (QA-BIZ-6): `ap` = AP the action gives
+(+) or takes (−) to spend now (a unit of the acting group: Overclock's robot), `apNext` = AP banked for the unit's next
+turn (`DD.Act.gainAp` outside its turn, or a drain), both signed, the actor's own cost left out (the card's pips show
+it), 0 for a unit that drops or stays down; the text names them in `gainAp`'s words: `"+2 AP · Overclocked"`, `"+1 AP
+next turn"`, `"−1 AP next turn"`. `spawned: [{ defId, name, x, y, side, kind }]`, `objects: [{ x, y, id, dmg,
+destroyed }]`, `hype` (gained). A def `preview(ctx)` override returns `{ [unitId]: { dmg, heal, blocked, block, ap,
+apNext, text } }` (missing numbers are 0; `custom: true` on its entries). The HUD prints `ap` / `apNext` on the unit's
+badge and in the aim hint (§8.3), never a number of its own.
 **Fairness — previews never give a roll away.** The copy would know the next roll, so when the dry run draws from the
 combat RNG (a `random` skill, a proc, a Wild Surge) the preview is `uncertain` and is computed from `SAMPLES` (8) dry
 runs on *other* dice: their common outcome when they all agree, else their **expected outcome** — per entry `dmg /
-heal / blocked / block` = rounded means with `dmgMin`/`dmgMax`… ranges, `lethal` = at least half the runs
+heal / blocked / block / ap / apNext` = rounded means with `dmgMin`/`dmgMax`… (`apMin` / `apMax`, `apNextMin` /
+`apNextMax`; text `"? +1–2 AP"`) ranges, `lethal` = at least half the runs
 (`lethalChance`), `statuses` / `removed` = at least half (`statusChance` / `removedChance` per id), `moved` = the most
 common tile (`movedChance`), `text` like `"? −3–9 · Burn 50% · KO 40%"`, `samples` = runs averaged. Whether dice are
 rolled depends only on the visible state, so the flag itself tells nothing. Engine bookkeeping draws (loot gold,
@@ -1703,9 +1759,15 @@ DD.Render.overlay = {
                            //   the same badge layout as 💥 (objTargets keeps only `detonates` entries)
   objPreview: null,        // the hovered break { x, y, dmg, breaks }: the object's HP bar shows even at full HP, the HP it
                            //   would lose pulsing red (all of it when it breaks)
+  // h19 (QA-BIZ-2, render-ui): absent / null = nothing drawn
+  moves: null,             // [{ unitId, from: {x,y}, to: {x,y} }] (at most 8): where the armed action puts the units it
+                           //   moves (the HUD fills it from the dry run's perUnit `moved`; the actor landing on the very
+                           //   tile it clicks is left out): a dashed mint diamond on `to` and an arcing arrow from the unit
 }
 // previews[id] may also be { revive: true, heal: 0, text: 'UP! 7 HP' } (a heal aimed at a downed ally): a green badge
-// renderTo() stats add swapRings (⇄ rings drawn), ghosted (faded allies) and booms[].kind ('boom' | 'break')
+// renderTo() stats add swapRings (⇄ rings drawn), ghosted (faded allies) and booms[].kind ('boom' | 'break');
+// h19: landings (landing marks drawn for overlay.moves) and heads ([{ id, x0, x1, y0, y1 }]: the head boxes, top 60% of
+// the sprite box, of the selected unit and of the unit whose turn it is; the HP widgets of units in front rise clear)
 ```
 **V3 E8 — content zones (RENDER-WORLD; plan §3.6)**: the renderer also draws `state.data.zones` (§4.1: `[{ tiles:
 [{x,y}], color, label, line: [{x,y}, {x,y}] }]`; tiles tinted, an optional label, an optional line between two tiles at
@@ -1718,6 +1780,11 @@ pulses.
 bass on the gold squares stays gold): its tiles pulse in that colour under the same red-and-cream danger tape and red
 outline; a tile two wind-ups with different tints share keeps the red. A status def may set `showTurns: true` (a timed
 form: the Dragonsnail): its icon over the unit draws its turns left (amber, bottom left), as `DD.UI.statusChip` does.
+h19 (H19-SEATS, plan D9): a status def with `showStacks: true` draws its stack count from 1 (not only from 2), as the
+chip does (§3.3). The title campfire: `DD.Render.TITLE_SLOTS` (a copy) — seat i belongs to the i-th hero of
+`DD.UI.HERO_ORDER` (else the renderer's `HERO_ORDER`), so an unregistered hero leaves his chair empty and a registered
+hero neither order lists takes the first free seat; `DD.Render.titleTile(x, y)` → `{ t, h, obj }` | null (a diorama
+tile, for tests).
 
 ### 7.3 Sprites — `DD.Sprites`
 ```
@@ -1755,6 +1822,12 @@ view = { ctx, zoom, t /*s*/, dt /*ms*/, width, height, toScreen(x, y, h) → { x
 FX grid directions follow the view yaw (§7.1): `DD.FXRender.screenDelta(a, b)` / `facingToward(a, b)` (walk, slide,
 jump, lunge, projectile and beam facings; lunges re-aim if the view turns mid-animation), tile pulses and wind-up glows
 on the view's quad. Content FX painters that point along the grid use `view.local` / `DD.Iso.local`.
+**Beam shooters (h19 qa-rasma-1)**: `DD.FX.beam(from, to, opts)` stores `posOf(from)` (a plain `{x, y, h}` for units and
+points alike), so the unit standing on its start tile takes the cast pose and turns to face `to` — except with opts
+`shooter: false`, and except a unit struck by a `damage` FX at most 8 events / 1.5 s before whose beam carries on to its
+own side (the foe Rasma's strike hit as the arc jumps to its friend, a chain hop played after its hit); that one only
+flinches. A struck unit beaming at the other side (Hellish Rebuke) still casts. Content whose beams play **before**
+their damage passes `shooter: false` on every beam that leaves a struck unit (Galbraith's Chain Lightning hops).
 `DD.Meta.data.settings.animSpeed` → `DD.FX.speed` (set by main.js / settings screen).
 **v2 markers** (0 ms from the engine): `turn` (fx_core's applyEnd moves `DD.FX.shownTurn`), `windup` (a red glow on the
 announced tiles + a sound), `initiative`. **Hosted moments**: a screen may register `DD.FXRender.moments.initiative =
@@ -1835,7 +1908,15 @@ chooseSkillSlot(heroIdx, newSkillId, opts, cb) → modal  // the "learn a 5th sk
 targetLabel(def) → text        // V3 QA: "an enemy", "a tile" (a tile skill with filter 'any' or none: not "any unit")…
 drainsAp(def, level?, user?, desc?) → bool  // V3 QA: spends every AP left (Power Nap, Coming Out of My Shell): the def's
                                // optional `drainsAp` flag, else its exact desc ("spend all your AP"); cost pills read "1+ AP"
-statusChip(st)                 // V3 QA: a status def with `showTurns: true` also shows its turns left (amber, bottom left)
+statusChip(st)                 // V3 QA: a status def with `showTurns: true` also shows its turns left (amber, bottom left);
+                               // h19 (H19-SEATS): one with `showStacks: true` shows its stack count from 1 (§3.3)
+passiveText(passive, who?) → text  // h19: a hero passive's rule for one hero: its `liveDesc(who)` (§3.1; who = a combat
+                               // unit or a RunHero; a blank or throwing one is reported and falls back), else `desc` (a
+                               // string or a function of who). No who (party select, the Hall, recruit): the base text.
+                               // The HUD's party card tooltip, bar head and inspect panel, the party sheet and
+                               // heroTooltipHtml(id, { who }) print it
+ANYWHERE_RANGE                 // h19 (QA-BIZ-5): 30; a reach at or past it reads "Anywhere" (the tooltip's Range pill) /
+                               // "(anywhere)" (the HUD's aim hint)
 ```
 
 ### 8.2 Screens & flow
@@ -1978,6 +2059,23 @@ leads that unit's board badge and is listed in the aim hint ("📦 11 next turn 
 it, and only the lines and chips over something fade (`.ho-under`; a faded chip lets clicks through), so the rest (a cheat
 chip's tooltip) stays readable. A drain skill (`DD.UI.drainsAp`) shows "1+" on its button and "spends all N AP" in the
 armed hint when the hero has more AP than its cost.
+*h19 (render-ui QA fixes, Nov 20; fix:polish, Nov 21; `docs/notes/hud-v2.md` "h19 QA fixes")*:
+- **Where a moved unit lands** (QA-BIZ-2): while aiming, `overlay.moves` (§7.2) from each entry's `moved`; the hint adds
+  "↷ Kiri lands next to Spooder" (the units around the landing tile once everyone moved, the actor as "you"), else "↷ X
+  moves N tiles", or "↷ N units move (landings marked)" past two; the ↷ badge stays.
+- **The end-of-turn cue** (QA-BIZ-4): a hero passive's `turnEndNote(hero, x, y, moved)` (§3.1) is shown in the move hint
+  (the hero's own move, and his summon's move with `moved`), the tile panel of a tile that has a panel, and the End
+  Turn tooltip (where he stands now). Biz: "♨️ Biz basks on Spooder's hot engine: +3 HP" / "♨️ Biz won't bask here: not
+  next to Spooder" (the HP is what the bask would restore now; "nothing to heal (full HP)" at full HP).
+- **AP in previews** (QA-BIZ-6): an entry's `ap` / `apNext` (§5.2) on the unit's badge ("+2 AP ♨️", "+1 AP next turn",
+  a range "+1–2 AP" from `apMin` / `apMax`) and in the aim hint ("⚡ Hjalmarino +2 AP", "⚡ Slate +1 AP next turn", the
+  actor's own as "⚡ you +2 AP"; past three "… and N more"); never on a KO or a revive, never twice when a def's own
+  preview text already names the AP. The number is always the preview's (Overclock's grant may change).
+- **"anywhere"** (QA-BIZ-5): the aim hint prints "(anywhere)" / "(anywhere N+ tiles away)" for a reach at or past
+  `DD.UI.ANYWHERE_RANGE`; hotbar names wrap at spaces and step down through `.fit1`-`.fit4` before a word may break.
+`DD.HUD` adds `endTurnTip()` (the End Turn tooltip's text), `turnEndNote(unitOrId, x?, y?)` (the note for a unit of
+this turn on a tile, default where it stands) and `fitNames()` (refit the hotbar names; returns how many still had to
+break a word, `.fit-break`).
 
 ---------------------------------------------------------------------------------------------------------------------
 

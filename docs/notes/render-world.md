@@ -1033,3 +1033,64 @@ and 1600×900): zones (the Coven's threads, the goats' squares), the barn's hay,
 ## V3 QA fixes (render-ui, Nov 17)
 FIGHTS-13 (`intent.data.tint`: a wind-up's own wash colour) and HERO-5 (status `showTurns`: turns left by the icon over
 the unit) in `renderer.js`; details, requests and tests: `hud-v2.md` "V3 QA fixes".
+
+## h19 — the campfire seats for Rasma, Biz and Phat Gus, and `showStacks` on the board (H19-SEATS, Nov 18)
+
+Plan `.tmp/h19/plan.md` §1.3, D2, D3, D9 (RENDER-WORLD pieces; the META-UI lists are in `ui-v2.md` "h19").
+
+### Summary
+- **Fallback order** (`HERO_ORDER`): `…, 'pebbles', 'rasma', 'biz', 'gus', 'benedick'`, id for id `UI.HERO_ORDER`.
+- **Seats** (`TITLE_SLOTS`, 20): the 16 classic seats, then **Rasma [6, 2]** (grass, height 1, standing by the water at
+  [6, 1], between it and the tent), **Biz [0, 4]** (grass, height 0, the west edge by the signpost), **Phat Gus [0, 1]**
+  (grass, height 1, under the tree at [0, 0], foraging), then Benedick's **[4, 6]** on the path (index 19 =
+  `HERO_ORDER.indexOf('benedick')`). All three tiles were free (no object, not water, not the fire's ring). Facing comes
+  from the existing rule: Rasma looks west at the fire, Biz and Phat Gus east.
+- **Seats keyed by the order** (the brief's option, taken): `titleHeroes()` now returns `[{ id, seat }]`: a hero of the
+  order (UI.HERO_ORDER, else the fallback) sits in the seat at his index in it; a registered hero the order does not
+  list (test heroes) takes the first free seat after them. So Benedick never moves while the three land one by one, a
+  hero who has not registered leaves his chair empty (in the real game: [6, 2], [0, 4] and [0, 1] until each
+  registers), and nobody moves up. With all 20 registered the picture equals the by-index fill. `res.seats` (renderTo's
+  title result) stays in the display order; its "min(seats, open heroes) sit" count is unchanged.
+- **Board glyph** (`statusRow`, plan D9, ARCHITECTURE §7.2): a status def with `showStacks: true` draws its stack count
+  from 1 (default: from 2), as `DD.UI.statusChip` does. Nothing else changes (2+ stacks draw the same pixels).
+- `DD.Render.titleTile(x, y)` → `{ t, h, obj }` (or null off the island): a read-only helper so the tests can prove a
+  seat is on open ground. The header comment and the `TITLE_SLOTS` getter's doc say how seats are keyed.
+
+### Deviations
+- None from the plan. (Keyed seats are the option the brief allowed; the by-index fill would have parked Benedick at
+  [6, 2] until all three registered.)
+
+### Requests
+- **Lead (ARCHITECTURE §7.2, optional)**: mention `DD.Render.titleTile(x, y)` (test helper) and that seat i of
+  `TITLE_SLOTS` belongs to the i-th hero of the order (a missing hero leaves it empty).
+- **W1 (plan D9, deferred)**: Biz's two robots drawn at his seat; the seat alone ships.
+- The addendum's "something in the branches blinks" over Phat Gus's seat is left to his sprite (his eyed murk and tail
+  already blink); the tree is not repainted.
+
+### Tests (`tests/render_tests.js`)
+- "render: V3 the 17th hero — …" rewritten for keyed seats: each hero of the order in his own seat, the rest in the free
+  seats in order; nobody shares a seat; Benedick on [4, 6] whenever the order puts him there (both orders).
+- New "render: title campfire (h19) — Rasma [6, 2], Biz [0, 4] and Phat Gus [0, 1] sit down before Benedick, each in his
+  own chair, whoever has registered" (18 assertions): the fallback order (`…, pebbles, rasma, biz, gus, benedick`) equals
+  `UI.HERO_ORDER`; the four seats; grass, height and no object under the three; the water by Rasma, the tree over Gus;
+  every seat on the island, on open ground, out of the fire; no two share; `S.length >= O.length`; with Pebbles (and
+  Rasma / Biz when registered) taken out of the registry, every later hero of the order keeps his own seat and no hero
+  of the order takes an empty chair; Benedick back on the path afterwards.
+- New "render: h19 — a status that opts in (showStacks) draws its stack count from 1 by its icon over the unit; from 2
+  nothing changes" (3 assertions, pixel diffs as the showTurns suite).
+- Not mutation-run (renderer.js is loaded by every agent's runs): by construction, under the old by-index fill Benedick
+  sits at seat 16 ([6, 2]) with 17 registered and at [5, 5] with Pebbles out, which both suites assert against.
+- Shots (every URL `debug=1`): the real title at 1024×640, 1280×720, 1600×900 and 1920×1080 (17 seated, three empty
+  chairs, Benedick on the path), and a scratch probe (`.tmp/h19/seats/probe.html`, `view=title&fake=rasma,biz,gus`:
+  stand-in heroes under the three ids) at 1280×720 and 1024×640: 20 at the fire, the three new seats where planned.
+
+### Review (h19) — `review:shared`, Nov 19
+With all 20 registered: `render: title campfire (h19)`, `render: V3 the 17th hero` and the showStacks glyph suite PASS.
+Title shots at 1024×640, 1280×720 and 1920×1080 (`.tmp/h19/review-shared/title_*.png`, read): 20 at the fire, Phat Gus
+under the tree at [0, 1], Rasma by the water at [6, 2], Biz at the west edge by the signpost at [0, 4], Benedick on the
+path at [4, 6], nobody in the flames. No change needed here.
+
+## h19 QA fixes (render-ui, Nov 20)
+QA-BIZ-2 (`overlay.moves`: the landing tile and an arrow, `drawMoves`, `renderTo(...).landings`) and
+gus-hpbar-covers-face (the selected / acting unit's head box in the widget layout, `renderTo(...).heads`) in
+`renderer.js`; qa-rasma-1 (`beamShooter`) in `fx_render.js`; details, requests and tests: `hud-v2.md` "h19 QA fixes".

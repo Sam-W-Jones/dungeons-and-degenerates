@@ -366,6 +366,10 @@
     ['valdris', 'Valdris. That hair. So healthy. So... prunable.'],
     ['zarathor', '[FIRE HAZARD] Zarathor, do not fireball the greenhouse.'],
     ['benedick', 'PEST DETECTED: Benedick. INITIATING SALT PROTOCOL.'],
+    // h19 (addendum-rasma §19.4, addendum-biz §19.4, addendum-gus §20.4)
+    ['rasma', 'GUEST DETECTED: Rasma. GRAZING IS PROHIBITED ON THE LAWN.'],
+    ['biz', '[ALERT] Biz built a smaller me. [FLATTERED] [STILL HOSTILE]'],
+    ['gus', '[SQUIRREL DETECTED] Phat Gus. Acorn count: alarming. Pruning.'],
   ];
   /** A named line about `about` (or any hero in this fight), '' when none fits. Cosmetic RNG. */
   function namedLine(about) {

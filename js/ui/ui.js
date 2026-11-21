@@ -131,9 +131,10 @@
     cursed: { name: 'Cursed', color: '#c06cff' },
   };
   UI.SLOTS = { weapon: { name: 'Weapon', icon: '🗡️' }, armor: { name: 'Armor', icon: '🛡️' }, trinket: { name: 'Trinket', icon: '💍' } };
-  // V3: Benedick, the 17th hero, arrives last (obviously). An id here that is not registered is ignored (UI.heroIds).
+  // V3: Benedick, the 17th hero, arrives last (obviously). h19: Rasma, Biz and Phat Gus (the user's order) sit down
+  // before he gets there. An id here that is not registered is ignored (UI.heroIds).
   UI.HERO_ORDER = ['zarathor', 'syllamin', 'marbles', 'marwyn', 'ellaria', 'josiah', 'buga', 'sparrow', 'slate', 'corelos',
-    'kiri', 'betty', 'basanos', 'valdris', 'hjalmar', 'pebbles', 'benedick'];
+    'kiri', 'betty', 'basanos', 'valdris', 'hjalmar', 'pebbles', 'rasma', 'biz', 'gus', 'benedick'];
   const MAX_LEVEL = 10;
 
   // ---- tiny utils -------------------------------------------------------------------------------------------------
@@ -1124,6 +1125,7 @@
   }
 
   const ANYWHERE_RANGE = 30;   // no board is that wide: a skill with this reach hits anywhere
+  UI.ANYWHERE_RANGE = ANYWHERE_RANGE;   // the HUD's aim hint says "anywhere" past it too (h19 QA-BIZ-5)
   function rangeLabel(def, L, user, level) {
     const tg = def.target || {};
     if (tg.type === 'self') return 'Self';
@@ -1552,7 +1554,9 @@
     const d = DD.getStatus(st.id);
     const chip = el('span.status-chip', { class: d ? (d.type === 'buff' ? 'buff' : 'debuff') : '', style: d && d.color ? { '--sc': d.color } : null });
     chip.appendChild(el('span.st-icon', null, d ? d.icon || '?' : '?'));
-    if (num(st.stacks, 1) > 1) chip.appendChild(el('span.st-stacks', null, String(st.stacks)));
+    // h19 (plan D9): a status def with showStacks prints its count from 1 (Rasma's last charge, Phat Gus's one acorn)
+    const stacks = num(st.stacks, 1);
+    if (stacks > (d && d.showStacks ? 0 : 1)) chip.appendChild(el('span.st-stacks', null, String(stacks)));
     // [QA HERO-5] a timed form that opts in (status def showTurns: the Dragonsnail) shows its turns left at a glance
     if (d && d.showTurns && num(st.turns, -1) > 0) chip.appendChild(el('span.st-turns', { title: U.plural(num(st.turns), 'turn') + ' left' }, String(st.turns)));
     UI.tooltip(chip, function () { return UI.statusTooltipHtml(st); });
@@ -1713,6 +1717,21 @@
   };
 
   // ---- heroes & enemies ----------------------------------------------------------------------------------------------------------
+  /**
+   * [h19 gus-passive-live-numbers] A hero passive's rule text for one hero: its optional `liveDesc(who)` (who = the combat
+   * unit or the RunHero: the numbers his items change, "they hold 4"), else its `desc` (a string, or a function of who).
+   * Without a who (party select, the Hall, recruit) it is the def's base text.
+   */
+  UI.passiveText = function (p, who) {
+    if (!p) return '';
+    if (who && typeof p.liveDesc === 'function') {
+      const s = DD.safe('passive liveDesc of ' + (p.name || 'a hero'), p.liveDesc, p, [who]);
+      if (typeof s === 'string' && s.trim()) return s;
+    }
+    const d = typeof p.desc === 'function' ? DD.safe('passive desc of ' + (p.name || 'a hero'), p.desc, p, [who || null]) : p.desc;
+    return typeof d === 'string' ? d : '';
+  };
+
   UI.heroTooltipHtml = function (heroId, opts) {
     opts = opts || {};
     const d = DD.getHero(heroId);
@@ -1724,7 +1743,7 @@
     h += '<div class="tt-costs"><span class="pill">❤ ' + num(st.hp) + ' HP</span><span class="pill ap">' + num(st.ap, 3) + ' AP</span><span class="pill">👣 ' + num(st.mov) + ' Move</span>' + (num(st.armor) ? '<span class="pill">🛡 ' + num(st.armor) + ' Armor</span>' : '') +
       '<span class="pill" title="Initiative modifier: added to the d20 when a fight starts">🎲 Init ' + initText(st.init) + '</span></div>';
     if (d.flags && d.flags.flying) h += '<div class="tt-target">' + esc(UI.flyLine(d.name, true)) + '</div>';
-    if (d.passive) h += '<div class="tt-desc"><b>' + esc(d.passive.name || 'Passive') + ':</b> ' + esc(d.passive.desc || '') + '</div>';
+    if (d.passive) h += '<div class="tt-desc"><b>' + esc(d.passive.name || 'Passive') + ':</b> ' + esc(UI.passiveText(d.passive, opts.who)) + '</div>';
     if (opts.locked) h += '<div class="tt-foot">🔒 ' + esc(UI.unlockHint(d)) + '</div>';
     h += '</div>';
     return h;

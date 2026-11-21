@@ -3384,6 +3384,350 @@
     } finally { leave(); }
   });
 
+  // ---- h19 QA fixes (render-ui cluster) -------------------------------------------------------------------------------
+  // [QA-BIZ-2] Zip Line showed only a ↷ badge on the ally: the hint now says where a moved unit lands and the board marks it
+  T.suite('hud: h19 QA-BIZ-2 — an action that moves a unit says where it lands ("↷ … lands next to you") and marks the tile', function (t) {
+    if (!ready(t)) return;
+    try {
+      fight({ heroes: [{ id: 'test_rogue', x: 1, y: 3, skills: ['test_hook'] }], enemies: [{ id: 'test_grunt', x: 4, y: 3 }, { id: 'test_grunt', x: 7, y: 7 }], enemyAi: false });
+      const r = byDef('test_rogue'), g = DD.Grid.unitAt(4, 3);
+      DD.HUD.select(r.id);
+      DD.HUD.key('2');
+      t.ok(DD.HUD.mode().kind === 'skill', 'the Grappling Hook is armed');
+      const slot = DD.Combat.slotsOf(r).filter(function (sl) { return sl && sl.id === 'test_hook'; })[0];
+      const pe = DD.Combat.preview(r, slot, 4, 3).perUnit[g.id];
+      t.ok(pe && pe.moved && pe.moved.x === 2 && pe.moved.y === 3, 'premise: the dry run pulls the grunt to 2,3 (' + JSON.stringify(pe && pe.moved) + ')');
+      DD.HUD.hover(4, 3);
+      const m = ov().moves;
+      t.ok(m && m.length === 1 && m[0].unitId === g.id && m[0].from.x === 4 && m[0].from.y === 3 && m[0].to.x === 2 && m[0].to.y === 3,
+        'overlay.moves marks the landing tile: ' + JSON.stringify(m));
+      t.ok(new RegExp('↷ ' + g.name + ' lands next to you').test(DD.HUD.hint()), 'the hint says where it lands: ' + DD.HUD.hint());
+      t.ok(/↷/.test((ov().previews[g.id] || {}).text || ''), 'the ↷ badge stays on the grunt');
+      DD.HUD.rightClick();
+      t.ok(!ov().moves, 'cancelled: no landing mark');
+      // nobody next to the landing tile: "moves N tiles"
+      fight({ heroes: [{ id: 'test_rogue', x: 1, y: 3, skills: ['test_hook'] }], enemies: [{ id: 'test_grunt', x: 5, y: 3 }, { id: 'test_grunt', x: 7, y: 7 }], enemyAi: false });
+      const r2 = byDef('test_rogue'), g2 = DD.Grid.unitAt(5, 3);
+      DD.HUD.select(r2.id);
+      DD.HUD.key('2');
+      DD.HUD.hover(5, 3);
+      const m2 = ov().moves && ov().moves[0];
+      t.ok(m2 && m2.to.x === 2, 'pulled 3 of the 4 tiles: lands at 2,3 (' + JSON.stringify(m2) + ')');
+      t.ok(new RegExp('↷ ' + g2.name + ' lands next to you').test(DD.HUD.hint()), 'next to the rogue again: ' + DD.HUD.hint());
+      DD.HUD.rightClick();
+      // a blink lands on the very tile clicked: no extra mark, no "↷ you"
+      fight({ heroes: [{ id: 'test_mage', x: 1, y: 3, skills: ['test_blink'] }], enemies: [{ id: 'test_grunt', x: 7, y: 7 }], enemyAi: false });
+      DD.HUD.select(byDef('test_mage').id);
+      DD.HUD.key('2');
+      DD.HUD.hover(3, 3);
+      t.ok(DD.HUD.mode().kind === 'skill' && !ov().moves && !/↷/.test(DD.HUD.hint()), 'Blink onto the clicked tile: no landing mark, no ↷ line: ' + DD.HUD.hint());
+      DD.HUD.rightClick();
+    } finally { leave(); }
+  });
+
+  // [QA-BIZ-4] where to end the turn to bask: a hero passive's turnEndNote(hero, x, y, moved) reaches the move hint (for
+  // him and for his summon's move), the End Turn tooltip and the tile panel
+  T.suite('hud: h19 QA-BIZ-4 — a hero passive\'s turnEndNote shows in the move hint (his and his summon\'s), End Turn and the tile panel', function (t) {
+    if (!ready(t)) return;
+    const pv = DD.getHero('test_summoner').passive;
+    const calls = [];
+    pv.turnEndNote = function (hero, x, y, moved) {
+      calls.push({ hero: hero.id, x: x, y: y, moved: moved ? { id: moved.unit.id, x: moved.x, y: moved.y } : null });
+      if (x === 0 && !moved) return '';
+      return '♨️ NOTE ' + x + ',' + y + (moved ? ' with ' + moved.unit.name + ' on ' + moved.x + ',' + moved.y : '');
+    };
+    try {
+      fight({ heroes: [{ id: 'test_summoner', x: 2, y: 3 }], enemies: [{ id: 'test_grunt', x: 7, y: 7 }], enemyAi: false,
+        terrain: function (tl) { return tl.x === 4 && tl.y === 5 ? { t: 'mud' } : null; } });
+      const s = byDef('test_summoner');
+      const hound = DD.Combat.state.units.filter(function (u) { return u.kind === 'summon' && u.ownerId === s.id && !u.dead; })[0];
+      t.ok(!!hound, 'premise: Pack Bond put a hound next to her');
+      DD.HUD.select(s.id);
+      // (tiles 3 steps from her: the hound starts within 2)
+      DD.HUD.hover(2, 6);
+      t.ok(/Move here: .*♨️ NOTE 2,6/.test(DD.HUD.hint()), 'her move hint carries the note for the hovered tile: ' + DD.HUD.hint());
+      DD.HUD.hover(0, 2);
+      t.ok(/Move here/.test(DD.HUD.hint()) && !/NOTE/.test(DD.HUD.hint()), 'an empty note adds nothing: ' + DD.HUD.hint());
+      DD.HUD.hover(4, 5);
+      t.ok(/♨️ NOTE 4,5/.test(text('.hud-inspect')), 'a tile with a panel (mud) lists the note there: ' + text('.hud-inspect'));
+      t.ok(/♨️ NOTE 2,3/.test(DD.HUD.endTurnTip()), 'End Turn\'s tooltip: the note where she stands');
+      if (hound && hound.ap > 0 && DD.HUD.select(hound.id) !== false && DD.HUD.selected() && DD.HUD.selected().id === hound.id) {
+        const spot = [[2, 1], [1, 1], [3, 1], [4, 2], [5, 3], [1, 5]].map(function (p) { return { x: p[0], y: p[1] }; })
+          .filter(function (p) { return !DD.Grid.unitAt(p.x, p.y); })[0];
+        DD.HUD.hover(spot.x, spot.y);
+        t.ok(new RegExp('♨️ NOTE 2,3 with ' + hound.name + ' on ' + spot.x + ',' + spot.y).test(DD.HUD.hint()),
+          'the hound\'s move: her note where she stands, with the hound on the hovered tile: ' + DD.HUD.hint());
+      } else t.log('the hound could not be selected now: its move case is skipped');
+      t.ok(calls.every(function (c) { return c.hero === s.id; }), 'the hook always gets the hero');
+      pv.turnEndNote = function () { throw new Error('boom note'); };
+      const p0 = DD.problems.length;
+      DD.HUD.select(s.id);
+      DD.HUD.hover(5, 3);
+      t.ok(/Move here/.test(DD.HUD.hint()) && !/NOTE/.test(DD.HUD.hint()), 'a throwing hook is contained: ' + DD.HUD.hint());
+      const errs = DD.problems.slice(p0).filter(function (w) { return /^Error in turnEndNote/.test(w); });
+      t.ok(errs.length >= 1, 'and reported (' + errs.length + ')');
+      DD.problems.splice(p0);
+    } finally { delete pv.turnEndNote; leave(); }
+  });
+
+  // [QA-BIZ-5] a reach past any board printed "(range 1–99)": it reads "anywhere", like the skill's Range pill
+  T.suite('hud: h19 QA-BIZ-5 — the aim hint says "anywhere" for a reach past any board', function (t) {
+    if (!ready(t)) return;
+    const tg = DD.getSkill('test_bolt').target, keep = tg.range;
+    try {
+      fight({ heroes: [{ id: 'test_mage', x: 1, y: 3 }], enemies: [{ id: 'test_grunt', x: 6, y: 3 }], enemyAi: false });
+      const m = byDef('test_mage');
+      DD.HUD.select(m.id);
+      DD.HUD.key('1');
+      t.ok(/\(range 1–5\)/.test(DD.HUD.hint()), 'a normal reach keeps its numbers: ' + DD.HUD.hint());
+      DD.HUD.rightClick();
+      tg.range = [1, 99];
+      DD.HUD.key('1');
+      t.ok(/\(anywhere\)/.test(DD.HUD.hint()) && !/99/.test(DD.HUD.hint()), '[1, 99]: "(anywhere)": ' + DD.HUD.hint());
+      DD.HUD.rightClick();
+      tg.range = [3, DD.UI.ANYWHERE_RANGE];
+      DD.HUD.key('1');
+      t.ok(/\(anywhere 3\+ tiles away\)/.test(DD.HUD.hint()), '[3, 30]: "(anywhere 3+ tiles away)": ' + DD.HUD.hint());
+      t.ok(/Anywhere/.test(DD.UI.skillTooltipHtml('test_bolt', 1, m)), 'the same words as the tooltip\'s Range pill');
+      DD.HUD.rightClick();
+    } finally { tg.range = keep; leave(); }
+  });
+
+  // [gus-passive-live-numbers] a hero passive's optional liveDesc(who) gives the text with this hero's numbers (his items)
+  T.suite('hud: h19 gus-passive — a hero passive\'s liveDesc(who) is the text on the party card tooltip, the inspect panel and heroTooltipHtml(id, { who })', function (t) {
+    if (!ready(t)) return;
+    const pv = DD.getHero('test_summoner').passive;
+    pv.liveDesc = function (who) { return 'Live for ' + (who && who.name ? who.name : who && who.id) + ': holds ' + (who && who.items && who.items.length ? 4 : 3) + '.'; };
+    try {
+      t.eq(DD.UI.passiveText(pv), pv.desc, 'no hero: the base text (party select, Hall, recruit)');
+      t.ok(DD.UI.heroTooltipHtml('test_summoner').indexOf(DD.UI.esc(pv.desc)) >= 0, 'the hero tooltip without a hero: base text');
+      t.ok(/Live for x: holds 4\./.test(DD.UI.passiveText(pv, { id: 'x', items: ['a'] })), 'a RunHero with an item: its live text');
+      t.ok(/Live for /.test(DD.UI.heroTooltipHtml('test_summoner', { who: { id: 'rh1', items: [] } })), 'heroTooltipHtml(id, { who }) prints it');
+      fight({ heroes: [{ id: 'test_summoner', x: 2, y: 3 }], enemies: [{ id: 'test_grunt', x: 7, y: 7 }], enemyAi: false });
+      const s = byDef('test_summoner');
+      t.ok(DD.HUD.unitTip(s.id).indexOf('Live for ' + DD.UI.esc(s.name)) >= 0, 'the party card tooltip: live text');
+      DD.HUD.hover(s.x, s.y);
+      t.ok(text('.hud-inspect').indexOf('Live for ' + s.name) >= 0, 'the inspect panel: live text');
+      t.ok(text('.hud-inspect').indexOf(pv.desc) < 0, 'and not the base text');
+      pv.liveDesc = function () { return '  '; };
+      t.eq(DD.UI.passiveText(pv, s), pv.desc, 'a blank live text falls back to desc');
+      const p0 = DD.problems.length;
+      pv.liveDesc = function () { throw new Error('boom live'); };
+      t.eq(DD.UI.passiveText(pv, s), pv.desc, 'a throwing liveDesc falls back to desc');
+      t.ok(DD.problems.slice(p0).some(function (w) { return /^Error in passive liveDesc/.test(w); }), 'and is reported');
+      DD.problems.splice(p0);
+    } finally { delete pv.liveDesc; leave(); }
+  });
+
+  // [SCR-1 / qa-rasma-6] hotbar names broke mid-word ("SPOODMARI / NO!", "OVERCLOC / K") or lost a word to the 2-line clamp
+  T.suite('hud: h19 SCR-1 — hotbar names keep every word whole: the font steps down (then three tight lines) before a word may break', function (t) {
+    if (!ready(t)) return;
+    const html = document.documentElement, keepFs = html.style.fontSize;
+    try {
+      fight({ heroes: [{ id: 'test_knight', x: 1, y: 3 }], enemies: [{ id: 'test_grunt', x: 6, y: 3 }], enemyAi: false });
+      html.style.fontSize = '13.43px';   // the root size at 1024×640, the smallest supported window (slot 57 px)
+      const n = qa('.hud-bar .hud-skill:not(.empty) .hs-name')[1];
+      if (!n || !n.clientWidth) { t.skip('the hotbar is not laid out here'); return; }
+      const keep = n.textContent;
+      const steps = function () { return ['fit1', 'fit2', 'fit3', 'fit4', 'fit-break'].filter(function (c) { return n.classList.contains(c); }); };
+      const broken = function () {
+        const out = [], tn = n.firstChild, re = /[^\s-]+-?/g;
+        let m;
+        while ((m = re.exec(n.textContent))) {
+          const rg = document.createRange(); rg.setStart(tn, m.index); rg.setEnd(tn, m.index + m[0].length);
+          const tops = Array.prototype.slice.call(rg.getClientRects()).filter(function (r) { return r.width > 0.5; })
+            .map(function (r) { return Math.round(r.top); }).filter(function (v, i, a) { return a.indexOf(v) === i; });
+          if (tops.length > 1) out.push(m[0]);
+        }
+        return out;
+      };
+      const clamped = function () { return n.scrollHeight > n.clientHeight + 1; };
+      ['Spoodmarino!', 'Overclock', 'A Disapproving Look', 'A Thousand Pardons', 'Sending My Regards', 'Turn It Off and On Again',
+        'The Acorn That Should Not Be', 'Fourteen Thousand Teeth', 'Percussive Maintenance'].forEach(function (name) {
+        n.textContent = name;
+        DD.HUD.fitNames();
+        t.ok(!broken().length && !clamped() && steps().indexOf('fit-break') < 0, '"' + name + '": whole words, nothing clamped (' + (steps().join('+') || 'base') + ')' +
+          (broken().length ? ' broken: ' + broken().join(', ') : '') + (clamped() ? ' clamped' : ''));
+        t.eq(n.textContent, name, '"' + name + '": the text itself is untouched');
+        // each step is needed: without its class the name overflows
+        const st = steps();
+        if (st.length) { n.classList.remove(st[0]); t.ok(n.scrollWidth > n.clientWidth + 1 || n.scrollHeight > n.clientHeight + 1, '"' + name + '": ' + st[0] + ' is needed'); }
+      });
+      n.textContent = 'Stab';
+      DD.HUD.fitNames();
+      t.eq(steps().length, 0, 'a short name keeps the base size');
+      n.textContent = 'Supercalifragilisticexpialidociousnessmanship';
+      t.ok(DD.HUD.fitNames() >= 1 && steps().indexOf('fit-break') >= 0, 'a word no step fits may break (the last resort)');
+      n.textContent = keep;
+      DD.HUD.fitNames();
+    } finally { html.style.fontSize = keepFs; leave(); }
+  });
+
+  // ---- fix:polish (Nov 21): the h19 cross-fixer requests that had not landed ------------------------------------------
+  /** A preview entry's AP in the engine's words ("+2 AP", "+1 AP next turn"), read from the entry: the HUD's text for it. */
+  function apWords(e) {
+    const out = [];
+    const sign = function (n) { return (n > 0 ? '+' : '−') + Math.abs(n); };
+    if (e && e.ap) out.push(sign(e.ap) + ' AP');
+    if (e && e.apNext) out.push(sign(e.apNext) + ' AP next turn');
+    return out;
+  }
+  /** Hover the free tiles nearest `from` first; the first one `want(p)` accepts whose hint reads "Move here" (or null). */
+  function moveTile(from, want) {
+    const tiles = DD.Combat.state.grid.tiles.filter(function (tl) { return DD.Grid.isFree(tl.x, tl.y) && want(tl); })
+      .sort(function (a, b) { return (Math.abs(a.x - from.x) + Math.abs(a.y - from.y)) - (Math.abs(b.x - from.x) + Math.abs(b.y - from.y)) || a.y - b.y || a.x - b.x; });
+    for (let i = 0; i < tiles.length; i++) {
+      DD.HUD.hover(tiles[i].x, tiles[i].y);
+      if (/Move here/.test(DD.HUD.hint())) return { x: tiles[i].x, y: tiles[i].y };
+    }
+    return null;
+  }
+
+  // [QA-BIZ-6, rules.md "h19 QA fixes" Requests] the engine's preview entries carry ap / apNext: the badge and the hint print them
+  T.suite('hud: h19 polish — a preview\'s AP (ap / apNext) shows on the unit\'s badge and in the aim hint ("⚡ Hound +1 AP", "+1 AP next turn", "⚡ you +2 AP"), the number read from the preview', function (t) {
+    if (!ready(t)) return;
+    const TMP = 'test_tmp_polish_espresso';
+    DD.registerSkill({ id: TMP, name: 'Tmp Espresso', owner: 'test_summoner', icon: '☕', kind: 'buff', tags: [], ap: 1, cooldown: 0, levels: [{ ap: 2 }],
+      target: { type: 'self' }, desc: function (L) { return 'Gain ' + L.ap + ' AP now.'; }, execute: function (ctx) { DD.Act.gainAp(ctx.user, ctx.L.ap); } });
+    try {
+      fight({ heroes: [{ id: 'test_summoner', x: 2, y: 3 }, { id: 'test_knight', x: 2, y: 5 }], enemies: [{ id: 'test_grunt', x: 7, y: 7 }], enemyAi: false });
+      const s = byDef('test_summoner'), k = byDef('test_knight');
+      const hound = DD.Combat.state.units.filter(function (u) { return u.kind === 'summon' && u.ownerId === s.id && !u.dead; })[0];
+      t.ok(!!hound, 'premise: Pack Bond put a hound next to her');
+      const gb = DD.Combat.slotsOf(s).filter(function (sl) { return sl && sl.id === 'test_bark_order'; })[0];
+      t.ok(!!gb, 'premise: Good Boy! is socketed');
+      if (!hound || !gb) return;
+      [1, 3].forEach(function (lv) {
+        gb.level = lv; gb.cd = 0;
+        DD.HUD.refresh();
+        DD.HUD.select(s.id);
+        DD.HUD.key('3');
+        t.eq(DD.HUD.mode().kind, 'skill', 'Good Boy! L' + lv + ' armed');
+        [hound, k].forEach(function (x) {
+          const e = DD.Combat.preview(s, gb, x.x, x.y).perUnit[x.id];
+          const words = apWords(e);
+          t.ok(words.length === 1, 'premise (L' + lv + '): the preview gives ' + x.name + ' AP: ' + JSON.stringify(e && { ap: e.ap, apNext: e.apNext }));
+          DD.HUD.hover(x.x, x.y);
+          const badge = (ov().previews[x.id] || {}).text || '';
+          t.ok(words.every(function (w) { return badge.indexOf(w) >= 0; }), 'L' + lv + ' ' + x.name + '\'s badge: "' + words.join(', ') + '" (' + badge + ')');
+          t.ok(DD.HUD.hint().indexOf('⚡ ' + x.name + ' ' + words.join(', ')) >= 0, 'L' + lv + ' the hint: ' + DD.HUD.hint());
+        });
+        DD.HUD.rightClick();
+      });
+      t.ok(apWords(DD.Combat.preview(s, gb, hound.x, hound.y).perUnit[hound.id])[0] === '+2 AP', 'at L3 the preview says +2, and so did the HUD (never a number of its own)');
+      // the actor's own AP: "⚡ you +2 AP" (its 1 AP cost is the card's pips, not the preview's)
+      s.skills.push(DD.Act.makeSlot(TMP, 1));
+      DD.HUD.refresh();
+      DD.HUD.select(s.id);
+      DD.HUD.key(String(1 + s.skills.length));
+      t.eq(DD.HUD.mode().kind, 'skill', 'the self-gift armed');
+      DD.HUD.hover(s.x, s.y);
+      t.ok(/\+2 AP/.test((ov().previews[s.id] || {}).text || '') && DD.HUD.hint().indexOf('⚡ you +2 AP') >= 0, 'her own: "+2 AP" badge, "⚡ you +2 AP": ' + DD.HUD.hint());
+      DD.HUD.rightClick();
+      // a skill that gives no AP adds no ⚡ part
+      DD.HUD.select(s.id);
+      DD.HUD.key('1');
+      const g = byDef('test_grunt');
+      DD.HUD.hover(g.x, g.y);
+      t.ok(!/⚡/.test(DD.HUD.hint()), 'no AP, no ⚡: ' + DD.HUD.hint());
+      DD.HUD.rightClick();
+    } finally { delete DD.defs.skills[TMP]; leave(); }
+  });
+
+  // [QA-BIZ-4 / QA-BIZ-6 with the real Biz] the bask cue (biz.js turnEndNote) and Overclock's "+N AP" on the robot
+  T.suite('hud: h19 polish — Biz: Overclock\'s aim reads "+N AP" on the robot (N from the preview: the Remote adds 1); the bask cue in his move hint, the robot\'s move hint and End Turn, and the bask agrees', function (t) {
+    if (!ready(t)) return;
+    if (!DD.getHero('biz') || !DD.Biz || !DD.getSkill('biz_overclock')) { t.skip('biz.js not loaded (isolated run)'); return; }
+    try {
+      [[], ['biz_universal_remote']].forEach(function (items) {
+        const tag = items.length ? ' (Universal Remote)' : '';
+        fight({ w: 9, h: 9, heroes: [{ id: 'biz', x: 2, y: 4, level: 1, skills: ['biz_overclock'], items: items }], enemies: [{ id: 'test_grunt', x: 8, y: 8, hpMult: 4 }], enemyAi: false });
+        const b = byDef('biz'), hj = DD.Biz.constructOf(b, 'hjalmarino');
+        const sl = DD.Combat.slotsOf(b).filter(function (x) { return x && x.id === 'biz_overclock'; })[0];
+        if (!t.ok(!!hj && !!sl, 'premise: Hjalmarino unpacked, Overclock socketed' + tag)) return;
+        DD.HUD.select(b.id);
+        DD.HUD.key('2');
+        t.eq(DD.HUD.mode().kind, 'skill', 'Overclock armed' + tag);
+        const e = DD.Combat.preview(b, sl, hj.x, hj.y).perUnit[hj.id];
+        const n = e && e.ap;
+        t.eq(n, DD.getSkill('biz_overclock').levels[0].ap + (items.length ? 1 : 0), 'the preview\'s N is the level\'s grant' + (items.length ? ' + 1' : '') + ': ' + n);
+        DD.HUD.hover(hj.x, hj.y);
+        const badge = (ov().previews[hj.id] || {}).text || '';
+        t.ok(badge.indexOf('+' + n + ' AP') >= 0 && /♨️/.test(badge), 'Hjalmarino\'s badge: "+' + n + ' AP ♨️" (' + badge + ')');
+        t.ok(DD.HUD.hint().indexOf('⚡ Hjalmarino +' + n + ' AP') >= 0, 'the hint: ' + DD.HUD.hint());
+        t.log('Overclock aimed at Hjalmarino' + tag + ': badge "' + badge + '" · hint "' + DD.HUD.hint() + '"');
+        if (items.length) { DD.HUD.rightClick(); return; }
+        // overclock it for real, then the cue: where his turn has to end for the bask
+        DD.HUD.click(hj.x, hj.y);
+        t.ok(DD.Act.hasStatus(hj, 'biz_overclocked'), 'Hjalmarino runs hot');
+        b.hp = 10;
+        DD.HUD.refresh();
+        DD.HUD.select(b.id);
+        const bask = DD.Act.getStatus(hj, 'biz_overclocked').data.bask;
+        const next = function (p) { return Math.abs(p.x - hj.x) + Math.abs(p.y - hj.y) === 1; };
+        const near = moveTile(b, next);
+        t.ok(!!near && DD.HUD.hint().indexOf('♨️ Biz basks on Hjalmarino\'s hot engine: +' + bask + ' HP') >= 0, 'his move next to it: ' + DD.HUD.hint());
+        t.log('move hint next to the hot robot: ' + DD.HUD.hint());
+        const far = moveTile(b, function (p) { return Math.abs(p.x - hj.x) + Math.abs(p.y - hj.y) >= 2; });
+        t.ok(!!far && DD.HUD.hint().indexOf('♨️ Biz won\'t bask here: not next to Hjalmarino') >= 0, 'his move away from it: ' + DD.HUD.hint());
+        const tip = DD.HUD.endTurnTip();   // (tooltip HTML: the note is escaped)
+        t.ok(tip.indexOf(DD.UI.esc(next(b) ? '♨️ Biz basks on Hjalmarino' : '♨️ Biz won\'t bask here: not next to Hjalmarino')) >= 0, 'End Turn says it for where he stands: ' + tip);
+        // the robot's move: the note for Biz where he stands, with Hjalmarino on the hovered tile
+        if (DD.HUD.select(hj.id) !== false && DD.HUD.selected() && DD.HUD.selected().id === hj.id) {
+          const by = moveTile(hj, function (p) { return Math.abs(p.x - b.x) + Math.abs(p.y - b.y) === 1; });
+          t.ok(!!by && DD.HUD.hint().indexOf('♨️ Biz basks on Hjalmarino\'s hot engine') >= 0, 'Hjalmarino\'s move next to Biz: ' + DD.HUD.hint());
+          const off = moveTile(hj, function (p) { return Math.abs(p.x - b.x) + Math.abs(p.y - b.y) >= 3; });
+          t.ok(!!off && DD.HUD.hint().indexOf('won\'t bask here') >= 0, 'Hjalmarino\'s move away from him: ' + DD.HUD.hint());
+        } else t.log('Hjalmarino could not be selected now: its move case is skipped');
+        // the cue agrees with the bask: move him where it says "basks", end the turn
+        DD.HUD.select(b.id);
+        const go = moveTile(b, next);
+        if (go) DD.HUD.click(go.x, go.y);
+        t.ok(!!go && b.x === go.x && b.y === go.y, 'Biz walks to ' + (go && go.x + ',' + go.y));
+        t.ok(DD.HUD.endTurnTip().indexOf(DD.UI.esc('♨️ Biz basks on Hjalmarino\'s hot engine: +' + bask + ' HP')) >= 0, 'End Turn there: ' + DD.HUD.endTurnTip());
+        const hp0 = b.hp;
+        DD.Combat.endTurn();
+        t.eq(b.hp, hp0 + bask, 'and the turn end basks: +' + bask);
+      });
+    } finally { leave(); }
+  });
+
+  // the contract lines for the h19 hooks and fields (lead request in hud-v2.md and rules.md "h19 QA fixes"; the digest)
+  T.suite('hud: h19 polish — ARCHITECTURE documents the h19 hooks and fields the code has (turnEndNote, liveDesc, showStacks, ap / apNext, forgetWarning\'s resolve, overlay.moves, shooter: false, passiveText)', function (t) {
+    let arch = null;
+    try {
+      const x = new XMLHttpRequest();
+      x.open('GET', (window.DD_BASE || '../') + 'docs/ARCHITECTURE.md', false);
+      if (x.overrideMimeType) x.overrideMimeType('text/plain; charset=utf-8');
+      x.send();
+      if ((x.status === 0 || x.status === 200) && x.responseText) arch = x.responseText;
+    } catch (e) { arch = null; }
+    if (!arch) { t.skip('this page can\'t read docs/ARCHITECTURE.md (run it through tools/test.sh)'); return; }
+    const sec = function (head) {
+      const i = arch.indexOf(head);
+      if (i < 0) return '';
+      const j = arch.indexOf('\n###', i + head.length), k = arch.indexOf('\n## ', i + head.length);
+      const end = [j, k].filter(function (v) { return v > 0; }).reduce(function (a, b) { return Math.min(a, b); }, arch.length);
+      return arch.slice(i, end).replace(/\s*\/\/\s*/g, ' ').replace(/\s+/g, ' ');
+    };
+    const s31 = sec('### 3.1'), s32 = sec('### 3.2'), s33 = sec('### 3.3'), s52 = sec('### 5.2'), s72 = sec('### 7.2'), s74 = sec('### 7.4'),
+      s81 = sec('### 8.1'), s83 = sec('### 8.3');
+    t.ok(/liveDesc\(who\)/.test(s31) && /turnEndNote\(hero, x, y, moved\)/.test(s31), '§3.1: the passive\'s liveDesc(who) and turnEndNote(hero, x, y, moved)');
+    t.ok(/called \(null, runHero\) through DD\.safe/.test(s32) && /DD\.resolve\(def\.forgetWarning, null, rh, ''\)/.test(s32), '§3.2: forgetWarning is resolved with (null, runHero)');
+    t.ok(/showStacks/.test(s33), '§3.3: showStacks');
+    t.ok(/ap, apNext, uncertain, text/.test(s52) && /apMin/.test(s52) && /diff\(real, sim, uncertain, opts\?\)/.test(s52), '§5.2: PreviewEntry ap / apNext (apMin / apMax), Targeting.diff opts');
+    t.ok(/moves: null/.test(s72) && /landings/.test(s72) && /titleTile/.test(s72), '§7.2: overlay.moves, renderTo().landings / heads, the title seats');
+    t.ok(/shooter: false/.test(s74), '§7.4: FX.beam opts shooter: false');
+    t.ok(/passiveText\(passive, who\?\)/.test(s81) && /ANYWHERE_RANGE/.test(s81), '§8.1: DD.UI.passiveText and ANYWHERE_RANGE');
+    t.ok(/endTurnTip\(\)/.test(s83) && /turnEndNote\(unitOrId/.test(s83) && /fitNames\(\)/.test(s83) && /⚡ Hjalmarino \+2 AP/.test(s83), '§8.3: the h19 HUD (cue, AP, DD.HUD additions)');
+    // and the code has what it says
+    t.ok(typeof DD.UI.passiveText === 'function' && typeof DD.UI.ANYWHERE_RANGE === 'number', 'DD.UI.passiveText, DD.UI.ANYWHERE_RANGE exist');
+    t.ok(['endTurnTip', 'turnEndNote', 'fitNames'].every(function (k) { return typeof DD.HUD[k] === 'function'; }), 'DD.HUD.endTurnTip / turnEndNote / fitNames exist');
+    t.ok(!DD.Render || typeof DD.Render.titleTile === 'function', 'DD.Render.titleTile exists');
+    if (DD.getHero('biz')) t.ok(typeof DD.getHero('biz').passive.turnEndNote === 'function', 'Biz\'s passive has a turnEndNote');
+    if (DD.getHero('gus')) t.ok(typeof DD.getHero('gus').passive.liveDesc === 'function', 'Phat Gus\'s passive has a liveDesc');
+  });
+
   // review: the render / sprite / run / ui / hud suites before this one all turn the map; none may leave it turned,
   // moving or remembered for the content suites after them (their screen positions assume the classic view)
   T.suite('hud: map rotation — no suite so far left the view turned, turning or remembered', async function (t) {

@@ -21,6 +21,8 @@
     zarathor: 'Zarathor', syllamin: 'Syllamin', marbles: 'Professor Marbles', marwyn: 'Marwyn', ellaria: 'Ellaria', josiah: 'Josiah',
     sparrow: 'Sparrow', corelos: 'Corelos', slate: 'Slate', buga: 'Mayor Buga', kiri: 'Kiri', betty: 'Betty', basanos: 'Basanos',
     valdris: 'Valdris', hjalmar: 'Hjalmar', pebbles: 'Pebbles', benedick: 'Benedick',
+    // h19 (plan D5): their pools land before their hero files
+    rasma: 'Rasma', biz: 'Biz', gus: 'Phat Gus',
   };
   const SHE_HEROES = ['ellaria', 'sparrow', 'kiri'];
   // the plan's five doors (§2.2); the registry's lanes are added when their encounters are loaded
@@ -64,7 +66,17 @@
   // Benedick's reserved display names (plan §4.12): no act-4 def reuses one
   const RESERVED = ['Fourteen Thousand Teeth', 'Slow Burn', 'Coming Out of My Shell', 'Slime Line', 'I\'ll Wait', 'Lettuce Pray', 'Shellacking',
     'Spit Shine', 'Snail Mail', 'Morning Breath', 'Wing It', 'Riddle Me This', 'The Inevitable', 'A Sticky Situation', 'Snail Slime', 'In His Shell',
-    'Dragonsnail'];
+    'Dragonsnail',
+    // h19: Rasma's, Biz's and Phat Gus's reserved names (addendum-rasma §19.5, addendum-biz §19.5, addendum-gus §20.5)
+    'Pardon Me', 'The Cold Shoulder', 'Positively Shocking', 'Most Disarming', 'With All Due Respect', 'Sweeping Bow', 'Sending My Regards',
+    'Do Keep the Change', 'Touché', 'Tea, Anyone?', 'A Disapproving Look', 'A Thousand Pardons', 'Enchanté', 'Frosty Blade', 'Shocking Blade',
+    'Disarming Blade', 'En Garde', 'Rapier Wit', 'Bespoke Waistcoat', 'The Spare Monocle',
+    'Rivet Gun', 'Duct Tape', 'Overclock', 'Turn It Off and On Again', 'Big Red Button', 'Nothing to See Here', 'Firmware Update', 'World Wide Web',
+    'Zip Line', 'Synergy', 'Spoodmarino!', 'Monkey Wrench', 'Cymbal Crash', 'Pew Pew', 'Thwip!', 'Batteries Included', 'Overclocked', 'Updated',
+    'Rebuilding', 'Scrap Heap', 'Hjalmarino', 'Spooder', 'Mechanical Monkey', 'Mechanical Spider', 'Universal Remote', 'Extended Warranty', 'Spare Tail',
+    'Phat Gus', 'Incisor Decision', 'Don\'t Listen to the Trees', 'Root Canal', 'The Hollow Hungers', 'All You Can Eat', 'Down the Squirrel Hole',
+    'Too Many Eyes', 'The Tree That Isn\'t There', 'Hangry', 'Fine, Have One', 'The Acorn That Should Not Be', 'The Woods Provide', 'Cheekful of Acorns',
+    'The Nom-Nom-Nomicon', 'Cheeks of Holding', 'Winter Coat (Built In)'];
   // the act-4 families (ids): Svammiel, the Gardener, the League, Galbraith, the Coven, the Rapping Goats
   const A4_ID = /^(svam|gard|lg|gal|cov|rap)_/;
   // the act-4 cast and their pronouns (plan §0.2): a sentence naming exactly one of them never uses the other gender
@@ -300,7 +312,7 @@
     t.eq(dups.join(' | '), '', 'no line appears in two svam_* pools');
     // no count of doors or heroes (they come from the registry)
     const counted = [];
-    cat.forEach(function (c) { pool(c.key).forEach(function (l) { if (/\b(?:four|five|six|sixteen|seventeen) (?:mini-?bosses|doors|rooms|heroes|toys|favourites)\b|\b(?:three|four|five) down\b/i.test(l)) counted.push(c.key + ': "' + l + '"'); }); });
+    cat.forEach(function (c) { pool(c.key).forEach(function (l) { if (/\b(?:four|five|six|sixteen|seventeen|eighteen|nineteen|twenty) (?:mini-?bosses|doors|rooms|heroes|toys|favourites)\b|\b(?:three|four|five) down\b/i.test(l)) counted.push(c.key + ': "' + l + '"'); }); });
     t.eq(counted.join(' | '), '', 'no count of doors or heroes');
   });
 
@@ -490,7 +502,7 @@
       other(h.name, 'hero ' + id);
       if (h.passive && h.passive.name) other(h.passive.name, 'hero ' + id + ' passive');
     });
-    RESERVED.forEach(function (n) { other(n, 'Benedick (reserved)'); });
+    RESERVED.forEach(function (n) { other(n, 'a hero-side reserved name (Benedick, h19)'); });
     const def = DD.getCameo ? DD.getCameo('svammiel') : null;
     if (def) Object.keys(def.cheats || {}).forEach(function (id) { a4.push({ fam: 'svam', id: 'cheat ' + id, name: def.cheats[id].name }); });
     const famOf = {};
@@ -524,5 +536,44 @@
     });
     // the Coven's lava cameo: the counter tells the party it spares the hags (FIGHTS-06)
     t.ok(/never burns a hag/.test(pool('svam_counter_svam_cameo_lava')[0] || ''), 'the lava cameo counter: it spares the hags');
+  });
+
+  // ---- h19 review:shared (Nov 19): Rasma's courtesy is his own; the other villains never retell Svammiel's roasts --------
+  T.suite('svammiel_lines: h19 review — Rasma\'s own lines (sir only to Svammiel, none of Benedick\'s phrases); the act-4 villains\' named lines for Rasma, Biz and Phat Gus never retell Svammiel\'s roasts of him', function (t) {
+    // addendum-rasma §3 rule 3-4: "sir" only where the listener is known to be he (Svammiel); and not Benedick ("No rush",
+    // "Mind the slime", "After you … I insist", "Splendid", and his twist-reaction frame "I'd only just …")
+    const BENEDICK = /\b(?:no rush|mind the slime|after you|i insist|splendid|i'd only just)\b/i;
+    const own = { svam_back_rasma: true, svam_twist_react_rasma: false, rap_back_rasma: false };
+    Object.keys(own).forEach(function (k) {
+      const ls = pool(k);
+      t.ok(ls.length > 0, k + ': has lines');
+      ls.forEach(function (l) {
+        t.ok(!BENEDICK.test(l), k + ': Rasma\'s courtesy, not Benedick\'s: "' + l + '"');
+        if (!own[k]) t.ok(!/\b(?:sir|madam)\b/i.test(l), k + ': no sir / madam: "' + l + '"');
+      });
+    });
+    // the act-4 villains' optional named lines for the three (Gardener, Galbraith, Granny Gristle, the League): never
+    // Svammiel's opening words for the same hero, never one of the jokes the split gives him (boss_goats: HERO-7)
+    const SVAM_JOKES = { rasma: [/monotaur/i, /apologi[sz]/i, /smudge/i], biz: [/warrant/i, /reboot|off and on/i, /hid(?:e|ing) behind/i, /cold-blooded/i, /recall/i],
+      gus: [/storage/i, /\brent\b/i] };
+    const opener = function (l) { return String(l).toLowerCase().replace(/[^a-z' ]+/g, ' ').trim().split(/\s+/).slice(0, 3).join(' '); };
+    const named = [];
+    const pairs = function (who, list) { (list || []).forEach(function (p) { named.push({ who: who, id: p[0], line: p[1] }); }); };
+    if (DD.Gardener) pairs('the Gardener', DD.Gardener.NAMED);
+    if (DD.Galbraith) pairs('Galbraith', DD.Galbraith.NAMED);
+    if (DD.Coven) Object.keys(DD.Coven.NAMED).forEach(function (k) { pairs(k, DD.Coven.NAMED[k]); });
+    if (DD.League) Object.keys(DD.League.NAMED).forEach(function (k) { pairs(k, DD.League.NAMED[k]); });
+    if (!named.length) { t.skip('no act-4 villain file loaded'); return; }
+    let seen = 0;
+    Object.keys(SVAM_JOKES).forEach(function (id) {
+      const svam = pool('svam_hero_' + id);
+      const openers = svam.map(opener);
+      named.filter(function (n) { return n.id === id; }).forEach(function (n) {
+        seen++;
+        t.ok(openers.indexOf(opener(n.line)) < 0, n.who + ' on ' + id + ': not Svammiel\'s opening words ("' + opener(n.line) + '"): "' + n.line + '"');
+        SVAM_JOKES[id].forEach(function (re) { t.ok(!re.test(n.line), n.who + ' on ' + id + ': ' + re + ' is Svammiel\'s joke: "' + n.line + '"'); });
+      });
+    });
+    t.log(seen + ' villain lines about Rasma, Biz and Phat Gus checked');
   });
 })();

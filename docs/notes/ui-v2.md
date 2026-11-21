@@ -608,3 +608,132 @@ render-world A/B identity harness against HEAD's renderer.
 HERO-8 (`DD.UI.targetLabel`: tile skills open to anything target "a tile"), HERO-3 (`DD.UI.drainsAp`, "1+ AP" pills) and
 HERO-5 (`statusChip` turns badge with status `showTurns`, `.st-turns` in `css/style.css`); details, requests and tests:
 `hud-v2.md` "V3 QA fixes".
+
+## h19 — Rasma, Biz and Phat Gus: the order, the 20-card fit and `showStacks` (H19-SEATS, Nov 18)
+
+READY: h19 seats
+
+Plan `.tmp/h19/plan.md` §1.3, D2, D9 (META-UI pieces; the renderer's seats are in `render-world.md` "h19"). Nothing
+here needs the three heroes registered: every list tolerates a registered or an unregistered id (`UI.heroIds()`).
+
+### What the player sees
+- **Order** (`UI.HERO_ORDER`, plan D2): `…, 'hjalmar', 'pebbles', 'rasma', 'biz', 'gus', 'benedick'`: the user's order,
+  after the v2 six and before Benedick, who still arrives last (obviously).
+- **Party select** (`party_select.js`, `css/style.css`): 17 and 18 heroes keep V3's grid (6 × 3 from 1280 px, 5 × 4
+  below). 19 and 20 (`.ps-roster.many.fives`) sit in rows of five at every width: 5 × 4 = 20 with no ragged last row (6
+  columns would leave four empty chairs; at 1920×1080 the cards grow to ~240 × 185 px). 21 or more go back to 6 × 4
+  from 1280 px and 5 × 5 below (the rows share the height: the art shrinks, the text keeps its lines). The
+  `.ps-body.many` details panel is unchanged (its stat boxes stay inside at 1024×640; the fit suite checks it).
+- **Hall roster** (`hall.js`): 17-20 keep `.many` (4 columns, five rows). More than 20 (`.hall-heroes.crowd`) take a
+  sixth row; the cards keep the small type and the 3.2rem portrait at every width (no 1500 px step up), with a little
+  less padding and line height (21 overflowed by 15 px at 1280×720 and 66 px at 1600×900 without it; with it the body
+  has 43 px and 89 px to spare).
+- **Tavern recruit pick**: unchanged: 16 recruits at twenty heroes fill the four compact columns (4 × 4), a 21st adds a
+  fifth row; both fit at the four sizes (the CSS comment says so).
+- **Status chips** (`UI.statusChip`, plan D9, ARCHITECTURE §3.3 / §7.2): a status def with `showStacks: true` prints its
+  stack count from 1 (default: from 2): Rasma's last charge and Phat Gus's one acorn read "1" once their owners set the
+  flag. The value printed is the number (`num(st.stacks, 1)`), so an instance without `stacks` reads "1", never
+  "undefined"; 0 stacks print nothing. The tooltip's "×n" still starts at 2; `showTurns` is untouched.
+- Comments: party select "all twenty", no "17 is prime"; hall "17 to 20 fit"; the tavern recruit CSS note.
+
+### Card worst case (re-check if a builder lengthens a string)
+`padHeroes` reads the worst case from the registry (longest role, name, race, class, epithet). Today: Betty's 46-char
+role, Professor Marbles's 17-char name, Benedick's 25-char race and 21-char class, Syllamin's 23-char epithet. The
+addenda's strings beat none of them: roles Rasma 39 ("Melee spellsword · enchant, then strike"), Biz 35, Phat Gus 33;
+Phat Gus's race "Squirrel (Mostly Cheeks)" 24 and class "Snackromancer" 13; epithets "the Monotaur" 12, "the
+Subcontractor" 17, "the Unfathomable" 16. A longer one becomes the new worst case automatically.
+
+### Public API (new / changed)
+- `DD.UI.HERO_ORDER` + `'rasma', 'biz', 'gus'` before `'benedick'`.
+- Status def flag `showStacks` read by `DD.UI.statusChip` (the board glyph: `render-world.md` "h19").
+- CSS classes `.ps-roster.fives` (19-20 heroes) and `.hall-heroes.crowd` (more than 20).
+
+### Deviations
+- Party select at 19-20 heroes is 5 × 4 at every width, not "7 × 3 or 6 × 4 by width" (the brief's examples): 20 fills
+  5 × 4 exactly, the cards are bigger than 6 × 4's at every size, and the headroom for 21 is 6 × 4 from 1280 px / 5 × 5
+  below (all proven by the fit suite, padded).
+
+### Requests
+- **HERO-RASMA / HERO-GUS**: `showStacks: true` has landed (chip and board glyph): set it on `ras_frost`, `ras_shock`,
+  `ras_charm` and `gus_cheeks` if you want the "1" (your addenda's optional request); the suites `ui: h19 — …showStacks`
+  and `render: h19 — …showStacks` log which of them set it.
+- **Lead / integrator (optional M1, plan D9)**: the party-select details panel does not list `def.summons`. Deferred, not
+  built: it would put every summon's `desc` on a new player-facing surface (Ellaria's corgi "HP 8 + Ellaria's level",
+  Josiah's Onyx "10 HP, +10% per Josiah level…", Corelos's Lawyer, Zarathor's statue, Sparrow's clone, Biz's two
+  robots), and each would first need a desc == execute audit, Ellaria's text included (she is never touched). Biz's
+  fallback stands: his blurb and passive name both robots, the numbers are in the in-combat tooltip.
+- **review:shared / integrator**: once all three register, `tools/test.sh "suite=ui: v2"` runs the fit at 20 real cards
+  plus a padded 21; the shots at 20 real cards are review:shared's (plan §1.5).
+
+### Tests (`tests/ui_tests.js`)
+- `H19_HEROES = ['rasma', 'biz', 'gus']` beside `V3_HEROES`; "ui: v2 — every registered hero is in UI.HERO_ORDER…" also
+  asserts the three sit right after the v2 six, in the user's order, before Benedick (Benedick's "last" assert unchanged).
+- The fit suite ("ui: v2 — party select and the hall roster fit…", real page at 1024×640, 1280×720, 1600×900,
+  1920×1080) now pads to every count from the registry's +1 (at least 17) up to 21: 18 and 19 while the three land one
+  by one, 20, and 21 for one more. 244 assertions with 17 registered. Before the CSS: 3 failures, all the
+  Hall at 21 (1280×720 by 15 px, 1600×900 by 66 px and one card off screen); after: 0.
+- New: "ui: h19 — a status def with showStacks prints its stack count on the chip from 1; without it, from 2; nothing
+  else changes" (9 assertions; it toggles the flag on `ras_frost` / `gus_cheeks` when registered, else `burn`).
+- Shots (`.tmp/h19/seats/`, every URL `debug=1`): the real party select and Hall (heroes tab, `tab=heroes`) at the four
+  sizes with 17 heroes, and a scratch probe (`.tmp/h19/seats/probe.html` + `run.sh`, sourcing `tools/chrome_slot.sh`)
+  padding to 20 / 21 worst-case cards: party select 20 at 1024 / 1280 / 1600 / 1920, 21 at 1024 / 1280; the Hall 20 at
+  1280, 21 at 1600; the tavern recruit pick (16) at 1024×640. All read; nothing clipped.
+
+### Known issues
+- 21 heroes at 1024×640: 5 × 5 party-select cards, the portraits shrink to ~25 px (the fit passes; only a 21st hero
+  reaches it).
+- Full run (Nov 18, 17 heroes registered, the three new files still stubs): `bash tools/test.sh` 1323 suites, 152,638
+  assertions, 0 failures; my suites under `CONSOLE=1`: no "Error in" line.
+
+## Review (h19) — `review:shared`, Nov 19
+All three hero files registered: 20 REAL cards.
+- **Fit**: `tools/test.sh "suite=hall roster fit"` PASS (108 assertions: 20 real and a padded 21, party select, the Hall
+  and the tavern recruit pick at 1024×640, 1280×720, 1600×900, 1920×1080). Shots read (`.tmp/h19/review-shared/`):
+  party select and the Hall heroes tab at the four sizes (5 × 4 and 4 × 5, nothing clipped, no scroll, Rasma, Biz and
+  Phat Gus after Pebbles, Benedick last), the details panel focused on Biz, Rasma and Phat Gus at 1024×640 (stat boxes
+  and Init chip inside; a probe, `probe.html` + `run.sh` sourcing `tools/chrome_slot.sh`), the recruit pick (16) at
+  1024×640, 1280×720 and 1920×1080.
+- **Fixed — the recruit pick's order**: it listed the run layer's registry order (`DD.Run.recruitCandidates`), so
+  Benedick came BEFORE Rasma, Biz and Phat Gus (they load after him), and Corelos second. `tavern.js` now shows the
+  candidates in `UI.heroIds()` order, as party select and the Hall do (display only: the run's list, its count and
+  the rules are untouched). The fit suite asserts the order at every size and count.
+- **showStacks**: `ui: h19 — …` logs `ras_frost`, `ras_shock`, `ras_charm` and `gus_cheeks` set it and read "1"; a real
+  fight (`party=gus,rasma,betty,josiah&autoplay=1`) shows Phat Gus's cheek chip "1" and Rasma's blade chip "3".
+- **HUD worst case** (`party=biz,ellaria,josiah,corelos`, 1024×640; deployment and an AutoPlay turn): no overflow; the
+  summons compact into "entourage" rows. One cosmetic HUD request: the hotbar's slot labels break single long words
+  mid-word at 1024×640 ("OVERCLOC K", "SPOODMARI NO!"): the HUD's CSS, passed on.
+- Observation (sprite framing, not the grid): at 1600 / 1920 the bigger 5 × 4 cards show Phat Gus's tail (and
+  Benedick's shell, as in V3) cut by the square portrait canvas's left edge. Passed on to qa:screens / qa:gus.
+
+## h19 QA fixes (render-ui, Nov 20)
+SCR-1 / qa-rasma-6 (hotbar name fit), QA-BIZ-4 (`turnEndNote`), QA-BIZ-5 (`DD.UI.ANYWHERE_RANGE`), the hero passive
+`liveDesc` (`DD.UI.passiveText`, also `screens/party.js`), SCR-2 (card art fades, `css/style.css`) and SCR-3 (README
+order); details, requests and tests: `hud-v2.md` "h19 QA fixes".
+
+## h19 polish (fix:polish, Nov 21) — the cross-fixer requests that had not landed
+The HUD half of QA-BIZ-6 (`docs/notes/rules.md` "h19 QA fixes (Nov 20)" Requests: render-ui, show a preview entry's
+`ap` / `apNext`) and the content halves of `hud-v2.md` "h19 QA fixes" Requests; the digest's list: `h19-digest.md` §7.
+- **AP in previews** (`js/ui/combat_hud.js`): `apLabel(e, next)` / `apLabels(e)` print an entry's AP in the engine's
+  words, the number always the entry's: "+2 AP", "−1 AP next turn", a range "+1–2 AP" from an uncertain entry's `apMin` /
+  `apMax` (`apNextMin` / `apNextMax`). `overlayPreviews` adds them to the unit's badge after the Block part (Overclock's
+  robot reads "+2 AP ♨️", "+3 AP ♨️" with the Universal Remote); `previewSummary` adds one "⚡" part to the aim hint:
+  "⚡ Hjalmarino +2 AP", "⚡ Slate +1 AP next turn", the actor's own first as "you" ("⚡ you +2 AP": a refund, a self-gift;
+  its own cost is not in the preview), past three "… and N more". Never on a KO or a revive entry; never twice when a
+  def's own preview text (`hudCustom`) already names the AP. Display only: no engine, AI, AutoPlay or sim path reads the
+  badge or the hint.
+- **Content landed by the same pass** (their notes have the details): Biz's `turnEndNote` (the bask cue the HUD hook was
+  waiting for: `hero-biz.md` "Polish"), Phat Gus's `liveDesc` (`hero-gus.md` "Polish"), `shooter: false` on Galbraith's
+  chain hops (`boss-galbraith.md` "Polish"), and the ARCHITECTURE lines for the h19 hooks and fields (§3.1 `liveDesc` /
+  `turnEndNote`, §3.2 the `forgetWarning` resolve, §3.2 / §5.2 `ap` / `apNext` and `Targeting.diff` opts, §7.2
+  `overlay.moves`, `renderTo` `landings` / `heads`, the title seats, §7.4 beam shooters, §8.1 `passiveText` /
+  `ANYWHERE_RANGE`, §8.3 the h19 HUD and `DD.HUD.endTurnTip` / `turnEndNote` / `fitNames`).
+- **Tests** (`tests/hud_tests.js`, three new suites before the map-rotation check):
+  - "hud: h19 polish — a preview's AP (ap / apNext) shows on the unit's badge and in the aim hint …" (Good Boy! at I and
+    III on the hound (now) and the knight (next turn): badge and hint carry exactly what the preview says, "+2 AP" at
+    III; a temporary self-gift reads "⚡ you +2 AP"; a skill with no AP adds no ⚡; 20 assertions).
+  - "hud: h19 polish — Biz: Overclock's aim reads "+N AP" on the robot …" (real biz.js; skips isolated without it: N is
+    the preview's, 2 and 3 with the Remote; after a real Overclock his move hint next to / away from the hot robot,
+    Hjalmarino's own move hint, End Turn where he stands, then the bask he really gets there; 19 assertions).
+  - "hud: h19 polish — ARCHITECTURE documents the h19 hooks and fields the code has …" (reads ARCHITECTURE.md through the
+    page, as the ui review suite does; 13 assertions).
+  `bash tools/test.sh "suite=hud: h19&isolate=heroes/biz,heroes/gus"`: 8 suites, 0 failures.

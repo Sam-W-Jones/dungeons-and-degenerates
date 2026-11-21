@@ -1694,6 +1694,55 @@
     });
   }, { tags: ['render'] });
 
+  // [h19 gus-hpbar-covers-face] a medium foe one tile in front of a short hero drew its HP bar across his face (Phat Gus's
+  // cheeks in melee): the selected (or acting) unit's head is an obstacle the front widget rises over, whatever its size
+  T.suite('render: h19 gus-hpbar-covers-face — a front unit\'s HP widget rises over the selected or acting unit\'s head', function (t) {
+    const r = R(), S = DD.Sprites;
+    if (!S || typeof S.metrics !== 'function') { t.skip('no DD.Sprites.metrics'); return; }
+    const height = function (id) { try { return S.metrics(id).height || 0; } catch (e) { return 0; } };
+    const heroes = Object.keys(DD.defs.heroes).filter(function (id) { return height(id) > 0; }).sort(function (a, b) { return height(a) - height(b); });
+    const foes = Object.keys(DD.defs.enemies).filter(function (id) { const d = DD.getEnemy(id); return d && d.tier !== 'boss' && height(id) > 0; });
+    if (!heroes.length || !foes.length) { t.skip('needs a hero and an enemy'); return; }
+    const W = 640, H = 420, cam = { x: 0, y: 0, zoom: 1.5 };
+    const over = function (a, b) { return !!a && !!b && a.x0 < b.x1 && a.x1 > b.x0 && a.y0 < b.y1 && a.y1 > b.y0; };
+    // a real crossing: at least a quarter of the head box under the bar (the renderer acts from 15%)
+    const crosses = function (a, b) {
+      if (!over(a, b)) return false;
+      const ix = Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0), iy = Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0);
+      return ix * iy >= 0.25 * (b.x1 - b.x0) * (b.y1 - b.y0);
+    };
+    let hid = null;
+    const shoot = function (st, ov) {
+      r.resetOverlay();
+      Object.assign(r.overlay, ov || {});
+      return withState(st, function () { return r.renderTo(canvas(W, H), { state: st, width: W, height: H, camera: cam }); });
+    };
+    const box = function (res, id) { return ((res && res.widgets) || []).filter(function (b) { return b.id === id; })[0]; };
+    let found = null;
+    try {
+      // a foe one tile in front of a short hero (x + y larger: in front at yaw 0) whose bar crosses his head
+      for (let i = 0; i < foes.length * 4 && i < 120 && !found; i++) {
+        hid = heroes[i % Math.min(4, heroes.length)];
+        const fid = foes[Math.floor(i / Math.min(4, heroes.length)) % foes.length];
+        const hero = makeUnit('gh_h', 'hero', 3, 4, { defId: hid }), foe = makeUnit('gh_e', 'enemy', 4, 4, { defId: fid });
+        const st = makeState(makeGrid(8, 8), [hero, foe]);
+        cam.x = DD.Iso.toWorld(3.5, 4, 0).x; cam.y = DD.Iso.toWorld(3.5, 4, 0).y - 30;
+        const sel = shoot(st, { selectedId: 'gh_h' }), base = shoot(st, null);
+        const head = (sel.heads || []).filter(function (h) { return h.id === 'gh_h'; })[0];
+        if (head && crosses(box(base, 'gh_e'), head)) found = { st: st, foe: fid, head: head, base: box(base, 'gh_e'), sel: box(sel, 'gh_e') };
+      }
+      if (!found) { t.skip('no enemy\'s bar crosses a short hero\'s head here'); return; }
+      t.log(hid + ' (' + height(hid) + ' px) behind ' + found.foe + ' (' + height(found.foe) + ' px): head ' + JSON.stringify(found.head) + ', bar ' + JSON.stringify(found.base));
+      t.ok(crosses(found.base, found.head), 'premise: unselected, ' + found.foe + '\'s bar crosses ' + hid + '\'s head ' + JSON.stringify(found.base) + ' / ' + JSON.stringify(found.head));
+      t.ok(found.sel && found.sel.dy < found.base.dy && !over(found.sel, found.head), 'selected: the bar rises clear of his head ' + JSON.stringify(found.sel));
+      const turn = box(shoot(found.st, { turnUnitId: 'gh_h' }), 'gh_e');
+      t.ok(turn && !over(turn, found.head), 'his turn (not selected): clear of his head too');
+      const foeSel = shoot(found.st, { selectedId: 'gh_e' });
+      t.eq(box(foeSel, 'gh_e').dy, found.base.dy, 'the front unit selected instead: its own bar stays put');
+      t.ok(!(foeSel.heads || []).some(function (h) { return h.id === 'gh_h'; }), 'and only the focus units have a head box');
+    } finally { r.resetOverlay(); }
+  }, { tags: ['render'] });
+
   T.suite('render: a broken FX duration never freezes the game', function (t) {
     const r = R();
     const FX = DD.FX;
@@ -2632,6 +2681,58 @@
     }
   }, { tags: ['render'] });
 
+  // [h19 QA-BIZ-2] Zip Line (and every pull / push / reposition) showed only a ↷ badge: where the unit lands is marked now
+  T.suite('render: h19 QA-BIZ-2 — overlay.moves marks the landing tile of a moved unit, with an arrow from its tile, at every yaw', function (t) {
+    const r = R();
+    const st = makeState(makeGrid(8, 8), [makeUnit('mv_a', 'hero', 2, 3), makeUnit('mv_b', 'hero', 5, 3), makeUnit('mv_e', 'enemy', 7, 7)]);
+    const W = 560, H = 380, rand = Math.random;
+    const diffBox = function (a, b) {
+      let x0 = W, y0 = H, x1 = -1, y1 = -1;
+      for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+          const i = (y * W + x) * 4;
+          if (Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]) > 24) {
+            if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+          }
+        }
+      }
+      return x1 < 0 ? null : { x0: x0, y0: y0, x1: x1, y1: y1 };
+    };
+    try {
+      [0, 30, 200].forEach(function (yaw) {
+        const cam = DD.Iso.withYaw(yaw, function () { const w = DD.Iso.toWorld(3.5, 3.5, 0); return { x: w.x, y: w.y - 20, zoom: 1.5 }; });
+        const scr = function (tx, ty) { return DD.Iso.withYaw(yaw, function () { const w = DD.Iso.toWorld(tx, ty, 0); return { x: (w.x - cam.x) * cam.zoom + W / 2, y: (w.y - cam.y) * cam.zoom + H / 2 }; }); };
+        const shot = function (ov) {
+          let s = 7;
+          Math.random = function () { s = (s * 16807) % 2147483647; return s / 2147483647; };
+          try {
+            r.resetOverlay();
+            Object.assign(r.overlay, { selectedId: 'mv_a' }, ov || {});
+            const cv = canvas(W, H);
+            const res = withState(st, function () { return r.renderTo(cv, { state: st, width: W, height: H, camera: cam, yaw: yaw }); });
+            return { px: cv.getContext('2d').getImageData(0, 0, W, H).data, res: res };
+          } finally { Math.random = rand; }
+        };
+        const base = shot(null);
+        t.eq(base.res.landings, 0, 'yaw ' + yaw + ': no landing mark without overlay.moves');
+        t.eq(diffBox(base.px, shot({ moves: null }).px), null, 'yaw ' + yaw + ': moves: null draws nothing');
+        const mv = shot({ moves: [{ unitId: 'mv_b', from: { x: 5, y: 3 }, to: { x: 3, y: 5 } }] });
+        t.eq(mv.res.landings, 1, 'yaw ' + yaw + ': one landing mark');
+        const b = diffBox(base.px, mv.px), land = scr(3, 5), from = scr(5, 3);
+        const inside = function (p, pad) { return !!b && p.x >= b.x0 - pad && p.x <= b.x1 + pad && p.y >= b.y0 - pad && p.y <= b.y1 + pad; };
+        t.ok(inside(land, 2), 'yaw ' + yaw + ': the mark covers the landing tile ' + JSON.stringify(b) + ' vs ' + JSON.stringify(land));
+        t.ok(inside({ x: (land.x + from.x) / 2, y: (land.y + from.y) / 2 }, 2) && b.x1 - b.x0 >= Math.abs(from.x - land.x) * 0.5,
+          'yaw ' + yaw + ': and the arrow reaches back toward the unit\'s tile ' + JSON.stringify(b));
+        // junk never throws and draws nothing
+        const junk = shot({ moves: [null, 'x', { to: { x: 'a', y: 1 } }, { from: { x: 1, y: 1 }, to: { x: 40, y: 40 } }] });
+        t.ok(!!junk.res && junk.res.landings === 0, 'yaw ' + yaw + ': junk moves render without throwing and mark nothing');
+      });
+    } finally {
+      Math.random = rand;
+      r.resetOverlay();
+    }
+  }, { tags: ['render'] });
+
   T.suite('render: playtest bosses-objectives-2 — a wind-up badge\'s "?" follows DD.AI.describe (uncertain), not the bare Dazzled status', function (t) {
     const r = R();
     const AI = DD.AI;
@@ -2905,9 +3006,20 @@
     const check = function (tag, orderUsed) {
       const seats = seated();
       t.eq(seats.length, Math.min(S.length, pool.length), tag + ': min(seats, open heroes) sit (' + seats.length + ')');
-      let bad = 0;
-      seats.forEach(function (s, i) { if (!S[i] || s.x !== S[i][0] || s.y !== S[i][1]) bad++; });
-      t.eq(bad, 0, tag + ': heroes fill the seats in order');
+      // h19: a hero of the order sits in the seat at his index in it (one not registered yet leaves his chair to the
+      // heroes the order does not list, never to the heroes after him); those fill the free seats in order
+      const ownSeat = function (id) { const i = orderUsed.indexOf(id); return i >= 0 && i < S.length ? i : -1; };
+      const taken = {};
+      seats.forEach(function (s) { const i = ownSeat(s.id); if (i >= 0) taken[i] = true; });
+      let bad = 0, free = 0;
+      seats.forEach(function (s) {
+        let i = ownSeat(s.id);
+        if (i < 0) { while (taken[free]) free++; i = free; taken[free] = true; }
+        if (!S[i] || s.x !== S[i][0] || s.y !== S[i][1]) bad++;
+      });
+      t.eq(bad, 0, tag + ': each hero of the order in his own seat, the others in the free seats in order');
+      const at = seats.map(function (s) { return s.x + ',' + s.y; });
+      t.eq(at.filter(function (k, i) { return at.indexOf(k) === i; }).length, at.length, tag + ': nobody shares a seat');
       const realSeated = seats.filter(function (s) { return s.id.indexOf('test_') !== 0; }).map(function (s) { return s.id; });
       const want = Math.min(real.filter(isOpen).length, S.length);
       t.eq(realSeated.length, want, tag + ': all ' + want + ' real heroes sit (N = ' + real.length + ' from the registry)');
@@ -2918,7 +3030,8 @@
       if (DD.defs.heroes.benedick && isOpen('benedick')) {
         const i = seats.map(function (s) { return s.id; }).indexOf('benedick');
         t.ok(i >= 0, tag + ': Benedick sits at the fire');
-        if (i === O.indexOf('benedick')) t.eq(seats[i].x + ',' + seats[i].y, '4,6', tag + ': as the last of the full roster, on the path');
+        // h19: his seat is his index's, so he stays on the path whoever has registered before him
+        if (i >= 0 && ownSeat('benedick') === O.indexOf('benedick')) t.eq(seats[i].x + ',' + seats[i].y, '4,6', tag + ': the last of the order, on the path');
       }
       // the path seat is taken whenever there are enough heroes (test heroes fill it until Benedick lands)
       if (pool.length >= S.length) t.ok(seats.some(function (s) { return s.x === 4 && s.y === 6; }), tag + ': the seat on the path [4, 6] is taken');
@@ -2935,6 +3048,61 @@
       } finally { UI.HERO_ORDER = keep; r.invalidate(); }
     }
     if (!DD.defs.heroes.benedick) t.log('Benedick is not registered yet (HERO-BENEDICK\'s stub): the seat on the path waits for him');
+  }, { tags: ['render'] });
+
+  // ---- h19 (H19-SEATS, plan D2 / D3): Rasma, Biz and Phat Gus at the campfire, before Benedick --------------------
+  T.suite('render: title campfire (h19) — Rasma [6, 2], Biz [0, 4] and Phat Gus [0, 1] sit down before Benedick, each in his own chair, whoever has registered', function (t) {
+    const r = R();
+    if (!Array.isArray(r.TITLE_SLOTS) || !Array.isArray(r.HERO_ORDER) || typeof r.titleTile !== 'function') { t.skip('renderer without the h19 seats'); return; }
+    const S = r.TITLE_SLOTS, O = r.HERO_ORDER;
+    t.eq(O.slice(O.indexOf('pebbles')).join(','), 'pebbles,rasma,biz,gus,benedick', 'the fallback order: Pebbles, then the user\'s order (Rasma, Biz, Phat Gus), then Benedick, last (obviously)');
+    if (DD.UI && Array.isArray(DD.UI.HERO_ORDER)) t.eq(DD.UI.HERO_ORDER.join(','), O.join(','), 'the fallback order is UI.HERO_ORDER, id for id');
+    t.ok(S.length >= O.length, 'a seat for every hero of the order (' + S.length + ' seats, ' + O.length + ' heroes)');
+    const want = { rasma: [6, 2, 1], biz: [0, 4, 0], gus: [0, 1, 1], benedick: [4, 6, 0] };
+    Object.keys(want).forEach(function (id) {
+      const s = S[O.indexOf(id)], w = want[id];
+      t.eq(s && s.join(','), w[0] + ',' + w[1], id + '\'s seat: [' + w[0] + ', ' + w[1] + ']');
+      const tile = s && r.titleTile(s[0], s[1]);
+      if (id !== 'benedick') t.ok(tile && tile.t === 'grass' && tile.h === w[2] && !tile.obj, id + ': grass, height ' + w[2] + ', nothing on it (' + JSON.stringify(tile) + ')');
+    });
+    t.eq(r.titleTile(6, 1) && r.titleTile(6, 1).t, 'water', 'Rasma stands by the water ([6, 1])');
+    t.eq(r.titleTile(0, 0) && r.titleTile(0, 0).obj, 'tree', 'Phat Gus forages under the tree ([0, 0])');
+    // every chair: on the island, on open ground, out of the flames
+    const bad = S.filter(function (s) {
+      const tile = r.titleTile(s[0], s[1]);
+      return !tile || tile.obj || tile.t === 'water' || (s[0] === 3 && s[1] === 3);
+    });
+    t.eq(bad.length, 0, 'every seat on the island, on open ground, nobody in the fire' + (bad.length ? ': ' + JSON.stringify(bad) : ''));
+    const keys = S.map(function (s) { return s.join(','); });
+    t.eq(keys.filter(function (k, i) { return keys.indexOf(k) === i; }).length, keys.length, 'no two heroes share a seat (' + keys.length + ' seats)');
+    // the chairs are keyed by the order: take a hero of the order away and nobody after him moves up
+    const UI = DD.UI;
+    const order = UI && Array.isArray(UI.HERO_ORDER) && UI.HERO_ORDER.length ? UI.HERO_ORDER : O;
+    const seatOf = function (seats, id) { const s = seats.filter(function (x) { return x.id === id; })[0]; return s ? s.x + ',' + s.y : null; };
+    const shot = function () { r.invalidate(); const res = r.renderTo(canvas(640, 360), { scene: 'title', width: 640, height: 360 }); return (res && res.seats) || []; };
+    const gone = ['pebbles', 'rasma', 'biz'].filter(function (id) { return !!DD.defs.heroes[id]; });
+    const kept = {};
+    gone.forEach(function (id) { kept[id] = DD.defs.heroes[id]; });
+    let seats;
+    try {
+      gone.forEach(function (id) { delete DD.defs.heroes[id]; });
+      seats = shot();
+    } finally {
+      gone.forEach(function (id) { DD.defs.heroes[id] = kept[id]; });
+      r.invalidate();
+    }
+    const after = order.filter(function (id, i) { return i > order.indexOf('pebbles') && DD.defs.heroes[id] && gone.indexOf(id) < 0; });
+    after.forEach(function (id) {
+      const s = S[order.indexOf(id)];
+      t.eq(seatOf(seats, id), s[0] + ',' + s[1], 'without ' + gone.join(', ') + ': ' + id + ' keeps his own seat [' + s.join(', ') + ']');
+    });
+    t.ok(seats.every(function (s) { return gone.indexOf(s.id) < 0; }), 'the heroes taken away are not drawn');
+    const listedSeat = seats.filter(function (s) { return order.indexOf(s.id) >= 0; });
+    t.ok(listedSeat.every(function (s) { return gone.every(function (id) { const g = S[order.indexOf(id)]; return s.x + ',' + s.y !== g[0] + ',' + g[1]; }); }),
+      'no hero of the order takes an empty chair (only a hero the order does not list may)');
+    if (!after.length) t.log('none of Phat Gus and Benedick is registered here: the kept-seat check had nobody to move');
+    const back = shot();
+    if (DD.defs.heroes.benedick) t.eq(seatOf(back, 'benedick'), '4,6', 'Benedick on the path again with everyone back');
   }, { tags: ['render'] });
 
   // ---- V3 QA fixes (render-ui cluster) -------------------------------------------------------------------------------
@@ -3006,6 +3174,41 @@
       t.ok(changed > noise + 8, 'with showTurns the status row gains its "2" (' + changed + ' px changed; ' + noise + ' between two plain frames)');
     } finally {
       if (had) d.showTurns = was; else delete d.showTurns;
+      r.resetOverlay();
+    }
+  }, { tags: ['render'] });
+
+  // h19 (H19-SEATS, plan D9; ARCHITECTURE §3.3, §7.2): Rasma's last charge and Phat Gus's one acorn read "1"
+  T.suite('render: h19 — a status that opts in (showStacks) draws its stack count from 1 by its icon over the unit; from 2 nothing changes', function (t) {
+    const r = R();
+    const d = ['ras_frost', 'gus_cheeks', 'burn', 'inspired'].map(function (id) { return DD.getStatus(id); }).filter(Boolean)[0];
+    if (!d) { t.skip('no status to try'); return; }
+    const own = function (k) { return { had: Object.prototype.hasOwnProperty.call(d, k), was: d[k] }; };
+    const keep = { showStacks: own('showStacks'), showTurns: own('showTurns') };
+    const grid = makeGrid(5, 5);
+    const h = makeUnit('h19_stacks', 'hero', 2, 2, { statuses: [{ id: d.id, stacks: 1, turns: -1 }] });
+    const st = makeState(grid, [h]);
+    const W = 320, H = 240, cam = { x: DD.Iso.toWorld(2, 2, 0).x, y: DD.Iso.toWorld(2, 2, 0).y - 30, zoom: 1.6 };
+    const shot = function (stacks) {
+      h.statuses[0].stacks = stacks;
+      r.resetOverlay();
+      const cv = canvas(W, H);
+      withState(st, function () { r.renderTo(cv, { state: st, width: W, height: H, camera: cam, yaw: 0 }); });
+      return cv.getContext('2d').getImageData(0, 0, W, H).data;
+    };
+    const diff = function (a, b) { let n = 0; for (let i = 0; i < a.length; i += 4) if (Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]) > 30) n++; return n; };
+    try {
+      d.showTurns = false;
+      d.showStacks = false;
+      const a = shot(1), a2 = shot(1), two = shot(2);
+      d.showStacks = true;
+      const b = shot(1), two2 = shot(2);
+      const noise = diff(a, a2), changed = diff(a, b);
+      t.ok(changed > noise + 8, d.id + ' with showStacks: one stack draws its "1" (' + changed + ' px changed; ' + noise + ' between two plain frames)');
+      t.ok(diff(two, two2) <= noise + 2, 'two stacks look the same with or without the flag (' + diff(two, two2) + ' px)');
+      t.ok(diff(b, two2) > noise + 4, 'and "1" is not "2" (' + diff(b, two2) + ' px)');
+    } finally {
+      Object.keys(keep).forEach(function (k) { if (keep[k].had) d[k] = keep[k].was; else delete d[k]; });
       r.resetOverlay();
     }
   }, { tags: ['render'] });

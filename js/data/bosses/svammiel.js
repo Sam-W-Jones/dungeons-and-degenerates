@@ -1870,7 +1870,10 @@
       'You can\'t sign away my turn, Corelos! ...Can you?', 'Stop throwing my furniture, Slate!', 'No, Buga, I will NOT endorse you.',
       'Stop shooting through my walls, Kiri! They\'re load-bearing!', 'Betty, that\'s my wing! Stop chewing my wing!',
       'Bad dog, Basanos! Bad! ...Okay, good bite.', 'That hair is blinding me, Valdris! Tie it up!', 'Hjalmar! Give back my crown! HJALMAR!',
-      'Pebbles, you\'re setting my floor on fire! ...It\'s fine.', 'Stop sliming my floor, Benedick! It\'s LINOLEUM!'],
+      'Pebbles, you\'re setting my floor on fire! ...It\'s fine.', 'Stop sliming my floor, Benedick! It\'s LINOLEUM!',
+      // h19 (addendum-rasma §19.2, addendum-biz §19.2, addendum-gus §20.2, verbatim)
+      'Stop bowing, Rasma! Just HIT me like a normal bull!', 'Biz, your spider is in my EAR! Get it OUT!',
+      'Put DOWN the acorn, Phat Gus! That\'s MY floor\'s acorn!'],
   };
   DD.registerEnemy({ id: SVAM, name: 'Svammiel', act: 4, tier: 'boss', hp: N.hp, mov: N.mov, armor: N.armor, init: N.init, pronoun: 'he',
     shortName: 'Svammiel', tags: ['demon', 'boss', 'svammiel'], flags: { large: true },

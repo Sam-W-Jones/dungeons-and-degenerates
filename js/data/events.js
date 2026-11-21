@@ -1819,4 +1819,139 @@
       },
     ],
   });
+
+  // h19: the 18th-20th heroes' events (NARRATIVE; addendum-rasma §19.1, addendum-biz §19.1, addendum-gus §20.1). Classic
+  // acts like every hero event: nothing here mentions the fourth act. Biz's robots take "it" or no pronoun.
+  DD.registerEvent({
+    id: 'ev_ras_finishing_school', acts: [1, 2, 3], weight: HERO_WEIGHT, icon: '🫖', hero: 'rasma',
+    title: 'The Finishing School',
+    requires: withHero('rasma'),
+    text: 'A goblin finishing school has set up shop in a side tunnel, and the headmaster takes one look at Rasma\'s monocle and ' +
+      'begs him to teach the evening class. Twelve goblins sit in a row, holding teacups like daggers. One of them is holding a ' +
+      'dagger like a teacup. Rasma adjusts his monocle. This is his moment.',
+    choices: [
+      {
+        label: 'Teach the evening class.',
+        hint: 'Gain 40 gold.',
+        resolve: function (api) {
+          const s = star(api, 'rasma');
+          const g = api.gold(40);
+          return standIn(s) + s.name + ' teaches the fish fork, the bow and the polite refusal. The goblins graduate with honours and ' +
+            'pay ' + g + ' gold in tuition. One of them weeps.';
+        },
+      },
+      {
+        label: 'Take tea with the headmaster.',
+        hint: 'Every hero heals 25% of their max HP.',
+        resolve: function (api) {
+          const s = star(api, 'rasma');
+          api.heal(0.25);
+          return standIn(s) + 'Tea is poured, scones are buttered, and nobody stabs anybody for a whole hour. ' + s.name + '\'s little ' +
+            'finger has never been more extended.';
+        },
+      },
+      {
+        label: 'Challenge the one with the dagger.',
+        hint: '50%: Rasma finds a rare item. 50%: Rasma loses 30% of his max HP.',
+        resolve: function (api) {
+          const s = star(api, 'rasma');
+          if (api.rng.chance(0.5)) {
+            return standIn(s) + s.name + ' challenges the goblin to a duel of manners and wins on etiquette alone. The prize is ' +
+              heroItem(api, s.idx, 'rare') + '.';
+          }
+          if (s.idx >= 0) api.damage(0.3, s.idx);
+          return standIn(s) + 'The goblin does not know the rules of a duel of manners and stabs ' + s.name + ' in the shin. ' + s.name +
+            ' apologises for having a shin there.';
+        },
+      },
+    ],
+  });
+
+  DD.registerEvent({
+    id: 'ev_biz_scrap', acts: [1, 2, 3], weight: HERO_WEIGHT, icon: '🛠️', hero: 'biz',
+    title: 'Free to a Good Home',
+    requires: withHero('biz'),
+    text: 'Someone has dumped a mountain of scrap in the corridor under a hand-painted sign: FREE TO A GOOD HOME. Biz is already ' +
+      'halfway up it, tongue flicking. Hjalmarino is clanging with excitement and Spooder is trying to adopt a toaster. Nobody is ' +
+      'leaving until Biz has been through all of it.',
+    choices: [
+      {
+        label: 'Haggle it away.',
+        hint: 'Gain 40 gold.',
+        resolve: function (api) {
+          const s = star(api, 'biz');
+          const g = api.gold(40);
+          return standIn(s) + s.name + ' sells the whole pile to a passing kobold for ' + g + ' gold, then buys back one very good ' +
+            'spring. He calls it a strategic acquisition.';
+        },
+      },
+      {
+        label: 'Let Biz tune up the robots.',
+        hint: 'Biz upgrades one of his skills.',
+        resolve: function (api) {
+          const s = star(api, 'biz');
+          return standIn(s) + s.name + ' spends an hour elbow-deep in the toaster and comes out with patch notes. ' + upgradeFor(api, s.idx) +
+            ' The toaster is not better.';
+        },
+      },
+      {
+        label: 'Dig for the good stuff.',
+        hint: '50%: Biz finds a rare item. 50%: the pile comes down on him: Biz loses 30% of his max HP.',
+        resolve: function (api) {
+          const s = star(api, 'biz');
+          if (api.rng.chance(0.5)) {
+            return standIn(s) + 'Under a broken mangle ' + s.name + ' finds ' + heroItem(api, s.idx, 'rare') + '. He shows it to Spooder. ' +
+              'Spooder does a little dance.';
+          }
+          if (s.idx >= 0) api.damage(0.3, s.idx);
+          return standIn(s) + s.name + ' pulls one bolt too many and the pile comes down on him. Hjalmarino claps its cymbals. It does ' +
+            'not help.';
+        },
+      },
+    ],
+  });
+
+  DD.registerEvent({
+    id: 'ev_gus_picnic', acts: [1, 2, 3], weight: HERO_WEIGHT, icon: '🧺', hero: 'gus',
+    title: 'A Picnic for One (Squirrel)',
+    requires: withHero('gus'),
+    text: 'Someone has laid a checked picnic blanket in the middle of the corridor: sandwiches, a pie, and a jar of something that ' +
+      'hums. Trees stand around it, which they should not this far underground, and the bark is full of eyes. Phat Gus\'s cheeks ' +
+      'are already twitching. A voice from the roots says the picnic is for him. It does not say who it is from.',
+    choices: [
+      {
+        label: 'Share it with everyone.',
+        hint: 'Every hero heals 25% of their max HP.',
+        resolve: function (api) {
+          const s = star(api, 'gus');
+          api.heal(0.25);
+          return standIn(s) + s.name + ' shares. Nobody has ever seen him share. He watches every bite the party takes and says ' +
+            'nothing, which is worse. The pie is excellent.';
+        },
+      },
+      {
+        label: 'Let Phat Gus eat all of it.',
+        hint: '50%: Phat Gus levels up. 50%: the humming jar bites back: Phat Gus loses 30% of his max HP.',
+        resolve: function (api) {
+          const s = star(api, 'gus');
+          if (api.rng.chance(0.5)) {
+            return standIn(s) + s.name + ' eats the sandwiches, the pie, the jar and most of a tree. The woods are very pleased. ' +
+              levelUp(api, s.idx) + ' He feels wiser. Mostly fuller.';   // [h19 QA] size jokes are his own, not the narrator's
+          }
+          if (s.idx >= 0) api.damage(0.3, s.idx);
+          return standIn(s) + s.name + ' opens the humming jar. The jar opens him back. He is fine. He would like to lie down.';
+        },
+      },
+      {
+        label: 'Leave it for the woods.',
+        hint: 'Gain 40 gold.',
+        resolve: function (api) {
+          const s = star(api, 'gus');
+          const g = api.gold(40);
+          return standIn(s) + s.name + ' leaves the picnic untouched. It is the hardest thing he has ever done. The roots push up ' + g +
+            ' gold in thanks. Nobody asks whose it was.';
+        },
+      },
+    ],
+  });
 })();

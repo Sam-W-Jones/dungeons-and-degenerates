@@ -28,7 +28,8 @@
     'onDowned', 'onHealed', 'onStatusApplied', 'onAllyDeath', 'modifyStatus', 'modifyPush', 'modifyFinalDamage', 'preventDeath',
     'onAnyDeath', 'onAllyDowned', 'modifyHeal', 'modifyMoveCost', 'modifyOutgoingPush', 'onCostPaid', 'modifyInitiative',
     'modifyOpportunity', 'onOpportunityAttack'];
-  const HERO_PREFIX = /^(zar|syl|mar|mrw|cor|jos|ell|spa|sla|slate|buga|kir|bet|bas|val|hja|peb|gen|a1|a2|a3|dm|wm|test|rt|rp)_/;
+  // h19: + Rasma's, Biz's and Phat Gus's prefixes (a shared item never borrows a hero's)
+  const HERO_PREFIX = /^(zar|syl|mar|mrw|cor|jos|ell|spa|sla|slate|buga|kir|bet|bas|val|hja|peb|ras|biz|gus|gen|a1|a2|a3|dm|wm|test|rt|rp)_/;
   const EAST = { x: 1, y: 0 }, WEST = { x: -1, y: 0 };
 
   // ---- helpers ----------------------------------------------------------------------------------------------
@@ -1659,9 +1660,11 @@
   // ==========================================================================================================
   // Real heroes (the hero files; every suite below skips when they are not loaded, e.g. isolated runs)
   // ==========================================================================================================
-  // V3 (the integrator): Benedick, the 17th hero, joins once his file is registered (plan §4.12)
+  // V3 (the integrator): Benedick, the 17th hero, joins once his file is registered (plan §4.12); h19 (the integrator,
+  // plan §2.3): Rasma, Biz and Phat Gus, the 18th-20th, so the whole-pool AutoPlay, the previews with item hooks, the
+  // summoners / flyers, Whetstone and Encore Kazoo suites run on their kits too
   const REAL = ['zarathor', 'syllamin', 'marbles', 'marwyn', 'ellaria', 'josiah', 'sparrow', 'corelos', 'slate', 'buga',
-    'kiri', 'betty', 'basanos', 'valdris', 'hjalmar', 'pebbles', 'benedick'];
+    'kiri', 'betty', 'basanos', 'valdris', 'hjalmar', 'pebbles', 'benedick', 'rasma', 'biz', 'gus'];
   function realHeroes() { return REAL.filter(function (id) { return !!DD.getHero(id); }); }
   function haveAll(t, ids) {
     const miss = ids.filter(function (id) { return !DD.getHero(id) && !DD.getSkill(id); });
@@ -1846,6 +1849,22 @@
       t.ok(r[1].b1 === r[0].b1 && r[1].block === r[0].block, 'Dog Treats on ' + c[0] + ': no Block for the ' + c[1] + ' (v2)');
       t.eq(r[1].hp - r[0].hp, 3, 'Dog Treats on ' + c[0] + ': the ' + c[1] + ' heals 3 at her / his turn start');
     });
+    // h19: Biz starts every fight with two robots, his summons too: the Bandolier treats both at his turn start (a shared
+    // item; Biz's own kit never restores HP to a living robot, plan §0.2)
+    if (haveAll(t, ['biz']) && DD.getSummon('biz_hjalmarino') && DD.getSummon('biz_spooder')) {
+      const r = [[], ['dog_treat_bandolier']].map(function (items) {
+        fight({ heroes: [{ id: 'biz', x: 2, y: 4, items: items }], enemies: [{ id: 'test_grunt', x: 8, y: 8 }] });
+        const biz = unitOf('biz');
+        const bots = S().units.filter(function (u) { return u.kind === 'summon' && u.ownerId === biz.id && !u.dead; });
+        if (bots.length < 2) return null;
+        bots.forEach(function (b) { b.hp = 1; });
+        const round0 = S().round;
+        for (let i = 0; i < 12 && !(DD.Combat.current() === biz && S().round > round0); i++) DD.Combat.endTurn();
+        return { at: DD.Combat.current() === biz, hp: bots.map(function (b) { return b.defId + ' ' + b.hp; }).join(', '), sum: bots.reduce(function (n, b) { return n + b.hp; }, 0) };
+      });
+      if (!r[0] || !r[1]) t.log('Dog Treats: Biz has no two robots at the start of the fight (skipped)');
+      else okLog(t, r[0].at && r[1].at && r[1].sum - r[0].sum === 6, 'Dog Treats on Biz: both robots heal 3 at his turn start (' + r[0].hp + ' → ' + r[1].hp + ')');
+    }
     // Steve is not a corgi: he never takes a slot in Ellaria's pack
     if (haveAll(t, ['ellaria', 'ell_summon_corgi'])) {
       const r = [[], ['hireling_contract']].map(function (items) {

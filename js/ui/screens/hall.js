@@ -163,9 +163,10 @@
     const recs = heroRecords();
     const box = el('div.hall-roster');
     const ids = UI.heroIds();
-    // more than a 4 × 4 grid: still 4 columns, one more row; `.many` tightens each card a little (CSS) so 17 and 18 fit
-    // 1024×640 to 1920×1080 (the fit suite checks it, worst-case cards included)
-    const grid = el('div.hall-heroes', { class: ids.length > 4 * 4 ? 'many' : null });
+    // more than a 4 × 4 grid: still 4 columns, one more row; `.many` tightens each card a little (CSS) so 17 to 20 fit
+    // 1024×640 to 1920×1080 (the fit suite checks it, worst-case cards included). h19: more than twenty (4 × 5)
+    // take a sixth row, and `.crowd` keeps the small type and portrait at every width so it fits too
+    const grid = el('div.hall-heroes', { class: ids.length > 4 * 4 ? ['many', ids.length > 4 * 5 ? 'crowd' : ''] : null });
     ids.forEach(function (id) {
       const d = DD.getHero(id);
       const r = recs[id];

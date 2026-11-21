@@ -726,6 +726,14 @@ b, strong { font-weight: 700; color: var(--gold-4); }
 .hc-art { position: relative; z-index: 0; flex: 1 1 6.6rem; width: 100%; height: 6.6rem; min-height: 2.6rem; max-height: 6.6rem; margin-bottom: -.7rem; display: flex; align-items: center; justify-content: center; }
 .hc-art .portrait { width: auto !important; height: 100% !important; max-width: 100%; aspect-ratio: 1 / 1; filter: drop-shadow(0 6px 8px rgba(0, 0, 0, .55)); }
 .hc-art .portrait img, .hc-art .portrait canvas { object-fit: contain; }
+/* [h19 SCR-2] a face-framed portrait runs past its square (Phat Gus's and Rasma's tails, Benedick's shell): the card art
+   fades out at the left, right and top edges too, never a hard straight cut (the feet keep their longer fade) */
+.hc-art .portrait.noframe .portrait-canvas {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 10%, #000 76%, transparent 100%), linear-gradient(to right, transparent 0, #000 10%, #000 90%, transparent 100%);
+  -webkit-mask-composite: source-in;
+  mask-image: linear-gradient(to bottom, transparent 0, #000 10%, #000 76%, transparent 100%), linear-gradient(to right, transparent 0, #000 10%, #000 90%, transparent 100%);
+  mask-composite: intersect;
+}
 .hc-name { position: relative; z-index: 1; flex: 0 0 auto; max-width: 100%; font-family: var(--f-display); font-weight: 800; font-size: 1.05rem; color: var(--gold-4); line-height: 1.1; text-shadow: 0 1px 2px #000, 0 0 6px rgba(0, 0, 0, .8); }
 .hc-name.long { font-size: .92rem; }
 .hc-role { position: relative; z-index: 1; flex: 0 0 auto; font-size: .78rem; color: var(--text-2); line-height: 1.22; max-width: 100%; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; text-shadow: 0 1px 2px #000; }
@@ -786,8 +794,10 @@ b, strong { font-weight: 700; color: var(--gold-4); }
 .pdn-desc { font-size: .82rem; color: var(--text-2); }
 .ps-actions { display: flex; gap: .8rem; align-items: center; }
 .btn.roll.rolling .btn-icon { animation: dice-roll .6s ease-out; }
-/* V3: more than sixteen heroes (party_select.js `.many`; 17 is prime): 6 columns × 3 rows from 1280 px wide, 5 × 4
-   below (the details panel gives up a little width); the card text gets one more line, the art gives way first */
+/* V3: more than sixteen heroes (party_select.js `.many`): 6 columns × 3 rows from 1280 px wide, 5 × 4 below (the
+   details panel gives up a little width); the card text gets one more line, the art gives way first. h19: the twenty
+   (19 or 20, `.fives`) take rows of five at every width, 5 × 4 with no ragged last row; 21 or more go back to 6 × 4
+   from 1280 px and 5 × 5 below (the rows share the height, so the art shrinks and the text keeps its lines) */
 .ps-roster.many { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: .6rem; }
 .ps-roster.many .hero-card { padding: .35rem .4rem .45rem; }
 .ps-roster.many .hc-art { min-height: 2rem; }
@@ -795,6 +805,7 @@ b, strong { font-weight: 700; color: var(--gold-4); }
 .ps-roster.many .hc-name.long { font-size: .84rem; }
 .ps-roster.many .hc-role { font-size: .72rem; line-height: 1.18; -webkit-line-clamp: 4; }
 @media (min-width: 1280px) { .ps-roster.many { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
+.ps-roster.many.fives { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 @media (max-width: 1279px) {
   .ps-body.many { grid-template-columns: minmax(0, 1fr) minmax(19rem, 21rem); gap: 1rem; }
   /* [V3 review] the narrower details panel: the four stat boxes tighten up so "0 ARMOR" stays inside it (1024 px) */
@@ -1283,7 +1294,7 @@ b, strong { font-weight: 700; color: var(--gold-4); }
 .ro-name { font-family: var(--f-display); font-weight: 800; color: var(--gold-4); }
 .ro-role { font-size: .82rem; color: var(--text-2); }
 /* long pick lists (UI.choice with 7+ options — the tavern's recruits: every hero outside the party): four compact columns,
-   no scrolling down to 1024×640 */
+   no scrolling down to 1024×640 (h19: 16 recruits at twenty heroes, 4 × 4; 17 with a 21st, a fifth row) */
 .modal-choice:not(.modal-reroll):has(.choice-list.many) { max-width: min(68rem, calc(100vw - 2.5rem)); }
 .modal-backdrop:has(.modal-choice:not(.modal-reroll) .choice-list.many) { padding: 1.25rem; }
 .modal-choice:not(.modal-reroll) .choice-list.many { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .5rem; }
@@ -1507,7 +1518,7 @@ b, strong { font-weight: 700; color: var(--gold-4); }
 .prog { display: flex; flex-direction: column; gap: .35rem; }
 .prog-h { display: flex; justify-content: space-between; font-size: .88rem; color: var(--text-2); }
 .prog .up-bar { max-width: none; }
-/* the roster: every registered hero (V3: 17) on one page without scrolling, 1024×640 to 1920×1080 (portrait left, text right) */
+/* the roster: every registered hero (h19: 20) on one page without scrolling, 1024×640 to 1920×1080 (portrait left, text right) */
 .hall-roster { display: flex; flex-direction: column; gap: .7rem; }
 .hall-roster > .narration { margin: 0; }
 .hall-heroes { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .55rem; }
@@ -1527,6 +1538,17 @@ b, strong { font-weight: 700; color: var(--gold-4); }
 .hall-heroes.many .hh-card { padding: .36rem .6rem; }
 .hall-heroes.many .hh-text { gap: 0; }
 .hall-heroes.many .hh-sub, .hall-heroes.many .hh-role { line-height: 1.15; }
+/* h19: more than 4 × 5 = 20 heroes (hall.js `.crowd`): a sixth row of 4 columns. The cards keep the small type and
+   portrait at every width (no 1500 px step up) and give a little more height back, so 21 fit at 1280×720 and
+   1600×900 too */
+.hall-heroes.crowd { gap: .3rem; }
+.hall-heroes.crowd .hh-card { padding: .26rem .55rem; gap: .55rem; }
+.hall-heroes.crowd .hh-card .portrait { width: 3.2rem !important; height: 3.2rem !important; }
+.hall-heroes.crowd .hh-name { font-size: .92rem; line-height: 1.08; }
+.hall-heroes.crowd .hh-name.long { font-size: .84rem; }
+.hall-heroes.crowd .hh-sub { font-size: .72rem; line-height: 1.1; }
+.hall-heroes.crowd .hh-role { font-size: .68rem; line-height: 1.1; }
+.hall-heroes.crowd .hh-rec { font-size: .66rem; line-height: 1.15; }
 .hall-codex { display: flex; flex-direction: column; gap: .8rem; }
 .codex-h { display: flex; justify-content: space-between; align-items: baseline; font-family: var(--f-display); font-weight: 800; color: var(--gold-3); padding-bottom: .3rem; border-bottom: 1px solid rgba(198, 156, 75, .25); margin-top: .4rem; }
 .codex-count { font-family: var(--f-body); font-size: .85rem; color: var(--text-3); }

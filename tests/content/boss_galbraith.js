@@ -710,7 +710,8 @@
     });
     t.ok(checked >= 10, checked + ' sentences name Galbraith');
     // named lines: each names its hero exactly (registered heroes), Benedick's verbatim, never without the hero
-    const NAMES = { zarathor: 'Zarathor', kiri: 'Kiri', corelos: 'Corelos', syllamin: 'Syllamin', marbles: 'Professor Marbles', valdris: 'Valdris', benedick: 'Benedick' };
+    const NAMES = { zarathor: 'Zarathor', kiri: 'Kiri', corelos: 'Corelos', syllamin: 'Syllamin', marbles: 'Professor Marbles', valdris: 'Valdris', benedick: 'Benedick',
+      rasma: 'Rasma', biz: 'Biz', gus: 'Phat Gus' };
     B().NAMED.forEach(function (p) {
       const h = DD.getHero(p[0]);
       t.ok(!!NAMES[p[0]] && p[1].indexOf(NAMES[p[0]]) >= 0 && p[1].length <= 70, p[0] + ': names ' + NAMES[p[0]] + ' exactly: "' + p[1] + '"');
@@ -949,5 +950,44 @@
     if (!enc.length) { t.skip('galbraith.js not loaded'); return; }
     t.ok(!enc.some(function (l) { return /\bskull\b[^.]*\.\s*It\b/.test(l) || /\bIt bows\b/.test(l); }), 'no "It bows"');
     t.ok(enc.some(function (l) { return /Galbraith, now a floating skull in a crown\. He bows/.test(l); }), 'the spotlight finds Galbraith; he bows');
+  });
+
+  // ---- fix:polish (Nov 21): render-ui's request (hud-v2.md "h19 QA fixes", qa-rasma-1) ---------------------------------------
+  // Chain Lightning queues its beams before its damage, so fx_render's "struck a moment ago" rule can't see that a hop leaves
+  // from a foe it just hit: without `shooter: false` the hero on a hop's start tile took the cast pose and turned to face
+  // the next hero, as if it threw the bolt at its friend.
+  T.suite('boss_galbraith: polish — Chain Lightning\'s hops leave from the struck foe with shooter: false (no cast pose); his own first beam and the ray stay his', function (t) {
+    if (!ready(t)) return;
+    /** The beam events queued while fn runs: { from, to, shooter, color, width } (tile positions). */
+    function beams(fn) {
+      const out = [], push = DD.FX.push;
+      DD.FX.push = function (evt) {
+        if (evt && evt.type === 'beam') out.push({ from: evt.from, to: evt.to, shooter: evt.shooter, color: evt.color, width: evt.width });
+        return push.apply(this, arguments);
+      };
+      try { fn(); } finally { DD.FX.push = push; }
+      return out;
+    }
+    const at = function (p, u) { return !!p && !!u && Math.round(p.x) === u.x && Math.round(p.y) === u.y; };
+    arena({ heroes: [{ id: 'test_knight', x: 6, y: 9 }, { id: 'test_mage', x: 7, y: 9 }, { id: 'test_cleric', x: 6, y: 11 }, { id: 'test_rogue', x: 8, y: 11 }],
+      enemies: [{ id: GAL, x: 6, y: 5 }] });
+    const g = gal(), kn = hero('test_knight'), mg = hero('test_mage'), cl = hero('test_cleric');
+    let h = null;
+    const bs = beams(function () { h = hits(function () { useNow(g, 'gal_chain', kn); }); });
+    t.eq(bs.length, 3, 'three beams: from Galbraith, then two hops');
+    t.ok(!!bs[0] && at(bs[0].from, g) && bs[0].shooter !== false, 'the first beam leaves Galbraith and is his cast (no shooter: false)');
+    [kn, mg, cl].forEach(function (x) { t.ok(bs.some(function (b) { return at(b.to, x); }), 'a beam reaches ' + x.name); });
+    bs.slice(1).forEach(function (b, i) {
+      const src = [kn, mg, cl].filter(function (x) { return at(b.from, x); })[0];
+      t.ok(!!src && at(bs[i].to, src) && b.shooter === false, 'hop ' + (i + 1) + ' leaves the hero the last beam struck (' + (src && src.name) + ') with shooter: false');
+    });
+    t.ok(bs.every(function (b) { return b.color === '#cfe3ff' && b.width === 2; }), 'the look is unchanged (colour, width)');
+    t.ok(h.length === 3 && h.every(function (x) { return x.element === 'lightning'; }), 'the hits are unchanged: three lightning hits');
+    // (the renderer's side of shooter: false, no cast pose for the start tile's unit, is "sprites: h19 qa-rasma-1")
+    // his other beam stays his own cast: the Frostbite Ray
+    arena({ heroes: [{ id: 'test_mage', x: 6, y: 10 }], enemies: [{ id: GAL, x: 6, y: 5 }] });
+    const g2 = gal(), m2 = hero('test_mage');
+    const ray = beams(function () { useNow(g2, 'gal_ray', m2); });
+    t.ok(ray.length === 1 && at(ray[0].from, g2) && ray[0].shooter !== false, 'the Frostbite Ray: his own beam, his cast');
   });
 })();

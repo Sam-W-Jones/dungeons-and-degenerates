@@ -9,6 +9,11 @@ collectors, overdue liches, a beholder optometrist and, finally, the Dungeon Mas
 >
 > **Version 3:** a 17th hero pulls up a chair: Benedick the Inevitable, the snail knight. He apologises for being
 > late. He is not sorry about the slime.
+>
+> **Version 3.3:** three more chairs at the table. Rasma the Monotaur, a monocled minotaur spellsword who enchants his
+> sword and apologises for every swing; Biz the Subcontractor, a lizard-man artificer who lets Hjalmarino and Spooder,
+> his mechanical monkey and spider, do the fighting; and Phat Gus, a very round squirrel whose weird eldritch forest
+> powers run on acorns. Twenty heroes, all available from the start.
 
 ## Play
 
@@ -17,11 +22,14 @@ collectors, overdue liches, a beholder optometrist and, finally, the Dungeon Mas
 
 ## How it plays
 
-- **Party:** pick 4 of 17 heroes, all available from the start: Zarathor, Syllamin, Professor Marbles, Marwyn the
+- **Party:** pick 4 of 20 heroes, all available from the start: Zarathor, Syllamin, Professor Marbles, Marwyn the
   Magnificent, Ellaria, Josiah (and Onyx, his raven), Sparrow, Corelos, Slate, Mayor Buga, Kiri, Betty, Basanos,
-  Valdris, Hjalmar, Pebbles and Benedick the Inevitable, a courteous snail knight from the margins of old manuscripts
+  Valdris, Hjalmar, Pebbles, Rasma the Monotaur, Biz (with Hjalmarino and Spooder, his mechanical monkey and spider),
+  Phat Gus and Benedick the Inevitable. Benedick is a courteous snail knight from the margins of old manuscripts
   who leaves a slime trail that stops monsters in their tracks and, given a turn in his shell, bursts out as a
-  Dragonsnail. He is the slowest hero in the dungeon. He always gets there.
+  Dragonsnail. He is the slowest hero in the dungeon. He always gets there. Rasma enchants his sword with frost,
+  lightning or charm and begs your pardon for every strike; Biz hides behind his robots, overclocks them and reboots
+  them from the scrap; Phat Gus eats acorns, and the woods do the rest.
 - **Combat:** deploy your party, then **roll for initiative**. Every hero and monster acts in turn order. On a
   hero's turn you get 3 AP for moving, skills, consumables and interactions; unused AP is lost. Enemies act
   without warning (hold Alt to shade every tile they could reach); only bosses and a few elites wind up their

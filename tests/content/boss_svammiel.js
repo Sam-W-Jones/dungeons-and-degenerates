@@ -125,13 +125,27 @@
     });
     for (const k in def.barks) def.barks[k].forEach(function (b) { t.ok(b.length <= 70, 'bark ≤ 70: ' + b); });
     t.ok(def.barks.named.indexOf('Stop sliming my floor, Benedick! It\'s LINOLEUM!') >= 0, 'named bark #17 names Benedick (exact line)');
+    // h19: heroes 18-20, verbatim from their addenda (they land before the hero files: plan D5)
+    [['Rasma', 'Stop bowing, Rasma! Just HIT me like a normal bull!'], ['Biz', 'Biz, your spider is in my EAR! Get it OUT!'],
+      ['Phat Gus', 'Put DOWN the acorn, Phat Gus! That\'s MY floor\'s acorn!']].forEach(function (p) {
+      t.ok(def.barks.named.indexOf(p[1]) >= 0, 'h19: the named bark for ' + p[0] + ' (exact line): "' + p[1] + '"');
+    });
     // every registered real hero has exactly one named line of his, by the exact capitalised name
     realHeroIds().forEach(function (id) {
       const words = DD.getHero(id).name.split(/[^A-Za-z]+/).filter(function (w) { return w.length >= 3 && /^[A-Z]/.test(w) && w !== 'The'; });
       const n = def.barks.named.filter(function (l) { return words.some(function (w) { return new RegExp('\\b' + w + '\\b').test(l); }); }).length;
       t.eq(n, 1, 'one named bark for ' + id);
     });
-    t.eq(def.barks.named.length, 17, 'seventeen named lines (sixteen heroes of v2 + Benedick)');
+    // h19 (plan D6): exactly one named line per registered hero (the integrator tightened wave 0's ">=" back to "===" once
+    // all twenty registered); an isolated run that loads only some hero files keeps the ">=" (the lines land before the
+    // files, plan D5)
+    const ROSTER20 = ['zarathor', 'syllamin', 'marbles', 'marwyn', 'ellaria', 'josiah', 'sparrow', 'corelos', 'slate', 'buga',
+      'kiri', 'betty', 'basanos', 'valdris', 'hjalmar', 'pebbles', 'benedick', 'rasma', 'biz', 'gus'];
+    if (ROSTER20.every(function (id) { return !!DD.getHero(id); })) {
+      t.eq(def.barks.named.length, realHeroIds().length, def.barks.named.length + ' named lines for the ' + realHeroIds().length + ' registered heroes: one each, none spare');
+    } else {
+      t.ok(def.barks.named.length >= realHeroIds().length, def.barks.named.length + ' named lines for ' + realHeroIds().length + ' registered heroes (one each at least; isolated run)');
+    }
     t.ok(!/four/i.test(def.barks.spawn.join(' ')), 'his opening lines count no doors ("all my toys", not "four")');
     t.eq((DD.defs.narration.svam_finale_open || []).length >= 6, true, 'svam_finale_open: 6 opening lines (the start cameo\'s announcer key in his fight)');
     // the imp

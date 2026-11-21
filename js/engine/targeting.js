@@ -466,8 +466,17 @@
     return (d ? d.name : id) + (stacks > 1 ? ' ' + stacks : '');
   }
 
-  /** Per-unit diff between the real state and a simulated one. */
-  T.diff = function (real, sim, uncertain) {
+  /** "+2 AP", "−1 AP next turn" (h19 QA-BIZ-6: the words of Act.gainAp's pop-up, with the previews' minus sign). */
+  function apText(n, next) { return (n > 0 ? '+' : '−') + Math.abs(n) + ' AP' + (next ? ' next turn' : ''); }
+  function bankOf(u) { return Math.round(+u.apBank || 0) || 0; }
+
+  /**
+   * Per-unit diff between the real state and a simulated one. [h19 QA-BIZ-6] Each entry also carries the AP the action
+   * gives or takes: ap = AP to spend now (a unit of the acting group: Overclock's "+2 AP" on a robot), apNext = AP banked
+   * for the unit's next turn (Act.gainAp outside its turn). opts (optional) { actor, paid }: the actor's entry adds back
+   * the `paid` AP the use itself cost (the card's pips show that), so only what the action does to its AP is left.
+   */
+  T.diff = function (real, sim, uncertain, opts) {
     const perUnit = {};
     const simById = {};
     for (let i = 0; i < sim.units.length; i++) simById[sim.units[i].id] = sim.units[i];
@@ -491,10 +500,15 @@
       }
       for (const id in before) if (after[id] === undefined && !lethal) removed.push(id);
       const moved = su.x !== ru.x || su.y !== ru.y ? { x: su.x, y: su.y } : null;
-      if (!dHp && !dBlock && !lethal && !revived && !added.length && !removed.length && !moved) continue;
+      // a unit that drops (or stays down) has no AP to speak of
+      const up = !lethal && !su.dead && !su.downed;
+      const dAp = up ? (su.ap || 0) - (ru.ap || 0) + (opts && opts.actor === ru.id ? Math.max(0, +opts.paid || 0) : 0) : 0;
+      const dNext = up ? bankOf(su) - bankOf(ru) : 0;
+      if (!dHp && !dBlock && !lethal && !revived && !added.length && !removed.length && !moved && !dAp && !dNext) continue;
       const e = {
         dmg: Math.max(0, dHp), heal: Math.max(0, -dHp), blocked: Math.max(0, dBlock), block: Math.max(0, -dBlock),
         lethal: lethal, revived: revived, statuses: added, removed: removed, moved: moved, uncertain: !!uncertain, text: '',
+        ap: dAp, apNext: dNext,
       };
       const parts = [];
       if (e.dmg) parts.push('−' + e.dmg);
@@ -502,6 +516,8 @@
       if (revived) parts.push('UP! ' + su.hp + ' HP');
       else if (e.heal) parts.push('+' + e.heal);
       if (e.block) parts.push('+' + e.block + ' Block');
+      if (dAp) parts.push(apText(dAp, false));
+      if (dNext) parts.push(apText(dNext, true));
       for (let k = 0; k < added.length; k++) parts.push(statusLabel(added[k], after[added[k]]));
       for (let k = 0; k < removed.length; k++) parts.push('no ' + statusLabel(removed[k], 1));
       if (moved) parts.push('moved');
@@ -534,7 +550,8 @@
     return JSON.stringify([
       Object.keys(per).sort().map(function (id) {
         const e = per[id];
-        return [id, e.dmg, e.heal, e.blocked, e.block, !!e.lethal, !!e.revived, (e.statuses || []).slice().sort(), (e.removed || []).slice().sort(), e.moved ? [e.moved.x, e.moved.y] : 0];
+        return [id, e.dmg, e.heal, e.blocked, e.block, !!e.lethal, !!e.revived, (e.statuses || []).slice().sort(), (e.removed || []).slice().sort(), e.moved ? [e.moved.x, e.moved.y] : 0,
+          e.ap || 0, e.apNext || 0];
       }),
       (res.spawned || []).map(function (p) { return [p.defId, p.x, p.y, p.side]; }),
       (res.objects || []).map(function (o) { return [o.x, o.y, o.id, o.dmg, !!o.destroyed]; }),
@@ -543,10 +560,17 @@
   }
   function pct(p) { return Math.round(p * 100) + '%'; }
   function span(min, max) { return min === max ? String(max) : min + '–' + max; }
+  /** An AP range over the dice: "+0–2 AP", "−1 AP next turn" (a range across zero signs both ends). */
+  function apSpan(min, max, next) {
+    if (min === max) return apText(max, next);
+    const sign = function (n) { return (n < 0 ? '−' : '+') + Math.abs(n); };
+    const body = min >= 0 ? '+' + span(min, max) : max <= 0 ? '−' + span(-max, -min) : sign(min) + '–' + sign(max);
+    return body + ' AP' + (next ? ' next turn' : '');
+  }
 
   /**
-   * Expected outcome over several dry runs with other rolls of the dice. Per unit: dmg / heal / blocked / block are
-   * the rounded means with xMin / xMax ranges; lethal = more likely than not (lethalChance = the share of runs);
+   * Expected outcome over several dry runs with other rolls of the dice. Per unit: dmg / heal / blocked / block / ap /
+   * apNext are the rounded means with xMin / xMax ranges; lethal = more likely than not (lethalChance = the share of runs);
    * statuses / removed = the ones at least half the runs add or remove (statusChance / removedChance per id);
    * moved = the most common landing tile (movedChance); uncertain = true; text like "? −3–9 · Burn 50% · KO 40%".
    * spawned = the most common spawn list, objects = mean damage / majority destroyed, hype = the rounded mean.
@@ -559,7 +583,7 @@
     order.forEach(function (id) {
       const es = list.map(function (r) { return r.perUnit[id] || null; });
       const e = { uncertain: true, samples: n };
-      ['dmg', 'heal', 'blocked', 'block'].forEach(function (k) {
+      ['dmg', 'heal', 'blocked', 'block', 'ap', 'apNext'].forEach(function (k) {
         const v = es.map(function (x) { return x ? x[k] || 0 : 0; });
         let sum = 0, mn = Infinity, mx = -Infinity;
         v.forEach(function (a) { sum += a; mn = Math.min(mn, a); mx = Math.max(mx, a); });
@@ -592,6 +616,8 @@
       if (ups > 0) parts.push('UP! ' + span(e.healMin, e.healMax) + ' HP' + (ups < n ? ' ' + pct(ups / n) : ''));
       else if (e.healMax > 0) parts.push('+' + span(e.healMin, e.healMax));
       if (e.blockMax > 0) parts.push('+' + span(e.blockMin, e.blockMax) + ' Block');
+      if (e.apMin || e.apMax) parts.push(apSpan(e.apMin, e.apMax, false));
+      if (e.apNextMin || e.apNextMax) parts.push(apSpan(e.apNextMin, e.apNextMax, true));
       Object.keys(e.statusChance).forEach(function (sid) {
         const d = DD.getStatus(sid);
         parts.push((d ? d.name : sid) + (e.statusChance[sid] < 1 ? ' ' + pct(e.statusChance[sid]) : ''));
@@ -643,8 +669,9 @@
   }
 
   /**
-   * HUD preview of using a skill at target: { tiles, units, perUnit: { [id]: { dmg, heal, lethal, text, ... } },
-   * uncertain, samples, spawned, objects, hype }. Uses skill.preview(ctx) when defined, otherwise a dry-run simulation.
+   * HUD preview of using a skill at target: { tiles, units, perUnit: { [id]: { dmg, heal, lethal, ap, apNext, text, ... } },
+   * uncertain, samples, spawned, objects, hype } (ap / apNext: AP given now / next turn, the actor's own cost left out).
+   * Uses skill.preview(ctx) when defined, otherwise a dry-run simulation.
    * Fairness: the dry run uses a copy of the real RNG, so it would know the next roll. When the run draws from the
    * combat RNG (a 'random' skill, a proc, a wild surge...) the preview is uncertain and never shows that run: it
    * replays the action with SAMPLES other rolls and shows their expected outcome (aggregate: means, ranges, chances),
@@ -676,6 +703,7 @@
           // custom: the entry is the def's own words (the HUD leads a unit's badge and the aim hint with its text)
           out.perUnit[id] = { dmg: dmg, heal: Math.max(0, Math.round(e.heal || 0)), lethal: !!(u && dmg >= u.hp + (u.block || 0)),
             blocked: Math.max(0, Math.round(e.blocked || 0)), block: Math.max(0, Math.round(e.block || 0)),
+            ap: Math.round(+e.ap || 0) || 0, apNext: Math.round(+e.apNext || 0) || 0,
             text: e.text || (dmg ? '−' + dmg : e.heal ? '+' + e.heal : ''), uncertain: out.uncertain, statuses: [], removed: [], moved: null,
             custom: true };
         }
@@ -693,7 +721,7 @@
         }
         const ctx = DD.Combat.resolveSkill(su, slot || r.def, target, { pay: !!slot, consumable: !!DD.getConsumable(r.def.id) && !DD.getSkill(r.def.id) });
         if (ctx && ctx.uncertain) rec.uncertain = true;
-        const d = T.diff(real, sim, false);
+        const d = T.diff(real, sim, false, { actor: user.id, paid: ctx && ctx.paid ? ctx.paid.ap : 0 });
         d.blast = (rec.blasts || []).slice();   // tiles of the explosions it set off (Act.explode)
         return d;
       }, { seed: seed, record: true });

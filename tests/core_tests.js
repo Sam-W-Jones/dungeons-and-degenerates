@@ -2,7 +2,8 @@
  * Suites "core: ..." for the V3 core (the lead's wave-0 contract, docs/notes/v3-contract.md): DD.finalAct() and the act
  * rows it drives (act 4 ships dark: an act-4 fight reads act 3's row and prices until the knob says 4), the gauntlet's
  * order scaling in DD.Balance.scale, DD.registerCameo and the DD.Cameo stand-in, the narration act variants
- * (key@a<act>: runs, sandbox fights and stale states) and the V3 load order of both manifests.
+ * (key@a<act>: runs, sandbox fights and stale states) and the V3 load order of both manifests (with h19's twin: Rasma,
+ * Biz and Phat Gus after Benedick, docs/notes/h19-contract.md).
  * Every knob change is undone in a finally (DD.Balance.snapshot / restore); no literal "last act" is assumed.
  */
 (function () {
@@ -196,5 +197,32 @@
     t.ok(once(X, 'tests/core_tests.js'), 'tests/core_tests.js is listed once');
     // a listed file that failed to load is reported by the loader, never an error
     t.ok(!(DD.errors || []).some(function (e) { return /cameo|benedick|goats|gardener|league|galbraith|coven|svammiel|events_act4/.test(e); }), 'no load error from a V3 file');
+  });
+
+  // h19 (heroes 18-20, docs/notes/h19-contract.md; plan .tmp/h19/plan.md D1, D2, D5): the three new heroes' files and
+  // suites load once each, right after Benedick's, in the user's order (Rasma, Biz, Phat Gus); wave 0 ships them as
+  // empty stubs, so they are only checked for loading, never for what they register
+  T.suite('core: V3 manifests (h19) — Rasma, Biz and Phat Gus load once each, in the user\'s order, after Benedick', function (t) {
+    const M = window.DD_MANIFEST || [], X = window.DD_EXTRA_SCRIPTS || [], missing = window.DD_MISSING || [];
+    function at(list, p) { return list.indexOf(p); }
+    function once(list, p) { return list.filter(function (q) { return q === p; }).length === 1; }
+    const game = ['js/data/heroes/benedick.js', 'js/data/heroes/rasma.js', 'js/data/heroes/biz.js', 'js/data/heroes/gus.js'];
+    const tests = ['tests/content/hero_benedick.js', 'tests/content/hero_rasma.js', 'tests/content/hero_biz.js', 'tests/content/hero_gus.js'];
+    [[M, game, 'js/data/enemies/act1.js'], [X, tests, 'tests/content/shared.js']].forEach(function (c) {
+      const list = c[0], files = c[1];
+      for (let i = 1; i < files.length; i++) {
+        t.ok(once(list, files[i]) && at(list, files[i]) === at(list, files[i - 1]) + 1, files[i] + ' once, right after ' + files[i - 1]);
+      }
+      t.ok(at(list, files[files.length - 1]) < at(list, c[2]), files[files.length - 1] + ' before ' + c[2] + ' (the hero block)');
+    });
+    game.slice(1).concat(tests.slice(1)).forEach(function (p) {
+      t.ok(missing.indexOf(p) < 0, p + ' exists (a stub until its owner lands it)');
+    });
+    // by file path, not a bare word ("gus" is inside "fungus" and "disgust", "biz" inside "bizarre")
+    const H19_FILE = /(?:heroes\/|hero_)(?:rasma|biz|gus)\.js/;
+    t.ok(H19_FILE.test('SyntaxError @ file:///x/js/data/heroes/gus.js:3') && H19_FILE.test('x @ file:///x/tests/content/hero_biz.js:1') &&
+      !H19_FILE.test('fungus is not defined @ file:///x/js/data/enemies/act1.js:9'), 'the load-error check matches an h19 file\'s path, not a word like "fungus"');
+    t.ok(!(DD.errors || []).some(function (e) { return H19_FILE.test(e); }), 'no load error from an h19 file');
+    t.log('h19 heroes registered so far: ' + (['rasma', 'biz', 'gus'].filter(function (id) { return !!DD.getHero(id); }).join(', ') || 'none (the stubs)'));
   });
 })();

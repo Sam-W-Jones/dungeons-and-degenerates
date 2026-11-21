@@ -680,7 +680,7 @@
     texts.forEach(function (x) { t.ok(!SCREEN.test(x[1]), x[0] + ': no screen-direction words'); });
     // named lines: real heroes named exactly; Granny's Benedick line verbatim (plan §5.3)
     const ROSTER = { marbles: 'Professor Marbles', betty: 'Betty', ellaria: 'Ellaria', benedick: 'Benedick', pebbles: 'Pebbles', hjalmar: 'Hjalmar',
-      syllamin: 'Syllamin', basanos: 'Basanos' };
+      syllamin: 'Syllamin', basanos: 'Basanos', rasma: 'Rasma', biz: 'Biz', gus: 'Phat Gus' };
     IDS.forEach(function (id) {
       (C().NAMED[id] || []).forEach(function (p) {
         const h = DD.getHero(p[0]);

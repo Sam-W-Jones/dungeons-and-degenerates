@@ -164,6 +164,37 @@
         'Keep talking. I\'ll get to you. I always get there.'],
       react: 'Another boss? Splendid. I\'d only just arrived for this one.',
     },
+    // h19, heroes 18-20 (the addenda's voice sections, verbatim: .tmp/h19/addendum-rasma.md §19.2, addendum-biz.md
+    // §19.2, addendum-gus.md §20.2). Joke split with the goats (goats.js): Svammiel keeps "monotaur", the apologies and
+    // the smudged monocle; the warranty, the reboot, "hiding behind", cold-blooded and the recall; the storage unit and
+    // the rent. Rasma says "sir" only here (Svammiel is he); Hjalmarino and Spooder get no pronoun; Phat Gus is roasted
+    // for his snacking, his cheeks and his creepy trees, never his body.
+    rasma: {
+      roast: ['Rasma! A bull with a monocle. Who exactly are you trying to impress?', 'Stop apologising, Rasma. It\'s ruining my whole villain thing.',
+        'Monotaur? That isn\'t a word, Rasma. I checked. Twice.', 'Say please, Rasma. Go on. ...Ha! I\'m cheating ANYWAY.',
+        'Lovely monocle, Rasma. Shame if it got... SMUDGED.', 'A minotaur in a waistcoat, Rasma. The labyrinth is mortified.'],
+      back: ['I\'m afraid I must decline your hospitality. Firmly.', 'With all due respect, sir, your floor is sticky.',
+        'Charmed, I\'m sure. Well. Not sure. But charmed.'],
+      // [h19 review:shared] the addendum's "Another villain? How thoughtful. I'd only just put the kettle on." was
+      // Benedick's reaction ("Another boss? Splendid. I'd only just arrived…") in a waistcoat: his own words instead
+      react: 'How marvellous, a second host! I\'m afraid I\'ll need another cup.',
+    },
+    biz: {
+      roast: ['Biz! Robots fight for you? Cute. I have a whole DUNGEON for that.', 'Hiding behind a tin monkey, Biz? Bold. I hide behind a TABLE.',
+        'Your warranty\'s void, Biz. I voided it. Personally.', 'Have you tried turning YOURSELF off and on again, Biz?',
+        'Cold-blooded, Biz? Come closer. I\'m VERY warm.', 'Two robots and a lizard, Biz? That\'s not a party, that\'s a recall.'],
+      back: ['I don\'t fight demons. I have people for that. Robot people.', 'Big talk from a demon with no warranty.',
+        'Hjalmarino, Spooder: new client. Big one. Bill him double.'],
+      react: 'Another boss? Hang on. I think I have a blueprint for this.',
+    },
+    gus: {
+      roast: ['You brought snacks to MY boss fight, Gus? ...Fine. What flavour?', 'Eldritch powers, Phat Gus? I\'m the eldritch power. You\'re a snack.',
+        'Gus, those trees in my floor have EYES. Who approved eyes?', 'Stress eating, Gus? Wonderful. I\'m about to be VERY stressful.',
+        'Gus, your cheeks are a storage unit. I charge rent on storage units.', 'An acorn from a tree that isn\'t there, Gus? I OWN what isn\'t there.'],
+      back: ['Bold talk from a guy with wings and no snacks.', 'Mmf. Sorry, mouth full. Can you repeat the evil part?',
+        'The woods are under your floor too, buddy. They say hi.'],
+      react: 'A new boss? Hang on. Let me finish this acorn first.',
+    },
   };
 
   // ---- the twist (plan §2.1, §5.1): exactly the user's words -------------------------------------------------------

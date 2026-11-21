@@ -28,6 +28,8 @@
     slate: 'ev_sla_noisy_kids', buga: 'ev_buga_reelection', kiri: 'ev_kir_lost_and_found', betty: 'ev_bet_family_reunion',
     basanos: 'ev_bas_somebody_ate_dolly', valdris: 'ev_val_forge_god', hjalmar: 'ev_hja_prank_king', pebbles: 'ev_peb_best_in_show',
     benedick: 'ev_ben_bistro',   // V3: the 17th hero (his event lands before his hero file: a fixture stand-in plays him until then)
+    // h19, heroes 18-20 (the same landing rule, plan D5)
+    rasma: 'ev_ras_finishing_school', biz: 'ev_biz_scrap', gus: 'ev_gus_picnic',
   };
   // second events for Slate and Mayor Buga (DESIGN §11 offers two ideas each)
   const HERO_EXTRA = { ev_sla_sculptor: 'slate', ev_buga_toaster_cult: 'buga' };
@@ -40,17 +42,21 @@
     zarathor: 'Zarathor', syllamin: 'Syllamin', marbles: 'Professor Marbles', marwyn: 'Marwyn', ellaria: 'Ellaria',
     josiah: 'Josiah', sparrow: 'Sparrow', corelos: 'Corelos', slate: 'Slate', buga: 'Mayor Buga', kiri: 'Kiri', betty: 'Betty',
     basanos: 'Basanos', valdris: 'Valdris', hjalmar: 'Hjalmar', pebbles: 'Pebbles', benedick: 'Benedick',
+    rasma: 'Rasma', biz: 'Biz', gus: 'Phat Gus',
   };
-  // heroes with exactly one hero event whose text features them: the v2 roster's last six, then V3's
+  // heroes with exactly one hero event whose text features them: the v2 roster's last six, then V3's, then h19's
   const ONE_EVENT_HEROES = ['kiri', 'betty', 'basanos', 'valdris', 'hjalmar', 'pebbles'];
   const V3_ONE_EVENT_HEROES = ['benedick'];
+  const H19_ONE_EVENT_HEROES = ['rasma', 'biz', 'gus'];
   // the user's pronouns: she/her for these three, he/him for every other hero
   const SHE = ['ellaria', 'sparrow', 'kiri'];
   const HE_WORDS = ['he', 'him', 'his', 'himself'];
   const SHE_WORDS = ['she', 'her', 'hers', 'herself'];
   const THEY_WORDS = ['they', 'them', 'their', 'theirs', 'themselves', 'themself'];
-  // named level-ups jump the rotation: rare, and only in that hero's own event
-  const NAMED_LEVEL_UPS = ['ev_mrw_mirror', 'ev_jos_rat_union', 'ev_bas_somebody_ate_dolly'];
+  // named level-ups jump the rotation: rare, and only in that hero's own event (h19: Phat Gus's picnic, at 50%, against a
+  // 30% HP loss: its hint opens with the chance)
+  const NAMED_LEVEL_UPS = ['ev_mrw_mirror', 'ev_jos_rat_union', 'ev_bas_somebody_ate_dolly', 'ev_gus_picnic'];
+  const NAMED_HINT = /^(?:\d+%: )?([A-Z][\w ]+) levels up\./;
   const ROTATION_HINT = 'One hero levels up (the DM rolls among the lowest-level heroes).';
   // ARCHITECTURE §3.10 + the v2 engine key (combat.js / combat_hud.js narrate 'initiative' with { hero }) + 'objective_failed'
   // (a lost objective while heroes stand: requested from combat.js, whose 'defeat' lines are about a TPK) + 'opportunity' (an
@@ -73,7 +79,7 @@
   const FORESHADOW = { idle_dm: [/tucks his feet up/, /Something under the table bumps/], act_clear: [/A text from "S"/],
     boss_start: [/glances at the floor/], act_intro_3: [/says it to the floor/], victory: [/checks under the table/] };
   // a number of doors or heroes written out (they come from the registry): never in act-4 text
-  const COUNT_WORDS = /\b(?:four|five|six|sixteen|seventeen) (?:mini-?bosses|doors|rooms|heroes|lanes|favourites|toys)\b/i;
+  const COUNT_WORDS = /\b(?:four|five|six|sixteen|seventeen|eighteen|nineteen|twenty) (?:mini-?bosses|doors|rooms|heroes|lanes|favourites|toys)\b/i;
   const POCKET_GOLD = 15;
   const CONSOLATION_GOLD = 30;
   const DEBT_SCAR = 'scar_owes_the_dm';   // Corelos' fine print
@@ -781,6 +787,43 @@
         c.hurt(c.st, 0.3); c.hpSame(c.st); c.noItems(); return 'salt';
       } },
     ],
+    // h19: heroes 18-20 (addendum-rasma §19.1, addendum-biz §19.1, addendum-gus §20.1)
+    ev_ras_finishing_school: [
+      det(function (c) {
+        c.goldIs(40); c.noLevels(); c.hpSame(); c.noFight(); c.noItems(); c.noScars();
+        c.ok(c.out.text.indexOf('pay 40 gold in tuition') >= 0, 'the outcome names the tuition');
+      }),
+      det(function (c) { c.healAll(0.25); c.goldIs(0); c.noLevels(); c.noFight(); c.noItems(); c.noScars(); }),
+      { branches: ['etiquette', 'shin'], check: function (c) {
+        c.goldIs(0); c.noLevels(); c.noFight(); c.noScars();
+        if (c.newItems.length) { c.heroItem(c.st, 'rare'); c.hpSame(); return 'etiquette'; }
+        c.hurt(c.st, 0.3); c.hpSame(c.st); c.noItems(); return 'shin';
+      } },
+    ],
+    ev_biz_scrap: [
+      det(function (c) {
+        c.goldIs(40); c.noLevels(); c.hpSame(); c.noFight(); c.noItems(); c.noScars();
+        c.ok(c.out.text.indexOf('for 40 gold') >= 0, 'the outcome names the kobold\'s gold');
+      }),
+      det(function (c) { c.goldIs(c.upgradeGold(c.st)); c.noLevels(); c.hpSame(); c.noFight(); c.noItems(); }),
+      { branches: ['mangle', 'avalanche'], check: function (c) {
+        c.goldIs(0); c.noLevels(); c.noFight(); c.noScars();
+        if (c.newItems.length) { c.heroItem(c.st, 'rare'); c.hpSame(); return 'mangle'; }
+        c.hurt(c.st, 0.3); c.hpSame(c.st); c.noItems(); return 'avalanche';
+      } },
+    ],
+    ev_gus_picnic: [
+      det(function (c) { c.healAll(0.25); c.goldIs(0); c.noLevels(); c.noFight(); c.noItems(); c.noScars(); }),
+      { branches: ['feast', 'jar'], check: function (c) {
+        c.goldIs(0); c.noFight(); c.noItems(); c.noScars();
+        if (c.up(c.st)) { c.named(c.st); c.hpSame(); return 'feast'; }
+        c.noLevels(); c.hurt(c.st, 0.3); c.hpSame(c.st); return 'jar';
+      } },
+      det(function (c) {
+        c.goldIs(40); c.noLevels(); c.hpSame(); c.noFight(); c.noItems(); c.noScars();
+        c.ok(c.out.text.indexOf('push up 40 gold') >= 0, 'the outcome names the gold the roots push up');
+      }),
+    ],
   };
 
   /** Resolve every choice of `def` from `base` over seeds until every required branch was seen; check each outcome. */
@@ -846,7 +889,7 @@
         t.ok(typeof ch.label === 'string' && ch.label.length >= 3 && ch.label.length <= 40, L + ' choice ' + i + ': label "' + ch.label + '"');
         t.ok(typeof ch.hint === 'string' && ch.hint.length >= 8 && ch.hint.length <= 170 && !BAD_TEXT.test(ch.hint), L + ' choice ' + i + ': hint "' + ch.hint + '"');
         t.ok(typeof ch.resolve === 'function', L + ' choice ' + i + ': resolve');
-        t.ok(!/levels? up/.test(ch.hint) || ch.hint.indexOf(ROTATION_HINT) >= 0 || /^[A-Z][\w ]+ levels up\./.test(ch.hint), L + ' choice ' + i + ': a level-up is either the rotation or a named hero ("' + ch.hint + '")');
+        t.ok(!/levels? up/.test(ch.hint) || ch.hint.indexOf(ROTATION_HINT) >= 0 || NAMED_HINT.test(ch.hint), L + ' choice ' + i + ': a level-up is either the rotation or a named hero ("' + ch.hint + '")');
       });
       t.ok(ev.choices.some(function (ch) { return /\d+%|Pay \d+ gold|loses?|Fight|scar/i.test(ch.hint); }), L + ': at least one risk / reward trade');
       t.ok(ev.choices.some(function (ch) { return !/^Pay /.test(ch.hint); }), L + ': at least one choice is free');
@@ -872,8 +915,8 @@
     Object.keys(HERO_EVENTS).forEach(function (hid) {
       t.ok(evs.some(function (ev) { return ev.hero === hid; }), hid + ': has a hero event');
     });
-    // the six heroes of the v2 roster have exactly one event each, and theirs is about them; so does V3's Benedick
-    ONE_EVENT_HEROES.concat(V3_ONE_EVENT_HEROES).forEach(function (hid) {
+    // the six heroes of the v2 roster have exactly one event each, and theirs is about them; so do V3's Benedick and h19's three
+    ONE_EVENT_HEROES.concat(V3_ONE_EVENT_HEROES, H19_ONE_EVENT_HEROES).forEach(function (hid) {
       const evh = evs.filter(function (ev) { return ev.hero === hid; });
       t.eq(evh.length, 1, hid + ': one event');
       if (evh[0]) t.ok(evh[0].text.indexOf(HERO_NAMES[hid]) >= 0, hid + ': the event text features ' + HERO_NAMES[hid]);
@@ -1013,7 +1056,7 @@
     ours().forEach(function (ev) {
       ev.choices.forEach(function (ch, i) {
         if (ch.hint.indexOf(ROTATION_HINT) >= 0) rotation.push(ev.id + ' #' + i);
-        const m = /^([A-Z][\w ]+) levels up\./.exec(ch.hint);
+        const m = NAMED_HINT.exec(ch.hint);
         if (m) named.push({ ev: ev, i: i, who: m[1] });
       });
     });
@@ -2638,21 +2681,60 @@
       const all = [ev.title, text].concat(ev.choices.map(function (c) { return c.label + ' ' + c.hint; })).join(' ');
       t.ok(!SPOIL.test(all), ev.id + ': no act-4 spoiler');
     });
-    // Benedick is no secret: nothing of his (the hero, his skills, items and lines) mentions act 4
-    const hb = DD.getHero('benedick');
-    if (!hb) { t.log('Benedick\'s hero file has not landed yet: his own text is checked once it does'); return; }
-    const strings = [];
-    function walk(o, d) {
-      if (o === null || o === undefined || d > 6) return;
-      if (typeof o === 'string') { strings.push(o); return; }
-      if (typeof o === 'object') Object.keys(o).forEach(function (k) { if (k !== 'sprite') walk(o[k], d + 1); });
-    }
-    walk({ name: hb.name, epithet: hb.epithet, blurb: hb.blurb, barks: hb.barks, passive: hb.passive && hb.passive.desc }, 0);
-    Object.keys(DD.defs.skills).forEach(function (id) {
-      const s = DD.getSkill(id);
-      if (s.owner === 'benedick') { strings.push(s.name, DD.skillDesc(s, 1, null)); if (s.flavor) strings.push(s.flavor); }
+    // no hero is a secret: nothing of any real hero's (the hero, his or her skills, items and lines) mentions act 4 —
+    // Benedick (V3) and h19's Rasma, Biz and Phat Gus included; a hero whose file has not landed is checked once it does
+    ['benedick', 'rasma', 'biz', 'gus'].forEach(function (id) {
+      if (!DD.getHero(id)) t.log(id + '\'s hero file has not landed yet: his own text is checked once it does');
     });
-    Object.keys(DD.defs.items).forEach(function (id) { const it = DD.getItem(id); if (it.hero === 'benedick') strings.push(it.name, String(it.desc || ''), String(it.flavor || '')); });
-    t.eq(strings.filter(function (x) { return SPOIL.test(x); }).join(' | '), '', 'Benedick\'s ' + strings.length + ' texts: no act-4 spoiler');
+    const ids = Object.keys(DD.defs.heroes).filter(function (id) { return !/^test_/.test(id); });
+    if (!ids.length) { t.log('no real hero registered (isolated run)'); return; }
+    function walk(out, o, d) {
+      if (o === null || o === undefined || d > 6) return;
+      if (typeof o === 'string') { out.push(o); return; }
+      if (typeof o === 'object') Object.keys(o).forEach(function (k) { if (k !== 'sprite') walk(out, o[k], d + 1); });
+    }
+    /** A skill's or an item's desc as a player reads it (a function desc through DD.skillDesc, as the UI does). */
+    function descOf(d) { return typeof d.desc === 'function' ? DD.skillDesc(d, 1, null) : String(d.desc || ''); }
+    /** The id prefix most of a hero's skills share ('ras_', 'biz_', 'gus_' …), '' when none does. */
+    function prefixOf(sids) {
+      const n = {};
+      sids.forEach(function (sid) { const m = /^([a-z]+_)/.exec(sid); if (m) n[m[1]] = (n[m[1]] || 0) + 1; });
+      const best = Object.keys(n).sort(function (a, b) { return n[b] - n[a]; })[0];
+      return best && n[best] * 2 >= sids.length ? best : '';
+    }
+    /** A status's desc as its tooltip reads it (a function desc on a one-stack instance; '' if it needs more). */
+    function statusText(st) {
+      if (typeof st.desc !== 'function') return String(st.desc || '');
+      try { return String(st.desc({ stacks: 1, turns: -1, data: {} }) || ''); } catch (e) { return ''; }
+    }
+    let total = 0;
+    ids.forEach(function (id) {
+      const hb = DD.getHero(id);
+      const strings = [];
+      walk(strings, { name: hb.name, epithet: hb.epithet, blurb: hb.blurb, role: hb.role, barks: hb.barks, passive: hb.passive && hb.passive.desc }, 0);
+      // [h19 review:shared] every level of every skill of his, and his own summons (name, names, desc, barks: Biz's
+      // constructs and their skills) and statuses (the blades, the cheeks), found by the prefix his skills share
+      const pre = prefixOf(Object.keys(DD.defs.skills).filter(function (sid) { return DD.getSkill(sid).owner === id; }));
+      Object.keys(DD.defs.skills).forEach(function (sid) {
+        const s = DD.getSkill(sid);
+        if (s.owner !== id && !(pre && sid.indexOf(pre) === 0)) return;
+        strings.push(s.name);
+        if (s.flavor) strings.push(s.flavor);
+        for (let L = 1; L <= Math.max(1, s.maxLevel || 1); L++) strings.push(DD.skillDesc(s, L, null));
+      });
+      if (pre) {
+        Object.keys(DD.defs.summons || {}).forEach(function (mid) {
+          const m = DD.defs.summons[mid];
+          if (mid.indexOf(pre) === 0) walk(strings, { name: m.name, names: m.names, desc: typeof m.desc === 'string' ? m.desc : '', barks: m.barks }, 0);
+        });
+        Object.keys(DD.defs.statuses || {}).forEach(function (stid) {
+          if (stid.indexOf(pre) === 0) strings.push(DD.defs.statuses[stid].name, statusText(DD.defs.statuses[stid]));
+        });
+      }
+      Object.keys(DD.defs.items).forEach(function (iid) { const it = DD.getItem(iid); if (it.hero === id) strings.push(it.name, descOf(it), String(it.flavor || '')); });
+      total += strings.length;
+      t.eq(strings.filter(function (x) { return SPOIL.test(x); }).join(' | '), '', hb.name + '\'s ' + strings.length + ' texts: no act-4 spoiler');
+    });
+    t.log(ids.length + ' heroes, ' + total + ' texts walked');
   });
 })();

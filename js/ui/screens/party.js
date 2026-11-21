@@ -71,7 +71,7 @@
     // (v2: nobody starts a fight with Block, so a "Starting Block" stat is no longer shown)
     if (num(s.hype)) grid.appendChild(statRow('🔥', 'Starting Hype', UI.signed(s.hype), 'good', 'Party Hype at the start of each combat.'));
     col.appendChild(grid);
-    if (d.passive) col.appendChild(el('div.sheet-passive', null, el('div.sp-h', null, el('span.psd-h-tag', null, 'Passive'), d.passive.name || 'Passive'), el('div.sp-desc', null, d.passive.desc || '')));
+    if (d.passive) col.appendChild(el('div.sheet-passive', null, el('div.sp-h', null, el('span.psd-h-tag', null, 'Passive'), d.passive.name || 'Passive'), el('div.sp-desc', null, UI.passiveText(d.passive, rh))));
     const downs = num(rh.downs);
     const scars = rh.scars || [];
     const sc = el('div.sheet-scars', null, el('div.sp-h', null, el('span.psd-h-tag', null, 'Scars'), downs ? el('span.downs', { title: 'Downs this run. The third one is permanent.' }, '💀 ' + downs + ' / 3 downs') : 'No downs yet'));

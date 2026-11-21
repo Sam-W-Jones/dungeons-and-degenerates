@@ -423,6 +423,54 @@
     t.eq(errorsSince(p0).length, 0, 'no swallowed errors');
   });
 
+  T.suite('sprites: h19 qa-rasma-1 — a beam that carries on from a struck foe to its friend is not cast by that foe', function (t) {
+    const p0 = DD.problems.length, C = DD.Combat;
+    if (!C) { t.skip('needs DD.Combat'); return; }
+    const hero = fakeUnit('qr_h', '__none', 'hero', { x: 1, y: 2 });
+    const foe = fakeUnit('qr_a', '__none', 'enemy', { x: 3, y: 2 });
+    const pal = fakeUnit('qr_b', '__none', 'enemy', { x: 4, y: 2 });
+    const prev = C.state;
+    /** Play the queue out, counting the poses a unit shows (frames). */
+    const watch = function (FX, u) {
+      const seen = {};
+      for (let i = 0; i < 400 && FX.busy(); i++) { FX.update(16); const p = u.vis.pose || 'idle'; seen[p] = (seen[p] || 0) + 1; }
+      return seen;
+    };
+    C.state = { units: [hero, foe, pal] };
+    try {
+      withFx([hero, foe, pal], function (FX) {
+        // Rasma's Positively Shocking: his strike hits the foe, then the arc runs from that foe's tile to its friend
+        foe.vis.facing = -1;
+        foe.hp = 15; FX.damage(foe, 5, { element: 'lightning' });
+        const arc = FX.beam({ id: foe.id, x: foe.x, y: foe.y, name: foe.name }, pal, { color: '#ffe066', width: 2 });
+        const seen = watch(FX, foe);
+        t.ok(!seen.cast, 'the struck foe never takes the cast pose (' + JSON.stringify(seen) + ')');
+        t.ok(seen.hurt > 0, 'it flinches (hurt pose)');
+        t.eq(foe.vis.facing, -1, 'it keeps its facing');
+        t.ok(!arc._shooter, 'the arc has no shooter');
+        // a caster's own beam still casts and turns it to face the target
+        hero.vis.facing = -1;
+        FX.beam(hero, foe, { color: '#ffe066' });
+        t.ok(watch(FX, hero).cast > 0, 'a caster still casts its beam');
+        t.eq(hero.vis.facing, 1, 'and faces its target');
+        // the opt-out: shooter: false
+        FX.beam(hero, foe, { shooter: false });
+        t.ok(!watch(FX, hero).cast, 'opts shooter: false gives no cast pose');
+        // a struck unit lashing back at the other side (Hellish Rebuke) still casts
+        hero.hp = 15; FX.damage(hero, 5, {});
+        FX.beam(hero, foe, { color: '#ff5a1f' });
+        t.ok(watch(FX, hero).cast > 0, 'a struck unit beaming at a foe still casts (a rebuke)');
+        // a chain hop: the bolt jumps on from the foe it just hit
+        pal.hp = 15; FX.damage(pal, 4, { element: 'lightning' });
+        pal.vis.facing = 1;
+        FX.beam(pal, foe, { kind: 'lightning' });
+        const hop = watch(FX, pal);
+        t.ok(!hop.cast && pal.vis.facing === 1, 'a chain hop from a struck foe to its friend: no cast, no turn');
+      });
+    } finally { C.state = prev; }
+    t.eq(errorsSince(p0).length, 0, 'no swallowed errors');
+  });
+
   T.suite('sprites: FXRender tolerates bad input', function (t) {
     const p0 = DD.problems.length;
     t.tryRun('missing view', function () { DD.FXRender.drawWorld(null); DD.FXRender.drawScreen({}); DD.FXRender.drawWorld({ ctx: null }); });

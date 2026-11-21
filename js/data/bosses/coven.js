@@ -108,6 +108,11 @@
       ['betty', 'Betty! What a lovely name. I\'ll knit it on your shroud.'],
       ['ellaria', 'Lovely corgis, Ellaria. I\'ll knit them jumpers. Cursed ones.'],
       ['benedick', 'Benedick, dearie! I\'ve a lovely garlic butter for you.'],
+      // h19 (addendum-rasma §19.4, addendum-biz §19.4, addendum-gus §20.4)
+      ['rasma', 'Rasma, dearie! Such lovely manners. Do stay for tea. Forever.'],
+      // [h19 review:shared] not "cold-blooded" (Svammiel's joke about Biz): the handyman is wanted at the cauldron
+      ['biz', 'Biz, dearie! Come fix Granny\'s cauldron. It\'s only a little cursed.'],
+      ['gus', 'Ooh, Phat Gus, dearie! Come closer. Granny\'s got a lovely pie dish.'],
     ],
     cov_brine: [
       ['pebbles', 'Off! Pebbles, off! Hot dog away from my seaweed!'],

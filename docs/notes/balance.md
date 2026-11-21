@@ -2269,6 +2269,8 @@ The audit failed the plan's gates on fresh seeds; the release decision reads eac
   lever. Players will not feel it.
 - **T4 casual 78.8%** (69.7-85.7; four readings 74-80%): about 77% pooled against a 75% ceiling, its interval
   overlapping the band; §8 step 5 (casual 0.8 → 0.85) is the lever. Casual is meant to be kind.
+  **Decided (Nov 18, the user): "Casual being easy is fine"** - the lever stays unpulled; casual's upper bound is a
+  report from now on, not a gate.
 - **T3 / T9, two round-cap fights** (Svammiel, normal seed 40301, 102/414 HP at round 31; the Gardener, casual seed 41059,
   6/192): the 30-round cap exists only in AutoPlay's `runBattle` (sims and tests); a player's fight has no cap. Both
   replays are grinds a few hits from a win, not loops: every lift heal is bounded per event, turn or round, and the
@@ -2307,3 +2309,457 @@ user. Players' notes: `.tmp/heal/release-notes.md`.
   stopped the pass; the audit's 53.4% at today's rows could sit next to it.
 - **Lead (non-blocking):** the audit's levers (T3 doors, T4 casual, the Svammiel stall shape, T6 `DENTS` past 7, the T5
   lever for Pebbles' Burning-neighbour heal 3 → 4) and the four T8 AutoPlay requests in the hero notes.
+
+## h19 pass (Nov 20) — h19:balance: Rasma, Biz and Phat Gus (plan `.tmp/h19/plan.md` §3)
+
+The user (Nov 18) added three heroes: Rasma, Biz and Phat Gus. The plan (§3.4) tunes their own numbers first, inside
+each addendum's knob list and in its order (D10: they are unreleased, so both directions are allowed). The 17 shipped
+heroes do not change, and nothing of Ellaria's changes. Enemy rows move only once all three new heroes are in band.
+**Outcome:** Rasma is now in band (within noise) on both readings. Phat Gus needed no change. Biz has every "too strong"
+knob in his list applied and still reads about 2× the reference, so the pass stopped there (stop rule, §3.4.4). No enemy
+row moved: without Biz in the party, the campaign is already inside T1 and T2.
+
+**Measurement.** Stock `tools/sim.sh`, one 100-seed page at a time, `debug=1&healers=ellaria,josiah,valdris&raw=1`
+(`verbose=1` on normal pages).
+- Pooled with `.tmp/heal/baseline/merge.awk` / `split.awk` and the integrator's `fp.awk` / `lifts.awk` / `nobiz.awk`.
+- Scripts: `.tmp/h19/bal/run_it.sh` (`K`, `SEATS`, `PART`) and `compose.sh <k> [reference pages]`. Raw pages are in
+  `.tmp/h19/bal/it<k>/`.
+- Iteration 0 is the integrator's reading `int` (normal 86000-86599, forced 86600-86699). No game file changed between
+  that reading and this pass's first edit.
+- Iteration k uses normal seeds 64000 + 1000k … +599 and forced seeds 64000 + 1000k + 600 … +699. The one brutal probe
+  ran at 68800.
+- The final-gate seeds (60000-60599, 61000-61099, 62000-62099, 63000-63099, 63500-63599) were never used.
+- Forced reading (plan §3.2): R_H = W(H with T_A + T_B) / ½(W(Betty) + W(Buga)), with a delta-method 95% interval on
+  log R. T_A is Josiah, Kiri and Marwyn; T_B is Corelos, Slate and Hjalmar.
+- No enemy row moved, so the Betty / Buga / Phat Gus seats keep their `int` pages (86600). Only the seats whose numbers
+  moved were re-run. Rates carry Wilson 95% intervals; per-fight means carry batch-means 95% half-widths.
+
+### What landed (numbers only; every text reads its constant)
+| hero | knob (addendum order) | before | after | iteration |
+|---|---|---|---|---|
+| Rasma | `AFTERGLOW` (Enchanté; T8n lever 1, weak knob 2) | 3 | **4** (top of [2*, 4]) | 1 |
+| Rasma | With All Due Respect I-III (weak knob 3) | 8 / 10 / 12 | **9 / 11 / 13** | 1 |
+| Rasma | HP (weak knob 4) | 30 (+4) | **32** (+4) | 2 |
+| Biz | (1) robot HP | 8 + 2L / 6 + 2L | **6 + 2L / 4 + 2L** | 1 |
+| Biz | (2) reboot timer `SCRAP_TURNS` | 2 | **3** of his turns | 1 |
+| Biz | (3) Mk bands `MK_AT` | 3 / 6 | **4 / 7** | 2 |
+| Biz | (4) Overclock cooldown I-III | 2 / 1 / 1 | **2 / 2 / 1** | 2 |
+| Biz | (5) Hjalmarino armor | 1 | **0** | 3 |
+| Biz | (6) Cymbal Crash | any adjacent foe | **not a boss** (refusal "Bosses have heard the cymbals before.") | 3 |
+| Biz | (7) timed reboot `REBOOT_FRAC` (a Warranty claim too) | half its HP | **a third**, rounded up | 4 |
+
+Each change updated the constant, the desc (from the constant), the hero's suite pins, his notes ("Balance pass" in
+`docs/notes/hero-{rasma,biz}.md`) and the DESIGN §6 brief (Rasma: 32 HP, Respect 9-13, the afterglow's 4. Biz: the
+robots' HP, no armor on Hjalmarino, Cymbal Crash not on bosses, the third turn, a third of its HP, Mk bands 4 / 7. §6.1
+D7 note: "one adjacent foe, never a boss").
+- Phat Gus: unchanged (in band at `int`: forced 1.36, 0.99-1.86, within noise; random 0.95×; T8n met).
+- `js/data/balance.js` and `tests/balance_tests.js`: unchanged (no row moved).
+- Two steps a reading: the lead's rule for a hero whose first reading sat outside 0.67-1.50×. Both did (Biz 3.31,
+  Rasma 0.51), and each kept its two steps while still outside.
+- Rasma's first weak knob (enchant bonus +2 → +3 at I) was **skipped**: The Cold Shoulder II and Most Disarming II would
+  equal their level I (a level-up that changes nothing). His charges were never touched.
+
+### Iterations (forced readings, 200 runs a seat; the reference ½(W(Betty) + W(Buga)) = 18.8%, `int` pages)
+| iteration | change | Biz R (W) | Rasma R (W) | `lift:biz` fires · HP | `lift:rasma` fires · HP |
+|---|---|---|---|---|---|
+| 0 (`int`) | the addenda's numbers | 3.31 (62.0%, 124/200; 2.62-4.17) | 0.51 (9.5%, 19/200; 0.32-0.81) | 0.70 · 1.74 (normal) | 0.92 · 2.43 (normal) |
+| 1 | Biz (1)+(2); Rasma `AFTERGLOW` 4 + Respect | 2.77 (52.0%, 104/200; 2.17-3.54) | 0.64 (12.0%, 24/200; 0.42-0.98) | 0.70 · 1.83 | 0.89 · 3.07 |
+| 2 | Biz (3)+(4); Rasma 32 HP | 2.59 (48.5%, 97/200; 2.02-3.32) | **0.72** (13.5%, 27/200; 0.48-1.08) within noise | 0.61 · 1.53 | 0.87 · 3.05 |
+| 3 | Biz (5)+(6) | 2.00 (37.5%, 75/200; 1.52-2.62) | — | 0.64 · 1.74 | — |
+| **4 (kept)** | Biz (7) | **2.12** (39.7%, 79/199; 1.62-2.76); it3+it4 pooled 2.06 (38.6%, 154/399; 1.62-2.61) | — | 0.63 · 1.66 | — |
+
+Per triple, Biz's party won 85 / 77 / 74 / 67 / 64% with T_A (the references 39 / 33%) and 39 / 27 / 23 / 8 / 16% with
+T_B (references 1 / 2%). Iterations 1-3 ran no normal block: a forced point outside 0.67-1.50× is a T5n miss whatever
+the pool says, and it decided the next step. Iteration 4 ran the full normal block (Deviations).
+
+### Every target at the kept numbers (iteration 4: normal 68000-68599, 600 runs; forced as above)
+| target | reading | `int` | verdict |
+|---|---|---|---|
+| T1 campaign [23, 28], CI overlaps 22-28 | **28.9%** (173/599, 25.4-32.6) | 30.5% | **MISS by 0.9 points** (CI overlaps). Without Biz in the party: 24.8% (120/483, 21.2-28.9) |
+| T2 act 3 cleared [28, 35] | **38.2%** (229/600, 34.4-42.1) | 38.8% | **MISS.** Without Biz: 33.7% (163/483, 29.7-38.1) |
+| T3 Svammiel [80, 85] | **83.7%** (174/208, 78.0-88.1) | 86.7% | PASS |
+| T3 doors ≥ 91% (≤ 98.5% report) | coven 97.2 · galbraith 97.7 · gardener 97.7 · league 98.1 · **goats 99.5** (all 98.0%, 1053/1074) | 97.3-99.1 | PASS. Report: the goats sit over 98.5%, as at `int` and in v3.2 |
+| T3 Svammiel rounds ≤ 13.27 | 13.00 | 12.33 | PASS |
+| T3s stalls ≤ 1 / 1,000 fights | 1 in 7,773 normal fights (+ 2 in ~14,700 forced). All three replayed with `dump=1`: below | 0 | PASS |
+| T4 brutal [5, 13] | 10.0% (10/100, 5.5-17.4; one probe page at 68800, act 3 cleared 13%; 0 errors, 0 stalls) | — | PASS (report-grade n; the audit's 62000-62099 is the gate). Casual: a report only, not measured |
+| T5n Rasma | forced **0.72** (0.48-1.08) · random **0.71×** (17.8%, 21/118, 11.9-25.7; the median 25.2% inside) | 0.51 · 0.84× | PASS (within noise, both) |
+| T5n Biz | forced **2.12** (1.62-2.76) · random **1.81×** (45.7%, 53/116, 36.9-54.7) | 3.31 · 2.40× | **MISS, both** (the knob list is spent) |
+| T5n Phat Gus | forced 1.36 (`int`, unchanged numbers) · random **1.11×** (27.9%, 34/122) | 1.36 · 0.95× | PASS |
+| E Ellaria's parties (n ≥ 150) | **51.3%** (58/113, 42.2-60.3; n under 150) | 55.1% (65/118) | **under the 52% line at n = 113**. No enemy row moved (below) |
+| T6 healers ≥ 2× non-healers; new heroes heal no other unit | Josiah 15.7, Ellaria 11.0, Valdris 3.5 vs Sparrow 2.8 (1.25×); `lift:rasma` / `lift:biz` / `lift:gus` to others 0.00 | Valdris 1.19× | PASS |
+| T8n `lift:rasma` ≥ 1.0 fire, 4-10 HP | 0.90 ± 0.11 fires · **3.22 ± 0.38 HP** | 0.92 · 2.43 | **MISS** (`AFTERGLOW` at the top of its range) |
+| T8n `lift:biz` 0.8-2 fires, 3-8 HP | 0.65 ± 0.03 · **1.71 ± 0.15** | 0.70 · 1.74 | **MISS** (left; below) |
+| T8n `lift:gus` ≥ 0.8 fires, 2.4-9 HP | 1.14 ± 0.12 · 3.31 ± 0.32 (Winter Coat worn: 154 fights, 7.38 HP) | 1.04 · 3.01 | PASS |
+| T8o (report) | Slate, Benedick and Kiri fire low; Valdris 59% to others | 13 of 16 | report |
+| T9 | 0 errors and 0 `DD.warn` on all pages | | PASS (suite below) |
+
+T5o (report): shares at iteration 4 (median 25.2%):
+- Ellaria 2.04×, Zarathor 1.81×, Biz 1.81×, Josiah 1.65×, Syllamin 1.65×.
+- Phat Gus 1.11×, Kiri 1.06×, Benedick 1.06×, Buga 1.05×, Marbles 1.01×, Corelos 0.99×, Marwyn 0.98×, Betty 0.97×.
+- Pebbles 0.94×, Sparrow 0.91×, Basanos 0.91×, Valdris 0.89×, Slate 0.86×, Rasma 0.71×, Hjalmar 0.61×.
+- The guard rails, against v3.2's run-win rates: Pebbles 23.6% and Valdris 22.3% (Rasma's Tea), Betty 24.4% and Syllamin
+  41.5% (Phat Gus). Hjalmar's 15.3% (n 124) is the lowest share; it is reported, never acted on.
+
+T10 (report, the sim's usage; the hero suites' zz sims were not re-run):
+- Biz: Overclock 2.25 a fight, Turn It Off and On Again 0.61 a socketed fight.
+- Rasma: Pardon Me 3.71 and The Cold Shoulder 1.45 a fight; Sweeping Bow 0.06; his signature 0.00, like every hero's in
+  the sim.
+- Phat Gus: Root Canal 2.78 and Incisor Decision 2.75 a fight.
+
+### Why no enemy row moved
+Plan §3.4 step 3 tunes T1-T4 only with all three new heroes in band, and Biz is not. The campaign's excess is his:
+- Runs without him sit inside T1 and T2 (24.8% / 33.7%). With him in the party they read 45.7% / 56.0%.
+- A row step would cut every other party to pay for one hero. Runs without Biz would fall under 23%.
+- Healer-less runs lost in act 1: 30.8% (88/286), under the 42% limit.
+
+**Ellaria's parties read 51.3% (n = 113).** This is the stop-and-report line. It is reported, not acted on:
+- No row moved. The reading carries ±9 points at this n.
+- Her parties without Biz read 50.0% (50/100), so his cut did not pull them down either.
+- Pooled across `int` and iteration 4 (the heroes' numbers differ, so this is indicative only): 53.3% (123/231).
+
+### Stalls (each replayed with `dump=1`: deterministic grinds, none a new hero's loop)
+- **Normal seed 68241**: Betty, Marwyn, Josiah and Benedick at the League. Benedick (25/44) stands alone against Warduke
+  (47/84), who is healed 12 by Zargash every other round. A grind; no new hero in the party.
+- **Forced seed 66662** (iteration 2, T_B): Biz and Hjalmar are down, so there are no robots and no timers (they pause
+  while he is down). Corelos and Slate trade Help Ups against the Coven's Cousin Mildred (32/105). A Help-Up loop; no Biz
+  mechanic involved.
+- **Forced seed 68601** (iteration 4, T_A; Marwyn had died and Phat Gus was recruited): Biz, Kiri and Phat Gus are down.
+  Josiah stands alone against the Gardener (45/240), whose Photosynthesis heals 5-15 a round. A grind.
+
+### Deviations (from the plan)
+- **Rasma's weak knob 1 was skipped** (the dead level above). His iteration 1 took knobs 2 and 3, iteration 2 took knob 4.
+- **Normal blocks in iterations 1-3 were not run**: a forced point outside 0.67-1.50× (Biz at 2.0-2.8) is a T5n miss on
+  its own and set the next step. This spared the machine about 2.5 hours. Iteration 4, the kept set, ran all six pages.
+- **Two knob steps per reading** while a hero's forced point stayed outside 0.67-1.50× (Biz in iterations 1-3, Rasma in
+  iterations 1-2). This is my reading of the lead's rule for a first reading outside that band.
+- **Biz's T8n lever was not pulled.** The bask stays 3 / 4 / 4 (weak step 4 / 5 / 5). Lever 1 comes before lever 2, but a
+  heal step up adds power to a hero who is still 2× the reference. The integrator and the hero owner put this to the lead.
+- **Reference seats from `int`**: Betty, Buga and Phat Gus were not re-run (their numbers and every row are unchanged).
+  The seeds are therefore paired only within each hero's own pages, which widens the interval slightly.
+- **Brutal probe**: one page (100 runs at 68800) as a T4 report. The probe range is the only seed range left for it.
+- **The Biz suite's AutoPlay batch**: it now asserts "a scrap or a reboot", not "a reboot". With a 3-turn timer, the 10
+  short fixture fights end before a timed reboot. Suites 4 and 9 pin the reboot itself.
+
+### Questions for the lead (the stop rule: a question for the user, never a reason to touch one of the 17)
+1. **Biz is still about 2× with his whole "too strong" list applied.** Readings: forced 2.12 (it3+it4 pooled 2.06,
+   1.62-2.61) and random 1.81×. He is weak alone; the power is in three bodies a turn: his robots deal ~50% of his side's
+   damage, and his party members take less.
+   - What the list cannot do is the user's call: robot HP below 6 + 2L / 4 + 2L, robots that skip the turn they reboot,
+     Overclock +1 AP, or no Overclock on a just-rebooted robot.
+   - Until then, T1 (28.9%) and T2 (38.2%) sit just over their bands because of his parties alone.
+2. **The two T8n heal floors.** Rasma's afterglow gives about 0.9 fires and 3.2 HP a fight with `AFTERGLOW` at the top of
+   its range; three charges per enchantment cap it. Biz's bask gives 0.65 fires and 1.7 HP, because he takes only ~13 a
+   fight. The options are to accept lower bands (Rasma ≈ 3 HP / ≈ 0.9 fires, Biz ≈ 1.7 HP) or to take the heal steps
+   (Biz's bask 4 / 5 / 5 adds power to a hero who is already too strong).
+3. **Ellaria's parties** read 51.3% (58/113) at n under 150, below the 52% line. No enemy row moved, so this is noise or
+   the new heroes' pool. The audit's 600 runs settle it.
+
+### Requests
+- **Owner of `tests/content_tests.js`** ("content: v2 review — every barrel-aimable attack sets a barrel off"). The case
+  `biz_monkey_wrench` now fails "the barrel is gone", but the barrel does go off. The cause:
+  - The arena's `userFor` kills Biz's deployed robots, which leaves Scrap Heaps on the board, then summons a fresh
+    Hjalmarino at (5, 3), which can stand on one of those heaps.
+  - At 8 HP and armor 0 (this pass) Hjalmarino now dies in its own barrel's blast, where at 10 HP and armor 1 it lived.
+  - Its new Scrap Heap may not lie over the old one, so it lands on the nearest free floor: the barrel's tile, now empty.
+  - Smallest fix: assert that the tile holds no `barrel_explosive` (`!o || o.id !== 'barrel_explosive'`), as Biz's own
+    Rivet Gun suite does.
+- **h19 digest owner / audit** (`docs/notes/h19-digest.md`): the kit tables quote the old numbers. Rasma: 30 HP,
+  Respect 8 / 10 / 12, heals him 3. Biz: robots 8 + 2L / 6 + 2L, Hjalmarino armor 1, his 2nd turn and half HP, Overclock
+  cd 2 / 1 / 1, Mk II from 3 and Mk III from 6, Cymbal Crash on any foe. The new numbers are in "What landed" above.
+- **h19 audit**: T10's zz-sim readings (blade share, freezes, scraps, acorns) were not re-run (machine load). Biz's scraps
+  per fight will read higher at 6 + 2L / 4 + 2L HP.
+
+### Tests
+- `tests/content/hero_biz.js` pins the new numbers (the definition, Batteries Included, scrap and reboot, Hjalmarino,
+  Spooder, Overclock, Turn It Off and On Again, Big Red Button, items, previews, attacks of opportunity, AutoPlay battles
+  and combos suites):
+  - robot HP 8 / 6 at L1; `MK_AT` [4, 7] and HP by level 2 / 3 / 4 / 6 / 7; Hjalmarino armor 0;
+  - `SCRAP_TURNS` 3: the heap, the chip, the log, the paused timer, the Button, the Warranty's second scrap;
+  - `REBOOT_FRAC` 1 / 3 with the log line; Overclock cooldown 2 / 2 / 1;
+  - Cymbal Crash's word-for-word desc, the boss refusal and a forced resolve on a boss;
+  - the AutoPlay fixtures at L1 / L4 / L7.
+- `tests/content/hero_rasma.js`: suite 1 pins 32 HP, suite 4 pins `AFTERGLOW` 4, suite 5 pins Respect 9 / 11 / 13, and the
+  word-for-word suite pins the passive's 4.
+- Isolated: `suite=hero_biz&isolate=heroes/biz,hero_biz` PASS (26 suites, 2,806 assertions); `suite=hero_biz` with every file
+  loaded PASS (2,823); `suite=hero_rasma&isolate=heroes/rasma,hero_rasma` PASS (17 suites, 8,962).
+- One full `bash tools/test.sh`: 1,394 suites, 178,160 assertions, **1 failure** (the barrel case in
+  `tests/content_tests.js`, Requests), 0 "Error in" lines.
+
+## h19 audit (Nov 20) — h19:audit: the final gate on fresh seeds (plan `.tmp/h19/plan.md` §3)
+
+The balance pass's kept numbers (no enemy row moved; Rasma 32 HP, `AFTERGLOW` 4, Respect 9/11/13; Biz's seven "too
+strong" knobs; Phat Gus as built), measured on the plan's never-used gate seeds: normal 60000-60599 (6 pages), casual
+61000-61099, brutal 62000-62099, the forced set 63000-63099 (Rasma, Biz, Phat Gus, Betty, Mayor Buga × T_A, T_B: 10
+pages) and `acts=3` 63500-63599. Stock `tools/sim.sh`, `debug=1&healers=ellaria,josiah,valdris&raw=1&verbose=1`, one
+page at a time. Every overrides line reads `none`, except `campaign.acts=3` on the drift page. Raw pages, scripts
+(`run_audit.sh`, `replays.sh`, `shapes.awk`, `pairs.awk`) and the pooled tables are in `.tmp/h19/audit/` (`gate/`,
+`pooled/`, `fp_gate.md`, `fp_pooled.md`, `stall_*.txt`, `zz_*.txt`, `test_full.txt`). Rates carry Wilson 95%
+intervals, per-fight means batch-means 95% half-widths, R_H a delta-method interval on its log.
+
+**Pooling.** The pass's last iteration (it4: normal 68000-68599 and Biz's forced 68600) ran on today's rows and the three
+heroes' numbers:
+- No file under `js/` changed after `biz.js` (18:05:34; it4 started at 18:05:39), and `balance.js` last changed Nov 18.
+- Replays agree: seeds 68000-68003 give it4's run lines byte for byte, and Biz's forced seed 68601 stalls at the
+  Gardener in round 31, as it4 logged.
+- So the normal block pools to 1,200 runs and Biz's forced seat to 400. Rasma's last forced pages (it2) and the
+  references' (`int`) ran with other Biz / Rasma numbers (a dead hero's recruit can be either), so they are not pooled.
+
+**Verified without the pass's numbers.**
+- `git diff 8688f41` of `js/data/heroes/`, `tests/content/hero_*.js` and `docs/notes/hero-*.md` is empty for the 17
+  shipped heroes, Ellaria's three files included. The three new heroes' files are new, untracked files.
+- `js/data/balance.js` and `tests/balance_tests.js` have no diff: no row moved, and the pins stand as in v3.2.
+- Every hero number is inside its knob list (plan §3.5):
+  - Rasma: `AFTERGLOW` 4 (the top of [2*, 4]), Respect 9/11/13 and HP 32 (weak knobs 2-4).
+  - Biz: all seven "too strong" knobs (6/4 + 2L, `SCRAP_TURNS` 3, `MK_AT` [4, 7], Overclock cd 2/2/1, Hjalmarino armor
+    0, Cymbal Crash refused on bosses in both `canTarget` and `execute`, `REBOOT_FRAC` 1/3). The bask is still 3/4/4.
+  - Phat Gus: unchanged.
+- Desc == execute at the changed numbers, read in the code:
+  - Respect's desc and its strike both read `L.dmg`; the passive and the tip read `AFTERGLOW`.
+  - Biz's passive reads `NTH[SCRAP_TURNS]` and `REBOOT_SHARE` ("a third of its HP", which matches `REBOOT_FRAC` 1/3).
+    Both summon descs read `KINDS.*.base` and `MK_AT`.
+  - Overclock's cooldown is `L.cd`, and Cymbal Crash's desc says "(not a boss)".
+  - The hero suites pin the behaviour, and they pass in the full run below: a timed reboot at the start of his third
+    turn with 3 of 8 HP, the Warranty's `ceil(max / 3)` and the boss refusal string.
+- DESIGN §5 and the three §6 briefs quote the code:
+  - Rasma: 32 HP, 9-13 damage, an afterglow of 4.
+  - Biz: 6 / 4 + twice his level, no armor on Hjalmarino, not on bosses, his third turn, a third of its HP, Mk II from
+    level 4 and Mk III from 7.
+  - The Sustain paragraph, and §6.1's "one adjacent foe, never a boss".
+- The digest's kit tables (§3) and §4 still quoted the old numbers. I fixed the numbers only.
+
+### Every target (normal unless stated; "pooled" = gate + it4, 1,200 runs at identical numbers)
+| # | target | v3.2 | the pass (it4) | final gate | pooled | verdict |
+|---|---|---|---|---|---|---|
+| T1 | campaign [23, 28], CI overlaps 22-28 | 26.2% (25.8 pooled) | 28.9% | **28.5%** (171/600, 25.0–32.2) | **28.7%** (344/1199, 26.2–31.3; 1 stalled) | **MISS** (point high; CI overlaps). Without Biz in the four: 24.3% gate, **24.6%** pooled (239/973, 22.0–27.4) |
+| T2 | act 3 cleared [28, 35] | 34.6% | 38.2% | **37.0%** (222/600, 33.2–40.9) | **37.6%** (451/1200, 34.9–40.4) | **MISS**. Without Biz: **33.7%** (328/973, 30.8–36.7) |
+| T3 | Svammiel [80, 85] | 81.7% | 83.7% | 83.0% (171/206, 77.3–87.5) | 83.3% (345/414, 79.4–86.6) | PASS |
+| T3 | every door ≥ 91% / ≤ 98.5% (report) | 95.8–99.0 | 97.2–99.5 | coven 96.3 · galbraith 97.7 · gardener 99.1 · **goats 100.0** (208/208) · league 99.5; all 98.5% | coven 96.8 · galbraith 97.7 · gardener 98.4 · **goats 99.8** · **league 98.8** | gate PASS. Report: the goats (and the pooled League) over 98.5, as before |
+| T3 | Svammiel rounds ≤ 13.27 | 13.22 | 13.00 | 12.64 | 12.82 | PASS |
+| T3s | stalls ≤ 1 / 1,000 fights; no new-hero loop | 2 in ~10,000 | 1, plus 2 forced | **2 in 23,239** gate fights (normal 0 / 7,599; forced 1 / 11,987; brutal 1 / 740) | normal 1 / 15,372 | PASS on rate. One is a Biz shape (Stalls, below) |
+| T4 | brutal [5, 13] | 7.0% | 10% (probe) | **6.0%** (6/100, 2.8–12.5; act 3 cleared 11%) | — | PASS |
+| T4 | casual (report) | 78.8% | — | 73.0% (73/100, 63.6–80.7) | — | report |
+| — | `acts=3` drift (report) | V3 34% (17/50); T2 34.6% | — | 40.0% (40/100, 30.9–49.8) | — | report: +3 to +5 points, the same excess as T2 (Biz 10/17, Rasma 5/20) |
+| T5n(a) | forced R_H in [0.80, 1.25] or within noise; outside [0.67, 1.50] is a miss | — | Biz 2.12 · Rasma 0.72 · Phat Gus 1.36 (`int`) | Biz **2.07** (1.57–2.71) · Rasma **0.66** (0.43–1.01) · Phat Gus 1.15 (0.82–1.62) | Biz **2.12** (1.67–2.70; 154/398) | Biz **MISS** · Rasma **MISS** (point under 0.67) · Phat Gus PASS (in band) |
+| T5n(b) | pool share in [0.80, 1.25]× or within noise (his CI holds the median) | — | Biz 1.81× · Rasma 0.71× · Phat Gus 1.11× | Biz 1.94× · Rasma 0.72× (17.7%, 11.8–25.8; median 24.4%) · Phat Gus 0.89× | Biz **1.87×** (46.5%, 105/226, 40.1–53.0) · Rasma **0.71×** (17.7%, 41/231, **13.4–23.2**; median 24.9%) · Phat Gus 1.00× (24.9%, 58/233) | Biz **MISS** · Rasma **MISS** (the pooled CI excludes the median) · Phat Gus PASS |
+| T5o | the 17 (report) | Ellaria 2.41, Josiah 1.92, Zarathor 1.56, Syllamin 1.46; 13 at 0.77-1.27 | | | Ellaria 2.02, Josiah 1.78, Syllamin 1.70, Zarathor 1.69; Kiri 1.11 · Buga 1.06 · Pebbles 1.05 · Benedick 1.04 · Marbles 1.00 · Corelos 0.99 · Betty 0.96 · Sparrow 0.95 · Valdris 0.92 · Marwyn 0.87 · Basanos 0.84 · Hjalmar 0.79 · Slate 0.76 | report (below) |
+| E | Ellaria's parties ≥ 52% (n ≥ 150; stop-and-report) | 53.4% | 51.3% (n 113) | 49.1% (56/114) | **50.2%** (114/227, 43.8–56.7) | **REPORT: under 52% at n = 227** (the CI holds 52; no row moved). Without Biz 49.3%, without Rasma 52.8% |
+| T6 | Josiah, Ellaria ≥ 2× every non-healer; Valdris ≥ 1.16×; the new kits heal no other unit | 15.6 / 10.7; 1.16× | PASS | Josiah 15.4, Ellaria 10.9 vs Sparrow 2.7 | 15.6 ± 0.7, 11.0 ± 1.0 vs Sparrow 2.7; Valdris 3.3 = 1.22× | PASS. `lift:*` to others is 0.00 for all three; each kit's only heal call is `heal(u, u, …)`. Biz's 0.5 HP a fight to others comes from shared content: generic First Aid 789 HP, items 231, statuses 427 and consumables 86, over 3,291 fights |
+| T8n | `lift:rasma` ≥ 1.0 fire, 4-10 HP | — | 0.90 · 3.22 | 0.87 ± 0.10 · 3.07 ± 0.37 | **0.89 ± 0.05 · 3.15 ± 0.20** (overheal 11%) | **MISS** (both, beyond noise) |
+| T8n | `lift:biz` 0.8-2 fires, 3-8 HP | — | 0.65 · 1.71 | 0.59 ± 0.06 · 1.49 ± 0.18 | **0.62 ± 0.03 · 1.61 ± 0.11** (overheal 24%) | **MISS** (both) |
+| T8n | `lift:gus` ≥ 0.8 fires, 2.4-9 HP (rail ≤ 10) | — | 1.14 · 3.31 | 1.15 ± 0.12 · 3.13 ± 0.29 | 1.15 ± 0.06 · 3.23 ± 0.16; Winter Coat worn in 272 fights (10%): 6.70 HP a worn fight | PASS |
+| T8o | the 16 v3.2 lifts (report) | misses Kiri, Benedick, Sparrow, Valdris | 13 of 16 | | Kiri 0.16 fires · 0.82 HP, Benedick 0.32, Valdris 0.78 fires and 56% to others, Slate 0.96 (min 1.0; v3.2 0.99-1.01); Sparrow now meets (0.25) | report: the v3.2 picture, with Slate at its noise edge |
+| T9 | 0 errors / 0 `DD.warn` on every page; full suite; D12 | PASS | 1 failure | 19 pages + 3 replays: 0 / 0; D12 diff empty; full suite **FAIL, 1** (1,394 suites, 178,160 assertions; the barrel case; 0 "Error in" lines) | | **MISS until the barrel test is fixed** (Requests) |
+| T10 | kit health (report; the hero suites' zz sims `sim=1&n=3`, 102 fights each, + the campaign sim) | — | not re-run | Rasma: blade on **80%** of foe strikes (≥ 70), freezes **0.20** a fight, afterglows 0.89. Biz: robots **58%** of his side's damage (zz; the campaign sim: 53%, 27.9 of 52.3), Overclock in 102 of 102 fights, scraps **1.98** a fight (0.5-1.5) and **57%** back before the end (≥ 70%). Phat Gus: acorns **4.26**, bonks **0.60**, foes Confused **0.75** (≥ 2) | | report: Biz's scraps and Phat Gus's Confuse count sit outside their lines |
+
+**Forced pages** (paired seeds 63000-63099; four-act wins out of 100):
+
+| seat | T_A (Josiah, Kiri, Marwyn) | T_B (Corelos, Slate, Hjalmar) | T_A + T_B | R_H |
+|---|---|---|---|---|
+| Betty (ref.) | 38% · act 3 55 | 4% · act 3 5 | 21.0% (42/200) | 1.15 |
+| Mayor Buga (ref.) | 28% · act 3 36 | 3% · act 3 12 | 15.5% (31/200) | 0.85 |
+| **Biz** | **66%** · act 3 72 | **9.1%** (9/99; 1 stall) · act 3 26 | 37.7% (75/199) | **2.07** (1.57–2.71) |
+| **Rasma** | 23% · act 3 33 | **1%** · act 3 6 | 12.0% (24/200) | **0.66** (0.43–1.01) |
+| **Phat Gus** | 36% · act 3 45 | 6% · act 3 9 | 21.0% (42/200) | 1.15 (0.82–1.62) |
+
+The reference ½(W(Betty) + W(Buga)) is 18.2% (`int`: 18.8%). Rasma's forced readings so far are 0.51 (`int`), 0.64,
+0.72 and now 0.66: the same hero at about 0.65, give or take noise, not a drift.
+
+### What the averages hide (pooled 1,200 runs; `shapes.awk`, `pairs.awk`)
+- **Biz carries every party shape.**
+  - With no healer his parties win 40.0% (56/140), against 14.4% for healer-less parties without him.
+  - With one other summoner (Ellaria, Josiah, Zarathor, Corelos or Sparrow) they win 58.5% (55/94); with two or more,
+    62.2% (23/37); with none, 28.4% (27/95).
+  - Every partner roughly doubles with him: Josiah 75% (27/36) vs 39%, Syllamin 68% vs 38%, Corelos 50% vs 20%, Hjalmar
+    37% vs 17%, Betty 42% vs 21%.
+  - He takes 13.0 damage a fight (the third lowest) and goes down 0.23 times: the robots soak the hits.
+  - No role is gutted: Josiah still heals others 15.6 a fight, Ellaria 11.0, and Hjalmar's traps heal him 1.24 times a
+    fight.
+- **Rasma drags every party shape.**
+  - With a Wet source (Ellaria or Marwyn) his parties win 18.2% (10/55), against 37.5% for those parties without him.
+    Without one: 17.6% vs 27.4%. With no healer: 13.6% vs 22.3%.
+  - He goes down **0.44 times a fight, the most of all twenty** (the median is about 0.25), and takes 23.2 a fight
+    (between Marbles and Basanos). His addendum's "downs ≤ the roster median" misses.
+  - No freeze lock: 0.20 freezes a fight, and no stall involves him. His Wet payoffs do not lift Ellaria: her parties
+    with him win 33% (n 30).
+- **Phat Gus is level in every shape.**
+  - With no healer: 18.0% vs 21.1%. With no melee partner: 45.8% (11/24, a small n; those parties hold Ellaria, Josiah
+    or Zarathor). With T_B (healer-less): 6%, against the references' 3.5%.
+  - No acorn farm (0.60 bonks, 4.26 acorns eaten a fight), and no Hype source of his own in the Hype table.
+- **Guard rails** (against v3.2's kept rows): Pebbles 26.1% (+6.8 on 19.3), Valdris 23.0% (+1.2), Betty 23.9% (+2.0),
+  Syllamin 42.3% (+8.7).
+  - The two breaches go up, with the campaign (+3 points) and with Biz (Syllamin wins 68% with him).
+  - On the rails' own worry: Valdris reads 11.6% with Rasma (5/43, 5–24%) against 25.4% without him, and Pebbles 20.7%
+    (6/29) against 26.9%. These are small samples, in the direction of Rasma's general drag; no Tea / Burn effect can be
+    isolated.
+
+### Stalls (replayed with `dump=1`; `.tmp/h19/audit/stall_*.txt`)
+- **Forced seed 63047** (Biz, Corelos, Slate, Hjalmar; Corelos died and Betty was recruited), the Gardener's door,
+  round 31:
+  - The Gardener is at 91/240, Biz 10/40, Betty 23/52, Hjalmarino 6/16; Slate and Hjalmar are down.
+  - Photosynthesis heals 5-10 a round against the party's chip of about 7. Biz's timed reboots (a third of their HP)
+    keep putting a robot between the Gardener and the last two standing.
+  - A grind, not a deterministic loop (the Gardener fell from 240 to 91). But it is the first stall where a Biz
+    mechanic, the reboot decoys, keeps a lost fight alive.
+  - It is 1 in about 2,900 of Biz's forced fights, and 0 in the 3,291 random-pool fights he started. Reported, not a
+    blocker at this rate.
+- **Brutal seed 62043** (Hjalmar, Slate, Betty, Mayor Buga), act 1's Goblin Ambush:
+  - Each round Buga (24/24) helps Slate up, Slate stands up Rooted, and the Slingshot Kid drops him again.
+  - A deterministic Help-Up loop of the shipped AutoPlay, with no new hero in the party (the pass's 66662 had the same
+    shape). Requests, below.
+
+### Verdict and levers (the audit moved no number)
+**Fail** on the plan's gates, beyond noise:
+1. **T5n Biz** (forced 2.07-2.12, pool 1.87×). His knob list is spent, so the lever is the lead's or the user's call.
+   The pass's list: robot HP under 6 / 4 + 2L, robots that skip the turn they reboot, Overclock +1 AP, or no Overclock on
+   a just-rebooted robot. **T1 and T2 follow from it**: without Biz the campaign reads 24.6% and 33.7%, inside both
+   bands, so no enemy row should move (plan §3.4).
+2. **T5n Rasma** (forced 0.66, under the hard 0.67; pool 0.71×, with the median outside his interval at n = 231). This
+   is new since the pass, which read 0.72 and 0.71× "within noise" at n ≤ 200.
+   - His weak knobs left in the list: (1) the enchant bonus +2 → +3 at I, and (5) the reserve skill Sorry to Interrupt
+     in place of A Disapproving Look (a content build, for the hero owner).
+   - The pass skipped knob 1 because it makes level II equal to level I. The lead may allow +3 / +4 / +4, or accept
+     the dead level.
+   - His survival (0.44 downs a fight) is the visible weakness.
+3. **T8n Rasma and Biz** (0.89 fires · 3.15 HP; 0.62 fires · 1.61 HP). Lever 1, the AutoPlay term, was never tried for
+   either.
+   - Biz ends only 72 of 232 Overclock turns next to the hot robot (zz sim). `baskEnd` / `overclockScore` is the first
+     lever, and it adds no power.
+   - Rasma's `enchantScore` (finish a blade's last charge) is the same kind of lever.
+   - After that the lead decides the bands: Rasma's `AFTERGLOW` is at the top of its range, and Biz's 4 / 5 / 5 adds
+     power to the outlier.
+4. **E** (report): Ellaria's parties read 50.2% at n = 227, under the 52% line, with 52 inside the interval. No row
+   moved, so enemy tuning did not push her there. Her parties with Rasma read 33% (n 30), without him 52.8%.
+
+### Requests
+- **`tests/content_tests.js` owner** (the barrel suite): `biz_monkey_wrench` fails "the barrel is gone" on the balance
+  pass's numbers. Hjalmarino (8 HP, no armor) dies in its own barrel's blast, and its Scrap Heap lands on the empty
+  barrel tile. Smallest fix: assert that no `barrel_explosive` is on the tile instead of no object, as Biz's own Rivet
+  Gun suite does.
+- **AutoPlay owner** (non-blocking): the Help-Up loop of brutal seed 62043 (a Rooted ally knocked down again every
+  round).
+- **Lead / user**: the three levers above, and the Biz decoy stall (63047) as a shape to watch when his numbers move.
+
+
+## h19 fix pass (Nov 21) — fix:balance: the lead's B1-B5 for Biz, R1-R4 for Rasma (plan `.tmp/h19/plan.md` §3)
+
+The audit (Nov 20) failed T5n for Biz (forced 2.07-2.12, pool 1.87×) and Rasma (forced 0.66, pool 0.71×), and T8n for
+both; T1 / T2 were high because of Biz. The lead's decisions of Nov 21 (tuning, not character facts; beyond the
+addenda's knob lists): Biz B1-B5 in order, two a reading while he sat outside 0.67-1.50; Rasma R1-R4 in order; a heal
+step only as stated; enemy rows only once both pass T5n and T1 is still outside 23-28%; Phat Gus and the 17 untouched.
+**Outcome.** Rasma passes T5n (R1, R2, R4; R3 not needed) and meets T8n's HP band. Biz has all five of the lead's levers
+and still misses T5n on both readings (forced 1.44 at it3, pool 1.45×): the pass stopped there and reports what it would
+try next (below). No enemy row moved (Biz is not in band; T1 sits inside 23-28% anyway). Phat Gus is unchanged and in
+band. Final reading below: T1 25.8%, T2 34.7%, Rasma forced 0.81 / pool 0.96x, Phat Gus 1.25 / 0.81x, Biz 1.50 / 1.45x
+(at the edge of the hard band; the next lever is the lead's or the user's).
+
+**Measurement.**
+- Stock `tests/sim/sim.js` through `.tmp/h19/fix/bal/simsnap.sh`: the page runs from a frozen copy of the tree
+  (`snap<k>/`, js + tests/sim, md5 in `snap<k>/md5.txt`) so the live tree could be edited and tested meanwhile; the Chrome
+  slot is the real repo's (`tools/chrome_slot.sh`, the machine-wide cap 2). One 100-seed page at a time;
+  `debug=1&healers=ellaria,josiah,valdris&raw=1` (`verbose=1` on normal pages). Runner `run_it.sh` (a `PAUSE` flag held
+  it between pages for every test run), the final `run_final.sh`; pooled with `.tmp/h19/bal/compose.sh` (the heal pass's
+  `merge.awk` / `split.awk` / `rounds.awk`, the h19 `fp.awk` / `lifts.awk` / `nobiz.awk`). Raw pages: `.tmp/h19/fix/bal/`.
+- Seeds (the lead's, all ≥ 130000, never used before): iteration k normal 130000 + 1000k … +599, forced 130600 + 1000k
+  (T_A = Josiah, Kiri, Marwyn; T_B = Corelos, Slate, Hjalmar; one page each, the references Betty and Mayor Buga on the
+  same seeds); the final audit normal 140000-140599, casual 141000, brutal 142000-142199, forced T_A 143000-143299 and T_B
+  143300-143599 (600 runs a seat), smoke 145000-145199.
+- Iteration 0 re-measured: fix:polish changed Phat Gus's stress eating (a full-HP meal no longer spends the turn's heal).
+- Rates carry Wilson 95% intervals, per-fight means batch-means half-widths, R_H a delta-method interval on its log.
+
+### What landed
+| hero | lever (the lead's) | before | after | it |
+|---|---|---|---|---|
+| Biz | B1 AutoPlay: Monkey Wrench / Pew Pew `aiScore: warmScore` (an attack from a tile next to Biz is worth his bask: in full once he can't move, a third while he can) | — | robots walking off after his last action: 23 → 18 of ~120 hurt Overclock turns (zz) | 1 |
+| Biz | B2 "booting up": a robot that comes back (timer, Warranty, Turn It Off and On Again, Spoodmarino!) has no AP that turn and can't be overclocked (`c.data.biz.back`; chip `biz_booting` "Booting Up") | the timer's robot acted at once | sits that turn out; Turn It Off and On Again III keeps "It acts at once" (Deviations) | 1 |
+| Biz | B3 Overclock AP (`OC_AP`) | +2 (Remote +3) | **+1** (Remote +2) | 2 |
+| Biz | B4 robot basics | Wrench 3/4/5, Pew Pew 2/3/4 | **2/3/4**, **2/2/3** (never below 2) | 2 |
+| Biz | B5 robot HP (both steps) | 6 / 4 + 2L | **4 / 3 + 2L** (the floors) | 3 |
+| Rasma | R1 AutoPlay `enchantScore` → `onTheWay`: no blade up, a foe in reach of his next turn, a move left: enchant on the way in | 0 | the blade on 83% of his foe strikes (was 80%), afterglows 0.89 → 1.01 a fight (zz) | 1 |
+| Rasma | R2 the enchant bonus (all three) | +2 / +3 / +3 | **+3 / +4 / +4** | 2 |
+| Rasma | R4 `AFTERGLOW` | 4 | **5** | 3 |
+| Rasma | R3 HP 32 → 34 | — | not taken (T5n passed after R2) | — |
+Texts follow the constants: Biz's passive ("…on his third turn after (a third of its HP) and sits that turn out.", 41
+words), the reboot skill, Spoodmarino!, Overclock "gains 1 AP", the Remote "(2 instead of 1)", the tip, the timer's log
+line, the refusal "Hjalmarino is still booting up. Overclock it next turn."; Rasma's enchantments, blade tooltips,
+passive and tip. DESIGN §5 (Do Keep the Change "up to 15") and the Rasma / Biz briefs, the digest §3-§4 and the hero
+notes' "Balance fix pass" quote the code. `js/data/balance.js` and `tests/balance_tests.js` are unchanged (no row moved).
+
+### Iterations (forced: 200 runs a seat, references paired on the same seeds; normal: 600 runs)
+| it | change | ref | Biz R (W) | Rasma R (W) | T1 | T2 | Biz pool | Rasma pool | T8n rasma · biz (fires · HP) |
+|---|---|---|---|---|---|---|---|---|---|
+| audit | — | 18.2% | 2.07 | 0.66 | 28.5% | 37.0% | 1.94× | 0.72× | 0.87 · 3.07 · 0.59 · 1.49 |
+| 0 | fix:polish only (Gus) | 15.2% | — | — | 29.5% | 39.0% | 1.57× | 0.86× | 0.95 · 3.37 · 0.63 · 1.60 |
+| 1 | B1 + B2; R1 | 20.0% | 1.60 (32.0%; 1.21-2.12) | 0.80 (16.0%; 0.55-1.16) | 24.2% | 31.7% | 1.80× | 0.54× | 0.92 · 3.23 · 0.58 · 1.49 |
+| 2 | B3 + B4; R2 | 21.3% | 1.58 (33.5%; 1.20-2.07) | 0.73 (15.6%; 0.50-1.07) | 26.9% | 37.2% | 1.08× | 0.98× | 0.85 · 2.94 · 0.58 · 1.52 |
+| 3 (kept) | B5 ×2; R4 | 18.0% | **1.44** (26.0%; 1.05-1.97) | **0.83** (15.0%; 0.56-1.23) | 27.7% | 36.0% | **1.45×** | **0.78×** | **0.97 · 4.07** · 0.56 · 1.48 |
+Phat Gus at it0 (forced 130600 with the references): 1.41 (21.5%, 43/200; 0.99-2.00, within noise).
+Decisions: it1 → it2 Biz two steps (1.60 > 1.50); Rasma one (pool 0.54×). it2 → it3 Biz two steps (1.58 > 1.50: a
+forced point outside 0.67-1.50 misses whatever the pool says); Rasma passed T5n (0.73 within noise, 0.98×), so the
+T8n lever R4 came next and R3 was not taken. it3: Biz spent and still a miss → stop. The pool shares swing by ±0.4× at
+n ≈ 110-130 a hero (Rasma 0.54× → 0.98× with one +1 step): the final audit's 1,200 pooled runs settle them.
+
+The final audit pages (snap3) are summarised in "Final reading" at the end of this section. Casual, brutal and smoke
+were not finished: the user stopped the pass.
+
+### Biz: what the five levers did, and what I would try next (the lead's call; no new mechanic was built)
+- His robots' damage fell from 23.4 to 14.1 a fight on the T_A seat (it1 → it3) and his side's from 52.6 to 43.8, but his
+  parties barely noticed: the robots are bodies first. He takes ~14 a fight (the third lowest), Duct Tape puts ~11 Block a
+  fight on him, and the robots draw the enemy turns his partners would take.
+- Candidates, roughly by expected size: (1) the timed reboot later or weaker (`SCRAP_TURNS` 3 → 4, or `REBOOT_FRAC` 1/3 →
+  1 HP): fewer decoy turns; (2) Duct Tape on Biz only (no Block on the robots) or its cd 1 → 2; (3) only Hjalmarino at
+  combat start (Spooder unpacked by a skill); (4) Cymbal Crash cd 3/2/1 → 3/3/2 (a Confused foe swings at its friends);
+  (5) robots that can't Help Up Biz. (1) and (2) are numbers; (3)-(5) change the kit and are the user's to approve.
+- T8n: no heal step (he is not inside T5n). The bask reads ~0.56 fires and ~1.5 HP a fight: Overclock runs on fewer
+  turns (1.76 a fight, was 2.31), and in about a third of his hurt Overclock turns he spends his AP from his own tile
+  rather than walk next to the hot robot, a move AutoPlay prices honestly against a shot and the front line's danger.
+
+### Stalls (each replayed with `dump=1` on its own snapshot: deterministic; none a new hero's loop)
+- 130399 (it0 normal): Gardener r31 at 16/240, Phat Gus 30/54 alone (Photosynthesis 5-10 a round vs his 6-8 and his
+  stress eating 3): the Gardener grind.
+- 132658 (it2 forced Biz T_A): Svammiel r31 at 6/414; Biz down, Josiah healing, both robots hitting until scrapped at
+  r29 / r31: a long fight that ran out of rounds.
+- 132659 (it2 forced Biz T_A): Gardener r31 at 108/240 + 4 vines, Kiri alone (Biz down, both robots scrapped by r25):
+  the Gardener grind.
+- 133541 (it3 normal): Gardener r31 at 103/240, Benedick 1/50 alone behind DO NOT DISTURB (Biz down, robots
+  scrapped): the Gardener grind.
+- The audit's reboot-decoy grind (forced 63047) can't recur on its seed: replayed on B1 + B2 the run falls at act 2 (Dr.
+  Iris). No stall in any page shows a booting / reboot loop (a downed Biz ticks no timer).
+- Final pages: 0 stalls in 7,672 normal fights.
+
+### Deviations (from the plan and the lead's text)
+- **Turn It Off and On Again III keeps "It acts at once"** (B2 says a repaired robot boots up). Without it level III
+  equals level II (cd 2 both): a level-up that changes nothing, which the h19 pass refused for Rasma. It still can't be
+  overclocked that turn. One line to flip (`ready: true` → booting) if the lead wants B2 everywhere.
+- **Biz's passive is 41 words** (his suite's cap was 40, now 42): the booting clause.
+- **Overclock's desc does not repeat the booting rule** (34 words over its 30-word cap); like its stun / sheep refusals,
+  the rule is in the passive, the reboot skill, Spoodmarino!, the chip and the refusal text.
+- **Phat Gus's forced seat ran at it0 only** (and the final audit): his numbers never moved, and plan §3.2 re-runs only
+  the seats whose numbers moved (the references always ran, for pairing).
+- **One step a reading for Rasma** (the lead's two-step rule named Biz), though his it1 pool read 0.54×.
+- **The it2 runner was started with `&` in a subshell** (one sequential runner, one Chrome at a time; every other run
+  went through `run_in_background`).
+
+### Requests
+- **Lead / README & release notes**: the booting rule is a mechanic, not a number; `.tmp/h19/release-notes.md` got the
+  numbers only (+1 AP, 5 HP). Suggested line: "A rebooted robot spends its first turn booting up."
+- **Lead (ARCHITECTURE §8.3)**: its example "⚡ Hjalmarino +2 AP" now reads +1 in play (the HUD prints the preview's N);
+  `tests/hud_tests.js` checks the doc's example string, so change both together or keep the example.
+- **Voice owner (`tests/content/svammiel_lines.js` reserved list)**: add "Booting Up" (DESIGN §6 reserved names has it).
+- **Lead / user**: Biz's next lever (above).
+
+### Tests
+- Full `bash tools/test.sh` on the final tree (Nov 21, by the lead after the pass was stopped): PASS, 1417 suites, 178708
+  assertions, 0 failures, 0 "Error in" lines.
+
+- **Final reading** (snap3 = the shipped tree; normal 140000-140599, forced 143000-143599, 600 a seat; the pass was
+  stopped by the user before casual, brutal and smoke finished, so those three are not reported):
+  - T1 25.8% (155/600, 22.5-29.5) PASS · T2 34.7% (208/600, 31.0-38.6) PASS · Svammiel 82.9% (155/187) PASS · doors
+    97.8% (952/973) PASS · stalls 0 / 7672.
+  - Biz: forced R 1.50 (1.26-1.79; pooled with it3 1.49, 1.28-1.73), pool 1.45x - MISS at the edge of the hard band
+    (was 2.07-2.12 / 1.87x). B1-B5 are spent; the next lever is the lead's or the user's.
+  - Rasma: forced 0.81 (0.65-1.01; pooled 0.82), pool 0.96x - PASS (was 0.66 / 0.71x).
+  - Phat Gus: forced 1.25 (1.04-1.51), pool 0.81x - PASS (both at the edge).
+  - T8n: Rasma 1.00 fires, 4.41 HP PASS; Biz 0.55, 1.43 HP MISS (accepted: no heal step while he is outside T5n); Phat
+    Gus 1.12, 3.29 HP PASS.
+  - E (report): Ellaria's parties 45.6% (52/114) final, 54.5% (66/121) at it3, pooled 50.2% (118/235) - under the 52%
+    report line, as at the Nov 20 audit; no enemy row moved.

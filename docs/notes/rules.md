@@ -2320,3 +2320,46 @@ generator and copy the hero's line.
 - Phase 1's two items stand (no suite drives a real swap or hinted interaction with an `autoplayEnd`; the `opts.via`
   wrapper in a real fight is covered by the scratch probe and, since the builds, by every hero's forced-party sim page).
 - No sim was run in phase 2 (docs only); the balance pass measures next (plan §7).
+
+## h19 QA fixes (Nov 20) — QA FIXER, core cluster (`targeting.js`, `combat.js`)
+Findings from the `qa:biz` lens (`.tmp/h19/qa/biz/`), most severe first; both polish.
+- **QA-BIZ-6, fixed (engine half)**: Overclock's aim showed only ♨️, never the AP it gives: the dry-run diff
+  (`Targeting.diff`) tracked HP, Block, statuses and movement but not AP. Each per-unit entry now also carries
+  `ap` (AP to spend now: a unit of the acting group, e.g. Overclock's robot) and `apNext` (AP banked for the unit's next
+  turn: `Act.gainAp` outside its turn, or a drain), both signed, and the entry's `text` prints them in `Act.gainAp`'s
+  words with the previews' minus sign: `"+2 AP · Overclocked"`, `"+1 AP next turn"`, `"−1 AP next turn"`. A unit that
+  drops (or stays down) has no AP change. `diff(real, sim, uncertain, opts)` takes an optional `opts { actor, paid }`:
+  `Targeting.preview` passes the user and `ctx.paid.ap`, so **the actor's own cost is left out** (the card's pips show
+  it) and only AP the action gives or takes shows on the actor (Power Nap's spent rest, a refund). AutoPlay's three
+  `diff` callers pass no opts (raw change, which none of them reads: an AP-only entry adds 0 to `simGain`,
+  `bigMoment`, `blastValue` and `breakValue`). Uncertain previews: `aggregate` gives `ap` / `apNext` means with
+  `apMin` / `apMax` (text `"? +1–2 AP"`); `signature` compares them. A def's own `preview()` may set `ap` / `apNext`
+  on an entry (copied, rounded). Shipped AP gifts whose dry-run text now names the AP too: Mayor Buga's Campaign
+  Promise, Syllamin's Hype Man and Encore!, Corelos's Dark Bargain, the Energy Drink, and Overclock (`"+2 AP"`, `"+3
+  AP"` with the Universal Remote). AutoPlay unchanged: the Biz replay
+  `seeds=3&from=68600&party=biz,josiah,kiri,marwyn` (the audit's `replay_fp_biz_68600.txt`) is byte-identical before
+  and after (`.tmp/h19/qafix-core/replay_biz_68600_{before,after}.txt`). The HUD half (print the fields on the badge
+  and in the hint) is `combat_hud.js`'s: see Requests.
+- **QA-BIZ-8, fixed**: the signature log line appended "!" to names that already shout ("Biz unleashes
+  Spoodmarino!!", "BEHOLD, MARWYN!!"). `Combat.useSkill` now adds the bang only when the name does not end in "!" or
+  "?": "Biz unleashes Spoodmarino!", "Wizzy McTest unleashes Mass Assert!".
+
+### Requests
+- **render-ui (`js/ui/combat_hud.js`, owner HUD)**: show the new `ap` / `apNext` of a preview entry (QA-BIZ-6's
+  expected "+2 AP" on the robot). `overlayPreviews` (~l. 750-768): after the Block part, e.g.
+  `if (num(e.ap)) parts.push((e.ap > 0 ? '+' : '−') + Math.abs(e.ap) + ' AP'); if (num(e.apNext)) parts.push(... + ' AP next turn')`
+  (or a compact "+2⚡" badge); `previewSummary` (~l. 795-855): a part for allies other than the actor, e.g.
+  `"⚡ Spooder +2 AP"` / `"⚡ Slate +1 AP next turn"`, and for the actor's own non-zero `ap` (a refund, Power Nap's
+  spent rest). Uncertain entries carry `apMin` / `apMax` like `healMin` / `healMax`. The engine fields are there now
+  (the `text` already reads `"+2 AP · Overclocked"`).
+- **lead (`docs/ARCHITECTURE.md` §5.2)**: `PreviewEntry` gains `ap` (AP now, the actor's own cost left out) and
+  `apNext` (banked for the unit's next turn), signed; `Targeting.diff(real, sim, uncertain, opts?)` with
+  `opts { actor, paid }`.
+
+### Tests
+- `engine: h19 QA-BIZ-6 — a preview names the AP an action gives …` (engine_tests.js, fixtures: Good Boy! on the turret
+  = "+1 AP" and the real use agrees; on the knight = "+1 AP next turn" banked; a drain "−1 AP next turn"; a self-gift
+  "+2 AP"; no actor entry for its own cost; a KO carries no AP; a random gift aggregates; `diff` with / without opts).
+- `engine: h19 QA-BIZ-8 — a signature whose name already ends in "!" or "?" is logged with one bang` (engine_tests.js).
+- `integration: h19 QA — Overclock's preview gives the robot "+2 AP" (3 with the Universal Remote) …` (integration.js:
+  Biz's real Overclock on both robots, with and without the Remote, preview = reality; Spoodmarino!'s log line).

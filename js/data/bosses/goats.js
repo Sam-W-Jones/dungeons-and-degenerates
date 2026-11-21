@@ -603,6 +603,9 @@
     { hero: 'betty', lines: [[BILLY, 'There he is. Betty. The so-called G.O.A.T.'], [KID, 'He\'s so cool.'], [BILLY, 'KID.']] },
     { hero: 'benedick', lines: [[KID, 'Is that snail coming over here?'], [BILLY, 'Give him a minute.'], [TURNIP, 'Give him ten.']] },
     { hero: 'syllamin', lines: [[BILLY, 'Syllamin. The Roastmaster General.'], [TURNIP, 'He\'s tiny.'], [BILLY, 'Tiny, but he\'s got bars. Diss him first.']] },
+    // h19 (addendum-biz §19.3, addendum-gus §20.3): Hjalmarino's cymbals, Phat Gus's chewing (never his shape)
+    { hero: 'biz', lines: [[KID, 'Is that monkey... clapping at us?'], [BILLY, 'It\'s a backing track.'], [TURNIP, 'It\'s better than me.']] },
+    { hero: 'gus', lines: [[KID, 'Why does the squirrel keep chewing?'], [BILLY, 'Snacks, kid.'], [TURNIP, 'Eldritch snacks.']] },
   ];
   function banterOk(s, b) {
     const R = RD(s);
@@ -1375,6 +1378,23 @@
       'Benedick turns into a dragonsnail, so he says,|a dragon with a shell? That\'s a snail going through a phase.',
       'Benedick leaves a trail of slime across the stage,|that\'s not a flow, man. That\'s a mop. Turn the page.',
       'Slow flow, Benedick, slime all over the floor,|we brought salt to the cypher. You want some more?'],
+    // h19 (addendum-rasma §19.3, addendum-biz §19.3, addendum-gus §20.3, verbatim). The goats keep the teacup, the blade
+    // colours and the cold shoulder; the two robots, Spooder's name, tribute vs knockoff and the button; burying acorns.
+    // [h19 QA voice-2 / voice-10] three bars swapped: the apologies and the stress eating are Svammiel's jokes (plan
+    // §1.2), so the goats take Touché and Fine, Have One instead; "rolled in" on the round squirrel became "showed up"
+    // (villains never aim at his body).
+    rasma: ['Rasma rolled up with a monocle and a cup,|bull in a china shop, and he still won\'t shut up.',
+      'Rasma\'s blade goes blue, then yellow, then rose,|that\'s not a sword, man. That\'s a fashion show.',
+      'Rasma froze his sword to give us the cold shoulder,|but our bars stay hot and his tea just gets colder.',
+      'Rasma yells "Touché!" every time he gets hit,|man, that\'s not a riposte. That\'s a nervous tic.'],
+    biz: ['Biz brought two robots to do his rapping for him,|a monkey with cymbals? Man, the odds look slim.',
+      'Biz built a spider-bot, and he named it Spooder,|we\'ve heard better flows from a busted computer.',
+      'Biz calls his tin monkey a tribute, not a fake,|then why\'s there a key in its back? For goodness\' sake.',
+      'Biz pressed the big red button, his monkey went KABOOM,|best beat he\'s dropped all night, and it emptied the room.'],
+    gus: ['Phat Gus showed up with his cheeks stuffed tight,|you can\'t spit bars, man. You\'ve been chewing all night.',
+      'Phat Gus says the forest whispers in his ear,|that\'s not the forest, Gus. That\'s your stomach. We can hear.',
+      'Phat Gus buries acorns and forgets where they go,|just like his verses. Lost \'em. Gone. Oh no.',
+      'Phat Gus says "Fine, have ONE," like it costs him a limb,|one acorn for a friend? That\'s generous, for him.'],
     generic: ['{hero}, step up. You got a verse? ...No?|Then sit back down, pal. This barn\'s not your show.',
       'We heard about {hero}. We were not impressed.|Four acts in, and still dressed like the rest.',
       '{hero} came to the barn to battle the crew,|we\'d write you a diss, but the hay\'s more fun to chew.',
@@ -1403,6 +1423,9 @@
     hjalmar: ['Monkey business, Hjalmar? This is GOAT business!', 'Hjalmar, your pranks are so old, we already ate them!'],
     pebbles: ['Good boy, Pebbles! Bad idea! GOOD BOY THOUGH!', 'Sit, Pebbles! Stay! ...Stop, drop and ROLL!'],
     benedick: ['You\'re not slow, Benedick. You\'re just... loading!', 'Dragonsnail, Benedick? That\'s a slug in a party hat!'],
+    rasma: ['Rasma, keep the change. We keep the crown.', 'Pinky up, Rasma. Now put that teacup down.'],
+    biz: ['Some assembly required, Biz. Some talent too.', 'Biz, your bars came flat-packed. Half the screws are missing.'],
+    gus: ['Phat Gus, that\'s not a flow. That\'s a snack break with a mic.', 'Mic drop, Phat Gus. Don\'t eat it.'],
     generic: ['{hero}, your whole career\'s an opening act!', 'The end. Applause. Not for you, {hero}.', 'And THAT is why they call it Bar None.',
       'Three bars and a closer. That\'s a wrap, {hero}.'],
   };
@@ -1425,6 +1448,9 @@
     hjalmar: ['I put a whoopee cushion on your mic. You\'re welcome.', 'Hee hee hee! HAHAHA! ...What was the diss again?'],
     pebbles: ['Bork! BORK! ...Bork. (He says your bars are stale.)', 'Pebbles has a verse! The verse is \'good boy\'! BORK!'],
     benedick: ['Fourteen thousand teeth, gentlemen. Fourteen thousand.', 'Patience, goats. I always get there. And I get the last word.'],
+    rasma: ['Gentlemen, your meter is atrocious. Shall I count it for you?', 'I do apologise in advance for my rebuttal. It is frosty.'],
+    biz: ['My monkey\'s got cymbals. Your beat\'s got none.', 'Spooder, Hjalmarino: drop the beat. On them.'],
+    gus: ['Nice bars. Crunchy. I\'d eat them, but I have standards.', 'Something under this barn just ate your beat. Burp.'],
     generic: ['Yeah? Well... your mic\'s off.', 'That\'s it? That\'s the verse?', 'I\'ve heard better from a chicken. A shy chicken.'],
   };
   Object.keys(DISS).forEach(function (k) { DD.registerNarration('rap_diss_' + k, DISS[k]); });

@@ -21,7 +21,8 @@
   // the user's roster (the lint also covers heroes not loaded in an isolated run); the registry's names win when present
   const ROSTER = { zarathor: 'Zarathor', syllamin: 'Syllamin', marbles: 'Professor Marbles', marwyn: 'Marwyn', ellaria: 'Ellaria',
     josiah: 'Josiah', sparrow: 'Sparrow', corelos: 'Corelos', slate: 'Slate', buga: 'Mayor Buga', kiri: 'Kiri', betty: 'Betty',
-    basanos: 'Basanos', valdris: 'Valdris', hjalmar: 'Hjalmar', pebbles: 'Pebbles', benedick: 'Benedick' };
+    basanos: 'Basanos', valdris: 'Valdris', hjalmar: 'Hjalmar', pebbles: 'Pebbles', benedick: 'Benedick',
+    rasma: 'Rasma', biz: 'Biz', gus: 'Phat Gus' };   // h19: their bars land before their hero files (plan D5)
   const SHE = { ellaria: 1, sparrow: 1, kiri: 1 };
   // the addendum's tone guard (§3, §17): no mock dialect, and the fur colour is never a joke
   const DIALECT = /(^|[^a-z'])(yo|ain't|homie|dawg|bruh|finna|gonna|wanna|gotta|y'all|ya)([^a-z']|$)/i;
@@ -893,6 +894,31 @@
     // catchphrases stay on purpose: Betty's G.O.A.T., Valdris's "Mind the hair", Kiri the Half-There, a good boy.)
     const both = function (re) { return pool('svam_hero_benedick').some(function (l) { return re.test(l); }) && pool('rap_diss_benedick').concat(pool('rap_close_benedick')).some(function (l) { return re.test(l); }); };
     t.ok(!both(/last tuesday/i), 'Benedick: the "last Tuesday" joke is Svammiel\'s alone');
+    // h19: the same split for heroes 18-20 (addendum-rasma §19.3, addendum-biz §19.3, addendum-gus §18 / §20.3). Each joke
+    // has one owner: `svam` never appears in the goats' bars or closers, `goats` never in Svammiel's roasts.
+    // [h19 QA voice-2] the plan's split (§1.2) gives Svammiel the apologies ("sorry" too) and the stress eating; the goats
+    // take Touché and Fine, Have One in their place
+    const SPLIT = {
+      rasma: { svam: [/monotaur/i, /apologi[sz]|\bsorry\b/i, /smudge/i], goats: [/\b(?:tea)?cup\b|china/i, /\bblue\b|\byellow\b|\brose\b/i, /cold shoulder/i, /touch[ée]/i] },
+      biz: { svam: [/warrant/i, /reboot|off and on/i, /hid(?:e|ing) behind/i, /cold-blooded/i, /recall/i],
+        goats: [/rapping/i, /Spooder/, /tribute|knock-?off|homage/i, /button/i] },
+      gus: { svam: [/storage/i, /\brent\b/i, /stress/i], goats: [/\bbur(?:y|ies|ied|ying)\b/i, /have one/i] },
+    };
+    Object.keys(SPLIT).forEach(function (id) {
+      const svam = pool('svam_hero_' + id), goats = pool('rap_diss_' + id).concat(pool('rap_close_' + id));
+      if (!svam.length || !goats.length) { t.fail(id + ': Svammiel\'s roasts and the goats\' bars both land from day one (plan D5)'); return; }
+      SPLIT[id].svam.forEach(function (re) {
+        t.ok(svam.some(function (l) { return re.test(l); }) && !goats.some(function (l) { return re.test(l); }), id + ': ' + re + ' is Svammiel\'s joke alone');
+      });
+      SPLIT[id].goats.forEach(function (re) {
+        t.ok(goats.some(function (l) { return re.test(l); }) && !svam.some(function (l) { return re.test(l); }), id + ': ' + re + ' is the goats\' joke alone');
+      });
+    });
+    // [h19 QA voice-10] villains never aim at Phat Gus's body (the user, Nov 18): no roundness pun ("rolled in" on the
+    // round squirrel whose own bark is "Rolling, rolling, rolling."), no "fat" (his word only)
+    const gusBars = pool('rap_diss_gus').concat(pool('rap_close_gus'));
+    t.ok(gusBars.length > 0, 'Phat Gus has bars');
+    gusBars.forEach(function (l) { t.ok(!/\broll(?:s|ed|ing)?\b|\bround(?:er)?\b|\bspher|\bfat\b|\bchubby\b|\bbelly\b/i.test(l), 'Phat Gus: no body joke from the goats: "' + l + '"'); });
   });
 
   // ---- the bass and the Speaker Stacks -------------------------------------------------------------------------------------

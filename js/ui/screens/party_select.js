@@ -1,5 +1,5 @@
 /* Dungeons and Degenerates — js/ui/screens/party_select.js
- * Party select: roster of every hero (V3: all seventeen are available from the start — the count is the registry's; the
+ * Party select: roster of every hero (h19: all twenty are available from the start — the count is the registry's; the
  * lock UI only shows for a hero def with an unlock condition, none today), a details panel (portrait, blurb, role,
  * complexity, stats, passive, basic, signature, starting skills and skill pool with tooltips), four party slots,
  * difficulty picker, "Roll for Party" and Start → DD.Run.newRun(heroIds, difficulty). Remembers the last party.
@@ -10,8 +10,10 @@
 
   const FLAG_LABEL = { flying: ['🪽', 'Flying', 'Ignores height, pits, liquids and terrain cost.'], hop: ['🐇', 'Hop', 'Can climb 2 levels in one step.'], large: ['🐘', 'Large', 'A big target. Hard to miss.'], immovable: ['🗿', 'Immovable', 'Cannot be pushed or pulled.'] };
   const EMPTY_SEAT = ['Empty Chair', 'Bring Snacks', 'Seat Reserved', 'Probably Late'];
-  // the classic 4-column roster holds a 4 × 4 grid; a bigger registry switches to the wider `.many` grid (CSS)
+  // the classic 4-column roster holds a 4 × 4 grid; a bigger registry switches to the wider `.many` grid (CSS), and
+  // h19's twenty (19 or 20) sit in rows of five, `.fives` (5 × 4 = 20 at every width, no ragged last row)
   const GRID4_CAP = 4 * 4;
+  const FIVES = [19, 20];
 
   let st = null; // { selected: [], focus, difficulty, refs }
 
@@ -216,9 +218,12 @@
         root.appendChild(UI.header('Assemble Your Degenerates', 'Pick four heroes for the campaign. Choose wisely. Or don\'t — that\'s the fun part.',
           [diff, UI.button('Back', function () { UI.show('title'); }, { cls: 'ghost', icon: '←', hotkey: 'Escape', showKey: false })]));
 
-        // V3: more heroes than a 4 × 4 grid holds (17 is prime) take a wider grid: 5 columns below 1280 px wide, 6 above
-        const body = el('div.ps-body', { class: ids.length > GRID4_CAP ? 'many' : null });
-        const roster = el('div.ps-roster', { class: ids.length > GRID4_CAP ? 'many' : null, dataset: { n: String(ids.length) } });
+        // V3: more heroes than a 4 × 4 grid holds take a wider grid: 5 columns below 1280 px wide, 6 above (6 × 3
+        // for 17 and 18). h19: twenty heroes (and 19 on the way there) fill 5 × 4 at every width; 21 or more go back
+        // to 6 columns from 1280 px (6 × 4) and 5 below (5 × 5)
+        const many = ids.length > GRID4_CAP;
+        const body = el('div.ps-body', { class: many ? 'many' : null });
+        const roster = el('div.ps-roster', { class: many ? ['many', FIVES.indexOf(ids.length) >= 0 ? 'fives' : ''] : null, dataset: { n: String(ids.length) } });
         if (!ids.length) {
           roster.appendChild(el('div.empty-state', null, el('div.es-icon', null, '🪑'), el('div', null, 'No heroes have shown up to Session Zero yet.')));
         }
